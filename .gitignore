@@ -1,0 +1,91 @@
+# Environment Variables (CRITICAL - Contains AWS credentials!)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+ENV/
+env/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build outputs
+frontend/dist/
+frontend/build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Test files
+*.test.js
+*.spec.js
+coverage/
+
+# Excel/CSV temporary files
+~$*.xlsx
+~$*.xls
+~$*.csv
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Terminals (Cursor-specific)
+.cursor/projects/*/terminals/
+
+# Python virtual environment
+backend/venv/
+backend/env/
+
+# Sample data (optional - remove if you want to keep it)
+# backend/*.xlsx
+# backend/*.csv
+# backend/*.xls

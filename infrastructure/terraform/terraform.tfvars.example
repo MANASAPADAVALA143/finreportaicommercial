@@ -1,0 +1,6 @@
+aws_region = "us-east-1"
+environment = "production"
+app_name = "finreportai"
+
+# Add your sensitive variables in terraform.tfvars (not committed to git)
+# db_password = "your-secure-password"
