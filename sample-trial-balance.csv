@@ -1,0 +1,25 @@
+GL Code,Account Name,Debit,Credit
+1001,Cash & Bank,2500000,0
+1002,Accounts Receivable,4200000,0
+1003,Inventory - Raw Material,3000000,0
+1004,Inventory - Finished Goods,2800000,0
+1005,Prepaid Expenses,320000,0
+2001,PPE - Plant & Machinery,8500000,0
+2002,Intangible Assets - Software,1200000,0
+3001,Trade Payables,0,2800000
+3002,Short-term Loan,0,1500000
+3003,Accrued Expenses,0,650000
+4001,Long-term Loan,0,5000000
+5001,Share Capital,0,10000000
+5002,Retained Earnings Opening,0,3200000
+6001,Revenue - Domestic Sales,0,25000000
+6002,Revenue - Export Sales,0,8000000
+7001,Cost of Goods Sold,18500000,0
+7002,Employee Salaries,3200000,0
+7003,Rent Expense,600000,0
+7004,Electricity & Utilities,450000,0
+7005,Administrative Expenses,850000,0
+7006,Marketing & Selling,1200000,0
+7007,Depreciation,1400000,0
+7008,Bank Interest Expense,450000,0
+7009,Income Tax Expense,1700000,0
