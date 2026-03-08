@@ -192,7 +192,7 @@ export const R2RModule: React.FC = () => {
                   setSensitivityLevel(key as any);
                   setCustomThreshold(level.threshold);
                 }}
-                className={`p-4 rounded-xl border-2 transition-all text-left hover:shadow-md ${
+                className={`p-6 rounded-xl border-2 transition-all text-left hover:shadow-md ${
                   sensitivityLevel === key
                     ? level.color === 'red'
                       ? 'border-red-500 bg-red-50'
@@ -202,15 +202,15 @@ export const R2RModule: React.FC = () => {
                     : 'border-gray-200 hover:border-gray-300'
                 }`}
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-2xl">{level.icon}</span>
-                  <div>
-                    <p className="font-bold text-gray-900 text-sm">{level.name}</p>
-                    <p className="text-xs text-gray-500">{level.subtitle}</p>
+                <div className="flex items-start gap-3 mb-3">
+                  <span className="text-3xl flex-shrink-0">{level.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 text-base">{level.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{level.subtitle}</p>
                   </div>
                 </div>
-                <p className="text-xs text-gray-600 mb-2">{level.description}</p>
-                <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-600 mb-3 leading-relaxed">{level.description}</p>
+                <div className="space-y-1">
                   <p className="text-sm font-semibold text-gray-700">
                     Threshold: {level.threshold}+
                   </p>
