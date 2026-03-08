@@ -1,0 +1,25 @@
+GL Code,Account Name,IFRS Line Item
+1001,Cash & Bank,financialPosition.assets.current.cashAndEquivalents
+1002,Accounts Receivable,financialPosition.assets.current.tradeReceivables
+1003,Inventory - Raw Material,financialPosition.assets.current.inventories
+1004,Inventory - Finished Goods,financialPosition.assets.current.inventories
+1005,Prepaid Expenses,financialPosition.assets.current.prepayments
+2001,PPE - Plant & Machinery,financialPosition.assets.nonCurrent.propertyPlantEquipment
+2002,Intangible Assets - Software,financialPosition.assets.nonCurrent.intangibleAssets
+3001,Trade Payables,financialPosition.liabilities.current.tradePayables
+3002,Short-term Loan,financialPosition.liabilities.current.shortTermBorrowings
+3003,Accrued Expenses,financialPosition.liabilities.current.accruedExpenses
+4001,Long-term Loan,financialPosition.liabilities.nonCurrent.borrowings
+5001,Share Capital,financialPosition.equity.shareCapital
+5002,Retained Earnings Opening,financialPosition.equity.retainedEarnings
+6001,Revenue - Domestic Sales,profitLoss.revenue
+6002,Revenue - Export Sales,profitLoss.revenue
+7001,Cost of Goods Sold,profitLoss.costOfSales
+7002,Employee Salaries,profitLoss.operatingExpenses.employeeBenefits
+7003,Rent Expense,profitLoss.operatingExpenses.administrative
+7004,Electricity & Utilities,profitLoss.operatingExpenses.administrative
+7005,Administrative Expenses,profitLoss.operatingExpenses.administrative
+7006,Marketing & Selling,profitLoss.operatingExpenses.distribution
+7007,Depreciation,profitLoss.operatingExpenses.depreciation
+7008,Bank Interest Expense,profitLoss.financeCosts
+7009,Income Tax Expense,profitLoss.incomeTax

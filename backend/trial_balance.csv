@@ -1,0 +1,13 @@
+Account Code,Account Name,Account Type,Debit,Credit
+1000,Cash,Asset,812450,0
+1100,Accounts Receivable,Asset,420000,0
+1200,Inventory,Asset,95000,0
+2000,Accounts Payable,Liability,0,310000
+2100,Short-Term Debt,Liability,0,250000
+3000,Equity,Equity,0,1200000
+4000,Revenue - SaaS,Revenue,0,362000
+4100,Revenue - Subscription,Revenue,0,85000
+5000,Marketing Expense,Expense,94000,0
+5100,Operations Expense,Expense,118000,0
+5200,Engineering Expense,Expense,64000,0
+5300,G&A Expense,Expense,29000,0

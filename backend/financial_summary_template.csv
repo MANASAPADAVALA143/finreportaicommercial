@@ -1,0 +1,20 @@
+metric,value,date,category,notes
+cash_balance,562000,2024-02-14,assets,Total cash in all bank accounts
+revenue_monthly,328000,2024-02-14,income,Revenue for current month
+revenue_last_month,315000,2024-01-14,income,Revenue for previous month
+expenses_monthly,234000,2024-02-14,expenses,Total expenses for current month
+expenses_operations,105000,2024-02-14,expenses,Operations expenses
+expenses_marketing,58000,2024-02-14,expenses,Marketing expenses
+expenses_sales,47000,2024-02-14,expenses,Sales expenses
+expenses_rd,24000,2024-02-14,expenses,R&D expenses
+ar_total,150000,2024-02-14,assets,Total accounts receivable
+ar_0_30_days,80000,2024-02-14,assets,AR aging 0-30 days
+ar_31_60_days,50000,2024-02-14,assets,AR aging 31-60 days
+ar_over_60_days,20000,2024-02-14,assets,AR aging over 60 days
+ap_total,125000,2024-02-14,liabilities,Total accounts payable
+ap_due_this_week,45000,2024-02-14,liabilities,AP due this week
+current_assets,850000,2024-02-14,assets,Total current assets
+current_liabilities,350000,2024-02-14,liabilities,Total current liabilities
+total_equity,1200000,2024-02-14,equity,Total shareholders equity
+total_debt,360000,2024-02-14,liabilities,Total debt
+net_income,94000,2024-02-14,income,Net income for the month

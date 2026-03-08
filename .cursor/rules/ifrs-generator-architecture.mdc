@@ -1,0 +1,421 @@
+---
+description: IFRS Statement Generator architecture and implementation guide - Map Once Use Forever pattern
+globs: src/pages/ifrs/**,src/services/mappingService.ts,src/services/statementGenerator.ts,src/services/aiProvider.ts,src/types/ifrs.ts
+---
+
+# IFRS Statement Generator — Commercial Grade Architecture
+## "Map Once, Use Forever" Pattern (BlackLine-style)
+
+## CORE CONCEPT
+
+The IFRS Statement Generator uses a **mapping persistence pattern**:
+1. **First time**: Company uploads Chart of Accounts → GL codes mapped to IFRS line items → Saved forever
+2. **Every month after**: Upload Trial Balance → 100% auto-mapped using saved mappings (0 manual work)
+3. **New GL codes**: Only map the new code → Add to saved mappings
+4. **Result**: 60-second statement generation from raw Trial Balance
+
+AI Provider: **AWS Bedrock Amazon Nova Lite** (swappable to Claude/OpenAI via config)
+
+---
+
+## FILE STRUCTURE
+
+```
+src/
+├── types/
+│   └── ifrs.ts                          # All TypeScript interfaces
+├── services/
+│   ├── aiProvider.ts                    # Swappable AI service (Nova/Claude/OpenAI)
+│   ├── mappingService.ts                # Company mapping CRUD + auto-map logic
+│   └── statementGenerator.ts            # IFRS statement builder + AI validation
+├── pages/
+│   └── ifrs/
+│       ├── CompanyOnboarding.tsx        # One-time CoA mapping setup
+│       └── IFRSGenerator.tsx            # Monthly TB upload + statement generation
+└── components/
+    └── ifrs/
+        └── StatementDisplay.tsx         # 4-tab statement viewer
+```
+
+---
+
+## PHASE 1: DATA MODELS (src/types/ifrs.ts)
+
+### Core Entities
+
+**CompanyMapping** - Master mapping saved permanently:
+```typescript
+interface CompanyMapping {
+  id: string;
+  companyId: string;
+  companyName: string;
+  glCode: string;              // e.g. "1001"
+  glDescription: string;       // e.g. "Cash & Bank"
+  ifrsLine: string;            // e.g. "financialPosition.assets.current.cashAndEquivalents"
+  ifrsLabel: string;           // e.g. "Cash & Cash Equivalents"
+  ifrsStatement: string;       // "balanceSheet" | "profitLoss" | "cashFlow" | "equity"
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+**TrialBalanceEntry** - Monthly upload:
+```typescript
+interface TrialBalanceEntry {
+  glCode: string;
+  accountName: string;
+  debit: number;
+  credit: number;
+  mappedIfrsLine?: string;     // auto-filled from CompanyMapping
+  mappingStatus: "mapped" | "unmapped" | "new_code";
+}
+```
+
+**IFRSStatement** - Generated output:
+- Contains: balanceSheet, profitLoss, cashFlow, equity
+- All amounts properly classified per IFRS standards
+- AI validation included
+
+### Balance Sheet Structure
+```
+Assets
+  Current Assets (cash, receivables, inventory, prepayments)
+  Non-Current Assets (PPE, intangibles, investments)
+Liabilities
+  Current Liabilities (payables, short-term borrowings, accruals)
+  Non-Current Liabilities (long-term borrowings, deferred tax)
+Equity
+  Share Capital, Retained Earnings, Other Reserves
+```
+
+### P&L Structure
+```
+Revenue
+- Cost of Sales
+= Gross Profit
+- Operating Expenses (employee benefits, admin, distribution, depreciation, other)
+= Operating Profit
++/- Finance Income/Costs
+= Profit Before Tax
+- Income Tax
+= Net Profit
+```
+
+---
+
+## PHASE 2: AI SERVICE (src/services/aiProvider.ts)
+
+### Architecture
+- **Single config line to swap AI providers**: `const AI_PROVIDER = "aws-nova"`
+- Supports: AWS Nova Lite, Claude 3 Haiku, GPT-4o-mini
+- Same interface for all providers: `callAI(prompt: string): Promise<string>`
+
+### AWS Nova Implementation
+```typescript
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+
+// Model: us.amazon.nova-lite-v1:0
+// Region: us-east-1 (configurable)
+// Uses AWS SDK v3 with ConverseCommand
+```
+
+### Environment Variables
+```
+VITE_AWS_REGION=us-east-1
+VITE_AWS_ACCESS_KEY_ID=xxx
+VITE_AWS_SECRET_ACCESS_KEY=xxx
+VITE_CLAUDE_API_KEY=xxx (for future swap)
+VITE_OPENAI_API_KEY=xxx (for future swap)
+```
+
+---
+
+## PHASE 3: MAPPING SERVICE (src/services/mappingService.ts)
+
+### IFRS Master Line Items (Standard Reference)
+Contains ~30 standard IFRS line items across:
+- Balance Sheet Assets (current + non-current)
+- Balance Sheet Liabilities (current + non-current)
+- Balance Sheet Equity
+- P&L line items (revenue, COGS, opex categories, finance, tax)
+
+Format: `{ value: "financialPosition.assets.current.cashAndEquivalents", label: "Cash & Cash Equivalents", statement: "balanceSheet" }`
+
+### Storage Functions
+```typescript
+// localStorage implementation (replace with Supabase in production)
+saveCompanyMappings(companyId, mappings)    // Save to persistent storage
+loadCompanyMappings(companyId)              // Load saved mappings
+hasCompanyMappings(companyId)               // Check if company is set up
+```
+
+### Auto-Mapping Logic
+```typescript
+autoMapTrialBalance(trialBalance, companyId)
+// Returns: { mapped: entries[], newCodes: entries[], mappedCount: number }
+// - Mapped: GL codes found in saved mappings
+// - New Codes: GL codes added since last upload (need mapping)
+```
+
+### AI Suggestion Logic
+```typescript
+getAISuggestions(entries)
+// Calls AI to suggest IFRS mappings for unmapped/new GL codes
+// Returns: { "5004": "profitLoss.operatingExpenses.administrative", ... }
+```
+
+---
+
+## PHASE 4: UI COMPONENTS
+
+### Page 1: Company Onboarding (src/pages/ifrs/CompanyOnboarding.tsx)
+
+**Purpose**: One-time setup to map company's Chart of Accounts
+
+**UI Structure**:
+1. Header with blue info banner: "This is a one-time setup"
+2. Company info form (name, ID, currency, year-end)
+3. Three onboarding tabs:
+   - **TAB 1**: Upload pre-mapped Chart of Accounts (CSV with GL Code, Name, IFRS Line Item)
+   - **TAB 2**: Use industry template (Manufacturing, Retail, Services, etc.)
+   - **TAB 3**: AI-assisted setup (upload CoA without mappings → AI suggests → review → save)
+
+**On Save**: 
+- Call `saveCompanyMappings(companyId, mappings)`
+- Show success message: "✅ 247 accounts mapped. You will never need to do this again."
+- Redirect to IFRS Generator
+
+---
+
+### Page 2: IFRS Generator (src/pages/ifrs/IFRSGenerator.tsx)
+
+**3-Step Wizard**:
+
+**STEP 1: Upload Trial Balance**
+- Check `hasCompanyMappings(companyId)`
+- If YES: Green banner "✅ Your mappings are saved. Upload will be 100% auto-mapped"
+- If NO: Yellow banner "⚠️ First time? Complete Company Setup first" + button
+- Drag & drop CSV/Excel upload (GL Code, Account Name, Debit, Credit)
+- Preview first 5 rows
+- "Proceed to Mapping Review" button
+
+**STEP 2: Mapping Review**
+- Call `autoMapTrialBalance(entries, companyId)`
+- Show stats cards:
+  - **Total Accounts**: N
+  - **Auto-Mapped**: N (green) — "From your saved company mappings"
+  - **New GL Codes**: N (amber) — "Added since last upload"
+  - **Unmapped**: 0 (must be zero to proceed)
+
+- If new codes exist:
+  - "New GL Codes Found" section at top
+  - Auto-call `getAISuggestions()` for new codes
+  - User confirms/edits mappings
+  - "Save new mappings to company profile" checkbox (default ON)
+
+- Full accounts table (auto-mapped ones collapsed/expandable)
+- "Generate Statements" button (disabled until all mapped)
+
+**STEP 3: Generated Statements**
+- Display 4 statements in tabs
+- Export buttons (PDF, Excel, Word, JSON)
+- AI Commentary button
+
+---
+
+### Component: Statement Display (src/components/ifrs/StatementDisplay.tsx)
+
+**4 Tabs**:
+
+1. **Statement of Financial Position (Balance Sheet)**
+   - Two-column format: Assets | Liabilities & Equity
+   - Subtotals at each level
+   - **Validation**: Total Assets MUST equal Total Liabilities + Equity
+   - Green checkmark when balanced
+
+2. **Statement of Profit or Loss**
+   - Vertical format with subtotals
+   - Show Gross Profit, Operating Profit, PBT, Net Profit
+   - Include margin percentages (Gross Margin %, Net Margin %)
+
+3. **Statement of Cash Flows (Indirect Method)**
+   - Three sections: Operating, Investing, Financing
+   - Start with Net Profit, add back non-cash items
+   - **Validation**: Closing Cash MUST match Balance Sheet cash
+
+4. **Statement of Changes in Equity**
+   - Opening balances, movements, closing balances
+   - Share Capital and Retained Earnings rows
+
+**Export Features**:
+- PDF: Professional formatted report
+- Excel: Editable workbook with formulas
+- Word: Editable document
+- JSON: Machine-readable data
+- Filename format: `ifrs-statements-{periodEnd}.{ext}`
+
+---
+
+## PHASE 5: STATEMENT GENERATOR (src/services/statementGenerator.ts)
+
+### Generation Process
+
+```typescript
+generateIFRSStatements(mappedEntries, companyName, periodEnd, currency)
+```
+
+**Step 1: Aggregate by IFRS Line**
+- Loop through all trial balance entries
+- Calculate net amount: `debit - credit`
+- Sum by IFRS line item (e.g., all cash accounts → financialPosition.assets.current.cashAndEquivalents)
+
+**Step 2: Build Structured Statements**
+- `buildBalanceSheet(aggregated)` - Assets, Liabilities, Equity with proper nesting
+- `buildProfitLoss(aggregated)` - Revenue down to Net Profit
+- `buildCashFlow(aggregated, profitLoss)` - Indirect method starting from Net Profit
+- `buildEquity(aggregated, profitLoss)` - Opening + changes + closing
+
+**Step 3: AI Validation**
+- Call AI with prompt: "Review these statements for IFRS compliance"
+- AI checks:
+  - Balance Sheet equation (Assets = Liabilities + Equity)
+  - Cash Flow closing = Balance Sheet cash
+  - Any IFRS presentation issues
+  - Key financial highlights (3 bullet points)
+- Returns: `{ balanceCheck: boolean, issues: [], highlights: [] }`
+
+---
+
+## DATA FLOW
+
+```
+FIRST TIME:
+Upload CoA → User maps GL codes to IFRS lines → Save to storage → Done forever
+
+MONTHLY:
+1. Upload TB → Parse CSV
+2. autoMapTrialBalance(tb, companyId) → 100% mapped + new codes list
+3. If new codes: AI suggests → User confirms → Save to storage
+4. generateIFRSStatements(mappedEntries) → Aggregate → Build statements → AI validate
+5. Display 4 statements → Export options
+```
+
+---
+
+## KEY BUSINESS RULES
+
+1. **GL Code = Primary Key**: One GL code maps to exactly one IFRS line
+2. **Debit/Credit Convention**: 
+   - Assets & Expenses: Debit increases, Credit decreases
+   - Liabilities, Equity, Revenue: Credit increases, Debit decreases
+   - Net Amount: `debit - credit`
+3. **Balance Sheet Must Balance**: `Total Assets = Total Liabilities + Total Equity`
+4. **Cash Reconciliation**: Cash flow closing balance = Balance Sheet cash
+5. **P&L Flow**: Revenue → Gross Profit → Operating Profit → PBT → Net Profit
+6. **Mapping Persistence**: Once saved, mappings never asked again (until new GL code)
+
+---
+
+## TESTING DATA
+
+Sample files provided:
+- `public/sample-trial-balance.csv` - 25 GL codes with amounts
+- `public/sample-chart-of-accounts.csv` - Pre-mapped CoA for testing
+
+Test scenario:
+1. Upload sample CoA → All 25 codes auto-mapped
+2. Upload sample TB → 100% auto-mapped (0 manual work)
+3. Generate statements → All 4 statements correct
+4. Verify: Balance Sheet balances, Cash matches, P&L totals correct
+
+---
+
+## SUCCESS CRITERIA
+
+✅ First-time company: CoA uploaded → all GL codes mapped → saved to DB  
+✅ Monthly upload: 100% auto-mapped in <3 seconds  
+✅ New GL code: Only that code needs mapping → saved  
+✅ 4 IFRS statements generated with correct totals  
+✅ Balance Sheet balances (Assets = Liabilities + Equity)  
+✅ Cash closing = Balance Sheet cash  
+✅ AI provider swappable by changing ONE line in aiProvider.ts  
+✅ Export to PDF/Excel/Word working  
+✅ AI validation provides meaningful insights  
+
+---
+
+## NPM PACKAGES REQUIRED
+
+```bash
+npm install @aws-sdk/client-bedrock-runtime papaparse xlsx
+npm install --save-dev @types/papaparse
+```
+
+---
+
+## NAVIGATION LOGIC
+
+In dashboard:
+```typescript
+// Smart routing based on setup status
+onClick={() => {
+  if (hasCompanyMappings(currentCompanyId)) {
+    navigate("/ifrs/generator");  // go straight to upload
+  } else {
+    navigate("/ifrs/setup");      // first time → onboarding
+  }
+}}
+```
+
+Routes:
+- `/ifrs/setup` → CompanyOnboarding.tsx
+- `/ifrs/generator` → IFRSGenerator.tsx
+
+---
+
+## AI PROMPT PATTERNS
+
+### For GL Code Mapping
+```
+You are an IFRS accounting expert. Map these GL accounts to IFRS line items.
+
+GL Accounts: [list with amounts]
+Available IFRS lines: [master list]
+
+Return ONLY valid JSON: { "glCode": "ifrsLine", ... }
+Rules: Use exact IFRS line values, return JSON only
+```
+
+### For Statement Validation
+```
+You are an IFRS expert CFO. Review these financial statements.
+
+Provide:
+1. Balance check: Assets = Liabilities + Equity?
+2. Any IFRS presentation issues
+3. Key financial highlights (3 bullets)
+
+Return JSON: { balanceCheck: true/false, issues: [], highlights: [] }
+```
+
+---
+
+## IMPLEMENTATION CHECKLIST
+
+- [ ] Create src/types/ifrs.ts with all interfaces
+- [ ] Create src/services/aiProvider.ts with AWS Nova integration
+- [ ] Create src/services/mappingService.ts with storage + auto-map logic
+- [ ] Create src/services/statementGenerator.ts with aggregation + AI validation
+- [ ] Create src/pages/ifrs/CompanyOnboarding.tsx (3 tabs)
+- [ ] Create src/pages/ifrs/IFRSGenerator.tsx (3-step wizard)
+- [ ] Create src/components/ifrs/StatementDisplay.tsx (4 tabs)
+- [ ] Add routes to router
+- [ ] Update dashboard card with smart routing
+- [ ] Add sample CSV files to public/
+- [ ] Test full flow with sample data
+- [ ] Implement PDF/Excel export
+- [ ] Deploy and validate AWS credentials
+
+---
+
+END OF SPECIFICATION

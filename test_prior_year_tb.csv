@@ -1,0 +1,15 @@
+Account Code,Account Name,Account Type,Debit,Credit
+1000,Cash,Asset,2200000,0
+1100,Accounts Receivable,Asset,3800000,0
+1200,Inventory,Asset,850000,0
+2000,Accounts Payable,Liability,0,2900000
+2100,Short-Term Debt,Liability,0,2800000
+3000,Retained Earnings,Equity,0,900000
+4000,Revenue - Domestic,Revenue,0,22000000
+4100,Revenue - Export,Revenue,0,6500000
+5000,Cost of Goods Sold,Expense,16000000,0
+5100,Payroll Expenses,Expense,2800000,0
+5200,Admin Expenses,Expense,1300000,0
+5300,Distribution Costs,Expense,1000000,0
+5400,Depreciation,Expense,1300000,0
+6000,Interest Expense,Expense,850000,0

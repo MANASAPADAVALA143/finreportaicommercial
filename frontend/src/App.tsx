@@ -1,61 +1,61 @@
-import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { LandingPage } from './components/landing/LandingPage';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { R2RModule } from './components/r2r/R2RModule';
 import { NovaAssistant } from './components/nova/NovaAssistant';
-import { Login } from './pages/Login';
-import { Register } from './pages/Register';
-import { useAuthStore } from './services/auth';
-import { useEffect } from 'react';
-
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuthStore();
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
-
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
-};
+import { CFODashboard } from './pages/CFODashboard';
+import { UploadData } from './pages/UploadData';
+import { IFRSStatementGenerator } from './pages/IFRSStatementGenerator';
+import { FPASuite } from './pages/fpa/FPASuite';
+import { VarianceAnalysis } from './pages/fpa/VarianceAnalysis';
+import BudgetManagement from './pages/fpa/BudgetManagement';
+import KPIDashboard from './pages/fpa/KPIDashboard';
+import ForecastingEngine from './pages/fpa/ForecastingEngine';
+import ScenarioPlanning from './pages/fpa/ScenarioPlanning';
+import ManagementReporting from './pages/fpa/ManagementReporting';
+import CFOServices from './pages/cfo/CFOServices';
+import CFODecisionIntelligence from './pages/CFODecisionIntelligence';
 
 function App() {
-  const { checkAuth } = useAuthStore();
-
-  useEffect(() => {
-    // DEMO MODE - Auto-login with demo credentials
-    const token = localStorage.getItem('access_token');
-    if (!token) {
-      // Set demo token for testing
-      localStorage.setItem('access_token', 'demo-token-' + Date.now());
-      localStorage.setItem('demo_user', JSON.stringify({
-        id: 'demo-user',
-        email: 'demo@finreportai.com',
-        full_name: 'Demo User',
-        company: 'FinReport AI',
-        role: 'admin'
-      }));
-    }
-    checkAuth();
-  }, []); // Empty dependency array - only run once on mount
-
   return (
     <>
       <BrowserRouter>
         <Routes>
+          {/* Landing Page - First page users see */}
           <Route path="/" element={<LandingPage />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
           
-          {/* DEMO MODE - No authentication required */}
+          {/* Auth routes disabled for hackathon - redirect to dashboard */}
+          <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/register" element={<Navigate to="/dashboard" replace />} />
+          
+          {/* Main Dashboard - Module cards after "Launch Dashboard" */}
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/cfo-dashboard" element={<CFODashboard />} />
+          <Route path="/upload-data" element={<UploadData />} />
+          <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
           <Route path="/r2r" element={<R2RModule />} />
           <Route path="/nova" element={<NovaAssistant />} />
+          
+          {/* FP&A Suite Routes */}
+          <Route path="/fpa" element={<FPASuite />} />
+          <Route path="/fpa/variance" element={<VarianceAnalysis />} />
+          <Route path="/fpa/budget" element={<BudgetManagement />} />
+          <Route path="/fpa/kpi" element={<KPIDashboard />} />
+          <Route path="/fpa/forecast" element={<ForecastingEngine />} />
+          <Route path="/fpa/scenario" element={<ScenarioPlanning />} />
+          <Route path="/fpa/scenarios" element={<ScenarioPlanning />} />
+          <Route path="/fpa/reports" element={<ManagementReporting />} />
+          
+          {/* CFO Services Routes */}
+          <Route path="/cfo" element={<CFOServices />} />
+          <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
+          <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
+          <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
+          <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
+          
+          {/* CFO Decision Intelligence */}
+          <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
         </Routes>
       </BrowserRouter>
       <Toaster position="top-right" />

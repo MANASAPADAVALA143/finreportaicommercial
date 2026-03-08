@@ -38,19 +38,19 @@ export const LandingPage: React.FC = () => {
           {/* CTA Buttons */}
           <div className="flex gap-6 justify-center items-center">
             <Link
-              to="/register"
+              to="/dashboard"
               className="group relative px-8 py-4 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 text-white rounded-xl font-semibold hover:shadow-2xl hover:shadow-cyan-500/50 transition-all duration-300 transform hover:scale-105 flex items-center gap-2"
             >
-              Start Free Trial
+              Launch Dashboard
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
             
             <Link
-              to="/demo"
+              to="/upload-data"
               className="px-8 py-4 bg-slate-800/50 backdrop-blur-sm border border-slate-600 text-white rounded-xl font-semibold hover:bg-slate-700/50 hover:border-slate-500 transition-all duration-300 flex items-center gap-2"
             >
-              <Video className="w-5 h-5" />
-              Watch Demo
+              <Sparkles className="w-5 h-5" />
+              Upload Data
             </Link>
           </div>
         </div>
