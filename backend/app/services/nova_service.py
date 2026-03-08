@@ -209,73 +209,73 @@ CRITICAL RULES:
         # PRIORITY Rule: Duplicate Entry (HIGHEST RISK)
         if is_duplicate:
             risk_score += 60
-            anomalies.append("🚨 DUPLICATE ENTRY DETECTED - Potential fraud pattern")
+            anomalies.append("🔴 DUPLICATE ENTRY: This entry matches an existing posted transaction (same vendor, same amount, same period). Duplicate journal entries are a common source of financial misstatement and potential fraud. RECOMMENDED ACTION: Block posting and escalate to Controller for review.")
             shap_behavioral += 60
         
         # PRIORITY Rule: Weekend + Large Amount
         amount = max(debit, credit)
         if is_weekend and amount > 100000:
             risk_score += 55
-            anomalies.append(f"⚠️ WEEKEND POSTING with large amount ${amount:,.0f} - High risk!")
+            anomalies.append(f"🕐 WEEKEND POSTING: This entry was posted on a Saturday/Sunday outside normal business hours with amount ${amount:,.0f}. Weekend postings without prior authorisation violate Segregation of Duties controls. RECOMMENDED ACTION: Confirm who authorised this entry and validate business justification.")
             shap_temporal += 45
             shap_amount += 30
         elif is_weekend and amount > 50000:
             risk_score += 40
-            anomalies.append(f"⚠️ Weekend posting detected: ${amount:,.0f}")
+            anomalies.append(f"🕐 WEEKEND POSTING: This entry of ${amount:,.0f} was posted outside normal business hours. Weekend postings require special authorisation and oversight. RECOMMENDED ACTION: Verify proper approvals are on file.")
             shap_temporal += 35
         
         # Manual Entry flag
         if is_manual and amount > 50000:
             risk_score += 30
-            anomalies.append("📝 Manual entry with significant amount")
+            anomalies.append(f"✏️ MANUAL JOURNAL ENTRY: This is a manual journal entry of ${amount:,.0f} bypassing the automated posting workflow. Manual entries carry higher fraud risk as they override system controls. RECOMMENDED ACTION: Verify preparer authorisation and ensure dual approval is on file.")
             shap_behavioral += 25
         
         # Rule 1: Both debit and credit
         if debit > 0 and credit > 0:
             risk_score += 65
-            anomalies.append("CRITICAL: Both Debit and Credit filled (control violation)")
+            anomalies.append(f"🚨 CONTROL VIOLATION: Both Debit (${debit:,.0f}) and Credit (${credit:,.0f}) are filled simultaneously. This violates fundamental accounting controls and suggests either data entry error or potential manipulation. RECOMMENDED ACTION: Reject entry immediately and investigate source system controls.")
             shap_behavioral += 40
         
         # Rule 2: Both zero
         if debit == 0 and credit == 0:
             risk_score += 60
-            anomalies.append("CRITICAL: Both Debit and Credit are zero (invalid entry)")
+            anomalies.append("🚨 INVALID ENTRY: Both Debit and Credit are zero. This is a null transaction with no financial impact and should not exist in the general ledger. RECOMMENDED ACTION: Delete entry and review posting process for system errors.")
             shap_amount += 30
         
         # Rule 3: Large amount (only if not already counted in weekend check)
         if not (is_weekend and amount > 100000):  # Avoid double-counting
             if amount > 200000:
                 risk_score += 50
-                anomalies.append(f"💵 Very large amount: ${amount:,.0f}")
+                anomalies.append(f"⚠️ MATERIALITY ALERT: Transaction amount of ${amount:,.0f} is significantly above the account average. This triggers a materiality threshold alert requiring enhanced scrutiny. RECOMMENDED ACTION: Verify supporting invoice, obtain secondary approval, and confirm vendor legitimacy before posting.")
                 shap_amount += 45
             elif amount > 100000:
                 risk_score += 30
-                anomalies.append(f"💵 Large amount: ${amount:,.0f}")
+                anomalies.append(f"⚠️ LARGE AMOUNT: Transaction amount of ${amount:,.0f} exceeds standard posting thresholds. Large transactions require additional oversight to prevent material misstatement. RECOMMENDED ACTION: Verify supporting documentation and ensure proper authorisation level.")
                 shap_amount += 25
         
         # Rule 4: Round amounts
         if amount in [100000, 250000, 500000, 750000, 1000000]:
             risk_score += 40
-            anomalies.append(f"🔴 Suspicious round amount: ${amount:,.0f}")
+            anomalies.append(f"🎯 SUSPICIOUS ROUND AMOUNT: Exactly ${amount:,.0f} is an unusually round figure. Round amounts are statistical red flags for earnings manipulation or fraud as legitimate transactions rarely result in perfect round numbers. RECOMMENDED ACTION: Request detailed calculation worksheet and validate underlying business transaction.")
             shap_amount += 30
         
         # Rule 5: Suspicious description
         suspicious_words = ['adjustment', 'reversal', 'correction', 'manual', 'override']
         if any(word in description for word in suspicious_words):
             risk_score += 35
-            anomalies.append(f"📝 Suspicious description keyword found")
+            anomalies.append(f"📝 SUSPICIOUS DESCRIPTION: Entry contains keyword '{[w for w in suspicious_words if w in description][0]}' which is commonly associated with manual interventions and adjusting entries. These carry higher fraud risk. RECOMMENDED ACTION: Verify business justification, obtain management approval, and ensure proper documentation is attached.")
             shap_behavioral += 25
         
         # Rule 6: SOD violation
         if posted_by and approved_by and posted_by == approved_by:
             risk_score += 60
-            anomalies.append("🚫 SOD Violation: Same person posted and approved")
+            anomalies.append(f"🚨 SEGREGATION OF DUTIES VIOLATION: The same person ('{posted_by}') prepared and approved this entry. This is a critical internal control failure and audit finding that violates SOX requirements. RECOMMENDED ACTION: Immediate escalation to CFO. Entry should be reversed pending independent review and re-approval.")
             shap_behavioral += 50
         
         # Rule 7: Junior user high amount
         if ('junior' in posted_by or 'staff' in posted_by) and amount > 50000:
             risk_score += 40
-            anomalies.append(f"Junior user posting ${amount:,.0f}")
+            anomalies.append(f"⚠️ AUTHORISATION CONCERN: Junior staff member is posting ${amount:,.0f} which exceeds their typical authorisation limit. This may indicate compromised credentials or inadequate role-based access controls. RECOMMENDED ACTION: Verify that the staff member has proper delegated authority for this transaction size.")
             shap_behavioral += 30
         
         # Normalize risk score
@@ -311,7 +311,7 @@ CRITICAL RULES:
             "entryId": entry_id,
             "riskScore": risk_score,
             "riskLevel": risk_level,
-            "anomalies": anomalies if anomalies else ["No significant anomalies detected"],
+            "anomalies": anomalies if anomalies else ["✅ No significant anomalies detected. Transaction appears normal and complies with standard controls."],
             "shapBreakdown": {
                 "amountAnomaly": round(shap_amount, 1),
                 "temporalAnomaly": round(shap_temporal, 1),
@@ -322,7 +322,7 @@ CRITICAL RULES:
                 "zScore": round(z_score, 2),
                 "percentile": round((risk_score / 100) * 99, 1)
             },
-            "explanation": " | ".join(anomalies) if anomalies else "Transaction appears normal",
+            "explanation": "\n\n".join(anomalies) if anomalies else "✅ Transaction appears normal and complies with standard controls.",
             "recommendation": recommendation
         }
     

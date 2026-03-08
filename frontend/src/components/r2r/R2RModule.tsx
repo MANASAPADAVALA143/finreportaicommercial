@@ -618,26 +618,58 @@ export const R2RModule: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Anomalies */}
+                {/* Detected Issues Summary */}
                 <div className="bg-red-50 rounded-xl p-6 border border-red-200">
                   <h4 className="text-lg font-bold text-red-900 mb-3 flex items-center gap-2">
                     <AlertTriangle className="w-5 h-5" />
-                    Detected Anomalies
+                    Issues Detected ({selectedEntry.anomalies.length})
                   </h4>
-                  <ul className="space-y-2">
-                    {selectedEntry.anomalies.map((anomaly, idx) => (
-                      <li key={idx} className="text-sm text-red-800 flex items-start gap-2">
-                        <span className="text-red-500 mt-1">•</span>
-                        <span>{anomaly}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="space-y-2">
+                    {selectedEntry.anomalies.map((anomaly, idx) => {
+                      // Extract just the first line (the issue title) for summary
+                      const issueTitle = anomaly.split(':')[0] + (anomaly.includes(':') ? ':' : '');
+                      const issueSeverity = anomaly.includes('🚨') ? 'CRITICAL' : 
+                                           anomaly.includes('🔴') ? 'HIGH' :
+                                           anomaly.includes('⚠️') ? 'MEDIUM' : 'INFO';
+                      
+                      return (
+                        <div key={idx} className={`flex items-center gap-2 text-sm p-2 rounded ${
+                          issueSeverity === 'CRITICAL' ? 'bg-red-200 text-red-900' :
+                          issueSeverity === 'HIGH' ? 'bg-orange-100 text-orange-900' :
+                          'bg-yellow-100 text-yellow-900'
+                        }`}>
+                          <span className="font-semibold">{issueTitle}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-red-600 mt-3">
+                    📋 See "AI Audit Analysis" below for detailed explanations and recommended actions
+                  </p>
                 </div>
 
-                {/* Explanation */}
-                <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
-                  <h4 className="text-lg font-bold text-blue-900 mb-3">AI Explanation</h4>
-                  <p className="text-sm text-blue-800 leading-relaxed">{selectedEntry.explanation}</p>
+                {/* AI Explanation */}
+                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 border-2 border-blue-300">
+                  <h4 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-blue-600" />
+                    AI Audit Analysis
+                  </h4>
+                  <div className="space-y-4 text-sm text-gray-800 leading-relaxed">
+                    {selectedEntry.anomalies.map((anomaly, idx) => (
+                      <div key={idx} className="bg-white rounded-lg p-4 border-l-4 border-blue-500 shadow-sm">
+                        <p className="whitespace-pre-wrap">{anomaly}</p>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {selectedEntry.riskLevel === 'High' && (
+                    <div className="mt-4 bg-red-100 border-l-4 border-red-600 rounded-lg p-4">
+                      <p className="text-sm font-semibold text-red-900 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4" />
+                        CRITICAL: This entry requires immediate escalation to senior management
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
