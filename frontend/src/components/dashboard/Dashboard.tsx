@@ -78,7 +78,7 @@ export const Dashboard: React.FC = () => {
         {/* Header Section */}
         <div className="text-center mb-16">
           <h1 className="text-5xl font-bold text-white mb-4">
-            FinReport AI Commercial
+            FinReport AI
           </h1>
           <p className="text-xl text-gray-300">
             Enterprise Financial Intelligence Platform powered by Amazon Nova
