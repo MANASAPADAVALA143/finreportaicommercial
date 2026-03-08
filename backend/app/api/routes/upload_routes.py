@@ -73,6 +73,8 @@ async def upload_journal_entries(
             # ID variations
             'ID': 'id',
             'Id': 'id',
+            'JE_ID': 'id',
+            'je_id': 'id',
             'entry_id': 'id',
             'EntryID': 'id',
             # Date variations
@@ -89,6 +91,8 @@ async def upload_journal_entries(
             'Description': 'description',
             'Desc': 'description',
             'desc': 'description',
+            'Type': 'description',
+            'type': 'description',
             # Debit variations
             'Debit': 'debit',
             'debit_amount': 'debit',
@@ -104,6 +108,7 @@ async def upload_journal_entries(
             'PostedBy': 'preparer',
             'prepared_by': 'preparer',
             'PreparedBy': 'preparer',
+            'Vendor/Customer': 'preparer',
             # Approver variations
             'Approver': 'approver',
             'approved_by': 'approver',

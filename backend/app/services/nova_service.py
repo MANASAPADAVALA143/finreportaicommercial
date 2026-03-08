@@ -187,12 +187,17 @@ CRITICAL RULES:
         """Rule-based fallback analysis with configurable threshold"""
         
         # SANITIZE ALL STRINGS FOR WINDOWS
-        entry_id = self._sanitize(entry.get('ID', entry.get('id', entry.get('Entry_ID', 'Unknown'))))
+        entry_id = self._sanitize(entry.get('ID', entry.get('id', entry.get('JE_ID', entry.get('Entry_ID', 'Unknown')))))
         debit = float(entry.get('Debit', entry.get('debit', 0)))
         credit = float(entry.get('Credit', entry.get('credit', 0)))
-        description = self._sanitize(entry.get('Description', entry.get('description', ''))).lower()
-        posted_by = self._sanitize(entry.get('Posted_By', entry.get('posted_by', entry.get('preparer', '')))).lower()
+        description = self._sanitize(entry.get('Description', entry.get('description', entry.get('Type', '')))).lower()
+        posted_by = self._sanitize(entry.get('Posted_By', entry.get('posted_by', entry.get('preparer', entry.get('Vendor/Customer', ''))))).lower()
         approved_by = self._sanitize(entry.get('Approved_By', entry.get('approved_by', entry.get('approver', '')))).lower()
+        
+        # NEW: Check for Duplicate flag and Weekend flag
+        is_duplicate = entry.get('Duplicate', False) or entry.get('duplicate', False)
+        is_weekend = entry.get('Weekend', False) or entry.get('weekend', False)
+        is_manual = entry.get('Manual', False) or entry.get('manual', False)
         
         risk_score = 20
         anomalies = []
@@ -200,6 +205,30 @@ CRITICAL RULES:
         shap_temporal = 10
         shap_behavioral = 10
         shap_account = 10
+        
+        # PRIORITY Rule: Duplicate Entry (HIGHEST RISK)
+        if is_duplicate:
+            risk_score += 60
+            anomalies.append("🚨 DUPLICATE ENTRY DETECTED - Potential fraud pattern")
+            shap_behavioral += 60
+        
+        # PRIORITY Rule: Weekend + Large Amount
+        amount = max(debit, credit)
+        if is_weekend and amount > 100000:
+            risk_score += 55
+            anomalies.append(f"⚠️ WEEKEND POSTING with large amount ${amount:,.0f} - High risk!")
+            shap_temporal += 45
+            shap_amount += 30
+        elif is_weekend and amount > 50000:
+            risk_score += 40
+            anomalies.append(f"⚠️ Weekend posting detected: ${amount:,.0f}")
+            shap_temporal += 35
+        
+        # Manual Entry flag
+        if is_manual and amount > 50000:
+            risk_score += 30
+            anomalies.append("📝 Manual entry with significant amount")
+            shap_behavioral += 25
         
         # Rule 1: Both debit and credit
         if debit > 0 and credit > 0:
@@ -213,16 +242,16 @@ CRITICAL RULES:
             anomalies.append("CRITICAL: Both Debit and Credit are zero (invalid entry)")
             shap_amount += 30
         
-        # Rule 3: Large amount
-        amount = max(debit, credit)
-        if amount > 200000:
-            risk_score += 50
-            anomalies.append(f"Very large amount: ${amount:,.0f}")
-            shap_amount += 45
-        elif amount > 100000:
-            risk_score += 30
-            anomalies.append(f"💵 Large amount: ${amount:,.0f}")
-            shap_amount += 25
+        # Rule 3: Large amount (only if not already counted in weekend check)
+        if not (is_weekend and amount > 100000):  # Avoid double-counting
+            if amount > 200000:
+                risk_score += 50
+                anomalies.append(f"💵 Very large amount: ${amount:,.0f}")
+                shap_amount += 45
+            elif amount > 100000:
+                risk_score += 30
+                anomalies.append(f"💵 Large amount: ${amount:,.0f}")
+                shap_amount += 25
         
         # Rule 4: Round amounts
         if amount in [100000, 250000, 500000, 750000, 1000000]:
