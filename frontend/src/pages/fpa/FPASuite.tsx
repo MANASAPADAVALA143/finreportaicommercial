@@ -1,5 +1,5 @@
 // FP&A Suite - Landing Page with Sub-Module Cards
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
 import { 
@@ -133,14 +133,14 @@ export const FPASuite = () => {
               </div>
             </div>
             
-            {/* Upload Data Button - Opens Modal */}
-            <button
-              onClick={() => setShowUploadModal(true)}
+            {/* Upload Data - same as all sections (top right) */}
+            <Link
+              to="/upload-data"
               className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm bg-blue-600 text-white hover:bg-blue-700"
             >
               <Upload className="w-4 h-4" />
               <span>Upload Data</span>
-            </button>
+            </Link>
           </div>
           
           {/* Info Banner */}

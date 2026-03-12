@@ -289,10 +289,8 @@ const parseDecisionAuditSheet = (rows: any[]): DecisionAuditData[] => {
 // MAIN PARSER
 // ============================================
 
-export const parseCFODecisionFile = async (file: File): Promise<CFODecisionUploadedData> => {
-  const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  
+/** Parse from workbook (e.g. when processing multi-sheet upload). */
+export const parseCFODecisionFromWorkbook = (workbook: XLSX.WorkBook): CFODecisionUploadedData => {
   const result: CFODecisionUploadedData = {
     investment: [],
     buildVsBuy: [],
@@ -307,6 +305,9 @@ export const parseCFODecisionFile = async (file: File): Promise<CFODecisionUploa
   
   // Sheet name mappings (case-insensitive)
   const sheetMappings: { [key: string]: keyof CFODecisionUploadedData } = {
+    'cfo_decision_inputs': 'investment',
+    'cfo_decision': 'investment',
+    'decision_inputs': 'investment',
     'investment_decisions': 'investment',
     'investment': 'investment',
     'build_vs_buy': 'buildVsBuy',
@@ -368,8 +369,15 @@ export const parseCFODecisionFile = async (file: File): Promise<CFODecisionUploa
   if (sheetsProcessed === 0) {
     throw new Error('No valid sheets found. Please check sheet names.');
   }
-  
+
   return result;
+};
+
+/** Parse from File (e.g. CFO Decision upload modal). */
+export const parseCFODecisionFile = async (file: File): Promise<CFODecisionUploadedData> => {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  return parseCFODecisionFromWorkbook(workbook);
 };
 
 // ============================================
@@ -390,9 +398,13 @@ export const saveCFODecisionData = (data: CFODecisionUploadedData): void => {
 
 export const loadCFODecisionData = (): CFODecisionUploadedData | null => {
   try {
+    const fromPipeline = localStorage.getItem('finreport_cfo_decisions');
+    if (fromPipeline) {
+      const data = JSON.parse(fromPipeline);
+      if (data && typeof data === 'object' && (data.uploadDate != null || Array.isArray(data.investment))) return data as CFODecisionUploadedData;
+    }
     const uploadDate = localStorage.getItem('cfo_decision_upload_date');
     if (!uploadDate) return null;
-    
     return {
       investment: JSON.parse(localStorage.getItem('cfo_decision_investment') || '[]'),
       buildVsBuy: JSON.parse(localStorage.getItem('cfo_decision_build_vs_buy') || '[]'),

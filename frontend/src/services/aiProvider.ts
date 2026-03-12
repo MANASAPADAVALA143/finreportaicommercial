@@ -11,13 +11,22 @@ const AI_PROVIDER: "aws-nova" | "claude" | "openai" = "aws-nova";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 
 // ==================== AWS BEDROCK CLIENT ====================
+// Env vars MUST be prefixed with VITE_ so Vite exposes them to the browser.
+// Use: VITE_AWS_ACCESS_KEY_ID, VITE_AWS_SECRET_ACCESS_KEY, VITE_AWS_REGION
+// For temporary/SSO credentials also set: VITE_AWS_SESSION_TOKEN
+
+const awsRegion = import.meta.env.VITE_AWS_REGION || "us-east-1";
+const accessKeyId = import.meta.env.VITE_AWS_ACCESS_KEY_ID || "";
+const secretAccessKey = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY || "";
+const sessionToken = import.meta.env.VITE_AWS_SESSION_TOKEN || undefined;
+
+const bedrockCredentials = accessKeyId && secretAccessKey
+  ? { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) }
+  : undefined;
 
 const bedrockClient = new BedrockRuntimeClient({
-  region: import.meta.env.VITE_AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: import.meta.env.VITE_AWS_ACCESS_KEY_ID || "",
-    secretAccessKey: import.meta.env.VITE_AWS_SECRET_ACCESS_KEY || "",
-  },
+  region: awsRegion,
+  ...(bedrockCredentials ? { credentials: bedrockCredentials } : {}),
 });
 
 // ==================== MAIN AI CALL FUNCTION ====================
@@ -35,6 +44,11 @@ export async function callAI(prompt: string, options?: {
     // AWS BEDROCK - AMAZON NOVA LITE
     // ===================================================
     if (AI_PROVIDER === "aws-nova") {
+      if (!accessKeyId || !secretAccessKey) {
+        throw new Error(
+          "AWS credentials not loaded. In frontend/.env use exactly: VITE_AWS_ACCESS_KEY_ID=... and VITE_AWS_SECRET_ACCESS_KEY=... (VITE_ prefix is required). Then restart the dev server."
+        );
+      }
       const command = new ConverseCommand({
         modelId: "us.amazon.nova-lite-v1:0",
         messages: [

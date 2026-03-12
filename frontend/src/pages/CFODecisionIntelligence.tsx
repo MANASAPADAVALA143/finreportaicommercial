@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Brain, ArrowLeft, Upload } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import MorningBrief from '../components/cfo-decision/MorningBrief';
 import InvestmentDecision from '../components/cfo-decision/InvestmentDecision';
 import BuildVsBuy from '../components/cfo-decision/BuildVsBuy';
@@ -83,12 +83,19 @@ const CFODecisionIntelligence: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowUploadModal(true)}
+              <Link
+                to="/upload-data"
                 className="px-4 py-2 bg-white text-amber-600 hover:bg-amber-50 rounded-lg transition-colors font-medium flex items-center gap-2 shadow-sm"
               >
                 <Upload className="w-4 h-4" />
                 <span>Upload Data</span>
+              </Link>
+
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors font-medium flex items-center gap-2"
+              >
+                <span>Upload Decision Data</span>
               </button>
 
               <button

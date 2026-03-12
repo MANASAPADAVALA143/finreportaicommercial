@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
+import { parseCFODecisionFromWorkbook, saveCFODecisionData } from '../services/cfoDecisionDataService';
+import { parseTrialBalanceFromRows } from '../services/fpaDataService';
+import { saveCFOServicesContext, type CFOServicesContext } from '../types/cfoServicesContext';
+import { useAgentActivity } from '../context/AgentActivityContext';
 
 interface TrialBalanceRow {
   accountCode: string;
@@ -26,8 +30,13 @@ interface ParsedFinancialData {
   fileName: string;
 }
 
+function normalizeSheetName(name: string): string {
+  return name.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
 export const UploadData: React.FC = () => {
   const navigate = useNavigate();
+  const { pushAction } = useAgentActivity();
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,25 +50,109 @@ export const UploadData: React.FC = () => {
     setResult(null);
 
     try {
-      // Parse Excel/CSV file in browser using XLSX
-      const parsedData = await parseFinancialFile(file);
-      
-      // Save to localStorage for use across all modules
-      localStorage.setItem('financialData', JSON.stringify(parsedData));
-      localStorage.setItem('dataUploadDate', new Date().toISOString());
-      
-      // Set success result
+      const data = new Uint8Array(await file.arrayBuffer());
+      const wb = XLSX.read(data, { type: 'array' });
+      const sheetNames = wb.SheetNames.slice();
+
+      const getSheet = (workbook: typeof wb, keywords: string[]) => {
+        const name = workbook.SheetNames.find((n) =>
+          keywords.some((k) => n.toLowerCase().includes(k.toLowerCase()))
+        );
+        return name ? XLSX.utils.sheet_to_json(workbook.Sheets[name]) : null;
+      };
+
+      const r2rData = getSheet(wb, ['r2r', 'journal']);
+      let ifrsData: any[] | null = getSheet(wb, ['trial', 'balance', 'ifrs']);
+      const fpaData = getSheet(wb, ['fpa', 'budget', 'variance']);
+      const cfoContextRows = getSheet(wb, ['cfo_services', 'context', 'services']);
+      const kpiData = getSheet(wb, ['kpi']);
+      const cfoData = getSheet(wb, ['cfo_decision', 'cfo decision', 'decision_input', 'CFO_Decision']);
+      let cfoDecisionData: any = null;
+      try {
+        cfoDecisionData = parseCFODecisionFromWorkbook(wb);
+      } catch {
+        // if parser fails but we have raw CFO sheet, store raw rows so key exists
+        if (cfoData?.length) {
+          cfoDecisionData = { rawRows: cfoData, uploadDate: new Date().toISOString(), investment: [], buildVsBuy: [], internalVsExternal: [], hireVsAutomate: [], costCutVsInvest: [], capitalAllocation: [], risks: [], auditTrail: [] };
+        }
+      }
+
+      if (!ifrsData?.length && wb.SheetNames.length > 0) {
+        for (const sheetName of wb.SheetNames) {
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName]);
+          const tb = parseTrialBalanceFromSheet(rows);
+          if (tb.length > 0) {
+            ifrsData = tb.map((r) => ({ glCode: r.accountCode, accountName: r.accountName, accountType: r.accountType, debit: r.debit, credit: r.credit }));
+            break;
+          }
+        }
+      }
+
+      const parsedData = {
+        r2r: r2rData,
+        trialBalance: ifrsData,
+        fpa: fpaData,
+        cfo: cfoDecisionData,
+        kpi: kpiData,
+        cfoContext: cfoContextRows,
+      };
+
+      console.log('=== UPLOAD DEBUG ===');
+      console.log('All sheet names found:', sheetNames);
+      console.log('Parsed data keys:', Object.keys(parsedData));
+      console.log('R2R rows:', parsedData.r2r?.length);
+      console.log('Trial balance rows:', parsedData.trialBalance?.length);
+      console.log('FPA rows:', parsedData.fpa?.length);
+      console.log('CFO rows:', parsedData.cfo ? (Array.isArray(parsedData.cfo) ? parsedData.cfo.length : Object.keys(parsedData.cfo).length) : 0);
+
+      if (r2rData?.length) localStorage.setItem('finreport_r2r_entries', JSON.stringify(r2rData));
+      if (ifrsData?.length) localStorage.setItem('finreport_trial_balance', JSON.stringify(ifrsData));
+      if (fpaData?.length) {
+        const fpaParsed = await parseTrialBalanceFromRows(fpaData, file.name).catch(() => null);
+        if (fpaParsed) {
+          localStorage.setItem('finreport_fpa_budget', JSON.stringify(fpaParsed));
+          localStorage.setItem('finreport_fpa_actuals', JSON.stringify(fpaParsed));
+        } else {
+          localStorage.setItem('finreport_fpa_budget', JSON.stringify(fpaData));
+          localStorage.setItem('finreport_fpa_actuals', JSON.stringify(fpaData));
+        }
+      }
+      if (cfoDecisionData) localStorage.setItem('finreport_cfo_decisions', JSON.stringify(cfoDecisionData));
+      if (kpiData?.length) localStorage.setItem('finreport_kpi_data', JSON.stringify(kpiData));
+      if (cfoContextRows?.length) {
+        const ctx = parseCFOServicesContextSheet(cfoContextRows, file.name);
+        if (ctx) {
+          localStorage.setItem('finreport_cfo_context', JSON.stringify(ctx));
+          saveCFOServicesContext(ctx);
+        }
+      }
+      localStorage.setItem('finreport_upload_timestamp', String(Date.now()));
+
+      console.log('=== LOCALSTORAGE AFTER UPLOAD ===');
+      console.log(Object.keys(localStorage));
+
+      const loaded: string[] = [];
+      if (r2rData?.length) loaded.push('R2R Journal Entries');
+      if (ifrsData?.length) loaded.push('IFRS Trial Balance');
+      if (fpaData?.length) loaded.push('FP&A Budget vs Actuals');
+      if (cfoDecisionData) loaded.push('CFO Decision');
+      if (kpiData?.length) loaded.push('KPI Actuals');
+      if (cfoContextRows?.length) loaded.push('CFO Services Context');
+
       setResult({
         success: true,
-        message: `Successfully processed ${parsedData.trialBalance.length} accounts`,
-        data: parsedData.summary
+        message: loaded.length
+          ? `Data loaded for ${loaded.length} module(s): ${loaded.join(', ')}`
+          : 'File processed. Some sheets may not match expected names (r2r/journal, trial/balance/ifrs, fpa/budget, cfo, kpi).',
+        loaded,
       });
-      
-      // Redirect to CFO dashboard after 2 seconds
-      setTimeout(() => {
-        navigate('/cfo-dashboard');
-      }, 2000);
-      
+      if (loaded.includes('R2R Journal Entries')) pushAction('r2r', `Processed ${r2rData!.length} journal entries — open R2R Pattern Engine`);
+      if (loaded.includes('IFRS Trial Balance')) pushAction('ifrs', 'Trial balance loaded — open IFRS Generator for statements');
+      if (loaded.includes('FP&A Budget vs Actuals') || loaded.includes('KPI Actuals')) pushAction('fpa', 'Budget/actuals loaded — open FP&A Suite');
+      if (loaded.includes('CFO Decision')) pushAction('decision', 'Decision data loaded — open CFO Decision Intelligence');
+      if (loaded.includes('CFO Services Context')) pushAction('voice', 'CFO context updated');
+
+      setTimeout(() => navigate('/dashboard'), 2000);
     } catch (err: any) {
       setError(err.message || 'Upload failed. Please check your file format.');
     } finally {
@@ -67,41 +160,197 @@ export const UploadData: React.FC = () => {
     }
   };
 
+  function normalizeTbHeader(col: string): string {
+    return col.trim().toLowerCase()
+      .replace(/\s*\(₹\)\s*/gi, '').replace(/\s*\(rs\)\s*/gi, '')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  function parseTrialBalanceFromSheet(rows: any[]): TrialBalanceRow[] {
+    if (!rows.length) return [];
+    const headers = Object.keys(rows[0]);
+    const normToOrig: Record<string, string> = {};
+    headers.forEach((h) => {
+      const n = normalizeTbHeader(h);
+      if (n && !normToOrig[n]) normToOrig[n] = h;
+    });
+    const pick = (...keys: string[]): string | undefined => {
+      for (const k of keys) {
+        if (normToOrig[k]) return normToOrig[k];
+      }
+      return undefined;
+    };
+    const glCol = pick('gl code', 'account code', 'code', 'entry id');
+    const nameCol = pick('account name', 'accountname', 'name', 'description', 'account');
+    const typeCol = pick('account type', 'accounttype', 'type');
+    const debitCol = pick('debit', 'debit balance', 'dr');
+    const creditCol = pick('credit', 'credit balance', 'cr');
+    if (!nameCol) return [];
+    const debitColKey = debitCol || '';
+    const creditColKey = creditCol || '';
+    return rows.map((row: any, i) => {
+      const accountCode = String(glCol ? row[glCol] : (row[nameCol] ?? i + 1)).trim();
+      const accountName = String(row[nameCol] ?? '').trim();
+      const accountType = typeCol ? String(row[typeCol] ?? 'Unknown').trim() : 'Unknown';
+      const debit = debitColKey ? parseFloat(String(row[debitColKey] ?? 0).replace(/[₹,\s]/g, '')) || 0 : 0;
+      const credit = creditColKey ? parseFloat(String(row[creditColKey] ?? 0).replace(/[₹,\s]/g, '')) || 0 : 0;
+      return { accountCode, accountName, accountType, debit, credit };
+    }).filter((e) => e.accountName && (e.debit > 0 || e.credit > 0));
+  }
+
+  function parseCFOServicesContextSheet(rows: any[], fileName: string): CFOServicesContext | null {
+    if (!rows.length) return null;
+    const get = (row: any, ...keys: string[]) => {
+      for (const k of keys) {
+        const v = row[k];
+        if (v !== undefined && v !== null && v !== '') return String(v).trim();
+      }
+      return '';
+    };
+    const getNum = (row: any, ...keys: string[]) => {
+      const v = get(row, ...keys);
+      const n = parseFloat(String(v).replace(/[₹,%\s]/g, ''));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const section = (name: string) => (row: any) =>
+      get(row, 'Section', 'Category', 'Type').toLowerCase().includes(name.toLowerCase().replace(/\s+/g, ' ').slice(0, 15));
+
+    const aiRows = rows.filter((r) => section('AI Assistant')(r) || (!get(r, 'Section', 'Category') && get(r, 'Metric', 'Name', 'Key')));
+    const kpiRows = rows.filter((r) => section('KPI')(r) || get(r, 'KPI', 'kpi'));
+    const healthRows = rows.filter((r) => section('Financial Health')(r) || section('Health Score')(r) || get(r, 'Overall', 'Grade', 'Profitability'));
+    const insightRows = rows.filter((r) => section('Strategic Insight')(r) || section('Insight')(r) || get(r, 'Priority', 'P1', 'P2', 'P3'));
+
+    let aiAssistantContext = '';
+    if (aiRows.length) {
+      aiAssistantContext = aiRows
+        .map((r) => {
+          const name = get(r, 'Metric', 'Name', 'Key', 'Label');
+          const value = get(r, 'Value', 'Amount', 'Score');
+          return name && value ? `${name}: ${value}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    if (!aiAssistantContext && rows.length <= 30) {
+      aiAssistantContext = rows
+        .map((r) => {
+          const keys = Object.keys(r).filter((k) => !/section|category|type/i.test(k));
+          return keys.map((k) => `${k}: ${r[k]}`).join(' | ');
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    const kpiAlerts = kpiRows.map((r, i) => {
+      const kpi = get(r, 'KPI', 'kpi', 'Metric', 'Name');
+      const current = getNum(r, 'Current', 'Value', 'Actual');
+      const threshold = getNum(r, 'Threshold', 'Critical', 'Warning', 'critical', 'warning');
+      const severity = (get(r, 'Severity', 'Alert', 'Status').toLowerCase().includes('critical') ? 'critical' : 'warning') as 'critical' | 'warning' | 'info';
+      return {
+        id: `cfo-alert-${i + 1}`,
+        kpi: kpi || `KPI ${i + 1}`,
+        current,
+        threshold: threshold || current,
+        severity,
+        message: get(r, 'Message', 'Description') || `${kpi}: ${current} vs threshold ${threshold}`,
+        recommendation: get(r, 'Recommendation', 'Action') || 'Review and take action.',
+        triggeredAt: new Date().toISOString(),
+      };
+    });
+
+    let healthScore: CFOServicesContext['healthScore'] = {
+      overall: 72,
+      grade: 'B',
+      components: { profitability: 72, liquidity: 81, efficiency: 68, growth: 74, stability: 55 },
+      trend: 'stable',
+      benchmarkVsIndustry: 70,
+      aiSummary: 'Financial health from CFO Services Context upload.',
+    };
+    if (healthRows.length) {
+      const first = healthRows[0];
+      const overall = getNum(first, 'Overall', 'Score', 'Total');
+      const grade = get(first, 'Grade', 'grade') || 'B';
+      healthScore = {
+        overall: overall || 72,
+        grade: (grade.toUpperCase().slice(0, 1) as 'A' | 'B' | 'C' | 'D' | 'F') || 'B',
+        components: {
+          profitability: getNum(first, 'Profitability', 'profitability') || 72,
+          liquidity: getNum(first, 'Liquidity', 'liquidity') || 81,
+          efficiency: getNum(first, 'Efficiency', 'efficiency') || 68,
+          growth: getNum(first, 'Growth', 'growth') || 74,
+          stability: getNum(first, 'Risk', 'Stability', 'stability', 'risk') || 55,
+        },
+        trend: (get(first, 'Trend', 'trend') || 'stable').toLowerCase() as 'improving' | 'stable' | 'declining',
+        benchmarkVsIndustry: getNum(first, 'Benchmark', 'benchmarkVsIndustry') || 70,
+        aiSummary: get(first, 'AI Summary', 'aiSummary', 'Summary') || healthScore.aiSummary,
+      };
+    }
+
+    const strategicInsightsSeeds = insightRows.slice(0, 6).map((r, i) => ({
+      id: `seed-${i + 1}`,
+      priority: (get(r, 'Priority', 'P1', 'P2', 'P3').toUpperCase().slice(0, 2) || 'P2') as 'P1' | 'P2' | 'P3',
+      category: get(r, 'Category', 'category') || 'risk',
+      trigger: get(r, 'Trigger', 'Description', 'Summary', 'Title') || '',
+      impact: get(r, 'Impact', 'impact'),
+      urgency: get(r, 'Urgency', 'urgency'),
+    }));
+
+    return {
+      aiAssistantContext: aiAssistantContext || 'Company financial context from upload.',
+      kpiAlerts: kpiAlerts.length ? kpiAlerts : [],
+      healthScore,
+      strategicInsightsSeeds,
+      fileName,
+    };
+  }
+
   const parseFinancialFile = (file: File): Promise<ParsedFinancialData> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const sheetName = workbook.SheetNames.includes('Trial_Balance_IFRS')
+            ? 'Trial_Balance_IFRS'
+            : workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
           const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          
           if (rows.length === 0) {
             throw new Error('File is empty or has no valid data');
           }
-          
-          // Parse Trial Balance rows
-          const trialBalance: TrialBalanceRow[] = rows.map((row, index) => {
-            // Handle different column name variations
-            const accountCode = String(row['Account Code'] || row['AccountCode'] || row['GL Code'] || row['Code'] || index + 1).trim();
-            const accountName = String(row['Account Name'] || row['AccountName'] || row['Name'] || row['Description'] || 'Unknown').trim();
-            const accountType = String(row['Account Type'] || row['AccountType'] || row['Type'] || 'Unknown').trim();
-            const debit = parseFloat(row['Debit'] || row['Debit Balance'] || row['Dr'] || 0);
-            const credit = parseFloat(row['Credit'] || row['Credit Balance'] || row['Cr'] || 0);
-            
-            return {
-              accountCode,
-              accountName,
-              accountType,
-              debit,
-              credit
-            };
-          }).filter(entry => entry.accountName !== 'Unknown' && (entry.debit > 0 || entry.credit > 0));
-          
+          const headers = Object.keys(rows[0]);
+          const normToOrig: Record<string, string> = {};
+          headers.forEach((h) => {
+            const n = normalizeTbHeader(h);
+            if (n && !normToOrig[n]) normToOrig[n] = h;
+          });
+          const pick = (...keys: string[]): string | undefined => {
+            for (const k of keys) {
+              if (normToOrig[k]) return normToOrig[k];
+            }
+            return undefined;
+          };
+          const glCol = pick('gl code', 'account code', 'code', 'entry id');
+          const nameCol = pick('account name', 'accountname', 'name', 'description', 'account');
+          const typeCol = pick('account type', 'accounttype', 'type');
+          const debitCol = pick('debit', 'debit balance', 'dr');
+          const creditCol = pick('credit', 'credit balance', 'cr');
+          if (!nameCol || !debitCol || !creditCol) {
+            throw new Error(
+              `Missing required columns. Need at least: Account/Name, Debit, Credit. Found: ${headers.join(', ')}`
+            );
+          }
+          const trialBalance: TrialBalanceRow[] = rows.map((row: any, index) => {
+            const accountCode = String(glCol ? row[glCol] : (row[nameCol] ?? index + 1)).trim();
+            const accountName = String(row[nameCol] ?? '').trim();
+            const accountType = typeCol ? String(row[typeCol] ?? 'Unknown').trim() : 'Unknown';
+            const debit = parseFloat(String(row[debitCol] ?? 0).replace(/[₹,\s]/g, '')) || 0;
+            const credit = parseFloat(String(row[creditCol] ?? 0).replace(/[₹,\s]/g, '')) || 0;
+            return { accountCode, accountName, accountType, debit, credit };
+          }).filter((entry) => entry.accountName && entry.accountName !== 'Unknown' && (entry.debit > 0 || entry.credit > 0));
           if (trialBalance.length === 0) {
-            throw new Error('No valid accounts found. Please check your file format.');
+            throw new Error('No valid accounts found. Check that Account Code, Account Name, Debit and Credit have values. Found columns: ' + headers.join(', '));
           }
           
           // Calculate summary metrics
@@ -184,7 +433,9 @@ export const UploadData: React.FC = () => {
             </h2>
 
             <p className="text-slate-300 text-center mb-8 max-w-2xl">
-              Your file should contain: Account Code, Account Name, Account Type, Debit, Credit
+              Single sheet: Account Code, Account Name, Account Type, Debit, Credit.
+              <br />
+              <span className="text-purple-200">Demo (one file, 7 sheets):</span> R2R_Journal_Entries, Trial_Balance_IFRS, FPA_Budget_vs_Actuals, CFO_Decision_Inputs (or Investment / Build vs Buy / …), KPI_Actuals, CFO_Services_Context (AI context, KPI thresholds, Health Score, Insight seeds), README → all modules use this file.
             </p>
 
             {/* Upload Area */}
@@ -231,38 +482,35 @@ export const UploadData: React.FC = () => {
                     <p className="text-green-200 text-sm mb-4">
                       {result.message}
                     </p>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between text-green-100">
-                        <span>Cash:</span>
-                        <span className="font-semibold">
-                          ₹{(result.data?.cash / 10000000).toFixed(2)}Cr
-                        </span>
+                    {result.multiSheet && result.loaded?.length > 0 && (
+                      <p className="text-green-100 text-xs mb-2">
+                        Loaded for: {result.loaded.join(' · ')}
+                      </p>
+                    )}
+                    {result.data && (
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between text-green-100">
+                          <span>Cash:</span>
+                          <span className="font-semibold">₹{(result.data.cash / 10000000).toFixed(2)}Cr</span>
+                        </div>
+                        <div className="flex justify-between text-green-100">
+                          <span>Revenue:</span>
+                          <span className="font-semibold">₹{(result.data.totalRevenue / 10000000).toFixed(2)}Cr</span>
+                        </div>
+                        <div className="flex justify-between text-green-100">
+                          <span>Expenses:</span>
+                          <span className="font-semibold">₹{(result.data.totalExpenses / 10000000).toFixed(2)}Cr</span>
+                        </div>
+                        <div className="flex justify-between text-green-100">
+                          <span>Net Profit:</span>
+                          <span className="font-semibold">₹{(result.data.netProfit / 10000000).toFixed(2)}Cr</span>
+                        </div>
+                        <div className="flex justify-between text-green-100">
+                          <span>Total Assets:</span>
+                          <span className="font-semibold">₹{(result.data.totalAssets / 10000000).toFixed(2)}Cr</span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-green-100">
-                        <span>Revenue:</span>
-                        <span className="font-semibold">
-                          ₹{(result.data?.totalRevenue / 10000000).toFixed(2)}Cr
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-green-100">
-                        <span>Expenses:</span>
-                        <span className="font-semibold">
-                          ₹{(result.data?.totalExpenses / 10000000).toFixed(2)}Cr
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-green-100">
-                        <span>Net Profit:</span>
-                        <span className="font-semibold">
-                          ₹{(result.data?.netProfit / 10000000).toFixed(2)}Cr
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-green-100">
-                        <span>Total Assets:</span>
-                        <span className="font-semibold">
-                          ₹{(result.data?.totalAssets / 10000000).toFixed(2)}Cr
-                        </span>
-                      </div>
-                    </div>
+                    )}
                     <p className="text-green-200 text-sm mt-4">
                       Redirecting to dashboard...
                     </p>

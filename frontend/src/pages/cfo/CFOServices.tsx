@@ -11,9 +11,11 @@ import {
   Bell,
   Activity,
   MessageSquare,
-  Upload
+  Upload,
+  Mic,
+  Square
 } from 'lucide-react';
-import { CFOTab, ChatMessage, StrategicInsight, KPIAlert } from '../../types/cfo';
+import { CFOTab, ChatMessage, StrategicInsight, KPIAlert, FinancialHealthScore } from '../../types/cfo';
 import {
   initialChatMessages,
   suggestedQuestions,
@@ -23,22 +25,67 @@ import {
   financialContext
 } from '../../data/cfoMockData';
 import { callAI } from '../../services/aiProvider';
+import { useAgentActivity } from '../../context/AgentActivityContext';
+import { loadCFOServicesContext } from '../../types/cfoServicesContext';
 
 interface CFOServicesProps {
   defaultTab?: CFOTab;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const VOICE_SUGGESTED_QUESTIONS = [
+  'What is our cash runway?',
+  'Why did costs increase this month?',
+  'Which department is over budget?',
+  'Should we hire or automate?',
+  'What is our financial health score?',
+];
+type VoiceState = 'idle' | 'recording' | 'processing' | 'speaking' | 'error';
+
 const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) => {
   const navigate = useNavigate();
+  const { pushAction, markActive } = useAgentActivity();
   const [activeTab, setActiveTab] = useState<CFOTab>(defaultTab);
   const [messages, setMessages] = useState<ChatMessage[]>(initialChatMessages);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [insights, setInsights] = useState<StrategicInsight[]>(mockInsights);
   const [alerts, setAlerts] = useState<KPIAlert[]>(mockKPIAlerts);
-  const [healthScore] = useState(mockHealthScore);
+  const [healthScore, setHealthScore] = useState<FinancialHealthScore>(mockHealthScore);
+  const [effectiveContext, setEffectiveContext] = useState<string>(financialContext);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const ctx = loadCFOServicesContext();
+    if (!ctx) return;
+    if (ctx.aiAssistantContext) setEffectiveContext(`COMPANY FINANCIAL DATA (from upload):\n${ctx.aiAssistantContext}`);
+    if (ctx.kpiAlerts?.length) setAlerts(ctx.kpiAlerts as KPIAlert[]);
+    if (ctx.healthScore) setHealthScore(ctx.healthScore as FinancialHealthScore);
+    if (ctx.strategicInsightsSeeds?.length) {
+      const fromSeeds: StrategicInsight[] = ctx.strategicInsightsSeeds.map((s, i) => ({
+        id: `ctx-ins-${i + 1}`,
+        category: (s.category?.toLowerCase().slice(0, 5) === 'revenu' ? 'revenue' : s.category?.toLowerCase().slice(0, 4) === 'cost' ? 'cost' : s.category?.toLowerCase().slice(0, 4) === 'cash' ? 'cash' : s.category?.toLowerCase().slice(0, 4) === 'risk' ? 'risk' : 'opportunity') as StrategicInsight['category'],
+        title: s.trigger?.slice(0, 60) || s.category || 'Insight',
+        summary: s.trigger || '',
+        detail: s.trigger || '',
+        impact: (s.impact?.toLowerCase().includes('high') ? 'high' : s.impact?.toLowerCase().includes('medium') ? 'medium' : 'low') as StrategicInsight['impact'],
+        urgency: (s.urgency?.toLowerCase().includes('immediate') ? 'immediate' : s.urgency?.toLowerCase().includes('week') ? 'this_week' : 'this_month') as StrategicInsight['urgency'],
+        action: 'Review and act per priority.',
+        generatedAt: new Date().toISOString(),
+      }));
+      setInsights(fromSeeds);
+    }
+  }, []);
+
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [lastSpoken, setLastSpoken] = useState<string | null>(null);
+  const [lastVoiceResponse, setLastVoiceResponse] = useState<string | null>(null);
+  const [voiceAudioUrl, setVoiceAudioUrl] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -78,7 +125,7 @@ Format with bullet points for lists.
 Keep response under 200 words unless detailed analysis is requested.
 End with 1 recommended action if relevant.
 
-${financialContext}
+${effectiveContext}
 
 USER QUESTION: ${userMessage}`;
 
@@ -115,6 +162,102 @@ USER QUESTION: ${userMessage}`;
     setInputMessage(question);
     inputRef.current?.focus();
   };
+
+  const callVoiceAPI = async (transcriptOrAudio: string | Blob): Promise<void> => {
+    setVoiceState('processing');
+    setVoiceError(null);
+    const formData = new FormData();
+    if (typeof transcriptOrAudio === 'string') {
+      formData.append('transcript', transcriptOrAudio);
+    } else {
+      formData.append('audio', transcriptOrAudio, 'recording.webm');
+    }
+    const token = localStorage.getItem('access_token');
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    try {
+      const res = await fetch(`${API_BASE}/api/nova/voice`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Voice request failed');
+      setLastSpoken(data.transcript || (typeof transcriptOrAudio === 'string' ? transcriptOrAudio : ''));
+      setLastVoiceResponse(data.text_response || '');
+      setVoiceAudioUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        if (data.audio_base64) {
+          const audioBlob = new Blob([Uint8Array.from(atob(data.audio_base64), c => c.charCodeAt(0))], { type: 'audio/mp3' });
+          return URL.createObjectURL(audioBlob);
+        }
+        return null;
+      });
+      setVoiceState('speaking');
+      const newUserMsg: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: data.transcript || String(transcriptOrAudio),
+        timestamp: new Date().toISOString(),
+      };
+      const newAssistantMsg: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: data.text_response,
+        timestamp: new Date().toISOString(),
+        sources: ['Voice AI · Nova 2 Sonic'],
+      };
+      setMessages((prev) => [...prev, newUserMsg, newAssistantMsg]);
+      markActive('voice');
+      const shortReply = (data.text_response || '').slice(0, 80) + ((data.text_response?.length || 0) > 80 ? '…' : '');
+      pushAction('voice', `CFO asked: ${(data.transcript || '').slice(0, 40)} → ${shortReply}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Voice request failed';
+      setVoiceError(msg);
+      setVoiceState('error');
+    }
+  };
+
+  const startRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceError('Microphone not supported');
+      setVoiceState('error');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        callVoiceAPI(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setVoiceState('recording');
+      setVoiceError(null);
+    } catch {
+      setVoiceError('Microphone access denied');
+      setVoiceState('error');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+    }
+  };
+
+  const handleVoiceChipClick = (q: string) => {
+    callVoiceAPI(q);
+  };
+
+  const supportsMediaRecorder = typeof MediaRecorder !== 'undefined';
 
   const dismissAlert = (id: string) => {
     setAlerts(prev => prev.filter(a => a.id !== id));
@@ -168,7 +311,7 @@ USER QUESTION: ${userMessage}`;
   const warningAlerts = alerts.filter(a => a.severity === 'warning');
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6">
+    <div className="min-h-screen p-6" style={{ backgroundColor: '#F0F4FF' }}>
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -210,14 +353,15 @@ USER QUESTION: ${userMessage}`;
 
       {/* Tabs */}
       <div className="max-w-[1800px] mx-auto mb-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-2 flex gap-2">
+        <div className="rounded-xl shadow-sm p-2 flex gap-2" style={{ backgroundColor: '#1E1B4B' }}>
           <button
             onClick={() => setActiveTab('assistant')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold transition-colors ${
               activeTab === 'assistant'
-                ? 'bg-purple-600 text-white'
-                : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ? 'text-white'
+                : 'text-white hover:opacity-90'
             }`}
+            style={{ backgroundColor: activeTab === 'assistant' ? '#7C3AED' : 'transparent' }}
           >
             <MessageSquare size={20} />
             AI Assistant
@@ -226,9 +370,10 @@ USER QUESTION: ${userMessage}`;
             onClick={() => setActiveTab('insights')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold transition-colors ${
               activeTab === 'insights'
-                ? 'bg-purple-600 text-white'
-                : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ? 'text-white'
+                : 'text-white hover:opacity-90'
             }`}
+            style={{ backgroundColor: activeTab === 'insights' ? '#7C3AED' : 'transparent' }}
           >
             <Sparkles size={20} />
             Strategic Insights
@@ -242,9 +387,10 @@ USER QUESTION: ${userMessage}`;
             onClick={() => setActiveTab('monitor')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold transition-colors ${
               activeTab === 'monitor'
-                ? 'bg-purple-600 text-white'
-                : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ? 'text-white'
+                : 'text-white hover:opacity-90'
             }`}
+            style={{ backgroundColor: activeTab === 'monitor' ? '#7C3AED' : 'transparent' }}
           >
             <Bell size={20} />
             KPI Monitor
@@ -258,9 +404,10 @@ USER QUESTION: ${userMessage}`;
             onClick={() => setActiveTab('health')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-semibold transition-colors ${
               activeTab === 'health'
-                ? 'bg-purple-600 text-white'
-                : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
+                ? 'text-white'
+                : 'text-white hover:opacity-90'
             }`}
+            style={{ backgroundColor: activeTab === 'health' ? '#7C3AED' : 'transparent' }}
           >
             <Activity size={20} />
             Health Score
@@ -320,6 +467,110 @@ USER QUESTION: ${userMessage}`;
                 </div>
               </div>
             )}
+
+            {/* Voice AI Panel */}
+            <div className="border-t border-gray-200 p-4 bg-gradient-to-br from-slate-50 to-blue-50">
+              <div className="text-sm font-semibold text-gray-800 mb-3">🎙 Ask Nova by Voice</div>
+              {!supportsMediaRecorder ? (
+                <p className="text-sm text-amber-700">Voice not supported in this browser. Use Chrome or Edge.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-3 mb-3">
+                    <button
+                      onMouseDown={startRecording}
+                      onMouseUp={stopRecording}
+                      onMouseLeave={stopRecording}
+                      onTouchStart={startRecording}
+                      onTouchEnd={stopRecording}
+                      disabled={voiceState === 'processing'}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                        voiceState === 'recording'
+                          ? 'bg-red-500 text-white animate-pulse'
+                          : voiceState === 'processing'
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : voiceState === 'speaking'
+                          ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                          : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {voiceState === 'recording' ? (
+                        <Square size={18} />
+                      ) : voiceState === 'processing' ? (
+                        <span className="flex gap-0.5">
+                          <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </span>
+                      ) : (
+                        <Mic size={18} />
+                      )}
+                      {voiceState === 'recording' ? 'Listening...' : voiceState === 'processing' ? 'Nova is thinking...' : 'Hold to Speak'}
+                    </button>
+                    <span className={`text-xs ${voiceState === 'speaking' ? 'text-blue-600 font-medium' : 'text-gray-600'}`}>
+                      {voiceState === 'idle' && '● Ready to listen'}
+                      {voiceState === 'recording' && '● Listening...'}
+                      {voiceState === 'processing' && '● Nova is thinking...'}
+                      {voiceState === 'speaking' && '● Nova is speaking...'}
+                      {voiceState === 'error' && '● Could not understand, try again'}
+                    </span>
+                  </div>
+                  {voiceError && <p className="text-sm text-red-600 mb-2">{voiceError}</p>}
+                  {lastSpoken && (
+                    <div className="mb-2 text-sm">
+                      <span className="text-gray-600">Last spoken: </span>
+                      <span className="font-medium">&quot;{lastSpoken}&quot;</span>
+                    </div>
+                  )}
+                  {lastVoiceResponse && (
+                    <div className="flex flex-wrap items-start gap-3">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-gray-600 text-sm">Nova replied: </span>
+                        <p className="text-gray-800 text-sm mt-0.5">{lastVoiceResponse}</p>
+                      </div>
+                      {voiceAudioUrl && (
+                        <div className="flex items-center gap-2">
+                          {voiceState === 'speaking' && (
+                            <span className="flex gap-0.5 items-end h-4">
+                              {[0, 1, 2, 3, 4].map((i) => (
+                                <span
+                                  key={i}
+                                  className="w-1 bg-blue-500 rounded-full animate-pulse"
+                                  style={{ height: '12px', animationDelay: `${i * 80}ms`, animationDuration: '0.5s' }}
+                                />
+                              ))}
+                            </span>
+                          )}
+                          <audio
+                            ref={audioRef}
+                            src={voiceAudioUrl}
+                            controls
+                            autoPlay
+                            className="h-8"
+                            onEnded={() => setVoiceState('idle')}
+                            onPlay={() => setVoiceState('speaking')}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="text-xs text-gray-600 mb-2">Voice suggested questions:</div>
+                    <div className="flex flex-wrap gap-2">
+                      {VOICE_SUGGESTED_QUESTIONS.map((q, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleVoiceChipClick(q)}
+                          disabled={voiceState === 'processing'}
+                          className="px-3 py-1.5 text-xs bg-white border border-purple-200 rounded-full hover:bg-purple-50 text-purple-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Input Box */}
             <div className="border-t border-gray-200 p-4">

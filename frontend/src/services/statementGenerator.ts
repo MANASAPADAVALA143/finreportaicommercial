@@ -45,9 +45,14 @@ export function generateIFRSStatements(input: StatementInput): GeneratedStatemen
   // Calculate totals and subtotals
   calculateBalanceSheetTotals(balanceSheet);
   calculateProfitLossTotals(profitLoss);
+
+  // Derive cash flow and equity from balance sheet and P&L (indirect method)
+  deriveCashFlowAndEquityFromBSAndPL(balanceSheet, profitLoss, cashFlow, equity);
+
   calculateCashFlowTotals(cashFlow);
+  reconcileCashToBalanceSheet(balanceSheet, cashFlow);
   calculateEquityTotals(equity);
-  
+
   return {
     entityName,
     periodEnd,
@@ -330,6 +335,36 @@ function calculateProfitLossTotals(pl: ProfitLoss) {
   
   // Profit After Tax
   pl.profitAfterTax = pl.profitBeforeTax - pl.incomeTax;
+}
+
+/** Derive cash flow (indirect) and equity from balance sheet and P&L so the statements are populated. */
+function deriveCashFlowAndEquityFromBSAndPL(
+  bs: BalanceSheet,
+  pl: ProfitLoss,
+  cf: CashFlow,
+  eq: Equity
+) {
+  // Cash flow – indirect method: feed P&L into operating, then reconcile to BS cash
+  cf.operating.profitBeforeTax = pl.profitBeforeTax;
+  cf.operating.adjustments.depreciation = pl.operatingExpenses.depreciation;
+  cf.operating.adjustments.interestExpense = pl.financeCosts;
+  cf.operating.interestPaid = pl.financeCosts;
+  cf.operating.taxesPaid = pl.incomeTax;
+
+  // Equity – link to BS and P&L
+  eq.shareCapital.beginning = bs.equity.shareCapital;
+  eq.shareCapital.ending = bs.equity.shareCapital;
+  eq.retainedEarnings.profitForYear = pl.profitAfterTax;
+  eq.retainedEarnings.ending = bs.equity.retainedEarnings;
+  eq.retainedEarnings.beginning = Math.max(0, eq.retainedEarnings.ending - eq.retainedEarnings.profitForYear + eq.retainedEarnings.dividends);
+  eq.reserves.beginning = bs.equity.reserves;
+  eq.reserves.ending = bs.equity.reserves;
+}
+
+/** After totals are calculated, reconcile cash flow so ending cash matches balance sheet. */
+function reconcileCashToBalanceSheet(bs: BalanceSheet, cf: CashFlow) {
+  cf.cashEnding = bs.assets.current.cashAndEquivalents;
+  cf.cashBeginning = cf.cashEnding - cf.netIncrease;
 }
 
 function calculateCashFlowTotals(cf: CashFlow) {

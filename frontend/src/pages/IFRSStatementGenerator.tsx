@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   Upload, FileText, CheckCircle, AlertTriangle, Download,
   ArrowLeft, ArrowRight, Save, Settings, Zap, Target,
@@ -13,6 +13,9 @@ import {
 } from 'lucide-react';
 import { getAISuggestions, INDUSTRY_TEMPLATES } from '../services/mappingService';
 import type { AIMappingResult } from '../types/ifrs';
+import IFRSTabBar from '../components/IFRSTabBar';
+import { NoteTemplate } from '../components/ifrs-notes';
+import ManagementCommentary from '../components/ifrs-notes/ManagementCommentary';
 
 // ==================== INTERFACES ====================
 
@@ -82,15 +85,102 @@ export const IFRSStatementGenerator = () => {
   // Step 3 state
   const [statements, setStatements] = useState<GeneratedStatements | null>(null);
   const [activeTab, setActiveTab] = useState('financial-position');
+  const [activeSection, setActiveSection] = useState('financial-position');
   const [entityName, setEntityName] = useState('Your Company Ltd');
   const [periodEnd, setPeriodEnd] = useState('2024-12-31');
   const [currency, setCurrency] = useState('USD');
   const [generating, setGenerating] = useState(false);
+  const [generatingNotes, setGeneratingNotes] = useState(false);
+  const [completedSections, setCompletedSections] = useState<string[]>([]);
+  const [noteCustomizations, setNoteCustomizations] = useState<Record<string, string>>({});
+  const [generatedNotes, setGeneratedNotes] = useState<Record<string, string>>({});
+  const [commentaryContent, setCommentaryContent] = useState('');
+  const [editedStatements, setEditedStatements] = useState<GeneratedStatements | null>(null);
 
   // Load templates on mount - use built-in templates from mapping service
   useEffect(() => {
     loadTemplates();
   }, []);
+
+  // On mount: read trial balance from localStorage and show step 2 immediately (no re-upload needed)
+  useEffect(() => {
+    const raw = localStorage.getItem('finreport_trial_balance') || localStorage.getItem('ifrs_trial_balance');
+    if (!raw) return;
+    const pick = (row: any, ...keys: string[]): string | number => {
+      const lower = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+      for (const k of keys) {
+        for (const [header, val] of Object.entries(row || {})) {
+          if (val == null || val === '') continue;
+          if (lower(String(header)) === lower(k) || lower(String(header)).includes(lower(k))) return val as string | number;
+        }
+        if (row[k] != null && row[k] !== '') return row[k] as string | number;
+      }
+      return '';
+    };
+    try {
+      const data = JSON.parse(raw);
+      const tb = Array.isArray(data) ? data : (data?.trialBalance ?? []);
+      if (!Array.isArray(tb) || tb.length === 0) return;
+      const entries: TrialBalanceEntry[] = tb.map((row: any, i: number) => {
+        const glCode = String(pick(row, 'gl code', 'account code', 'glcode', 'accountcode', 'code', 'entry id') || (i + 1)).trim();
+        const accountName = String(pick(row, 'account name', 'accountname', 'name', 'description', 'account') || '').trim();
+        const debit = parseFloat(String(pick(row, 'debit', 'debit balance', 'dr')).replace(/[₹,\s]/g, '')) || 0;
+        const credit = parseFloat(String(pick(row, 'credit', 'credit balance', 'cr')).replace(/[₹,\s]/g, '')) || 0;
+        let accountType = 'unknown';
+        if (debit > 0) accountType = 'asset/expense';
+        if (credit > 0) accountType = 'liability/equity/revenue';
+        return { glCode, accountName, debit, credit, accountType, mappingStatus: 'unmapped' as const };
+      }).filter((e: TrialBalanceEntry) => e.accountName && (e.debit > 0 || e.credit > 0));
+      if (entries.length === 0) return;
+      setTrialBalance(entries);
+      setCurrentStep(2);
+      (async () => {
+        try {
+          const aiResults = await getAISuggestions(entries);
+          const mappings: IFRSMapping[] = entries.map(entry => {
+            const r = aiResults[entry.glCode];
+            const confidence = r?.confidence ?? 0;
+            const suggested = r?.suggestedMapping ?? '';
+            const status = confidence >= 80 ? 'mapped' : confidence >= 50 ? 'uncertain' : 'unmapped';
+            return {
+              glCode: entry.glCode,
+              accountName: entry.accountName,
+              suggestedMapping: suggested || 'unmapped',
+              confidence,
+              status,
+              alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
+                path: alt.ifrsLine ?? '',
+                label: alt.label ?? ''
+              }));
+            };
+          });
+          setAiMappings(mappings);
+          const initialMappings: Record<string, string> = {};
+          mappings.forEach((m: IFRSMapping) => {
+            if (m.confidence >= 80 && m.suggestedMapping !== 'unmapped') initialMappings[m.glCode] = m.suggestedMapping;
+          });
+          setUserMappings(initialMappings);
+        } catch (e) {
+          console.error('IFRS AI mappings error', e);
+        }
+      })();
+    } catch (e) {
+      console.error('IFRS load error', e);
+    }
+  }, []);
+
+  // Keep activeTab in sync with activeSection for statement tabs
+  useEffect(() => {
+    setActiveTab(activeSection);
+  }, [activeSection]);
+
+  // Mark section as completed when viewed
+  useEffect(() => {
+    if (!activeSection) return;
+    setCompletedSections((prev) =>
+      prev.includes(activeSection) ? prev : [...prev, activeSection]
+    );
+  }, [activeSection]);
 
   const loadTemplates = async () => {
     try {
@@ -132,18 +222,27 @@ export const IFRSStatementGenerator = () => {
       const parsedData = await parseUploadedFile(file);
       setTrialBalance(parsedData);
       
-      // Automatically trigger AI mapping using client-side AI service
+      // Automatically trigger AI mapping (backend or rule-based)
       const aiResults = await getAISuggestions(parsedData);
       
-      // Convert AI results to IFRSMapping format
-      const mappings: IFRSMapping[] = parsedData.map(entry => ({
-        glCode: entry.glCode,
-        accountName: entry.accountName,
-        suggestedMapping: aiResults[entry.glCode] || 'unmapped',
-        confidence: aiResults[entry.glCode] ? 85 : 0,
-        status: aiResults[entry.glCode] ? 'mapped' : 'unmapped',
-        alternatives: []
-      }));
+      // Convert AI results to IFRSMapping format (aiResults[glCode] is an object, not a string)
+      const mappings: IFRSMapping[] = parsedData.map(entry => {
+        const r = aiResults[entry.glCode];
+        const confidence = r?.confidence ?? 0;
+        const suggested = r?.suggestedMapping ?? '';
+        const status = confidence >= 80 ? 'mapped' : confidence >= 50 ? 'uncertain' : 'unmapped';
+        return {
+          glCode: entry.glCode,
+          accountName: entry.accountName,
+          suggestedMapping: suggested || 'unmapped',
+          confidence,
+          status,
+          alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
+            path: alt.ifrsLine ?? '',
+            label: alt.label ?? ''
+          }))
+        };
+      });
       
       setAiMappings(mappings);
       
@@ -164,31 +263,64 @@ export const IFRSStatementGenerator = () => {
     }
   };
 
-  // Parse Excel/CSV file in browser
+  // Normalize header for column matching: strip, lowercase, remove (₹)/(Rs)
+  const normalizeHeader = (col: string): string =>
+    col.trim().toLowerCase()
+      .replace(/\s*\(₹\)\s*/gi, '').replace(/\s*\(rs\)\s*/gi, '')
+      .replace(/\s+/g, ' ').trim();
+
+  // Parse Excel/CSV file in browser — accepts Trial_Balance_IFRS sheet and flexible column names
   const parseUploadedFile = (file: File): Promise<TrialBalanceEntry[]> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      
       reader.onload = (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const sheetName = workbook.SheetNames.includes('Trial_Balance_IFRS')
+            ? 'Trial_Balance_IFRS'
+            : workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
           const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          
-          // Map rows to TrialBalanceEntry format
-          // Expected columns: GL Code, Account Name, Debit, Credit
-          const entries: TrialBalanceEntry[] = rows.map(row => {
-            const glCode = String(row['GL Code'] || row['GLCode'] || row['Account Code'] || '').trim();
-            const accountName = String(row['Account Name'] || row['AccountName'] || row['Description'] || '').trim();
-            const debit = parseFloat(row['Debit'] || row['Debit Balance'] || 0);
-            const credit = parseFloat(row['Credit'] || row['Credit Balance'] || 0);
-            
-            // Determine account type based on balance
+          if (rows.length === 0) {
+            throw new Error('No valid data found in file. Expected columns: GL Code / Account Code / Code, Account Name / Name, Debit, Credit');
+          }
+          const headers = Object.keys(rows[0]);
+          const normalizedToOriginal: Record<string, string> = {};
+          headers.forEach((h) => {
+            const n = normalizeHeader(h);
+            if (n && !normalizedToOriginal[n]) normalizedToOriginal[n] = h;
+          });
+          const pick = (...keys: string[]): string | undefined => {
+            for (const k of keys) {
+              const orig = normalizedToOriginal[k];
+              if (orig) return orig;
+            }
+            return undefined;
+          };
+          const glCol = pick('gl code', 'account code', 'code');
+          const nameCol = pick('account name', 'accountname', 'name', 'description');
+          const typeCol = pick('account type', 'accounttype', 'type');
+          const debitCol = pick('debit', 'debit balance', 'dr');
+          const creditCol = pick('credit', 'credit balance', 'cr');
+          if (!glCol || !nameCol || !debitCol || !creditCol) {
+            throw new Error(
+              `Missing required columns. Need: GL Code (or Account Code/Code), Account Name (or Name), Debit, Credit. Found: ${headers.join(', ')}`
+            );
+          }
+          const entries: TrialBalanceEntry[] = rows.map((row: any) => {
+            const glCode = String(row[glCol] ?? '').trim();
+            const accountName = String(row[nameCol] ?? '').trim();
+            const debitRaw = row[debitCol];
+            const creditRaw = row[creditCol];
+            const debit = parseFloat(String(debitRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
+            const credit = parseFloat(String(creditRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
             let accountType = 'unknown';
-            if (debit > 0) accountType = 'asset/expense';
-            if (credit > 0) accountType = 'liability/equity/revenue';
-            
+            if (typeCol && row[typeCol]) accountType = String(row[typeCol]).trim().toLowerCase();
+            if (accountType === 'unknown') {
+              if (debit > 0) accountType = 'asset/expense';
+              if (credit > 0) accountType = 'liability/equity/revenue';
+            }
             return {
               glCode,
               accountName,
@@ -197,18 +329,15 @@ export const IFRSStatementGenerator = () => {
               accountType,
               mappingStatus: 'unmapped' as const
             };
-          }).filter(entry => entry.glCode && entry.accountName); // Filter out invalid rows
-          
+          }).filter((entry) => entry.glCode && entry.accountName);
           if (entries.length === 0) {
-            throw new Error('No valid data found in file. Expected columns: GL Code, Account Name, Debit, Credit');
+            throw new Error('No valid accounts found. Check that GL Code, Account Name, Debit and Credit columns have values. Found columns: ' + headers.join(', '));
           }
-          
           resolve(entries);
         } catch (error: any) {
-          reject(new Error(`Failed to parse file: ${error.message}`));
+          reject(new Error(error.message || `Failed to parse file`));
         }
       };
-      
       reader.onerror = () => reject(new Error('Failed to read file'));
       reader.readAsArrayBuffer(file);
     });
@@ -252,17 +381,26 @@ export const IFRSStatementGenerator = () => {
       
       setTrialBalance(entries);
       
-      // Trigger AI mapping using client-side AI service
+      // Trigger AI mapping (backend or rule-based)
       const aiResults = await getAISuggestions(entries);
       
-      const mappings: IFRSMapping[] = entries.map(entry => ({
-        glCode: entry.glCode,
-        accountName: entry.accountName,
-        suggestedMapping: aiResults[entry.glCode] || 'unmapped',
-        confidence: aiResults[entry.glCode] ? 85 : 0,
-        status: aiResults[entry.glCode] ? 'mapped' : 'unmapped',
-        alternatives: []
-      }));
+      const mappings: IFRSMapping[] = entries.map(entry => {
+        const r = aiResults[entry.glCode];
+        const confidence = r?.confidence ?? 0;
+        const suggested = r?.suggestedMapping ?? '';
+        const status = confidence >= 80 ? 'mapped' : confidence >= 50 ? 'uncertain' : 'unmapped';
+        return {
+          glCode: entry.glCode,
+          accountName: entry.accountName,
+          suggestedMapping: suggested || 'unmapped',
+          confidence,
+          status,
+          alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
+            path: alt.ifrsLine ?? '',
+            label: alt.label ?? ''
+          }))
+        };
+      });
       
       setAiMappings(mappings);
       
@@ -547,11 +685,94 @@ export const IFRSStatementGenerator = () => {
       });
       
       setStatements(result);
+      setEditedStatements(JSON.parse(JSON.stringify(result)));
       setCurrentStep(3);
+      setCompletedSections(['financial-position', 'profit-loss', 'cash-flows', 'equity']);
+      try {
+        const keyPrefix = `ifrs_note_`;
+        const stored: Record<string, string> = {};
+        const noteIds = ['note-1-general', 'note-2-policies', 'note-3-revenue', 'note-4-ppe', 'note-5-leases', 'note-6-instruments', 'note-7-inventory', 'note-8-tax', 'note-9-related', 'note-10-events'];
+        noteIds.forEach((id) => {
+          const val = localStorage.getItem(`${keyPrefix}${id}_${entityName}_${periodEnd}`);
+          if (val) stored[id] = val;
+        });
+        setNoteCustomizations((prev) => ({ ...prev, ...stored }));
+      } catch (_) {}
+      await generateAllNotes(result);
     } catch (error: any) {
       alert('Failed to generate statements: ' + error.message);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleNoteSave = (noteId: string, content: string) => {
+    if (content) {
+      setNoteCustomizations((prev) => ({ ...prev, [noteId]: content }));
+    } else {
+      setNoteCustomizations((prev) => {
+        const updated = { ...prev };
+        delete updated[noteId];
+        return updated;
+      });
+    }
+    try {
+      const key = `ifrs_note_${noteId}_${entityName}_${periodEnd}`;
+      if (content) localStorage.setItem(key, content);
+      else localStorage.removeItem(key);
+    } catch (_) {}
+  };
+
+  const generateAllNotes = async (stmt: GeneratedStatements) => {
+    setGeneratingNotes(true);
+    try {
+      const { generateNoteContent, getNoteTypeForGeneration } = await import(
+        '../services/notesGeneratorService'
+      );
+      const companyInfo = {
+        name: entityName,
+        periodEnd,
+        period: periodEnd,
+        currency,
+      };
+      const financialData = {
+        financialPosition: stmt.financialPosition,
+        profitLoss: stmt.profitLoss,
+        cashFlows: stmt.cashFlows,
+        changesInEquity: stmt.changesInEquity,
+      };
+      const noteIds = [
+        'note-1-general',
+        'note-2-policies',
+        'note-3-revenue',
+        'note-4-ppe',
+        'note-5-leases',
+        'note-6-instruments',
+        'note-7-inventory',
+        'note-8-tax',
+        'note-9-related',
+        'note-10-events',
+      ];
+      const notes: Record<string, string> = {};
+      for (const id of noteIds) {
+        const noteType = getNoteTypeForGeneration(id);
+        notes[id] = await generateNoteContent(
+          noteType,
+          financialData as Record<string, unknown>,
+          companyInfo
+        );
+      }
+      setGeneratedNotes(notes);
+      const commentary = await generateNoteContent(
+        'Management commentary and analysis: summarise key financial results, trends, and highlights for the period',
+        financialData as Record<string, unknown>,
+        companyInfo
+      );
+      setCommentaryContent(commentary);
+    } catch (e) {
+      console.error('Notes generation failed:', e);
+    } finally {
+      setGeneratingNotes(false);
     }
   };
 
@@ -560,8 +781,7 @@ export const IFRSStatementGenerator = () => {
     
     try {
       if (format === 'json') {
-        // Export as JSON
-        const blob = new Blob([JSON.stringify(statements, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -575,12 +795,10 @@ export const IFRSStatementGenerator = () => {
         const workbook = XLSX.utils.book_new();
         
         // Balance Sheet
-        const bsData = formatBalanceSheetForExport(statements.financialPosition);
+        const bsData = formatBalanceSheetForExport(toExport.financialPosition);
         const bsSheet = XLSX.utils.aoa_to_sheet(bsData);
         XLSX.utils.book_append_sheet(workbook, bsSheet, 'Balance Sheet');
-        
-        // Profit & Loss
-        const plData = formatProfitLossForExport(statements.profitLoss);
+        const plData = formatProfitLossForExport(toExport.profitLoss);
         const plSheet = XLSX.utils.aoa_to_sheet(plData);
         XLSX.utils.book_append_sheet(workbook, plSheet, 'Profit & Loss');
         
@@ -675,7 +893,7 @@ export const IFRSStatementGenerator = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => currentStep > 1 ? setCurrentStep((currentStep - 1) as 1 | 2) : navigate('/dashboard')}
+                onClick={() => (currentStep > 1 ? setCurrentStep((currentStep - 1) as 1 | 2 | 3 | 4) : navigate('/dashboard'))}
                 className="p-2 hover:bg-gray-100 rounded-lg transition"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -687,8 +905,8 @@ export const IFRSStatementGenerator = () => {
             </div>
             
             {/* Progress Steps */}
-            <div className="flex items-center gap-4">
-              {[1, 2, 3].map(step => (
+            <div className="flex items-center gap-2">
+              {[1, 2, 3, 4].map(step => (
                 <div key={step} className="flex items-center">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
                     currentStep >= step
@@ -697,10 +915,18 @@ export const IFRSStatementGenerator = () => {
                   }`}>
                     {step}
                   </div>
-                  {step < 3 && <div className={`w-16 h-1 ${currentStep > step ? 'bg-blue-600' : 'bg-gray-200'}`} />}
+                  {step < 4 && <div className={`w-12 h-0.5 ${currentStep > step ? 'bg-blue-600' : 'bg-gray-200'}`} />}
                 </div>
               ))}
             </div>
+
+            <Link
+              to="/upload-data"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Upload Data</span>
+            </Link>
           </div>
         </div>
       </div>
@@ -765,18 +991,44 @@ export const IFRSStatementGenerator = () => {
             </motion.div>
           )}
           
-          {currentStep === 3 && statements && (
+          {currentStep === 3 && editedStatements && (
             <motion.div
               key="step3"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <Step3Statements
-                statements={statements}
-                activeTab={activeTab}
-                onTabChange={setActiveTab}
+              <Step3EditableReview
+                editedStatements={editedStatements}
+                setEditedStatements={setEditedStatements}
+                activeSection={activeSection}
+                onSectionChange={setActiveSection}
+                entityName={entityName}
+                periodEnd={periodEnd}
+                currency={currency}
+                onProceedToPrint={() => setCurrentStep(4)}
+              />
+            </motion.div>
+          )}
+
+          {currentStep === 4 && editedStatements && (
+            <motion.div
+              key="step4"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <Step4PrintedFormat
+                statements={editedStatements}
+                activeSection={activeSection}
+                onSectionChange={setActiveSection}
+                completedSections={completedSections}
+                noteCustomizations={noteCustomizations}
+                generatedNotes={generatedNotes}
+                commentaryContent={commentaryContent}
+                onNoteSave={handleNoteSave}
                 onExport={exportStatements}
+                generatingNotes={generatingNotes}
               />
             </motion.div>
           )}
@@ -1043,8 +1295,8 @@ const Step2Mapping: React.FC<Step2Props> = (props) => {
                           <option value={mapping.suggestedMapping}>
                             {mapping.suggestedMapping} (AI: {mapping.confidence}%)
                           </option>
-                          {mapping.alternatives?.map((alt) => (
-                            <option key={alt.path} value={alt.path}>{alt.label}</option>
+                          {mapping.alternatives?.map((alt, idx) => (
+                            <option key={alt.path || idx} value={alt.path || ''}>{alt.label || alt.path}</option>
                           ))}
                         </select>
                       </td>
@@ -1243,36 +1495,234 @@ const Step2Mapping: React.FC<Step2Props> = (props) => {
   );
 };
 
-// ==================== STEP 3 COMPONENT (STATEMENTS) ====================
-// Simplified version - you can expand with full statement formatting
+// ==================== STEP 3 COMPONENT (EDITABLE REVIEW) ====================
+
+interface Step3EditableReviewProps {
+  editedStatements: GeneratedStatements;
+  setEditedStatements: React.Dispatch<React.SetStateAction<GeneratedStatements | null>>;
+  activeSection: string;
+  onSectionChange: (s: string) => void;
+  entityName: string;
+  periodEnd: string;
+  currency: string;
+  onProceedToPrint: () => void;
+}
+
+const EDITABLE_TABS = [
+  { id: 'financial-position', label: 'Financial Position' },
+  { id: 'profit-loss', label: 'Profit & Loss' },
+  { id: 'cash-flows', label: 'Cash Flows' },
+  { id: 'equity', label: 'Changes in Equity' },
+];
+
+const Step3EditableReview: React.FC<Step3EditableReviewProps> = ({
+  editedStatements,
+  setEditedStatements,
+  activeSection,
+  onSectionChange,
+  entityName,
+  periodEnd,
+  currency,
+  onProceedToPrint,
+}) => (
+  <div className="space-y-6">
+    <div className="bg-white rounded-xl shadow-lg p-6">
+      <div className="mb-4">
+        <h2 className="text-2xl font-bold text-gray-900">{entityName}</h2>
+        <p className="text-gray-600">Step 3: Review & Edit — Change any numbers as needed, then proceed to print.</p>
+      </div>
+      <div className="flex gap-2 border-b border-gray-200">
+        {EDITABLE_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onSectionChange(tab.id)}
+            className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeSection === tab.id
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+    </div>
+    <div className="bg-white rounded-xl shadow-lg p-8">
+      {activeSection === 'financial-position' && (
+        <EditableFinancialPositionView
+          data={editedStatements.financialPosition}
+          onChange={(fp) => setEditedStatements((p) => (p ? { ...p, financialPosition: fp } : p))}
+          entityName={entityName}
+          periodEnd={periodEnd}
+          currency={currency}
+        />
+      )}
+      {activeSection === 'profit-loss' && (
+        <EditableProfitLossView
+          data={editedStatements.profitLoss}
+          onChange={(pl) => setEditedStatements((p) => (p ? { ...p, profitLoss: pl } : p))}
+          entityName={entityName}
+          periodEnd={periodEnd}
+          currency={currency}
+        />
+      )}
+      {activeSection === 'cash-flows' && (
+        <EditableCashFlowView
+          data={editedStatements.cashFlows}
+          onChange={(cf) => setEditedStatements((p) => (p ? { ...p, cashFlows: cf } : p))}
+          entityName={entityName}
+          periodEnd={periodEnd}
+          currency={currency}
+        />
+      )}
+      {activeSection === 'equity' && (
+        <EditableEquityView
+          data={editedStatements.changesInEquity}
+          onChange={(eq) => setEditedStatements((p) => (p ? { ...p, changesInEquity: eq } : p))}
+          entityName={entityName}
+          periodEnd={periodEnd}
+          currency={currency}
+        />
+      )}
+      <div className="mt-8 flex justify-end">
+        <button
+          type="button"
+          onClick={onProceedToPrint}
+          className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
+        >
+          Proceed to Print
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+// ==================== STEP 4 COMPONENT (PRINTED FORMAT) ====================
 
 interface Step3Props {
   statements: GeneratedStatements;
-  activeTab: string;
-  onTabChange: (tab: string) => void;
+  activeSection: string;
+  onSectionChange: (sectionId: string) => void;
+  completedSections: string[];
+  noteCustomizations: Record<string, string>;
+  generatedNotes: Record<string, string>;
+  commentaryContent: string;
+  onNoteSave: (noteId: string, content: string) => void;
   onExport: (format: 'pdf' | 'excel' | 'word' | 'json') => void;
+  generatingNotes: boolean;
 }
 
-const Step3Statements: React.FC<Step3Props> = ({ statements, activeTab, onTabChange, onExport }) => {
-  const tabs = [
-    { id: 'financial-position', label: 'Financial Position' },
-    { id: 'profit-loss', label: 'Profit & Loss' },
-    { id: 'cash-flows', label: 'Cash Flows' },
-    { id: 'equity', label: 'Changes in Equity' }
-  ];
+const NOTE_CONFIG: Record<string, { number: number; title: string }> = {
+  'note-1-general': { number: 1, title: 'General Information' },
+  'note-2-policies': { number: 2, title: 'Significant Accounting Policies' },
+  'note-3-revenue': { number: 3, title: 'Revenue (IFRS 15)' },
+  'note-4-ppe': { number: 4, title: 'Property, Plant & Equipment' },
+  'note-5-leases': { number: 5, title: 'Leases (IFRS 16)' },
+  'note-6-instruments': { number: 6, title: 'Financial Instruments' },
+  'note-7-inventory': { number: 7, title: 'Inventories' },
+  'note-8-tax': { number: 8, title: 'Income Tax' },
+  'note-9-related': { number: 9, title: 'Related Party Transactions' },
+  'note-10-events': { number: 10, title: 'Subsequent Events' },
+};
+
+const Step4PrintedFormat: React.FC<Step3Props> = ({
+  statements,
+  activeSection,
+  onSectionChange,
+  completedSections,
+  noteCustomizations,
+  generatedNotes,
+  commentaryContent,
+  onNoteSave,
+  onExport,
+  generatingNotes,
+}) => {
+  const renderContent = () => {
+    if (activeSection === 'financial-position') {
+      return (
+        <FinancialPositionView
+          data={statements.financialPosition}
+          entityName={statements.entityName}
+          periodEnd={statements.periodEnd}
+          currency={statements.currency}
+        />
+      );
+    }
+    if (activeSection === 'profit-loss') {
+      return (
+        <ProfitLossView
+          data={statements.profitLoss}
+          entityName={statements.entityName}
+          periodEnd={statements.periodEnd}
+          currency={statements.currency}
+        />
+      );
+    }
+    if (activeSection === 'cash-flows') {
+      return (
+        <CashFlowView
+          data={statements.cashFlows}
+          entityName={statements.entityName}
+          periodEnd={statements.periodEnd}
+          currency={statements.currency}
+        />
+      );
+    }
+    if (activeSection === 'equity') {
+      return (
+        <EquityView
+          data={statements.changesInEquity}
+          entityName={statements.entityName}
+          periodEnd={statements.periodEnd}
+          currency={statements.currency}
+        />
+      );
+    }
+    const note = NOTE_CONFIG[activeSection];
+    if (note) {
+      return (
+        <NoteTemplate
+          noteId={activeSection}
+          noteNumber={note.number}
+          noteTitle={note.title}
+          autoContent={generatedNotes[activeSection] ?? ''}
+          customContent={noteCustomizations[activeSection]}
+          onSave={(content) => onNoteSave(activeSection, content)}
+        />
+      );
+    }
+    if (activeSection === 'md-and-a') {
+      return (
+        <ManagementCommentary
+          data={commentaryContent}
+          entityName={statements.entityName}
+          periodEnd={statements.periodEnd}
+        />
+      );
+    }
+    return (
+      <FinancialPositionView
+        data={statements.financialPosition}
+        entityName={statements.entityName}
+        periodEnd={statements.periodEnd}
+        currency={statements.currency}
+      />
+    );
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header — UNCHANGED */}
       <div className="bg-white rounded-xl shadow-lg p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">{statements.entityName}</h2>
-            <p className="text-gray-600">IFRS Financial Statements - Period ending {statements.periodEnd}</p>
+            <h2 className="text-2xl font-bold text-gray-900">{statements?.entityName ?? 'Statements'}</h2>
+            <p className="text-gray-600">IFRS Financial Statements - Period ending {statements?.periodEnd ?? '—'}</p>
           </div>
-          
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={() => onExport('excel')}
               className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition flex items-center gap-2"
             >
@@ -1280,6 +1730,7 @@ const Step3Statements: React.FC<Step3Props> = ({ statements, activeTab, onTabCha
               Excel
             </button>
             <button
+              type="button"
               onClick={() => onExport('pdf')}
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition flex items-center gap-2"
             >
@@ -1287,6 +1738,7 @@ const Step3Statements: React.FC<Step3Props> = ({ statements, activeTab, onTabCha
               PDF
             </button>
             <button
+              type="button"
               onClick={() => onExport('json')}
               className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition flex items-center gap-2"
             >
@@ -1296,67 +1748,225 @@ const Step3Statements: React.FC<Step3Props> = ({ statements, activeTab, onTabCha
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-2 border-b border-gray-200">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => onTabChange(tab.id)}
-              className={`px-6 py-3 font-medium transition border-b-2 ${
-                activeTab === tab.id
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        {/* Workiva-style tab bar with dropdowns */}
+        <IFRSTabBar
+          activeSection={activeSection}
+          onSectionChange={onSectionChange}
+          completedSections={completedSections}
+        />
       </div>
 
-      {/* Statement Display */}
+      {/* Statement / Notes / Commentary content */}
       <div className="bg-white rounded-xl shadow-lg p-8">
-        {activeTab === 'financial-position' && (
-          <FinancialPositionView data={statements.financialPosition} entityName={statements.entityName} periodEnd={statements.periodEnd} currency={statements.currency} />
-        )}
-        {activeTab === 'profit-loss' && (
-          <ProfitLossView data={statements.profitLoss} entityName={statements.entityName} periodEnd={statements.periodEnd} currency={statements.currency} />
-        )}
-        {activeTab === 'cash-flows' && (
-          <div className="text-center py-12 text-gray-500">
-            <DollarSign className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <p>Cash Flow Statement (Indirect Method)</p>
-            <p className="text-sm mt-2">{statements.cashFlows.note}</p>
+        {generatingNotes && (
+          <div className="flex items-center gap-2 text-sm text-gray-600 mb-4 print:hidden">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            Generating notes…
           </div>
         )}
-        {activeTab === 'equity' && (
-          <div className="text-center py-12 text-gray-500">
-            <BarChart3 className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-            <p>Statement of Changes in Equity</p>
-            <p className="text-sm mt-2">{statements.changesInEquity.note}</p>
-          </div>
-        )}
+        {renderContent()}
       </div>
     </div>
   );
 };
 
-// ==================== STATEMENT VIEWS ====================
+// ==================== EDITABLE STATEMENT VIEWS ====================
+
+const inp = (v: unknown) => (typeof v === 'number' && !Number.isNaN(v) ? v : 0);
+const EditableCell = ({ value, onChange, className = '' }: { value: number; onChange: (v: number) => void; className?: string }) => (
+  <input
+    type="number"
+    value={value}
+    onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+    className={`w-28 text-right px-2 py-1 border border-gray-300 rounded text-sm ${className}`}
+  />
+);
+
+const EditableFinancialPositionView = ({ data, onChange, entityName, periodEnd, currency }: any) => {
+  if (!data?.assets) return <div className="text-gray-500">No data.</div>;
+  const d = data;
+  const up = (path: string, val: number) => {
+    const next = JSON.parse(JSON.stringify(d));
+    const parts = path.split('.');
+    let o: any = next;
+    for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+    o[parts[parts.length - 1]] = val;
+    onChange(next);
+  };
+  const nc = d.assets?.nonCurrent ?? {};
+  const c = d.assets?.current ?? {};
+  const eq = d.equity ?? {};
+  const lnc = d.liabilities?.nonCurrent ?? {};
+  const lc = d.liabilities?.current ?? {};
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-6">
+        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF FINANCIAL POSITION (Editable)</h4>
+        <p className="text-gray-600">As at {periodEnd}</p>
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          <tr><td colSpan={2} className="pt-4 pb-2 font-bold">ASSETS</td></tr>
+          <tr><td colSpan={2} className="pt-2 pb-1 font-semibold">Non-current assets</td></tr>
+          <tr><td className="pl-4 py-1">Property, plant and equipment</td><td className="text-right"><EditableCell value={inp(nc.propertyPlantEquipment ?? nc.ppe)} onChange={(v) => up('assets.nonCurrent.propertyPlantEquipment', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Intangible assets</td><td className="text-right"><EditableCell value={inp(nc.intangibleAssets ?? nc.intangibles)} onChange={(v) => up('assets.nonCurrent.intangibleAssets', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-2 pb-1 font-semibold">Current assets</td></tr>
+          <tr><td className="pl-4 py-1">Inventories</td><td className="text-right"><EditableCell value={inp(c.inventories)} onChange={(v) => up('assets.current.inventories', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Trade and other receivables</td><td className="text-right"><EditableCell value={inp(c.tradeReceivables)} onChange={(v) => up('assets.current.tradeReceivables', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Cash and cash equivalents</td><td className="text-right"><EditableCell value={inp(c.cashAndEquivalents)} onChange={(v) => up('assets.current.cashAndEquivalents', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-6 font-bold">EQUITY AND LIABILITIES</td></tr>
+          <tr><td colSpan={2} className="pt-2 font-semibold">Equity</td></tr>
+          <tr><td className="pl-4 py-1">Share capital</td><td className="text-right"><EditableCell value={inp(eq.shareCapital)} onChange={(v) => up('equity.shareCapital', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Retained earnings</td><td className="text-right"><EditableCell value={inp(eq.retainedEarnings)} onChange={(v) => up('equity.retainedEarnings', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-2 font-semibold">Non-current liabilities</td></tr>
+          <tr><td className="pl-4 py-1">Long-term borrowings</td><td className="text-right"><EditableCell value={inp(lnc.longTermBorrowings ?? lnc.borrowings)} onChange={(v) => up('liabilities.nonCurrent.longTermBorrowings', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-2 font-semibold">Current liabilities</td></tr>
+          <tr><td className="pl-4 py-1">Trade and other payables</td><td className="text-right"><EditableCell value={inp(lc.tradePayables)} onChange={(v) => up('liabilities.current.tradePayables', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Short-term borrowings</td><td className="text-right"><EditableCell value={inp(lc.shortTermBorrowings ?? lc.borrowings)} onChange={(v) => up('liabilities.current.shortTermBorrowings', v)} /></td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EditableProfitLossView = ({ data, onChange, entityName, periodEnd }: any) => {
+  if (!data) return <div className="text-gray-500">No data.</div>;
+  const up = (path: string, val: number) => {
+    const next = JSON.parse(JSON.stringify(data));
+    const parts = path.split('.');
+    let o: any = next;
+    for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+    o[parts[parts.length - 1]] = val;
+    onChange(next);
+  };
+  const op = data.operatingExpenses ?? {};
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-6">
+        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF PROFIT OR LOSS (Editable)</h4>
+        <p className="text-gray-600">For the year ended {periodEnd}</p>
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          <tr><td className="py-2 font-semibold">Revenue</td><td className="text-right"><EditableCell value={inp(data.revenue)} onChange={(v) => up('revenue', v)} /></td></tr>
+          <tr><td className="py-1">Cost of sales</td><td className="text-right"><EditableCell value={inp(data.costOfSales)} onChange={(v) => up('costOfSales', v)} /></td></tr>
+          <tr><td className="py-2 font-semibold">Gross profit</td><td className="text-right"><EditableCell value={inp(data.grossProfit)} onChange={(v) => up('grossProfit', v)} /></td></tr>
+          <tr><td className="pt-4">Operating expenses</td></tr>
+          <tr><td className="pl-4 py-1">Employee benefits</td><td className="text-right"><EditableCell value={inp(op.employeeBenefits)} onChange={(v) => up('operatingExpenses.employeeBenefits', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Depreciation</td><td className="text-right"><EditableCell value={inp(op.depreciation)} onChange={(v) => up('operatingExpenses.depreciation', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Administrative</td><td className="text-right"><EditableCell value={inp(op.administrative)} onChange={(v) => up('operatingExpenses.administrative', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Distribution</td><td className="text-right"><EditableCell value={inp(op.distribution)} onChange={(v) => up('operatingExpenses.distribution', v)} /></td></tr>
+          <tr><td className="py-2 font-semibold">Operating profit</td><td className="text-right"><EditableCell value={inp(data.operatingProfit)} onChange={(v) => up('operatingProfit', v)} /></td></tr>
+          <tr><td className="py-1">Finance costs</td><td className="text-right"><EditableCell value={inp(data.financeCosts)} onChange={(v) => up('financeCosts', v)} /></td></tr>
+          <tr><td className="py-2 font-semibold">Profit before tax</td><td className="text-right"><EditableCell value={inp(data.profitBeforeTax)} onChange={(v) => up('profitBeforeTax', v)} /></td></tr>
+          <tr><td className="py-1">Income tax</td><td className="text-right"><EditableCell value={inp(data.incomeTax)} onChange={(v) => up('incomeTax', v)} /></td></tr>
+          <tr><td className="py-2 font-bold">Profit after tax</td><td className="text-right"><EditableCell value={inp(data.profitAfterTax)} onChange={(v) => up('profitAfterTax', v)} /></td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EditableCashFlowView = ({ data, onChange, entityName, periodEnd }: any) => {
+  if (!data?.operating) return <div className="text-gray-500">No data.</div>;
+  const op = data.operating; const adj = op.adjustments ?? {}; const inv = data.investing ?? {}; const fin = data.financing ?? {};
+  const up = (path: string, val: number) => {
+    const next = JSON.parse(JSON.stringify(data));
+    const parts = path.split('.');
+    let o: any = next;
+    for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+    o[parts[parts.length - 1]] = val;
+    onChange(next);
+  };
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-6">
+        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF CASH FLOWS (Editable)</h4>
+        <p className="text-gray-600">For the year ended {periodEnd}</p>
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          <tr><td colSpan={2} className="pt-2 font-bold">Operating activities</td></tr>
+          <tr><td className="pl-4 py-1">Profit before tax</td><td className="text-right"><EditableCell value={inp(op.profitBeforeTax)} onChange={(v) => up('operating.profitBeforeTax', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Depreciation</td><td className="text-right"><EditableCell value={inp(adj.depreciation)} onChange={(v) => up('operating.adjustments.depreciation', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Net cash from operating</td><td className="text-right"><EditableCell value={inp(op.netOperating)} onChange={(v) => up('operating.netOperating', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-4 font-bold">Investing activities</td></tr>
+          <tr><td className="pl-4 py-1">Purchase of PPE</td><td className="text-right"><EditableCell value={inp(inv.propertyPlantEquipment)} onChange={(v) => up('investing.propertyPlantEquipment', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Net cash from investing</td><td className="text-right"><EditableCell value={inp(inv.netInvesting)} onChange={(v) => up('investing.netInvesting', v)} /></td></tr>
+          <tr><td colSpan={2} className="pt-4 font-bold">Financing activities</td></tr>
+          <tr><td className="pl-4 py-1">Borrowings drawdown</td><td className="text-right"><EditableCell value={inp(fin.borrowingsDrawdown)} onChange={(v) => up('financing.borrowingsDrawdown', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Dividends paid</td><td className="text-right"><EditableCell value={inp(fin.dividendsPaid)} onChange={(v) => up('financing.dividendsPaid', v)} /></td></tr>
+          <tr><td className="pt-4 font-semibold">Net increase in cash</td><td className="text-right"><EditableCell value={inp(data.netIncrease)} onChange={(v) => up('netIncrease', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Cash at beginning</td><td className="text-right"><EditableCell value={inp(data.cashBeginning)} onChange={(v) => up('cashBeginning', v)} /></td></tr>
+          <tr><td className="py-2 font-bold">Cash at end</td><td className="text-right"><EditableCell value={inp(data.cashEnding)} onChange={(v) => up('cashEnding', v)} /></td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EditableEquityView = ({ data, onChange, entityName, periodEnd }: any) => {
+  if (!data?.shareCapital) return <div className="text-gray-500">No data.</div>;
+  const sc = data.shareCapital ?? {}; const re = data.retainedEarnings ?? {}; const res = data.reserves ?? {};
+  const up = (path: string, val: number) => {
+    const next = JSON.parse(JSON.stringify(data));
+    const parts = path.split('.');
+    let o: any = next;
+    for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]];
+    o[parts[parts.length - 1]] = val;
+    onChange(next);
+  };
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-6">
+        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF CHANGES IN EQUITY (Editable)</h4>
+        <p className="text-gray-600">For the year ended {periodEnd}</p>
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          <tr><td className="py-2 font-semibold">Share capital – beginning</td><td className="text-right"><EditableCell value={inp(sc.beginning)} onChange={(v) => up('shareCapital.beginning', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Share capital – ending</td><td className="text-right"><EditableCell value={inp(sc.ending)} onChange={(v) => up('shareCapital.ending', v)} /></td></tr>
+          <tr><td className="pt-4 font-semibold">Retained earnings – beginning</td><td className="text-right"><EditableCell value={inp(re.beginning)} onChange={(v) => up('retainedEarnings.beginning', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Profit for the year</td><td className="text-right"><EditableCell value={inp(re.profitForYear)} onChange={(v) => up('retainedEarnings.profitForYear', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Dividends</td><td className="text-right"><EditableCell value={inp(re.dividends)} onChange={(v) => up('retainedEarnings.dividends', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Retained earnings – ending</td><td className="text-right"><EditableCell value={inp(re.ending)} onChange={(v) => up('retainedEarnings.ending', v)} /></td></tr>
+          <tr><td className="pt-4 font-semibold">Reserves – beginning</td><td className="text-right"><EditableCell value={inp(res.beginning)} onChange={(v) => up('reserves.beginning', v)} /></td></tr>
+          <tr><td className="pl-4 py-1">Reserves – ending</td><td className="text-right"><EditableCell value={inp(res.ending)} onChange={(v) => up('reserves.ending', v)} /></td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// ==================== STATEMENT VIEWS (READ-ONLY) ====================
+
+const num = (v: unknown) => (typeof v === 'number' && !Number.isNaN(v) ? v : 0).toLocaleString();
 
 const FinancialPositionView = ({ data, entityName, periodEnd, currency }: any) => {
+  if (!data?.assets) {
+    return (
+      <div className="text-center py-12 text-gray-500">
+        <p>No financial position data yet. Complete Steps 1–2 and generate statements.</p>
+      </div>
+    );
+  }
   return (
     <div className="font-serif">
       <div className="text-center mb-8">
-        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h3 className="text-xl font-bold uppercase">{entityName ?? ''}</h3>
         <h4 className="text-lg font-semibold">STATEMENT OF FINANCIAL POSITION</h4>
-        <p className="text-gray-600">As at {periodEnd}</p>
+        <p className="text-gray-600">As at {periodEnd ?? ''}</p>
       </div>
 
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b-2 border-gray-900">
             <th className="text-left py-2"></th>
-            <th className="text-right py-2 px-4">{currency}</th>
+            <th className="text-right py-2 px-4">{currency ?? ''}</th>
           </tr>
         </thead>
         <tbody>
@@ -1366,38 +1976,38 @@ const FinancialPositionView = ({ data, entityName, periodEnd, currency }: any) =
           <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Non-current assets</td></tr>
           <tr>
             <td className="pl-4 py-1">Property, plant and equipment</td>
-            <td className="text-right px-4">{data.assets.nonCurrent.ppe.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.assets?.nonCurrent?.propertyPlantEquipment ?? data.assets?.nonCurrent?.ppe)}</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Intangible assets</td>
-            <td className="text-right px-4">{data.assets.nonCurrent.intangibles.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.assets?.nonCurrent?.intangibleAssets ?? data.assets?.nonCurrent?.intangibles)}</td>
           </tr>
           <tr className="border-t border-gray-300">
             <td className="pl-4 py-1 font-semibold">Total non-current assets</td>
-            <td className="text-right px-4 font-semibold">{data.assets.totalNonCurrent.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.assets?.totalNonCurrent)}</td>
           </tr>
 
           <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Current assets</td></tr>
           <tr>
             <td className="pl-4 py-1">Inventories</td>
-            <td className="text-right px-4">{data.assets.current.inventories.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.assets?.current?.inventories)}</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Trade and other receivables</td>
-            <td className="text-right px-4">{data.assets.current.tradeReceivables.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.assets?.current?.tradeReceivables)}</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Cash and cash equivalents</td>
-            <td className="text-right px-4">{data.assets.current.cashAndEquivalents.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.assets?.current?.cashAndEquivalents)}</td>
           </tr>
           <tr className="border-t border-gray-300">
             <td className="pl-4 py-1 font-semibold">Total current assets</td>
-            <td className="text-right px-4 font-semibold">{data.assets.totalCurrent.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.assets?.current?.total ?? data.assets?.totalCurrent)}</td>
           </tr>
 
           <tr className="border-t-2 border-gray-900">
             <td className="py-2 font-bold">TOTAL ASSETS</td>
-            <td className="text-right px-4 font-bold">{data.assets.total.toLocaleString()}</td>
+            <td className="text-right px-4 font-bold">{num(data.assets?.total)}</td>
           </tr>
 
           {/* Equity & Liabilities */}
@@ -1406,45 +2016,45 @@ const FinancialPositionView = ({ data, entityName, periodEnd, currency }: any) =
           <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Equity</td></tr>
           <tr>
             <td className="pl-4 py-1">Share capital</td>
-            <td className="text-right px-4">{data.equity.shareCapital.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.equity?.shareCapital)}</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Retained earnings</td>
-            <td className="text-right px-4">{data.equity.retainedEarnings.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.equity?.retainedEarnings)}</td>
           </tr>
           <tr className="border-t border-gray-300">
             <td className="pl-4 py-1 font-semibold">Total equity</td>
-            <td className="text-right px-4 font-semibold">{data.equity.total.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.equity?.total)}</td>
           </tr>
 
           <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Non-current liabilities</td></tr>
           <tr>
             <td className="pl-4 py-1">Long-term borrowings</td>
-            <td className="text-right px-4">{data.liabilities.nonCurrent.borrowings.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.liabilities?.nonCurrent?.longTermBorrowings ?? data.liabilities?.nonCurrent?.borrowings)}</td>
           </tr>
 
           <tr><td colSpan={2} className="pt-4 pb-2 font-semibold">Current liabilities</td></tr>
           <tr>
             <td className="pl-4 py-1">Trade and other payables</td>
-            <td className="text-right px-4">{data.liabilities.current.tradePayables.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.liabilities?.current?.tradePayables)}</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Short-term borrowings</td>
-            <td className="text-right px-4">{data.liabilities.current.borrowings.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.liabilities?.current?.shortTermBorrowings ?? data.liabilities?.current?.borrowings)}</td>
           </tr>
           <tr className="border-t border-gray-300">
             <td className="pl-4 py-1 font-semibold">Total current liabilities</td>
-            <td className="text-right px-4 font-semibold">{data.liabilities.totalCurrent.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.liabilities?.current?.total ?? data.liabilities?.totalCurrent)}</td>
           </tr>
 
           <tr className="border-t-2 border-gray-900">
             <td className="py-2 font-bold">TOTAL EQUITY AND LIABILITIES</td>
-            <td className="text-right px-4 font-bold">{data.totalEquityAndLiabilities.toLocaleString()}</td>
+            <td className="text-right px-4 font-bold">{num(data.totalEquityAndLiabilities)}</td>
           </tr>
         </tbody>
       </table>
 
-      {data.isBalanced && (
+      {data?.isBalanced && (
         <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2">
           <CheckCircle className="w-5 h-5 text-green-600" />
           <span className="text-green-700 font-medium">Statement is balanced ✓</span>
@@ -1455,77 +2065,186 @@ const FinancialPositionView = ({ data, entityName, periodEnd, currency }: any) =
 };
 
 const ProfitLossView = ({ data, entityName, periodEnd, currency }: any) => {
+  if (!data) {
+    return (
+      <div className="text-center py-12 text-gray-500">
+        <p>No profit or loss data yet. Complete Steps 1–2 and generate statements.</p>
+      </div>
+    );
+  }
   return (
     <div className="font-serif">
       <div className="text-center mb-8">
-        <h3 className="text-xl font-bold uppercase">{entityName}</h3>
+        <h3 className="text-xl font-bold uppercase">{entityName ?? ''}</h3>
         <h4 className="text-lg font-semibold">STATEMENT OF PROFIT OR LOSS</h4>
-        <p className="text-gray-600">For the year ended {periodEnd}</p>
+        <p className="text-gray-600">For the year ended {periodEnd ?? ''}</p>
       </div>
 
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b-2 border-gray-900">
             <th className="text-left py-2"></th>
-            <th className="text-right py-2 px-4">{currency}</th>
+            <th className="text-right py-2 px-4">{currency ?? ''}</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td className="py-2 font-semibold">Revenue</td>
-            <td className="text-right px-4">{data.revenue.toLocaleString()}</td>
+            <td className="text-right px-4">{num(data.revenue)}</td>
           </tr>
           <tr>
             <td className="py-2">Cost of sales</td>
-            <td className="text-right px-4">({data.costOfSales.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.costOfSales)})</td>
           </tr>
           <tr className="border-t border-gray-300">
             <td className="py-2 font-semibold">Gross profit</td>
-            <td className="text-right px-4 font-semibold">{data.grossProfit.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.grossProfit)}</td>
           </tr>
 
           <tr><td colSpan={2} className="pt-4 pb-2">Operating expenses:</td></tr>
           <tr>
             <td className="pl-4 py-1">Employee benefits</td>
-            <td className="text-right px-4">({data.operatingExpenses.employeeBenefits.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.operatingExpenses?.employeeBenefits)})</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Depreciation and amortization</td>
-            <td className="text-right px-4">({data.operatingExpenses.depreciation.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.operatingExpenses?.depreciation)})</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Distribution costs</td>
-            <td className="text-right px-4">({data.operatingExpenses.distribution.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.operatingExpenses?.distribution)})</td>
           </tr>
           <tr>
             <td className="pl-4 py-1">Administrative expenses</td>
-            <td className="text-right px-4">({data.operatingExpenses.administrative.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.operatingExpenses?.administrative)})</td>
           </tr>
           
           <tr className="border-t border-gray-300">
             <td className="py-2 font-semibold">Operating profit</td>
-            <td className="text-right px-4 font-semibold">{data.operatingProfit.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.operatingProfit)}</td>
           </tr>
 
           <tr>
             <td className="py-2">Finance costs</td>
-            <td className="text-right px-4">({data.financeCosts.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.financeCosts)})</td>
           </tr>
 
           <tr className="border-t border-gray-300">
             <td className="py-2 font-semibold">Profit before tax</td>
-            <td className="text-right px-4 font-semibold">{data.profitBeforeTax.toLocaleString()}</td>
+            <td className="text-right px-4 font-semibold">{num(data.profitBeforeTax)}</td>
           </tr>
 
           <tr>
             <td className="py-2">Income tax expense</td>
-            <td className="text-right px-4">({data.incomeTax.toLocaleString()})</td>
+            <td className="text-right px-4">({num(data.incomeTax)})</td>
           </tr>
 
           <tr className="border-t-2 border-gray-900">
             <td className="py-3 font-bold text-lg">PROFIT FOR THE YEAR</td>
-            <td className="text-right px-4 font-bold text-lg">{data.profitAfterTax.toLocaleString()}</td>
+            <td className="text-right px-4 font-bold text-lg">{num(data.profitAfterTax)}</td>
           </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const CashFlowView = ({ data, entityName, periodEnd, currency }: any) => {
+  if (!data?.operating) {
+    return (
+      <div className="text-center py-12 text-gray-500">
+        <p>No cash flow data yet. Complete Steps 1–2 and generate statements.</p>
+      </div>
+    );
+  }
+  const op = data.operating;
+  const adj = op?.adjustments ?? {};
+  const wc = op?.workingCapitalChanges ?? {};
+  const inv = data.investing ?? {};
+  const fin = data.financing ?? {};
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-8">
+        <h3 className="text-xl font-bold uppercase">{entityName ?? ''}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF CASH FLOWS (Indirect Method)</h4>
+        <p className="text-gray-600">For the year ended {periodEnd ?? ''}</p>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b-2 border-gray-900">
+            <th className="text-left py-2"></th>
+            <th className="text-right py-2 px-4">{currency ?? ''}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colSpan={2} className="pt-4 pb-2 font-bold">Cash flows from operating activities</td></tr>
+          <tr><td className="pl-4 py-1">Profit before tax</td><td className="text-right px-4">{num(op.profitBeforeTax)}</td></tr>
+          <tr><td className="pl-4 py-1">Adjustments for:</td><td className="text-right px-4"></td></tr>
+          <tr><td className="pl-6 py-1">Depreciation and amortisation</td><td className="text-right px-4">{num(adj.depreciation)}</td></tr>
+          <tr><td className="pl-6 py-1">Interest expense</td><td className="text-right px-4">{num(adj.interestExpense)}</td></tr>
+          <tr><td className="pl-4 py-1">Change in inventories</td><td className="text-right px-4">({num(wc.inventories)})</td></tr>
+          <tr><td className="pl-4 py-1">Change in trade receivables</td><td className="text-right px-4">({num(wc.tradeReceivables)})</td></tr>
+          <tr><td className="pl-4 py-1">Change in trade payables</td><td className="text-right px-4">{num(wc.tradePayables)}</td></tr>
+          <tr><td className="pl-4 py-1">Interest paid</td><td className="text-right px-4">({num(op.interestPaid)})</td></tr>
+          <tr><td className="pl-4 py-1">Tax paid</td><td className="text-right px-4">({num(op.taxesPaid)})</td></tr>
+          <tr className="border-t border-gray-300"><td className="pl-4 py-2 font-semibold">Net cash from operating activities</td><td className="text-right px-4 font-semibold">{num(op.netOperating)}</td></tr>
+
+          <tr><td colSpan={2} className="pt-4 pb-2 font-bold">Cash flows from investing activities</td></tr>
+          <tr><td className="pl-4 py-1">Purchase of property, plant and equipment</td><td className="text-right px-4">({num(inv.propertyPlantEquipment)})</td></tr>
+          <tr><td className="pl-4 py-1">Purchase of intangibles</td><td className="text-right px-4">({num(inv.intangibles)})</td></tr>
+          <tr className="border-t border-gray-300"><td className="pl-4 py-2 font-semibold">Net cash used in investing activities</td><td className="text-right px-4 font-semibold">({num(inv.netInvesting)})</td></tr>
+
+          <tr><td colSpan={2} className="pt-4 pb-2 font-bold">Cash flows from financing activities</td></tr>
+          <tr><td className="pl-4 py-1">Proceeds from borrowings</td><td className="text-right px-4">{num(fin.borrowingsDrawdown)}</td></tr>
+          <tr><td className="pl-4 py-1">Repayment of borrowings</td><td className="text-right px-4">({num(fin.borrowingsRepayment)})</td></tr>
+          <tr><td className="pl-4 py-1">Dividends paid</td><td className="text-right px-4">({num(fin.dividendsPaid)})</td></tr>
+          <tr className="border-t border-gray-300"><td className="pl-4 py-2 font-semibold">Net cash from / (used in) financing activities</td><td className="text-right px-4 font-semibold">{num(fin.netFinancing)}</td></tr>
+
+          <tr className="border-t-2 border-gray-900"><td className="py-2 font-semibold">Net increase in cash and cash equivalents</td><td className="text-right px-4 font-semibold">{num(data.netIncrease)}</td></tr>
+          <tr><td className="pl-4 py-1">Cash and cash equivalents at beginning of period</td><td className="text-right px-4">{num(data.cashBeginning)}</td></tr>
+          <tr className="border-t-2 border-gray-900"><td className="py-2 font-bold">Cash and cash equivalents at end of period</td><td className="text-right px-4 font-bold">{num(data.cashEnding)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EquityView = ({ data, entityName, periodEnd, currency }: any) => {
+  if (!data?.shareCapital) {
+    return (
+      <div className="text-center py-12 text-gray-500">
+        <p>No changes in equity data yet. Complete Steps 1–2 and generate statements.</p>
+      </div>
+    );
+  }
+  const sc = data.shareCapital ?? {};
+  const re = data.retainedEarnings ?? {};
+  const res = data.reserves ?? {};
+  const tot = data.total ?? {};
+  return (
+    <div className="font-serif">
+      <div className="text-center mb-8">
+        <h3 className="text-xl font-bold uppercase">{entityName ?? ''}</h3>
+        <h4 className="text-lg font-semibold">STATEMENT OF CHANGES IN EQUITY</h4>
+        <p className="text-gray-600">For the year ended {periodEnd ?? ''}</p>
+      </div>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b-2 border-gray-900">
+            <th className="text-left py-2"></th>
+            <th className="text-right py-2 px-4">Share capital</th>
+            <th className="text-right py-2 px-4">Retained earnings</th>
+            <th className="text-right py-2 px-4">Reserves</th>
+            <th className="text-right py-2 px-4">{currency ?? ''}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td className="py-2 font-semibold">Balance at beginning of period</td><td className="text-right px-4">{num(sc.beginning)}</td><td className="text-right px-4">{num(re.beginning)}</td><td className="text-right px-4">{num(res.beginning)}</td><td className="text-right px-4 font-semibold">{num(tot.beginning)}</td></tr>
+          <tr><td className="pl-4 py-1">Profit for the year</td><td></td><td className="text-right px-4">{num(re.profitForYear)}</td><td></td><td className="text-right px-4">{num(re.profitForYear)}</td></tr>
+          <tr><td className="pl-4 py-1">Dividends</td><td></td><td className="text-right px-4">({num(re.dividends)})</td><td></td><td className="text-right px-4">({num(re.dividends)})</td></tr>
+          <tr><td className="pl-4 py-1">Share capital issued</td><td className="text-right px-4">{num(sc.issued)}</td><td></td><td></td><td className="text-right px-4">{num(sc.issued)}</td></tr>
+          <tr><td className="pl-4 py-1">Other reserves movement</td><td></td><td></td><td className="text-right px-4">{num(res.movements)}</td><td className="text-right px-4">{num(res.movements)}</td></tr>
+          <tr className="border-t-2 border-gray-900"><td className="py-2 font-bold">Balance at end of period</td><td className="text-right px-4 font-bold">{num(sc.ending)}</td><td className="text-right px-4 font-bold">{num(re.ending)}</td><td className="text-right px-4 font-bold">{num(res.ending)}</td><td className="text-right px-4 font-bold">{num(tot.ending)}</td></tr>
         </tbody>
       </table>
     </div>

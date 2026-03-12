@@ -18,20 +18,38 @@ import type { PeriodType, CompareType, DepartmentType, CurrencyType } from '../.
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
 
-  // Check data availability
+  // Check data availability (both legacy and finreport_* keys)
   const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);
   const [actualData, setActualData] = useState<any>(null);
   const [budgetData, setBudgetData] = useState<any>(null);
   const [realVarianceData, setRealVarianceData] = useState<any[]>([]);
 
+  // On mount: read from localStorage so dashboard upload data appears immediately
   useEffect(() => {
-    if (dataCheck.available) {
+    const budgetRaw = localStorage.getItem('finreport_fpa_budget') || localStorage.getItem('fpa_budget');
+    const actualRaw = localStorage.getItem('finreport_fpa_actuals') || localStorage.getItem('fpa_actual');
+    if (budgetRaw && actualRaw) {
+      try {
+        const budget = JSON.parse(budgetRaw);
+        const actual = JSON.parse(actualRaw);
+        setBudgetData(budget);
+        setActualData(actual);
+        if (actual && budget) {
+          const converted = convertToVarianceData(actual, budget);
+          setRealVarianceData(converted);
+        }
+      } catch (e) {
+        console.error('FPA load error', e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (dataCheck.available && !actualData && !budgetData) {
       const actual = loadFPAActual();
       const budget = loadFPABudget();
       setActualData(actual);
       setBudgetData(budget);
-      
-      // Convert uploaded data to variance format
       if (actual && budget) {
         const converted = convertToVarianceData(actual, budget);
         setRealVarianceData(converted);
@@ -80,13 +98,22 @@ export const VarianceAnalysis = () => {
       const sheet = workbook.Sheets[sheetName];
       const rows: any[] = XLSX.utils.sheet_to_json(sheet);
 
+      // Helper: parse number from cell (handles commas and string numbers)
+      const parseNum = (val: unknown): number => {
+        if (val == null || val === '') return 0;
+        if (typeof val === 'number' && !Number.isNaN(val)) return val;
+        const s = String(val).replace(/,/g, '');
+        const n = parseFloat(s);
+        return Number.isNaN(n) ? 0 : n;
+      };
+
       // Map uploaded data to VarianceRow format
       // Expected columns: Category, Actual, Budget, YTDActual, YTDBudget
       const mappedData = rows.map((row, index) => {
-        const actual = parseFloat(row['Actual'] || row['actual'] || 0);
-        const budget = parseFloat(row['Budget'] || row['budget'] || 0);
-        const ytdActual = parseFloat(row['YTD Actual'] || row['YTDActual'] || row['ytdActual'] || actual * 6);
-        const ytdBudget = parseFloat(row['YTD Budget'] || row['YTDBudget'] || row['ytdBudget'] || budget * 6);
+        const actual = parseNum(row['Actual'] ?? row['actual'] ?? 0);
+        const budget = parseNum(row['Budget'] ?? row['budget'] ?? 0);
+        const ytdActual = parseNum(row['YTD Actual'] ?? row['YTDActual'] ?? row['ytdActual'] ?? actual * 6);
+        const ytdBudget = parseNum(row['YTD Budget'] ?? row['YTDBudget'] ?? row['ytdBudget'] ?? budget * 6);
         const variance = actual - budget;
         const variancePct = budget !== 0 ? (variance / budget) * 100 : 0;
         const ytdVariance = ytdActual - ytdBudget;
@@ -114,7 +141,7 @@ export const VarianceAnalysis = () => {
           ytdBudget,
           ytdVariance,
           ytdVariancePct,
-          priorYear: parseFloat(row['Prior Year'] || row['priorYear'] || 0),
+          priorYear: parseNum(row['Prior Year'] ?? row['priorYear'] ?? 0),
           priorYearVariancePct: 0,
           hasChildren: false,
           isExpanded: false,

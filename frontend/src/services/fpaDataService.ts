@@ -692,9 +692,9 @@ export const parseMultiSheetWorkbook = async (file: File): Promise<MultiSheetRes
 };
 
 /**
- * Helper: Parse trial balance from rows (extracted from parseTrialBalance)
+ * Parse trial balance from rows (exported for central multi-sheet upload).
  */
-const parseTrialBalanceFromRows = async (rows: any[], fileName: string): Promise<UploadedFinancialData> => {
+export const parseTrialBalanceFromRows = async (rows: any[], fileName: string): Promise<UploadedFinancialData> => {
   if (rows.length === 0) {
     throw new Error('No valid data found');
   }

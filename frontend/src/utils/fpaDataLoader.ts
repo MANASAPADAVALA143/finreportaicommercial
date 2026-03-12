@@ -2,12 +2,12 @@
 // Each module reads only what it needs
 
 export const loadFPAActual = () => {
-  const stored = localStorage.getItem('fpa_actual');
+  const stored = localStorage.getItem('finreport_fpa_actuals') || localStorage.getItem('fpa_actual');
   return stored ? JSON.parse(stored) : null;
 };
 
 export const loadFPABudget = () => {
-  const stored = localStorage.getItem('fpa_budget');
+  const stored = localStorage.getItem('finreport_fpa_budget') || localStorage.getItem('fpa_budget');
   return stored ? JSON.parse(stored) : null;
 };
 
@@ -875,16 +875,18 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
   return sections;
 };
 
-// Check if required data is available for a module
+// Check if required data is available for a module (legacy keys or standardised finreport_* keys)
 export const checkDataAvailability = (required: string[]) => {
   const missing: string[] = [];
-  
+  const keyAliases: Record<string, string[]> = {
+    'fpa_actual': ['fpa_actual', 'finreport_fpa_actuals'],
+    'fpa_budget': ['fpa_budget', 'finreport_fpa_budget'],
+  };
   required.forEach(key => {
-    if (!localStorage.getItem(key)) {
-      missing.push(key);
-    }
+    const candidates = keyAliases[key] || [key];
+    const found = candidates.some(k => localStorage.getItem(k));
+    if (!found) missing.push(key);
   });
-
   return {
     available: missing.length === 0,
     missing

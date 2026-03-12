@@ -280,7 +280,7 @@ CRITICAL RULES:
         
         # Normalize risk score
         risk_score = min(risk_score, 100)
-        
+
         # Determine risk level using CUSTOM THRESHOLD
         if risk_score >= 70:
             risk_level = "High"
@@ -456,6 +456,21 @@ CRITICAL RULES:
                 "falseNegative": fn
             }
         }
+
+    def invoke(self, prompt: str, model_id: str = None, max_tokens: int = 600, temperature: float = 0.3) -> str:
+        """Raw invoke: send prompt to Bedrock, return response text. Used by CFO Decision Intelligence /api/nova/invoke."""
+        if self.client is None:
+            raise RuntimeError("AWS Bedrock client not available. Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION in .env")
+        model = model_id or self.model_id
+        response = self.client.converse(
+            modelId=model,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={
+                "maxTokens": max_tokens,
+                "temperature": temperature,
+            },
+        )
+        return response["output"]["message"]["content"][0]["text"]
 
 # Singleton
 nova_service = NovaService()

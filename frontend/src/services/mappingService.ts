@@ -2,7 +2,6 @@
 // "Map Once, Use Forever" Architecture
 // Company GL codes mapped to IFRS line items — saved permanently
 
-import { callAI, extractJSON } from "./aiProvider";
 import type { 
   CompanyMapping, 
   TrialBalanceEntry, 
@@ -190,91 +189,168 @@ export function autoMapTrialBalance(
   };
 }
 
+// ==================== BACKEND PATH NORMALIZER ====================
+// Backend IFRS mapper uses slightly different path names; map to frontend IFRS_LINE_ITEMS values
+
+const BACKEND_TO_FRONTEND_PATH: Record<string, string> = {
+  "financialPosition.assets.nonCurrent.ppe": "financialPosition.assets.nonCurrent.propertyPlantEquipment",
+  "financialPosition.assets.current.other": "financialPosition.assets.current.otherCurrent",
+  "financialPosition.assets.nonCurrent.other": "financialPosition.assets.nonCurrent.otherNonCurrent",
+  "financialPosition.liabilities.current.other": "financialPosition.liabilities.current.otherCurrent",
+  "financialPosition.liabilities.nonCurrent.other": "financialPosition.liabilities.nonCurrent.otherNonCurrent",
+  "financialPosition.equity.reserves": "financialPosition.equity.otherReserves",
+  "financialPosition.liabilities.current.borrowings": "financialPosition.liabilities.current.shortTermBorrowings",
+  "financialPosition.liabilities.nonCurrent.borrowings": "financialPosition.liabilities.nonCurrent.borrowings",
+};
+
+function normalizeBackendPath(path: string): string {
+  return BACKEND_TO_FRONTEND_PATH[path] ?? path;
+}
+
+// ==================== AI MAPPING VIA BACKEND (NO AWS TOKEN IN BROWSER) ====================
+
+const API_BASE_URL = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
+
+async function getAISuggestionsFromBackend(
+  entries: TrialBalanceEntry[]
+): Promise<Record<string, AIMappingResult> | null> {
+  try {
+    const body = entries.map((e) => ({
+      glCode: e.glCode,
+      accountName: e.accountName,
+      debit: e.debit,
+      credit: e.credit,
+      accountType: e.accountType || "unknown",
+    }));
+    const url = `${API_BASE_URL.replace(/\/$/, "")}/api/ifrs/ai-mapping`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const mappings: Array<{
+      glCode: string;
+      accountName: string;
+      suggestedMapping: string;
+      confidence: number;
+      alternatives?: Array<{ path?: string; ifrsLine?: string; label?: string; confidence?: number }>;
+    }> = data.mappings ?? [];
+    const results: Record<string, AIMappingResult> = {};
+    for (const m of mappings) {
+      const suggested = normalizeBackendPath(m.suggestedMapping || "");
+      results[m.glCode] = {
+        glCode: m.glCode,
+        accountName: m.accountName,
+        suggestedMapping: suggested,
+        confidence: m.confidence ?? 0,
+        alternatives: (m.alternatives ?? []).map((alt: any) => ({
+          ifrsLine: normalizeBackendPath(alt.path || alt.ifrsLine || ""),
+          label: alt.label || (IFRS_LINE_ITEMS.find((i) => i.value === normalizeBackendPath(alt.path || alt.ifrsLine || ""))?.label ?? ""),
+          confidence: alt.confidence ?? 0,
+        })),
+      };
+    }
+    return results;
+  } catch {
+    return null;
+  }
+}
+
+// ==================== RULE-BASED MAPPING (NO BACKEND, NO AWS) ====================
+// Same logic as backend ifrs_mapper — works offline, no credentials needed
+
+const RULE_KEYWORDS: Array<{ keyword: string; path: string; confidence: number }> = [
+  { keyword: "cash", path: "financialPosition.assets.current.cashAndEquivalents", confidence: 95 },
+  { keyword: "bank", path: "financialPosition.assets.current.cashAndEquivalents", confidence: 95 },
+  { keyword: "accounts receivable", path: "financialPosition.assets.current.tradeReceivables", confidence: 95 },
+  { keyword: "trade receivable", path: "financialPosition.assets.current.tradeReceivables", confidence: 95 },
+  { keyword: "inventory", path: "financialPosition.assets.current.inventories", confidence: 95 },
+  { keyword: "stock", path: "financialPosition.assets.current.inventories", confidence: 90 },
+  { keyword: "property, plant", path: "financialPosition.assets.nonCurrent.propertyPlantEquipment", confidence: 95 },
+  { keyword: "ppe", path: "financialPosition.assets.nonCurrent.propertyPlantEquipment", confidence: 95 },
+  { keyword: "equipment", path: "financialPosition.assets.nonCurrent.propertyPlantEquipment", confidence: 85 },
+  { keyword: "intangible", path: "financialPosition.assets.nonCurrent.intangibleAssets", confidence: 95 },
+  { keyword: "goodwill", path: "financialPosition.assets.nonCurrent.intangibleAssets", confidence: 95 },
+  { keyword: "accounts payable", path: "financialPosition.liabilities.current.tradePayables", confidence: 95 },
+  { keyword: "trade payable", path: "financialPosition.liabilities.current.tradePayables", confidence: 95 },
+  { keyword: "short-term loan", path: "financialPosition.liabilities.current.shortTermBorrowings", confidence: 90 },
+  { keyword: "long-term debt", path: "financialPosition.liabilities.nonCurrent.borrowings", confidence: 95 },
+  { keyword: "long-term loan", path: "financialPosition.liabilities.nonCurrent.borrowings", confidence: 95 },
+  { keyword: "share capital", path: "financialPosition.equity.shareCapital", confidence: 95 },
+  { keyword: "common stock", path: "financialPosition.equity.shareCapital", confidence: 95 },
+  { keyword: "retained earnings", path: "financialPosition.equity.retainedEarnings", confidence: 95 },
+  { keyword: "reserves", path: "financialPosition.equity.otherReserves", confidence: 85 },
+  { keyword: "sales", path: "profitLoss.revenue", confidence: 95 },
+  { keyword: "revenue", path: "profitLoss.revenue", confidence: 95 },
+  { keyword: "service revenue", path: "profitLoss.revenue", confidence: 95 },
+  { keyword: "cost of goods sold", path: "profitLoss.costOfSales", confidence: 95 },
+  { keyword: "cogs", path: "profitLoss.costOfSales", confidence: 95 },
+  { keyword: "cost of sales", path: "profitLoss.costOfSales", confidence: 95 },
+  { keyword: "salaries", path: "profitLoss.operatingExpenses.employeeBenefits", confidence: 90 },
+  { keyword: "wages", path: "profitLoss.operatingExpenses.employeeBenefits", confidence: 90 },
+  { keyword: "payroll", path: "profitLoss.operatingExpenses.employeeBenefits", confidence: 90 },
+  { keyword: "depreciation", path: "profitLoss.operatingExpenses.depreciation", confidence: 95 },
+  { keyword: "amortization", path: "profitLoss.operatingExpenses.depreciation", confidence: 95 },
+  { keyword: "rent", path: "profitLoss.operatingExpenses.administrative", confidence: 85 },
+  { keyword: "marketing", path: "profitLoss.operatingExpenses.distribution", confidence: 85 },
+  { keyword: "advertising", path: "profitLoss.operatingExpenses.distribution", confidence: 85 },
+  { keyword: "administrative", path: "profitLoss.operatingExpenses.administrative", confidence: 90 },
+  { keyword: "interest expense", path: "profitLoss.financeCosts", confidence: 95 },
+  { keyword: "interest income", path: "profitLoss.financeIncome", confidence: 95 },
+  { keyword: "income tax", path: "profitLoss.incomeTax", confidence: 95 },
+  { keyword: "tax expense", path: "profitLoss.incomeTax", confidence: 90 },
+];
+
+function getRuleBasedMappings(entries: TrialBalanceEntry[]): Record<string, AIMappingResult> {
+  const results: Record<string, AIMappingResult> = {};
+  for (const entry of entries) {
+    const name = (entry.accountName || "").toLowerCase();
+    const type = (entry.accountType || "").toLowerCase();
+    let suggested = "";
+    let confidence = 0;
+    for (const { keyword, path, confidence: c } of RULE_KEYWORDS) {
+      if (name.includes(keyword)) {
+        suggested = path;
+        confidence = c;
+        break;
+      }
+    }
+    if (!suggested && type) {
+      if (["asset", "assets"].some((t) => type.includes(t))) suggested = "financialPosition.assets.current.otherCurrent";
+      else if (["liability", "liabilities"].some((t) => type.includes(t))) suggested = "financialPosition.liabilities.current.otherCurrent";
+      else if (["equity", "capital"].some((t) => type.includes(t))) suggested = "financialPosition.equity.otherReserves";
+      else if (["revenue", "income"].some((t) => type.includes(t))) suggested = "profitLoss.revenue";
+      else if (["expense", "expenses"].some((t) => type.includes(t))) suggested = "profitLoss.operatingExpenses.other";
+      if (suggested) confidence = 55;
+    }
+    if (!suggested) suggested = "unmapped";
+    const ifrsItem = IFRS_LINE_ITEMS.find((i) => i.value === suggested);
+    results[entry.glCode] = {
+      glCode: entry.glCode,
+      accountName: entry.accountName,
+      suggestedMapping: suggested === "unmapped" ? "" : suggested,
+      confidence,
+      alternatives: ifrsItem ? [] : IFRS_LINE_ITEMS.slice(0, 3).map((i) => ({ ifrsLine: i.value, label: i.label, confidence: 0 })),
+    };
+  }
+  return results;
+}
+
 // ==================== AI MAPPING SUGGESTIONS ====================
 
 export async function getAISuggestions(
   entries: TrialBalanceEntry[]
 ): Promise<Record<string, AIMappingResult>> {
-  
-  if (entries.length === 0) {
-    return {};
-  }
+  if (entries.length === 0) return {};
 
-  const prompt = `You are an expert IFRS accountant. Map these General Ledger accounts to the appropriate IFRS line items.
+  // 1) Prefer backend (no AWS token in browser)
+  const backendResults = await getAISuggestionsFromBackend(entries);
+  if (backendResults && Object.keys(backendResults).length > 0) return backendResults;
 
-GL ACCOUNTS TO MAP:
-${entries.map(e => `${e.glCode}: "${e.accountName}" (Debit: ${e.debit}, Credit: ${e.credit})`).join("\n")}
-
-AVAILABLE IFRS LINE ITEMS:
-${IFRS_LINE_ITEMS.map(item => `${item.value} — ${item.label} (${item.statement})`).join("\n")}
-
-INSTRUCTIONS:
-1. Match each GL code to the most appropriate IFRS line item
-2. Consider the account name and debit/credit balance
-3. For each GL code, provide:
-   - Primary mapping (most confident match)
-   - Confidence score (0-100)
-   - 1-2 alternative mappings if applicable
-
-Return ONLY valid JSON in this exact format:
-{
-  "glCode": {
-    "suggestedMapping": "ifrsLine",
-    "confidence": 95,
-    "alternatives": [
-      {"ifrsLine": "alternative1", "label": "Alternative 1", "confidence": 75}
-    ]
-  }
-}
-
-RULES:
-- Use exact GL codes as keys
-- Use exact IFRS line item values from the list above
-- Confidence must be 0-100
-- Return ONLY JSON, no explanation`;
-
-  try {
-    const response = await callAI(prompt, { maxTokens: 3000, temperature: 0.2 });
-    const jsonData = extractJSON(response);
-    
-    // Transform AI response to AIMappingResult format
-    const results: Record<string, AIMappingResult> = {};
-    
-    for (const entry of entries) {
-      const aiResult = jsonData[entry.glCode];
-      
-      if (aiResult) {
-        const ifrsItem = IFRS_LINE_ITEMS.find(item => item.value === aiResult.suggestedMapping);
-        
-        results[entry.glCode] = {
-          glCode: entry.glCode,
-          accountName: entry.accountName,
-          suggestedMapping: aiResult.suggestedMapping,
-          confidence: aiResult.confidence || 0,
-          alternatives: (aiResult.alternatives || []).map((alt: any) => ({
-            ifrsLine: alt.ifrsLine,
-            label: alt.label || IFRS_LINE_ITEMS.find(i => i.value === alt.ifrsLine)?.label || alt.ifrsLine,
-            confidence: alt.confidence || 0
-          }))
-        };
-      } else {
-        // AI didn't provide mapping for this code
-        results[entry.glCode] = {
-          glCode: entry.glCode,
-          accountName: entry.accountName,
-          suggestedMapping: "",
-          confidence: 0,
-          alternatives: []
-        };
-      }
-    }
-    
-    return results;
-    
-  } catch (error) {
-    console.error("AI mapping suggestion failed:", error);
-    throw error;
-  }
+  // 2) Fallback: rule-based mapping (no backend, no AWS — works offline)
+  return getRuleBasedMappings(entries);
 }
 
 // ==================== HELPER: GET IFRS LINE ITEM INFO ====================

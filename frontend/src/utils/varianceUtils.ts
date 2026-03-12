@@ -136,11 +136,21 @@ export const getVarianceArrow = (variance: number): string => {
 
 // ==================== DATA CALCULATIONS ====================
 
+// Match row by id or by category (for uploaded data which has uploaded-0, uploaded-1, etc.)
+const findRow = (data: VarianceRow[], id: string, categoryPatterns: string[]) => {
+  const byId = data.find(r => r.id === id);
+  if (byId) return byId;
+  const cat = data.find(r =>
+    categoryPatterns.some(p => r.category.toLowerCase().includes(p))
+  );
+  return cat;
+};
+
 export const calculateKPISummaries = (data: VarianceRow[]): KPISummary[] => {
-  const revenue = data.find(r => r.id === "revenue");
-  const expenses = data.find(r => r.id === "total-expenses");
-  const netProfit = data.find(r => r.id === "net-profit");
-  const ebitda = data.find(r => r.id === "ebitda");
+  const revenue = findRow(data, "revenue", ["total revenue", "revenue"]);
+  const expenses = findRow(data, "total-expenses", ["operating expenses", "total expenses", "expenses"]);
+  const netProfit = findRow(data, "net-profit", ["net profit", "profit after tax"]);
+  const ebitda = findRow(data, "ebitda", ["ebitda"]);
   
   const summaries: KPISummary[] = [];
   
