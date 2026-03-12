@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Foundation Course - Select Your Batch | Srikanth's Academy</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .navbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 40px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .logo {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #fbbf24 0%, #ffffff 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+        .logo-text h1 { font-size: 20px; color: #000; margin-bottom: 2px; }
+        .logo-text p { font-size: 12px; color: #000; }
+        .nav-links {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            font-size: 16px;
+        }
+        .nav-links a:hover { opacity: 0.8; }
+        .btn-signin {
+            background: white;
+            color: #2b5876;
+            padding: 10px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+        }
+        .main {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 50px 40px;
+        }
+        .page-title {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .page-subtitle {
+            text-align: center;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+        .batch-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+        .batch-card {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 28px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .batch-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+        }
+        .batch-card.selected {
+            border-color: #fbbf24;
+            box-shadow: 0 0 0 2px #fbbf24;
+        }
+        .batch-card h3 {
+            font-size: 18px;
+            margin-bottom: 16px;
+        }
+        .batch-card .time {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .batch-card .commencing {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 8px;
+        }
+        .batch-card .duration {
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        .batch-card .note {
+            font-size: 13px;
+            opacity: 0.85;
+        }
+        .cta-wrap {
+            text-align: center;
+        }
+        .btn-continue {
+            display: inline-block;
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+            color: #000;
+            padding: 14px 32px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 16px;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            margin-bottom: 12px;
+        }
+        .btn-continue:hover { opacity: 0.95; }
+        .btn-continue:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .select-hint {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        /* Registration step: left side (video + foundation) + timer */
+        .registration-step {
+            display: none;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+        .registration-step.visible {
+            display: block;
+        }
+        .registration-step .batch-choice-summary {
+            text-align: center;
+            margin-bottom: 24px;
+            font-size: 16px;
+            opacity: 0.95;
+        }
+        .reg-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            align-items: start;
+        }
+        .reg-right {
+            position: sticky;
+            top: 20px;
+        }
+        .timer-box {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            text-align: center;
+        }
+        .timer-box .timer-label {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 8px;
+        }
+        .timer-box .timer-value {
+            font-size: 32px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .timer-box .timer-note {
+            font-size: 13px;
+            opacity: 0.8;
+            margin-top: 12px;
+        }
+        .reg-left {
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .reg-left h3 {
+            font-size: 18px;
+            margin-bottom: 16px;
+        }
+        .video-placeholder {
+            aspect-ratio: 16/9;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 15px;
+        }
+        .foundation-link-wrap {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .foundation-link-wrap a {
+            color: #fbbf24;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .foundation-link-wrap a:hover {
+            text-decoration: underline;
+        }
+        .main-content.hidden {
+            display: none;
+        }
+        @media (max-width: 768px) {
+            .batch-cards { grid-template-columns: 1fr; }
+            .reg-layout { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo-section">
+            <div class="logo">⚛️</div>
+            <div class="logo-text">
+                <h1>Srikanth's Academy</h1>
+                <p>Excellence in Physics</p>
+            </div>
+        </div>
+        <div class="nav-links">
+            <a href="homepage.html#about">About</a>
+            <a href="homepage.html#success">Success Stories</a>
+            <a href="homepage.html#support">Support</a>
+            <a href="homepage.html#courses">Foundation Course</a>
+            <a href="homepage.html#courses">Courses</a>
+            <a href="https://www.srikanthsacademy.com/login" class="btn-signin">Sign In</a>
+            <a href="#" class="btn-signin">Register</a>
+        </div>
+    </nav>
+
+    <main class="main">
+        <h1 class="page-title">Foundation Course - Select Your Batch</h1>
+        <p class="page-subtitle">Choose the batch timing that works best for you</p>
+
+        <div class="main-content" id="mainContent">
+        <div class="batch-cards">
+            <div class="batch-card" data-batch="1">
+                <h3>Foundation Batch 1</h3>
+                <div class="time">7:00 PM IST</div>
+                <div class="commencing">Commencing from 16th March, 2026</div>
+                <div class="duration">Duration: 1 month</div>
+                <div class="note">Limited seats available</div>
+            </div>
+            <div class="batch-card" data-batch="2">
+                <h3>Foundation Batch 2</h3>
+                <div class="time">6:00 PM IST</div>
+                <div class="commencing">Commencing from 6th April, 2026</div>
+                <div class="duration">Duration: 1 month</div>
+                <div class="note">Limited seats available</div>
+            </div>
+            <div class="batch-card" data-batch="3">
+                <h3>Foundation Batch 3</h3>
+                <div class="time">7:00 PM IST</div>
+                <div class="commencing">Commencing from 20th April, 2026</div>
+                <div class="duration">Duration: 1 month</div>
+                <div class="note">Limited seats available</div>
+            </div>
+        </div>
+
+        <div class="cta-wrap">
+            <button type="button" class="btn-continue" id="btnContinue" disabled>Continue to Registration →</button>
+            <p class="select-hint">Please select a batch to continue</p>
+        </div>
+        </div>
+
+        <div class="registration-step" id="registrationStep">
+            <p class="batch-choice-summary" id="batchSummary"></p>
+            <div class="reg-layout">
+                <div class="reg-left">
+                    <h3>Watch 2 minutes video</h3>
+                    <div class="video-placeholder">
+                        <span>▶ Video player (2 min)</span>
+                    </div>
+                    <div class="foundation-link-wrap">
+                        <strong>Foundation course</strong>
+                        <br>
+                        <a href="#" id="foundationCourseLink">Open Foundation Course →</a>
+                    </div>
+                </div>
+                <div class="reg-right">
+                    <div class="timer-box">
+                        <div class="timer-label">Registration timer</div>
+                        <div class="timer-value" id="timerDisplay">00:00</div>
+                        <div class="timer-note">Complete registration before time runs out</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const cards = document.querySelectorAll('.batch-card');
+        const btnContinue = document.getElementById('btnContinue');
+        const mainContent = document.getElementById('mainContent');
+        const registrationStep = document.getElementById('registrationStep');
+        const batchSummary = document.getElementById('batchSummary');
+        const timerDisplay = document.getElementById('timerDisplay');
+        const foundationCourseLink = document.getElementById('foundationCourseLink');
+
+        let timerInterval = null;
+        const REGISTRATION_SECONDS = 10 * 60; // 10 minutes
+
+        function startTimer() {
+            let remaining = REGISTRATION_SECONDS;
+            function tick() {
+                const m = Math.floor(remaining / 60);
+                const s = remaining % 60;
+                timerDisplay.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+                if (remaining <= 0) {
+                    clearInterval(timerInterval);
+                    timerDisplay.textContent = '00:00';
+                    return;
+                }
+                remaining--;
+            }
+            tick();
+            timerInterval = setInterval(tick, 1000);
+        }
+
+        cards.forEach(card => {
+            card.addEventListener('click', () => {
+                cards.forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+                btnContinue.disabled = false;
+            });
+        });
+
+        btnContinue.addEventListener('click', () => {
+            const selected = document.querySelector('.batch-card.selected');
+            if (!selected) return;
+            const batch = selected.dataset.batch;
+            const batchTitle = selected.querySelector('h3').textContent;
+            const batchTime = selected.querySelector('.time').textContent;
+
+            mainContent.classList.add('hidden');
+            registrationStep.classList.add('visible');
+            batchSummary.textContent = 'You selected: ' + batchTitle + ' (' + batchTime + ')';
+            foundationCourseLink.href = 'foundation-batch-select.html?batch=' + batch;
+
+            startTimer();
+        });
+    </script>
+</body>
+</html>
