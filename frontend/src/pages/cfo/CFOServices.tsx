@@ -26,7 +26,9 @@ import {
 } from '../../data/cfoMockData';
 import { callAI } from '../../services/aiProvider';
 import { useAgentActivity } from '../../context/AgentActivityContext';
-import { loadCFOServicesContext } from '../../types/cfoServicesContext';
+import { loadCFOServicesContext, saveCFOServicesContext } from '../../types/cfoServicesContext';
+import { parseCFOServicesContextFromFile } from '../../utils/cfoContextParser';
+import type { CFOServicesContext } from '../../types/cfoServicesContext';
 
 interface CFOServicesProps {
   defaultTab?: CFOTab;
@@ -55,27 +57,55 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
   const [effectiveContext, setEffectiveContext] = useState<string>(financialContext);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadFileName, setUploadFileName] = useState<string | null>(null);
+
+  const applyContext = (ctx: CFOServicesContext) => {
+    if (ctx.aiAssistantContext) setEffectiveContext(`COMPANY FINANCIAL DATA (from upload):\n${ctx.aiAssistantContext}`);
+    setAlerts(ctx.kpiAlerts ?? []);
+    if (ctx.healthScore) setHealthScore(ctx.healthScore as FinancialHealthScore);
+    const fromSeeds: StrategicInsight[] = (ctx.strategicInsightsSeeds ?? []).map((s, i) => ({
+      id: `ctx-ins-${i + 1}`,
+      category: (s.category?.toLowerCase().slice(0, 5) === 'revenu' ? 'revenue' : s.category?.toLowerCase().slice(0, 4) === 'cost' ? 'cost' : s.category?.toLowerCase().slice(0, 4) === 'cash' ? 'cash' : s.category?.toLowerCase().slice(0, 4) === 'risk' ? 'risk' : 'opportunity') as StrategicInsight['category'],
+      title: s.trigger?.slice(0, 60) || s.category || 'Insight',
+      summary: s.trigger || '',
+      detail: s.trigger || '',
+      impact: (s.impact?.toLowerCase().includes('high') ? 'high' : s.impact?.toLowerCase().includes('medium') ? 'medium' : 'low') as StrategicInsight['impact'],
+      urgency: (s.urgency?.toLowerCase().includes('immediate') ? 'immediate' : s.urgency?.toLowerCase().includes('week') ? 'this_week' : 'this_month') as StrategicInsight['urgency'],
+      action: 'Review and act per priority.',
+      generatedAt: new Date().toISOString(),
+    }));
+    setInsights(fromSeeds);
+  };
+
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const ctx = await parseCFOServicesContextFromFile(file);
+      if (ctx) {
+        localStorage.setItem('finreport_cfo_context', JSON.stringify(ctx));
+        saveCFOServicesContext(ctx);
+        applyContext(ctx);
+        setUploadFileName(file.name);
+      } else {
+        setUploadError('No CFO Services Context sheet found. Use Excel with a sheet named CFO_Services_Context (or containing "cfo", "context", "services").');
+      }
+    } catch (err: any) {
+      setUploadError(err?.message || 'Upload failed.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   useEffect(() => {
     const ctx = loadCFOServicesContext();
-    if (!ctx) return;
-    if (ctx.aiAssistantContext) setEffectiveContext(`COMPANY FINANCIAL DATA (from upload):\n${ctx.aiAssistantContext}`);
-    if (ctx.kpiAlerts?.length) setAlerts(ctx.kpiAlerts as KPIAlert[]);
-    if (ctx.healthScore) setHealthScore(ctx.healthScore as FinancialHealthScore);
-    if (ctx.strategicInsightsSeeds?.length) {
-      const fromSeeds: StrategicInsight[] = ctx.strategicInsightsSeeds.map((s, i) => ({
-        id: `ctx-ins-${i + 1}`,
-        category: (s.category?.toLowerCase().slice(0, 5) === 'revenu' ? 'revenue' : s.category?.toLowerCase().slice(0, 4) === 'cost' ? 'cost' : s.category?.toLowerCase().slice(0, 4) === 'cash' ? 'cash' : s.category?.toLowerCase().slice(0, 4) === 'risk' ? 'risk' : 'opportunity') as StrategicInsight['category'],
-        title: s.trigger?.slice(0, 60) || s.category || 'Insight',
-        summary: s.trigger || '',
-        detail: s.trigger || '',
-        impact: (s.impact?.toLowerCase().includes('high') ? 'high' : s.impact?.toLowerCase().includes('medium') ? 'medium' : 'low') as StrategicInsight['impact'],
-        urgency: (s.urgency?.toLowerCase().includes('immediate') ? 'immediate' : s.urgency?.toLowerCase().includes('week') ? 'this_week' : 'this_month') as StrategicInsight['urgency'],
-        action: 'Review and act per priority.',
-        generatedAt: new Date().toISOString(),
-      }));
-      setInsights(fromSeeds);
-    }
+    if (ctx) applyContext(ctx);
   }, []);
 
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
@@ -160,7 +190,7 @@ USER QUESTION: ${userMessage}`;
 
   const handleSuggestedQuestion = (question: string) => {
     setInputMessage(question);
-    inputRef.current?.focus();
+    sendMessage(question);
   };
 
   const callVoiceAPI = async (transcriptOrAudio: string | Blob): Promise<void> => {
@@ -334,14 +364,27 @@ USER QUESTION: ${userMessage}`;
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-wrap">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={handleUploadFile}
+                aria-label="Upload CFO context file"
+              />
               <button
-                onClick={() => navigate('/upload-data')}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-70"
               >
                 <Upload className="w-4 h-4" />
-                <span>Upload Data</span>
+                <span>{uploading ? 'Uploading…' : 'Upload Data'}</span>
               </button>
+              {uploadFileName && <span className="text-sm text-gray-600">✓ {uploadFileName}</span>}
+              {uploadError && <span className="text-sm text-red-600 max-w-xs">{uploadError}</span>}
+              <span className="text-xs text-gray-500">Excel/CSV with sheet: CFO_Services_Context</span>
               <div className="text-right">
                 <div className="text-sm text-gray-600">Powered by</div>
                 <div className="font-semibold text-purple-600">Amazon Nova</div>

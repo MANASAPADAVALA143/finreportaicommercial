@@ -438,8 +438,8 @@ const BuildVsBuy: React.FC<BuildVsBuyProps> = ({ onSaveToAudit }) => {
             </div>
           </div>
 
-          {/* AI Recommendation */}
-          {aiRecommendation && (
+          {/* AI Recommendation - hidden when Nova/credentials error */}
+          {aiRecommendation && !(aiRecommendation.confidence === 0 && (aiRecommendation.recommendation?.startsWith('Unable to generate') || /security token|AI call failed|invalid.*token/i.test(aiRecommendation.recommendation || ''))) && (
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200 p-6">
               <div className="flex items-start justify-between mb-4">
                 <div>

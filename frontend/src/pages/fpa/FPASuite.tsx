@@ -25,13 +25,14 @@ export const FPASuite = () => {
     {
       id: 'variance',
       title: 'Variance Analysis',
-      description: 'Budget vs Actual performance with AI-powered commentary',
+      description: 'Budget vs Actual — AI-powered variance intelligence',
       icon: BarChart3,
-      route: '/fpa/variance',
+      route: '/dashboard/fpa/variance-analysis',
       available: true,
       color: 'from-blue-500 to-blue-600',
       bgColor: 'bg-blue-50',
-      iconColor: 'text-blue-600'
+      iconColor: 'text-blue-600',
+      badge: 'NEW'
     },
     {
       id: 'budget',
@@ -133,20 +134,21 @@ export const FPASuite = () => {
               </div>
             </div>
             
-            {/* Upload Data - same as all sections (top right) */}
-            <Link
-              to="/upload-data"
+            {/* Upload Data - opens modal for this section only */}
+            <button
+              type="button"
+              onClick={() => setShowUploadModal(true)}
               className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm bg-blue-600 text-white hover:bg-blue-700"
             >
               <Upload className="w-4 h-4" />
               <span>Upload Data</span>
-            </Link>
+            </button>
           </div>
           
           {/* Info Banner */}
           <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg p-4 mt-4">
             <p className="text-sm text-blue-900">
-              <strong>💡 Upload Once, Use Everywhere:</strong> Upload your trial balance here and all 7 modules below will automatically use your real data.
+              <strong>💡 Upload here for FP&A:</strong> Upload your trial balance in this section; the modules below use only data you upload in FP&A Suite.
             </p>
           </div>
           

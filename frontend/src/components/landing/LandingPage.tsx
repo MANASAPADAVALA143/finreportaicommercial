@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Sparkles, Video, ArrowRight } from 'lucide-react';
+import { LandingNovaBot } from './LandingNovaBot';
 
 export const LandingPage: React.FC = () => {
   return (
@@ -44,14 +45,6 @@ export const LandingPage: React.FC = () => {
               Launch Dashboard
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
-            
-            <Link
-              to="/upload-data"
-              className="px-8 py-4 bg-slate-800/50 backdrop-blur-sm border border-slate-600 text-white rounded-xl font-semibold hover:bg-slate-700/50 hover:border-slate-500 transition-all duration-300 flex items-center gap-2"
-            >
-              <Sparkles className="w-5 h-5" />
-              Upload Data
-            </Link>
           </div>
         </div>
       </div>
@@ -59,6 +52,9 @@ export const LandingPage: React.FC = () => {
       {/* Decorative Glow Effects */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl"></div>
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl"></div>
+
+      {/* Landing Page Nova Bot */}
+      <LandingNovaBot />
     </div>
   );
 };

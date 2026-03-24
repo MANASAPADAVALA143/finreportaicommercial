@@ -1,10 +1,13 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 // FP&A Variance Analysis - Main P&L Variance Table Component
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { formatCurrency, formatPercentage, getVarianceIcon, getVarianceArrow, getVisibleRows, toggleRowExpansion } from '../../utils/varianceUtils';
 export const VarianceTable = ({ data: initialData, currency = "INR", onRowClick }) => {
     const [data, setData] = useState(initialData);
+    useEffect(() => {
+        setData(initialData);
+    }, [initialData]);
     const handleToggleExpand = (rowId) => {
         setData(toggleRowExpansion(data, rowId));
     };

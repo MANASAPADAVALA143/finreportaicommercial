@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useState } from 'react';
-import { Brain, ArrowLeft, Upload } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Brain, ArrowLeft, Upload, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import MorningBrief from '../components/cfo-decision/MorningBrief';
 import InvestmentDecision from '../components/cfo-decision/InvestmentDecision';
@@ -19,6 +19,19 @@ const CFODecisionIntelligence = () => {
     const [showMorningBrief, setShowMorningBrief] = useState(true);
     const [showUploadModal, setShowUploadModal] = useState(false);
     const [uploadedData, setUploadedData] = useState(loadCFODecisionData());
+    // On mount: read from localStorage so dashboard upload data appears (avoids stale initial state)
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('finreport_cfo_decisions');
+            if (raw) {
+                const data = JSON.parse(raw);
+                setUploadedData(data);
+            }
+        }
+        catch (e) {
+            console.error('CFO Decision load error', e);
+        }
+    }, []);
     const tabs = [
         { id: 'investment', name: 'Investment Decision', icon: '💰' },
         { id: 'build_vs_buy', name: 'Build vs Buy', icon: '🏗️', badge: 'NEW' },
@@ -46,9 +59,51 @@ const CFODecisionIntelligence = () => {
         setActiveTab(actionType);
         setShowMorningBrief(false);
     };
-    const criticalCount = morningBriefData.filter(item => item.urgency === 'critical' || item.urgency === 'warning').length;
-    const resolvedCount = morningBriefData.filter(item => item.urgency === 'info').length;
-    return (_jsxs("div", { className: "min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6", children: [_jsxs("div", { className: "max-w-7xl mx-auto", children: [_jsxs("div", { className: "bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl shadow-lg p-6 mb-6 text-white", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsxs("div", { className: "flex items-center gap-4", children: [_jsx("button", { onClick: () => navigate('/fpa'), className: "p-2 hover:bg-white/20 rounded-lg transition-colors", children: _jsx(ArrowLeft, { className: "w-6 h-6" }) }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("div", { className: "w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm", children: _jsx(Brain, { className: "w-8 h-8" }) }), _jsxs("div", { children: [_jsx("h1", { className: "text-3xl font-bold", children: "CFO Decision Intelligence" }), _jsx("p", { className: "text-amber-50 text-sm", children: "Strategic decisions powered by Amazon Nova AI" })] })] })] }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsxs("button", { onClick: () => setShowUploadModal(true), className: "px-4 py-2 bg-white text-amber-600 hover:bg-amber-50 rounded-lg transition-colors font-medium flex items-center gap-2 shadow-sm", children: [_jsx(Upload, { className: "w-4 h-4" }), _jsx("span", { children: "Upload Data" })] }), _jsxs("button", { onClick: () => setShowMorningBrief(!showMorningBrief), className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors backdrop-blur-sm flex items-center gap-2", children: [_jsx("span", { children: "\uD83C\uDF05" }), _jsx("span", { className: "font-medium", children: "Morning Brief" }), criticalCount > 0 && (_jsx("span", { className: "px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full", children: criticalCount }))] }), _jsxs("button", { onClick: () => setActiveTab('audit'), className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors backdrop-blur-sm flex items-center gap-2", children: [_jsx("span", { children: "\uD83D\uDCCB" }), _jsx("span", { className: "font-medium", children: "Decision Log" })] })] })] }), _jsxs("div", { className: "mt-4 pt-4 border-t border-white/20 flex items-center gap-6 text-sm", children: [criticalCount > 0 && (_jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { className: "w-2 h-2 bg-red-400 rounded-full animate-pulse" }), _jsxs("span", { className: "text-white/90", children: [criticalCount, " decision", criticalCount > 1 ? 's' : '', " need attention today"] })] })), resolvedCount > 0 && (_jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { children: "\u2705" }), _jsxs("span", { className: "text-white/90", children: [resolvedCount, " resolved automatically"] })] })), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { children: "\uD83E\uDD16" }), _jsxs("span", { className: "text-white/90", children: ["78% AI accuracy \u2022 ", savedDecisions.length + 6, " total decisions"] })] })] })] }), showMorningBrief && (_jsx(MorningBrief, { items: morningBriefData, onActionClick: handleMorningBriefAction })), _jsx("div", { className: "bg-white rounded-lg shadow-sm border border-gray-200 mb-6", children: _jsx("div", { className: "flex overflow-x-auto", children: tabs.map((tab) => (_jsxs("button", { onClick: () => setActiveTab(tab.id), className: `flex items-center gap-2 px-6 py-4 font-medium transition-all whitespace-nowrap border-b-2 ${activeTab === tab.id
+    // When user has uploaded data, build Morning Brief from it so they see "something coming"
+    const morningBriefItems = useMemo(() => {
+        if (!uploadedData)
+            return morningBriefData;
+        const items = [];
+        if (uploadedData.investment?.length > 0) {
+            const p = uploadedData.investment[0];
+            const roi = p.yearlyRevenue && p.investment ? ((p.yearlyRevenue - (p.yearlyCost || 0)) / p.investment * 100) : 0;
+            items.push({
+                urgency: roi < 15 ? 'warning' : 'info',
+                title: `${p.projectName || 'Investment'} — ROI ${roi.toFixed(0)}%`,
+                decision: roi < 15 ? 'Review project economics' : 'No action needed',
+                impact: p.investment ? `₹${(p.investment / 1e5).toFixed(1)}L investment` : '—',
+                action: 'investment'
+            });
+        }
+        if (uploadedData.risks?.length > 0) {
+            const r = uploadedData.risks.find((x) => (x.riskScore || 0) >= 70) || uploadedData.risks[0];
+            items.push({
+                urgency: (r.riskScore || 0) >= 70 ? 'critical' : (r.riskScore || 0) >= 50 ? 'warning' : 'info',
+                title: r.riskCategory || r.riskDescription || 'Risk item',
+                decision: (r.riskScore || 0) >= 70 ? 'Review mitigation' : 'Monitor',
+                impact: r.riskDescription || `Score ${r.riskScore || 0}`,
+                action: 'risk'
+            });
+        }
+        if (uploadedData.buildVsBuy?.length > 0) {
+            items.push({
+                urgency: 'info',
+                title: `${uploadedData.buildVsBuy.length} Build vs Buy scenario(s) loaded`,
+                decision: 'Review in Build vs Buy tab',
+                impact: '—',
+                action: 'build_vs_buy'
+            });
+        }
+        if (items.length === 0)
+            return morningBriefData;
+        return items;
+    }, [uploadedData]);
+    const criticalCount = morningBriefItems.filter(item => item.urgency === 'critical' || item.urgency === 'warning').length;
+    const resolvedCount = morningBriefItems.filter(item => item.urgency === 'info').length;
+    const hasUploadedData = uploadedData && ((uploadedData.investment?.length ?? 0) > 0 ||
+        (uploadedData.risks?.length ?? 0) > 0 ||
+        (uploadedData.buildVsBuy?.length ?? 0) > 0);
+    return (_jsxs("div", { className: "min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6", children: [_jsxs("div", { className: "max-w-7xl mx-auto", children: [_jsxs("div", { className: "bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl shadow-lg p-6 mb-6 text-white", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsxs("div", { className: "flex items-center gap-4", children: [_jsx("button", { onClick: () => navigate('/fpa'), className: "p-2 hover:bg-white/20 rounded-lg transition-colors", children: _jsx(ArrowLeft, { className: "w-6 h-6" }) }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("div", { className: "w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm", children: _jsx(Brain, { className: "w-8 h-8" }) }), _jsxs("div", { children: [_jsx("h1", { className: "text-3xl font-bold", children: "CFO Decision Intelligence" }), _jsx("p", { className: "text-amber-50 text-sm", children: "Strategic decisions powered by Amazon Nova AI" })] })] })] }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsxs("button", { type: "button", onClick: () => setShowUploadModal(true), className: "px-4 py-2 bg-white text-amber-600 hover:bg-amber-50 rounded-lg transition-colors font-medium flex items-center gap-2 shadow-sm", children: [_jsx(Upload, { className: "w-4 h-4" }), _jsx("span", { children: "Upload Data" })] }), _jsxs("button", { onClick: () => setShowMorningBrief(!showMorningBrief), className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors backdrop-blur-sm flex items-center gap-2", children: [_jsx("span", { children: "\uD83C\uDF05" }), _jsx("span", { className: "font-medium", children: "Morning Brief" }), criticalCount > 0 && (_jsx("span", { className: "px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full", children: criticalCount }))] }), _jsxs("button", { onClick: () => setActiveTab('audit'), className: "px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors backdrop-blur-sm flex items-center gap-2", children: [_jsx("span", { children: "\uD83D\uDCCB" }), _jsx("span", { className: "font-medium", children: "Decision Log" })] })] })] }), _jsxs("div", { className: "mt-4 pt-4 border-t border-white/20 flex items-center gap-6 text-sm", children: [criticalCount > 0 && (_jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { className: "w-2 h-2 bg-red-400 rounded-full animate-pulse" }), _jsxs("span", { className: "text-white/90", children: [criticalCount, " decision", criticalCount > 1 ? 's' : '', " need attention today"] })] })), resolvedCount > 0 && (_jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { children: "\u2705" }), _jsxs("span", { className: "text-white/90", children: [resolvedCount, " resolved automatically"] })] })), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("span", { children: "\uD83E\uDD16" }), _jsxs("span", { className: "text-white/90", children: ["78% AI accuracy \u2022 ", savedDecisions.length + 6, " total decisions"] })] })] })] }), hasUploadedData && (_jsxs("div", { className: "mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg", children: [_jsx(CheckCircle, { className: "w-5 h-5 text-green-600 flex-shrink-0" }), _jsx("span", { className: "text-green-800 font-medium", children: "Data loaded from upload \u2014 Morning Brief and tabs use your file." })] })), showMorningBrief && (_jsx(MorningBrief, { items: morningBriefItems, onActionClick: handleMorningBriefAction })), _jsx("div", { className: "bg-white rounded-lg shadow-sm border border-gray-200 mb-6", children: _jsx("div", { className: "flex overflow-x-auto", children: tabs.map((tab) => (_jsxs("button", { onClick: () => setActiveTab(tab.id), className: `flex items-center gap-2 px-6 py-4 font-medium transition-all whitespace-nowrap border-b-2 ${activeTab === tab.id
                                     ? 'border-amber-600 text-amber-600 bg-amber-50'
                                     : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'}`, children: [_jsx("span", { className: "text-xl", children: tab.icon }), _jsx("span", { children: tab.name }), tab.badge && (_jsx("span", { className: `px-2 py-0.5 text-xs font-bold rounded-full ${tab.badge === 'NEW' ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`, children: tab.badge }))] }, tab.id))) }) }), _jsxs("div", { className: "transition-all duration-300", children: [activeTab === 'investment' && (_jsx(InvestmentDecision, { onSaveToAudit: handleSaveToAudit })), activeTab === 'build_vs_buy' && (_jsx(BuildVsBuy, { onSaveToAudit: handleSaveToAudit })), activeTab === 'internal_vs_external' && (_jsx(InternalVsExternal, { onSaveToAudit: handleSaveToAudit })), activeTab === 'hire_vs_automate' && (_jsx(HireVsAutomate, { onSaveToAudit: handleSaveToAudit })), activeTab === 'cost_cut' && (_jsxs("div", { className: "bg-white rounded-lg border border-gray-200 p-8 text-center", children: [_jsx("div", { className: "text-6xl mb-4", children: "\u2702\uFE0F" }), _jsx("h3", { className: "text-2xl font-bold text-gray-900 mb-2", children: "Cost Cut vs Invest Analyzer" }), _jsx("p", { className: "text-gray-600 mb-4", children: "Limited budget \u2014 where to cut and where to invest?" }), _jsx("p", { className: "text-sm text-gray-500", children: "This module helps you balance cost savings with growth investments by analyzing your expense categories and recommending optimal allocation." })] })), activeTab === 'capital' && (_jsxs("div", { className: "bg-white rounded-lg border border-gray-200 p-8 text-center", children: [_jsx("div", { className: "text-6xl mb-4", children: "\uD83C\uDFE2" }), _jsx("h3", { className: "text-2xl font-bold text-gray-900 mb-2", children: "Capital Allocation Advisor" }), _jsx("p", { className: "text-gray-600 mb-4", children: "How to deploy available capital for maximum return?" }), _jsx("p", { className: "text-sm text-gray-500", children: "This module optimizes your capital allocation across product development, market expansion, debt repayment, M&A, and cash reserves based on your risk appetite." })] })), activeTab === 'risk' && _jsx(RiskDashboard, {}), activeTab === 'audit' && (_jsx(DecisionAuditTrail, { savedDecisions: savedDecisions }))] })] }), showUploadModal && (_jsx(CFODecisionUploadModal, { onClose: () => setShowUploadModal(false), onUploadSuccess: () => {
                     setUploadedData(loadCFODecisionData());

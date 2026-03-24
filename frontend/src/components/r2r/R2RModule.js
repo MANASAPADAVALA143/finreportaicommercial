@@ -1,9 +1,12 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useState, useEffect } from 'react';
-import { Upload, FileText, AlertTriangle, CheckCircle, TrendingUp, X, BarChart3, Shield } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Upload, FileText, AlertTriangle, CheckCircle, TrendingUp, X, BarChart3, Shield, ArrowLeft, LayoutGrid } from 'lucide-react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export const R2RModule = () => {
+    const navigate = useNavigate();
     const [file, setFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [results, setResults] = useState([]);
@@ -12,15 +15,23 @@ export const R2RModule = () => {
     const [confusionMatrix, setConfusionMatrix] = useState(null);
     const [selectedEntry, setSelectedEntry] = useState(null);
     const [showHighRiskModal, setShowHighRiskModal] = useState(false);
+    // Stateful R2R: company-specific learning (MindBridge-style)
+    const [companies, setCompanies] = useState([]);
+    const [selectedCompany, setSelectedCompany] = useState('');
+    const [newCompanyName, setNewCompanyName] = useState('');
     // Threshold configuration
     const [sensitivityLevel, setSensitivityLevel] = useState('balanced');
     const [customThreshold, setCustomThreshold] = useState(40);
-    // Load saved threshold preference on mount
     useEffect(() => {
         const saved = localStorage.getItem('fraud_detection_threshold');
-        if (saved) {
+        if (saved)
             setCustomThreshold(Number(saved));
-        }
+    }, []);
+    useEffect(() => {
+        fetch(`${API_BASE}/api/companies`)
+            .then((r) => r.json())
+            .then((data) => setCompanies(Array.isArray(data) ? data : []))
+            .catch(() => setCompanies([]));
     }, []);
     // Save threshold preference when it changes
     useEffect(() => {
@@ -61,6 +72,22 @@ export const R2RModule = () => {
             setFile(e.target.files[0]);
         }
     };
+    const handleAddCompany = async () => {
+        const name = newCompanyName.trim();
+        if (!name)
+            return;
+        try {
+            const r = await fetch(`${API_BASE}/api/companies?name=${encodeURIComponent(name)}&industry=General`, { method: 'POST' });
+            const c = await r.json();
+            setCompanies((prev) => [...prev, { id: c.company_id, name: c.name, industry: c.industry }]);
+            setSelectedCompany(c.company_id);
+            setNewCompanyName('');
+            toast.success(`Company "${c.name}" added`);
+        }
+        catch (e) {
+            toast.error(e?.message || 'Failed to add company');
+        }
+    };
     const handleUpload = async () => {
         if (!file) {
             toast.error('Please select a file (CSV or Excel)');
@@ -70,24 +97,43 @@ export const R2RModule = () => {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('threshold', customThreshold.toString());
+        const useStateful = !!selectedCompany;
+        if (useStateful) {
+            formData.append('company_id', selectedCompany);
+        }
+        const url = useStateful
+            ? `${API_BASE}/api/analyze`
+            : `${API_BASE}/api/journal-entries/upload`;
         try {
-            console.log('📤 Uploading file:', file.name);
+            console.log('📤 Uploading file:', file.name, useStateful ? `(company: ${selectedCompany})` : '(stateless)');
             console.log('🎯 Detection threshold:', customThreshold);
-            const response = await axios.post('http://localhost:8000/api/journal-entries/upload', formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data',
-                },
+            const response = await axios.post(url, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
             });
             console.log('✅ Upload response:', response.data);
             if (response.data.success) {
-                setResults(response.data.results);
-                setSummary(response.data.summary);
-                setMetrics(response.data.metrics);
-                // Fix: confusion matrix is inside metrics
-                if (response.data.metrics && response.data.metrics.confusionMatrix) {
-                    setConfusionMatrix(response.data.metrics.confusionMatrix);
+                const data = response.data;
+                setResults(data.results || []);
+                setSummary(data.summary || null);
+                setMetrics(data.metrics ?? null);
+                if (data.metrics?.confusionMatrix) {
+                    setConfusionMatrix(data.metrics.confusionMatrix);
                 }
-                toast.success(`✅ Analyzed ${response.data.summary.total} entries! High Risk: ${response.data.summary.highRisk}`);
+                else {
+                    setConfusionMatrix(null);
+                }
+                const summary = data.summary;
+                const novaUsed = summary?.novaUsed === true || (summary?.novaEntryCount != null && summary.novaEntryCount > 0);
+                toast.success(useStateful
+                    ? `✅ Stateful: ${data.total} entries, High: ${data.high ?? summary?.highRisk ?? 0}, baseline updated for next run`
+                    : novaUsed
+                        ? `✅ Analyzed ${summary?.total} entries with Amazon Nova. High Risk: ${summary?.highRisk}`
+                        : `✅ Analyzed ${summary?.total} entries (rule-based). High Risk: ${summary?.highRisk}`);
+                if (useStateful) {
+                    setCompanies((prev) => prev.map((c) => c.id === selectedCompany
+                        ? { ...c, total_uploads: (c.total_uploads ?? 0) + 1 }
+                        : c));
+                }
             }
         }
         catch (error) {
@@ -107,7 +153,7 @@ export const R2RModule = () => {
             default: return 'bg-gray-100 text-gray-800 border-gray-300';
         }
     };
-    return (_jsx("div", { className: "min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-8", children: _jsxs("div", { className: "container mx-auto max-w-7xl", children: [_jsxs("div", { className: "mb-8", children: [_jsxs("h1", { className: "text-4xl font-bold text-gray-900 flex items-center gap-3 mb-2", children: [_jsx(FileText, { className: "w-10 h-10 text-blue-600" }), "Record to Report (R2R) - Amazon Nova AI"] }), _jsx("p", { className: "text-lg text-gray-600", children: "Upload journal entries for complete ML-powered fraud analysis with SHAP & metrics" })] }), _jsxs("div", { className: "bg-white rounded-2xl shadow-xl border border-gray-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-6", children: [_jsx(Shield, { className: "w-6 h-6 text-purple-600" }), _jsxs("div", { children: [_jsx("h2", { className: "text-xl font-bold text-gray-900", children: "Detection Sensitivity" }), _jsx("p", { className: "text-sm text-gray-600", children: "Adjust how strictly anomalies are flagged" })] })] }), _jsx("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-4 mb-6", children: Object.entries(SENSITIVITY_LEVELS).map(([key, level]) => (_jsxs("button", { onClick: () => {
+    return (_jsx("div", { className: "min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-8", children: _jsxs("div", { className: "container mx-auto max-w-7xl", children: [_jsxs("div", { className: "flex items-center justify-between mb-6 flex-wrap gap-3", children: [_jsx("button", { onClick: () => navigate('/dashboard'), className: "p-2 hover:bg-white/80 rounded-lg transition flex items-center gap-2 text-gray-700", children: _jsx(ArrowLeft, { className: "w-5 h-5" }) }), _jsxs("div", { className: "flex items-center gap-2 flex-wrap", children: [_jsx("span", { className: "text-sm font-medium text-gray-500 mr-1", children: "Service 1:" }), _jsx(Link, { to: "/close-tracker", className: "flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium", children: "\uD83D\uDCCB Close Tracker" }), _jsx(Link, { to: "/tb-variance", className: "flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium", children: "\uD83D\uDCCA TB Variance" }), _jsx(Link, { to: "/bank-recon", className: "flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium", children: "\uD83C\uDFE6 Bank Recon" }), _jsxs(Link, { to: "/r2r-pattern", className: "flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm", children: [_jsx(Upload, { className: "w-4 h-4" }), _jsx("span", { children: "Upload journal entries (R2R Pattern)" })] })] })] }), _jsxs("div", { className: "mb-8", children: [_jsxs("h1", { className: "text-4xl font-bold text-gray-900 flex items-center gap-3 mb-2", children: [_jsx(FileText, { className: "w-10 h-10 text-blue-600" }), "Record to Report (R2R) - Amazon Nova AI"] }), _jsx("p", { className: "text-lg text-gray-600", children: "Upload journal entries for complete ML-powered fraud analysis with SHAP & metrics" })] }), _jsxs(Link, { to: "/r2r-pattern", className: "mb-6 flex items-center gap-3 p-4 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-800 hover:bg-indigo-100 transition", children: [_jsx(LayoutGrid, { className: "w-6 h-6 flex-shrink-0 text-indigo-600" }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsx("p", { className: "font-semibold text-indigo-900", children: "View your uploaded journal entry analysis" }), _jsxs("p", { className: "text-sm text-indigo-700 mt-0.5", children: ["Pattern analysis, risk flags, and anomaly trends are in ", _jsx("strong", { children: "R2R Pattern Engine" }), " \u2192"] })] }), _jsx("span", { className: "text-indigo-600 font-medium shrink-0", children: "Open R2R Pattern Engine" })] }), _jsxs("div", { className: "bg-white rounded-2xl shadow-xl border border-gray-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-6", children: [_jsx(Shield, { className: "w-6 h-6 text-purple-600" }), _jsxs("div", { children: [_jsx("h2", { className: "text-xl font-bold text-gray-900", children: "Detection Sensitivity" }), _jsx("p", { className: "text-sm text-gray-600", children: "Adjust how strictly anomalies are flagged" })] })] }), _jsx("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-4 mb-6", children: Object.entries(SENSITIVITY_LEVELS).map(([key, level]) => (_jsxs("button", { onClick: () => {
                                     setSensitivityLevel(key);
                                     setCustomThreshold(level.threshold);
                                 }, className: `p-6 rounded-xl border-2 transition-all text-left hover:shadow-md ${sensitivityLevel === key
@@ -129,7 +175,7 @@ export const R2RModule = () => {
                                                         customThreshold <= 35 ? '30-40 anomalies (high sensitivity)' :
                                                             customThreshold <= 50 ? '20-30 anomalies (moderate sensitivity)' :
                                                                 customThreshold <= 65 ? '15-20 anomalies (low sensitivity)' :
-                                                                    '10-15 anomalies (very low sensitivity - critical only)' })] }), _jsxs("p", { className: "text-xs text-gray-500 mt-2", children: ["\uD83D\uDCA1 Lower values = more anomalies detected (higher recall, more false positives)", _jsx("br", {}), "\uD83D\uDCA1 Higher values = fewer anomalies detected (higher precision, fewer false positives)"] })] })] })] }), _jsxs("div", { className: "bg-white rounded-2xl shadow-xl border border-gray-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-4", children: [_jsx(Upload, { className: "w-6 h-6 text-blue-600" }), _jsx("h2", { className: "text-xl font-bold text-gray-900", children: "Upload Journal Entries (CSV or Excel)" })] }), _jsxs("div", { className: "mt-6 flex items-center gap-4", children: [_jsx("input", { type: "file", accept: ".csv,.xlsx,.xls", onChange: handleFileChange, className: "flex-1 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-500 transition" }), _jsx("button", { onClick: handleUpload, disabled: loading || !file, className: "px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all transform hover:scale-105", children: loading ? 'Analyzing...' : 'Analyze with Nova AI' })] }), file && (_jsxs("p", { className: "mt-3 text-sm text-gray-600", children: ["Selected: ", _jsx("span", { className: "font-semibold", children: file.name }), " (", (file.size / 1024).toFixed(2), " KB)"] }))] }), results.length > 0 && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "grid grid-cols-1 md:grid-cols-4 gap-6 mb-8", children: [_jsxs("div", { className: "bg-white rounded-xl shadow-lg border border-gray-100 p-6", children: [_jsx("p", { className: "text-sm text-gray-600 mb-2", children: "Total Entries" }), _jsx("p", { className: "text-4xl font-bold text-gray-900", children: summary?.total || 0 })] }), _jsxs("div", { onClick: () => setShowHighRiskModal(true), className: "bg-gradient-to-br from-red-50 to-red-100 rounded-xl shadow-lg border border-red-200 p-6 cursor-pointer hover:scale-105 transition-transform hover:shadow-xl", children: [_jsx("p", { className: "text-sm text-red-700 mb-2", children: "High Risk" }), _jsx("p", { className: "text-4xl font-bold text-red-600", children: summary?.highRisk || 0 }), _jsxs("p", { className: "text-xs text-red-600 mt-2 flex items-center justify-center gap-1", children: [_jsx(AlertTriangle, { className: "w-3 h-3" }), "Click to view details"] })] }), _jsxs("div", { className: "bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-xl shadow-lg border border-yellow-200 p-6", children: [_jsx("p", { className: "text-sm text-yellow-700 mb-2", children: "Medium Risk" }), _jsx("p", { className: "text-4xl font-bold text-yellow-600", children: summary?.mediumRisk || 0 })] }), _jsxs("div", { className: "bg-gradient-to-br from-green-50 to-green-100 rounded-xl shadow-lg border border-green-200 p-6", children: [_jsx("p", { className: "text-sm text-green-700 mb-2", children: "Low Risk" }), _jsx("p", { className: "text-4xl font-bold text-green-600", children: summary?.lowRisk || 0 })] })] }), metrics && (_jsxs("div", { className: "bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-xl border border-blue-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-4", children: [_jsx(BarChart3, { className: "w-6 h-6 text-blue-600" }), _jsxs("div", { children: [_jsx("h3", { className: "text-xl font-bold text-gray-900", children: "AI Analysis Complete" }), _jsx("p", { className: "text-sm text-gray-600", children: "Amazon Nova Lite risk assessment finished" })] })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 text-center", children: [_jsx("p", { className: "text-5xl font-bold text-blue-600 mb-2", children: summary?.highRisk + summary?.mediumRisk || 0 }), _jsx("p", { className: "text-lg font-semibold text-gray-700", children: "Anomalies Flagged for Review" }), _jsxs("p", { className: "text-sm text-gray-500 mt-2", children: [summary?.highRisk || 0, " High Risk \u2022 ", summary?.mediumRisk || 0, " Medium Risk"] })] })] })), metrics && metrics.groundTruthAnomalies !== undefined && (_jsxs("div", { className: "bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl shadow-xl border border-purple-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-6", children: [_jsx(CheckCircle, { className: "w-6 h-6 text-purple-600" }), _jsxs("div", { children: [_jsx("h3", { className: "text-xl font-bold text-gray-900", children: "Ground Truth Validation" }), _jsx("p", { className: "text-sm text-gray-600", children: "Comparison with labeled anomalies" })] })] }), _jsxs("div", { className: "grid grid-cols-2 md:grid-cols-4 gap-6", children: [_jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-purple-700 mb-2", children: "True Anomalies" }), _jsx("p", { className: "text-4xl font-bold text-purple-600", children: metrics.groundTruthAnomalies }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: "Labeled in dataset" })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-green-700 mb-2", children: "Detected" }), _jsx("p", { className: "text-4xl font-bold text-green-600", children: metrics.detectedAnomalies }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: metrics.groundTruthAnomalies > 0
+                                                                    '10-15 anomalies (very low sensitivity - critical only)' })] }), _jsxs("p", { className: "text-xs text-gray-500 mt-2", children: ["\uD83D\uDCA1 Lower values = more anomalies detected (higher recall, more false positives)", _jsx("br", {}), "\uD83D\uDCA1 Higher values = fewer anomalies detected (higher precision, fewer false positives)"] })] })] })] }), _jsxs("div", { className: "bg-white rounded-2xl shadow-xl border border-gray-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-4", children: [_jsx(Upload, { className: "w-6 h-6 text-blue-600" }), _jsx("h2", { className: "text-xl font-bold text-gray-900", children: "Upload Journal Entries (CSV or Excel)" })] }), _jsxs("div", { className: "mt-6 mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200", children: [_jsx("label", { className: "block text-sm font-semibold text-gray-700 mb-2", children: "Select Client Company" }), _jsx("p", { className: "text-xs text-gray-500 mb-3", children: "Choose a company to use company-specific baselines (accuracy improves over time)." }), _jsxs("select", { value: selectedCompany, onChange: (e) => setSelectedCompany(e.target.value), className: "block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-500", children: [_jsx("option", { value: "", children: "\u2014 Stateless (no company learning) \u2014" }), companies.map((c) => (_jsxs("option", { value: c.id, children: [c.name, c.total_uploads != null ? ` (${c.total_uploads} uploads)` : ''] }, c.id)))] }), _jsxs("div", { className: "flex gap-2 mt-3", children: [_jsx("input", { type: "text", placeholder: "Or add new company...", value: newCompanyName, onChange: (e) => setNewCompanyName(e.target.value), onKeyDown: (e) => e.key === 'Enter' && (e.preventDefault(), handleAddCompany()), className: "flex-1 px-3 py-2 border border-gray-300 rounded-lg" }), _jsx("button", { type: "button", onClick: handleAddCompany, className: "px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700", children: "Add" })] })] }), _jsxs("div", { className: "mt-6 flex items-center gap-4", children: [_jsx("input", { type: "file", accept: ".csv,.xlsx,.xls", onChange: handleFileChange, className: "flex-1 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-500 transition" }), _jsx("button", { onClick: handleUpload, disabled: loading || !file, className: "px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all transform hover:scale-105", children: loading ? 'Analyzing...' : 'Analyze with Nova AI' })] }), file && (_jsxs("p", { className: "mt-3 text-sm text-gray-600", children: ["Selected: ", _jsx("span", { className: "font-semibold", children: file.name }), " (", (file.size / 1024).toFixed(2), " KB)"] }))] }), results.length > 0 && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "grid grid-cols-1 md:grid-cols-4 gap-6 mb-8", children: [_jsxs("div", { className: "bg-white rounded-xl shadow-lg border border-gray-100 p-6", children: [_jsx("p", { className: "text-sm text-gray-600 mb-2", children: "Total Entries" }), _jsx("p", { className: "text-4xl font-bold text-gray-900", children: summary?.total || 0 })] }), _jsxs("div", { onClick: () => setShowHighRiskModal(true), className: "bg-gradient-to-br from-red-50 to-red-100 rounded-xl shadow-lg border border-red-200 p-6 cursor-pointer hover:scale-105 transition-transform hover:shadow-xl", children: [_jsx("p", { className: "text-sm text-red-700 mb-2", children: "High Risk" }), _jsx("p", { className: "text-4xl font-bold text-red-600", children: summary?.highRisk || 0 }), _jsxs("p", { className: "text-xs text-red-600 mt-2 flex items-center justify-center gap-1", children: [_jsx(AlertTriangle, { className: "w-3 h-3" }), "Click to view details"] })] }), _jsxs("div", { className: "bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-xl shadow-lg border border-yellow-200 p-6", children: [_jsx("p", { className: "text-sm text-yellow-700 mb-2", children: "Medium Risk" }), _jsx("p", { className: "text-4xl font-bold text-yellow-600", children: summary?.mediumRisk || 0 })] }), _jsxs("div", { className: "bg-gradient-to-br from-green-50 to-green-100 rounded-xl shadow-lg border border-green-200 p-6", children: [_jsx("p", { className: "text-sm text-green-700 mb-2", children: "Low Risk" }), _jsx("p", { className: "text-4xl font-bold text-green-600", children: summary?.lowRisk || 0 })] })] }), metrics && (_jsxs("div", { className: "bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-xl border border-blue-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-4", children: [_jsx(BarChart3, { className: "w-6 h-6 text-blue-600" }), _jsxs("div", { children: [_jsx("h3", { className: "text-xl font-bold text-gray-900", children: "AI Analysis Complete" }), _jsx("p", { className: "text-sm text-gray-600", children: summary?.novaUsed ? (_jsxs(_Fragment, { children: ["Amazon Nova Lite risk assessment \u00B7 ", summary.novaEntryCount ?? summary.total, " entries with Nova"] })) : (_jsx(_Fragment, { children: "Rule-based analysis (Nova unavailable \u2014 check backend AWS keys)" })) })] })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 text-center", children: [_jsx("p", { className: "text-5xl font-bold text-blue-600 mb-2", children: summary?.highRisk + summary?.mediumRisk || 0 }), _jsx("p", { className: "text-lg font-semibold text-gray-700", children: "Anomalies Flagged for Review" }), _jsxs("p", { className: "text-sm text-gray-500 mt-2", children: [summary?.highRisk || 0, " High Risk \u2022 ", summary?.mediumRisk || 0, " Medium Risk"] })] })] })), metrics && metrics.groundTruthAnomalies !== undefined && (_jsxs("div", { className: "bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl shadow-xl border border-purple-200 p-8 mb-8", children: [_jsxs("div", { className: "flex items-center gap-3 mb-6", children: [_jsx(CheckCircle, { className: "w-6 h-6 text-purple-600" }), _jsxs("div", { children: [_jsx("h3", { className: "text-xl font-bold text-gray-900", children: "Ground Truth Validation" }), _jsx("p", { className: "text-sm text-gray-600", children: "Comparison with labeled anomalies" })] })] }), _jsxs("div", { className: "grid grid-cols-2 md:grid-cols-4 gap-6", children: [_jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-purple-700 mb-2", children: "True Anomalies" }), _jsx("p", { className: "text-4xl font-bold text-purple-600", children: metrics.groundTruthAnomalies }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: "Labeled in dataset" })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-green-700 mb-2", children: "Detected" }), _jsx("p", { className: "text-4xl font-bold text-green-600", children: metrics.detectedAnomalies }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: metrics.groundTruthAnomalies > 0
                                                         ? `${((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100).toFixed(0)}% recall rate`
                                                         : 'N/A' })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-red-700 mb-2", children: "Missed" }), _jsx("p", { className: "text-4xl font-bold text-red-600", children: metrics.missedAnomalies }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: "False negatives" })] }), _jsxs("div", { className: "bg-white rounded-xl p-6 shadow-sm", children: [_jsx("p", { className: "text-sm font-medium text-yellow-700 mb-2", children: "False Alarms" }), _jsx("p", { className: "text-4xl font-bold text-yellow-600", children: metrics.falseAlarms }), _jsx("p", { className: "text-xs text-gray-500 mt-2", children: "False positives" })] })] }), _jsxs("div", { className: "mt-6 bg-white rounded-xl p-6 shadow-sm", children: [_jsx("h4", { className: "text-sm font-semibold text-gray-700 mb-3", children: "Detection Performance" }), _jsxs("div", { className: "flex items-center gap-4", children: [_jsxs("div", { className: "flex-1", children: [_jsxs("div", { className: "flex justify-between text-xs text-gray-600 mb-2", children: [_jsxs("span", { children: ["Detected: ", metrics.detectedAnomalies] }), _jsxs("span", { children: ["Missed: ", metrics.missedAnomalies] })] }), _jsx("div", { className: "w-full bg-red-200 rounded-full h-4 overflow-hidden flex", children: _jsx("div", { className: "bg-green-500 h-4 transition-all flex items-center justify-center text-xs text-white font-semibold", style: { width: `${metrics.groundTruthAnomalies > 0 ? (metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100 : 0}%` }, children: metrics.groundTruthAnomalies > 0 && ((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100) > 10
                                                                     ? `${((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100).toFixed(0)}%`

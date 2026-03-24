@@ -11,8 +11,7 @@ import {
   Edit2,
   Check,
   X,
-  AlertCircle,
-  AlertTriangle
+  AlertCircle
 } from 'lucide-react';
 import { Scenario } from '../../types/forecast';
 import ScenarioToggle from '../../components/fpa/forecast/ScenarioToggle';
@@ -26,7 +25,7 @@ import {
   apSchedule,
   scenarioMultipliers
 } from '../../data/forecastMockData';
-import { loadFPAActual, loadFPABudget, loadFPAForecast, checkDataAvailability, getMissingDataMessage, generateForecastFromReal } from '../../utils/fpaDataLoader';
+import { loadFPAActual, loadFPABudget, loadFPAForecast, checkDataAvailability, generateForecastFromReal } from '../../utils/fpaDataLoader';
 import {
   ComposedChart,
   Bar,
@@ -186,32 +185,13 @@ Provide brief insights (max 150 words):
   const totalRevenueForecast = adjustedRevenueData.reduce((sum, row) => sum + row.forecast, 0);
   const totalExpenseForecast = adjustedExpenseData.reduce((sum, row) => sum + row.fy26, 0);
   const netProfitForecast = totalRevenueForecast - totalExpenseForecast;
+  const netMargin = totalRevenueForecast > 0 ? (netProfitForecast / totalRevenueForecast) * 100 : 0;
+  if (netMargin > 50) {
+    console.warn('Net margin unrealistic:', netMargin.toFixed(1) + '% — check expense data scaling (e.g. Lakhs vs Crores)');
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6">
-      {/* Data Missing Warning Banner */}
-      {!dataCheck.available && (
-        <div className="bg-yellow-50 border-b-2 border-yellow-400 px-6 py-4 rounded-lg mb-6">
-          <div className="max-w-[1800px] mx-auto flex items-center gap-3">
-            <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold text-yellow-900">
-                ⚠️ {getMissingDataMessage(dataCheck.missing)}
-              </p>
-              <p className="text-sm text-yellow-700 mt-1">
-                Forecasting requires Actual, Budget, and Forecast data for accurate projections.
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/fpa')}
-              className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors font-medium"
-            >
-              Upload Data
-            </button>
-          </div>
-        </div>
-      )}
-      
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

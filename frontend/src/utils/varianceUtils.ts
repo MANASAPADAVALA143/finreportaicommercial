@@ -134,7 +134,70 @@ export const getVarianceArrow = (variance: number): string => {
   return "−";
 };
 
+// When variance is 0 or near 0, show "Neutral" not "Unfavorable"
+export const getVarianceLabel = (pct: number): string => {
+  const val = typeof pct === 'number' ? pct : parseFloat(String(pct));
+  if (Number.isNaN(val) || Math.abs(val) < 0.5) return "Neutral";
+  if (val > 0) return "Favorable";
+  return "Unfavorable";
+};
+
+// For revenue: positive variance = good (green). For expenses: positive variance = bad (red). Near zero = gray.
+export const getVarianceColorForCard = (pct: number, type: 'revenue' | 'expense' | 'netProfit'): string => {
+  const val = typeof pct === 'number' ? pct : parseFloat(String(pct));
+  if (Number.isNaN(val) || Math.abs(val) < 0.5) return "gray";
+  if (type === 'expense') return val > 0 ? "red" : "green";
+  return val > 0 ? "green" : "red";
+};
+
 // ==================== DATA CALCULATIONS ====================
+
+// Classify row as revenue-type or expense-type from category (exclude headers)
+// Use category or type; exclude header rows and cost-of-sales from revenue
+const isRevenueRow = (r: VarianceRow): boolean =>
+  !r.isHeader && (
+    (r.category?.toLowerCase().includes('revenue') || (r as any).type?.toLowerCase() === 'revenue') &&
+    !/cost of sales|cos|cogs|cost of goods/i.test(r.category || '')
+  );
+const isExpenseRow = (r: VarianceRow): boolean =>
+  !r.isHeader && (
+    r.category?.toLowerCase().includes('expense') ||
+    r.category?.toLowerCase().includes('cost') ||
+    (r as any).type?.toLowerCase() === 'expense' ||
+    /cogs|operating|employee|admin|payroll|marketing|rent|depreciation|distribution/i.test(r.category || '')
+  );
+
+// Compute totals from actual data rows so dashboard cards show values from data
+const computeTotalsFromRows = (data: VarianceRow[]) => {
+  const revenueRows = data.filter(isRevenueRow);
+  const expenseRows = data.filter(isExpenseRow);
+  const totalRevenueActual = revenueRows.reduce((sum, r) => sum + (parseFloat(String(r.actual)) || 0), 0);
+  const totalRevenueBudget = revenueRows.reduce((sum, r) => sum + (parseFloat(String(r.budget)) || 0), 0);
+  const totalExpensesActual = expenseRows.reduce((sum, r) => sum + (parseFloat(String(r.actual)) || 0), 0);
+  const totalExpensesBudget = expenseRows.reduce((sum, r) => sum + (parseFloat(String(r.budget)) || 0), 0);
+  const netProfitActual = totalRevenueActual - totalExpensesActual;
+  const netProfitBudget = totalRevenueBudget - totalExpensesBudget;
+  const revenueVariance = totalRevenueActual - totalRevenueBudget;
+  const revenueVariancePct = totalRevenueBudget !== 0 ? (revenueVariance / totalRevenueBudget) * 100 : 0;
+  const expensesVariance = totalExpensesActual - totalExpensesBudget;
+  const expensesVariancePct = totalExpensesBudget !== 0 ? (expensesVariance / totalExpensesBudget) * 100 : 0;
+  const netProfitVariance = netProfitActual - netProfitBudget;
+  const netProfitVariancePct = netProfitBudget !== 0 ? (netProfitVariance / Math.abs(netProfitBudget)) * 100 : 0;
+  return {
+    totalRevenueActual,
+    totalRevenueBudget,
+    totalExpensesActual,
+    totalExpensesBudget,
+    netProfitActual,
+    netProfitBudget,
+    revenueVariance,
+    revenueVariancePct,
+    expensesVariance,
+    expensesVariancePct,
+    netProfitVariance,
+    netProfitVariancePct,
+  };
+};
 
 // Match row by id or by category (for uploaded data which has uploaded-0, uploaded-1, etc.)
 const findRow = (data: VarianceRow[], id: string, categoryPatterns: string[]) => {
@@ -147,52 +210,87 @@ const findRow = (data: VarianceRow[], id: string, categoryPatterns: string[]) =>
 };
 
 export const calculateKPISummaries = (data: VarianceRow[]): KPISummary[] => {
-  const revenue = findRow(data, "revenue", ["total revenue", "revenue"]);
-  const expenses = findRow(data, "total-expenses", ["operating expenses", "total expenses", "expenses"]);
-  const netProfit = findRow(data, "net-profit", ["net profit", "profit after tax"]);
-  const ebitda = findRow(data, "ebitda", ["ebitda"]);
-  
+  const totals = computeTotalsFromRows(data);
+  const hasAnyData = totals.totalRevenueActual !== 0 || totals.totalRevenueBudget !== 0 || totals.totalExpensesActual !== 0 || totals.totalExpensesBudget !== 0;
+
   const summaries: KPISummary[] = [];
-  
-  if (revenue) {
+
+  // BUG 1 FIX: Always show Total Revenue, Total Expenses, Net Profit from computed row totals when we have data
+  if (data.length > 0 && (hasAnyData || totals.netProfitActual !== 0 || totals.netProfitBudget !== 0)) {
     summaries.push({
       id: "revenue",
       label: "Total Revenue",
-      actual: revenue.actual,
-      budget: revenue.budget,
-      variance: revenue.variance,
-      variancePct: revenue.variancePct,
-      favorable: revenue.favorable,
-      threshold: revenue.threshold
+      actual: totals.totalRevenueActual,
+      budget: totals.totalRevenueBudget,
+      variance: totals.revenueVariance,
+      variancePct: totals.revenueVariancePct,
+      favorable: totals.revenueVariance > 0,
+      threshold: getThreshold(totals.revenueVariancePct, false)
     });
-  }
-  
-  if (expenses) {
     summaries.push({
       id: "expenses",
       label: "Total Expenses",
-      actual: expenses.actual,
-      budget: expenses.budget,
-      variance: expenses.variance,
-      variancePct: expenses.variancePct,
-      favorable: expenses.favorable,
-      threshold: expenses.threshold
+      actual: totals.totalExpensesActual,
+      budget: totals.totalExpensesBudget,
+      variance: totals.expensesVariance,
+      variancePct: totals.expensesVariancePct,
+      favorable: totals.expensesVariance < 0,
+      threshold: getThreshold(totals.expensesVariancePct, true)
     });
-  }
-  
-  if (netProfit) {
     summaries.push({
       id: "netProfit",
       label: "Net Profit",
-      actual: netProfit.actual,
-      budget: netProfit.budget,
-      variance: netProfit.variance,
-      variancePct: netProfit.variancePct,
-      favorable: netProfit.favorable,
-      threshold: netProfit.threshold
+      actual: totals.netProfitActual,
+      budget: totals.netProfitBudget,
+      variance: totals.netProfitVariance,
+      variancePct: totals.netProfitVariancePct,
+      favorable: totals.netProfitVariance > 0,
+      threshold: getThreshold(totals.netProfitVariancePct, false)
     });
+  } else {
+    // Fallback: use single-row match if no computed totals (e.g. only one row)
+    const revenue = findRow(data, "revenue", ["total revenue", "revenue"]);
+    const expenses = findRow(data, "total-expenses", ["operating expenses", "total expenses", "expenses"]);
+    const netProfit = findRow(data, "net-profit", ["net profit", "profit after tax"]);
+    if (revenue) {
+      summaries.push({
+        id: "revenue",
+        label: "Total Revenue",
+        actual: revenue.actual,
+        budget: revenue.budget,
+        variance: revenue.variance,
+        variancePct: revenue.variancePct,
+        favorable: revenue.favorable,
+        threshold: revenue.threshold
+      });
+    }
+    if (expenses) {
+      summaries.push({
+        id: "expenses",
+        label: "Total Expenses",
+        actual: expenses.actual,
+        budget: expenses.budget,
+        variance: expenses.variance,
+        variancePct: expenses.variancePct,
+        favorable: expenses.favorable,
+        threshold: expenses.threshold
+      });
+    }
+    if (netProfit) {
+      summaries.push({
+        id: "netProfit",
+        label: "Net Profit",
+        actual: netProfit.actual,
+        budget: netProfit.budget,
+        variance: netProfit.variance,
+        variancePct: netProfit.variancePct,
+        favorable: netProfit.favorable,
+        threshold: netProfit.threshold
+      });
+    }
   }
-  
+
+  const ebitda = findRow(data, "ebitda", ["ebitda"]);
   if (ebitda) {
     summaries.push({
       id: "ebitda",
@@ -205,107 +303,62 @@ export const calculateKPISummaries = (data: VarianceRow[]): KPISummary[] => {
       threshold: ebitda.threshold
     });
   }
-  
+
   return summaries;
 };
 
+// Alert if variance > 5% AND amount > 5L; severity CRITICAL if |variancePct| > 10 else WARNING
 export const extractVarianceAlerts = (data: VarianceRow[]): VarianceAlert[] => {
-  const alerts: VarianceAlert[] = [];
-  
-  // Materiality thresholds (in currency units)
-  const MATERIALITY_AMOUNT = 100000; // ₹1L minimum to be considered material
-  
-  data.forEach(row => {
-    const absVariancePct = Math.abs(row.variancePct);
-    const absVarianceAmount = Math.abs(row.variance);
-    
-    // Skip if variance is immaterial (both % and amount)
-    if (absVariancePct < 5 && absVarianceAmount < MATERIALITY_AMOUNT) {
-      return;
-    }
-    
-    // Determine if this is a critical item (always include these)
-    const criticalCategories = [
-      'net profit', 'operating profit', 'ebitda', 'revenue', 'total revenue',
-      'gross profit', 'profit before tax', 'operating expenses'
-    ];
-    const isCriticalCategory = criticalCategories.some(cat => 
-      row.category.toLowerCase().includes(cat)
-    );
-    
-    // Determine nature of line item for proper favorable/unfavorable logic
-    const isRevenueType = row.category.toLowerCase().includes('revenue') || 
-                          row.category.toLowerCase().includes('sales') ||
-                          row.category.toLowerCase().includes('income') ||
-                          row.category.toLowerCase().includes('profit');
-    
-    const isExpenseType = row.category.toLowerCase().includes('expense') ||
-                          row.category.toLowerCase().includes('cost') ||
-                          row.category.toLowerCase().includes('depreciation');
-    
-    // Calculate true favorable status
-    let trueFavorable = row.favorable;
-    
-    if (isRevenueType) {
-      // For revenue/profit: positive variance = favorable
-      trueFavorable = row.variance > 0;
-    } else if (isExpenseType) {
-      // For expenses: negative variance = favorable (spending less)
-      trueFavorable = row.variance < 0;
-    }
-    
-    // Recalculate threshold based on absolute variance %
-    let threshold: 'critical' | 'warning' | 'ok' = 'ok';
-    
-    if (absVariancePct > 10 || (isCriticalCategory && absVariancePct > 5)) {
-      threshold = 'critical';
-    } else if (absVariancePct > 5) {
-      threshold = 'warning';
-    }
-    
-    // Only include material variances or critical categories
-    if (threshold === 'critical' || threshold === 'warning' || isCriticalCategory) {
-      // Create detailed message
-      let message = '';
-      if (!trueFavorable && threshold === 'critical') {
-        message = `${row.category}: 🔴 ${formatPercentage(row.variancePct)} ${isRevenueType ? 'below' : 'over'} budget (Critical)`;
-      } else if (!trueFavorable && threshold === 'warning') {
-        message = `${row.category}: ⚠️ ${formatPercentage(row.variancePct)} ${isRevenueType ? 'below' : 'over'} budget`;
-      } else if (trueFavorable) {
-        message = `${row.category}: ✅ ${formatPercentage(Math.abs(row.variancePct))} ${isRevenueType ? 'above' : 'under'} budget`;
-      } else {
-        message = `${row.category}: ${formatPercentage(row.variancePct)} variance`;
-      }
-      
-      alerts.push({
-        id: row.id,
-        category: row.category,
-        variance: row.variance,
-        variancePct: row.variancePct,
-        threshold: threshold,
-        favorable: trueFavorable,
-        message: message
-      });
-    }
+  const ALERT_MIN_PCT = 5;
+  const ALERT_MIN_AMOUNT = 500000; // 5L
+
+  const rows = data.filter(row => {
+    const varPct = Math.abs(parseFloat(String(row.variancePct)) || 0);
+    const varAmt = Math.abs(parseFloat(String(row.variance)) || 0);
+    return varPct > ALERT_MIN_PCT && varAmt > ALERT_MIN_AMOUNT && !row.isHeader;
   });
-  
-  // Sort by severity and impact
-  alerts.sort((a, b) => {
-    // First by favorable status (unfavorable first)
-    if (a.favorable !== b.favorable) {
-      return a.favorable ? 1 : -1;
+
+  const isRevenueType = (r: VarianceRow) =>
+    /revenue|sales|income|profit/i.test(r.category || '') && !/cost of sales|cos|cogs/i.test(r.category || '');
+  const isExpenseType = (r: VarianceRow) =>
+    /expense|cost|depreciation|cogs|operating|admin|payroll|marketing|rent/i.test(r.category || '');
+
+  const alerts: VarianceAlert[] = rows.map(row => {
+    const variancePct = parseFloat(String(row.variancePct)) || 0;
+    const variance = parseFloat(String(row.variance)) || 0;
+    const absPct = Math.abs(variancePct);
+    const threshold: 'critical' | 'warning' | 'ok' = absPct > 10 ? 'critical' : 'warning';
+    let favorable = row.favorable;
+    if (isRevenueType(row)) favorable = variance > 0;
+    else if (isExpenseType(row)) favorable = variance < 0;
+
+    let message = '';
+    if (!favorable && threshold === 'critical') {
+      message = `${row.category}: 🔴 ${formatPercentage(variancePct)} ${isRevenueType(row) ? 'below' : 'over'} budget (Critical)`;
+    } else if (!favorable && threshold === 'warning') {
+      message = `${row.category}: ⚠️ ${formatPercentage(variancePct)} ${isRevenueType(row) ? 'below' : 'over'} budget`;
+    } else if (favorable) {
+      message = `${row.category}: ✅ ${formatPercentage(Math.abs(variancePct))} ${isRevenueType(row) ? 'above' : 'under'} budget`;
+    } else {
+      message = `${row.category}: ${formatPercentage(variancePct)} variance`;
     }
-    
-    // Then by severity
-    const severityOrder = { critical: 0, warning: 1, ok: 2 };
-    if (a.threshold !== b.threshold) {
-      return severityOrder[a.threshold] - severityOrder[b.threshold];
-    }
-    
-    // Finally by absolute variance %
-    return Math.abs(b.variancePct) - Math.abs(a.variancePct);
+
+    return {
+      id: row.id,
+      category: row.category,
+      variance: row.variance,
+      variancePct: row.variancePct,
+      threshold,
+      favorable,
+      message
+    };
   });
-  
+
+  // Sort by absolute variance % descending (highest impact first)
+  alerts.sort((a, b) =>
+    Math.abs(parseFloat(String(b.variancePct))) - Math.abs(parseFloat(String(a.variancePct)))
+  );
+
   return alerts;
 };
 

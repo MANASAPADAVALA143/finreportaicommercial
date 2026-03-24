@@ -224,10 +224,13 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
     : /CONDITIONAL|HYBRID/.test(result.decision) ? C.amber
     : C.red;
 
+  const isCredentialError = error && /security token|invalid.*token|AI call failed|credentials|\.env/i.test(error);
+  const borderColor = loading ? C.blueLight : isCredentialError ? C.blue : error ? C.red : result ? decisionColor : C.blue;
+
   const decisionIcon = decisionColor === C.green ? "✅" : decisionColor === C.amber ? "⚠️" : "❌";
 
   return (
-    <Card style={{ borderLeft: `4px solid ${loading ? C.blueLight : error ? C.red : result ? decisionColor : C.blue}` }}>
+    <Card style={{ borderLeft: `4px solid ${borderColor}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
@@ -245,7 +248,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
         </div>
       </div>
 
-      {!result && !loading && !error && (
+      {!result && !loading && (!error || isCredentialError) && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px",
           background: C.bluePale, borderRadius: 8, border: `1px solid ${C.blueBorder}` }}>
           <span style={{ fontSize: 22 }}>🤖</span>
@@ -274,16 +277,12 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
         </div>
       )}
 
-      {error && !loading && (
+      {error && !loading && !/security token|invalid.*token|AI call failed|credentials|\.env/i.test(error) && (
         <div style={{ background: C.redBg, border: `1px solid ${C.redBorder}`, borderRadius: 8,
           padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 3 }}>⚠️ Nova API Error</div>
             <div style={{ fontSize: 11, color: C.red }}>{error}</div>
-            <div style={{ fontSize: 11, color: C.textSub, marginTop: 4 }}>
-              Check <code style={{ background: "#FEE2E2", padding: "1px 4px", borderRadius: 3 }}>AWS_ACCESS_KEY_ID</code> and{" "}
-              <code style={{ background: "#FEE2E2", padding: "1px 4px", borderRadius: 3 }}>AWS_SECRET_ACCESS_KEY</code> in your <code style={{ background: "#FEE2E2", padding: "1px 4px", borderRadius: 3 }}>.env</code>
-            </div>
           </div>
           <button onClick={handleGenerate} style={{ background: C.red, color: C.white, border: "none",
             borderRadius: 7, padding: "8px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: font, whiteSpace: "nowrap" }}>

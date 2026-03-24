@@ -20,7 +20,7 @@ import {
 import * as XLSX from 'xlsx';
 import BudgetTable from '../../components/fpa/BudgetTable';
 import { budgetVersions, departmentBudgets, budgetSummary } from '../../data/budgetMockData';
-import { BudgetLineItem, BudgetStatus, BudgetApproach } from '../../types/budget';
+import { BudgetLineItem, BudgetStatus, BudgetApproach, MonthlyBudget } from '../../types/budget';
 import { callAI } from '../../services/aiProvider';
 import { loadFPABudget, loadFPAPriorYear, checkDataAvailability, getMissingDataMessage, convertBudgetToLineItems } from '../../utils/fpaDataLoader';
 
@@ -40,7 +40,7 @@ const BudgetManagement: React.FC = () => {
       
       // Convert budget data to line items
       if (budget) {
-        const converted = convertBudgetToLineItems(budget);
+        const converted = convertBudgetToLineItems(budget) as BudgetLineItem[];
         setBudgetData(converted);
       }
     }
@@ -58,6 +58,34 @@ const BudgetManagement: React.FC = () => {
     const crore = value / 10000000;
     return `₹${crore.toFixed(2)}Cr`;
   };
+
+  // Compute summary cards from budgetData when we have line items; otherwise use mock
+  const computedSummary = React.useMemo(() => {
+    if (!budgetData || budgetData.length === 0) return null;
+    const isRevenueRow = (item: BudgetLineItem) =>
+      !item.isHeader && /revenue|sales|income/i.test(item.category) && !/cost of sales|cos|cogs/i.test(item.category);
+    const isExpenseRow = (item: BudgetLineItem) =>
+      !item.isHeader && (/expense|cost|cogs|payroll|marketing|admin|depreciation|operating/i.test(item.category));
+    const sumMonthly = (item: BudgetLineItem) =>
+      Object.values(item.monthly || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+    const totalRevenue = budgetData.filter(isRevenueRow).reduce((s, r) => s + sumMonthly(r), 0);
+    const totalExpenses = budgetData.filter(isExpenseRow).reduce((s, r) => s + sumMonthly(r), 0);
+    const netProfit = totalRevenue - totalExpenses;
+    // EBITDA approx: net profit + depreciation (if we had it); else use same as net for display or derive from expense rows
+    const ebitda = netProfit; // simplified; could add back depreciation if we have a row
+    return {
+      totalRevenue,
+      totalExpenses,
+      netProfit,
+      ebitda,
+      priorYearRevenue: budgetSummary.priorYearRevenue,
+      priorYearExpenses: budgetSummary.priorYearExpenses,
+      priorYearNetProfit: budgetSummary.priorYearNetProfit,
+      priorYearEbitda: budgetSummary.priorYearEbitda
+    };
+  }, [budgetData]);
+
+  const displaySummary = computedSummary || budgetSummary;
 
   const getStatusColor = (status: BudgetStatus) => {
     const colors = {
@@ -119,28 +147,78 @@ const BudgetManagement: React.FC = () => {
       return;
     }
 
-    try {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+    const monthColToKey: Record<string, keyof MonthlyBudget> = {
+      'Jan': 'jan', 'Feb': 'feb', 'Mar': 'mar', 'Apr': 'apr', 'May': 'may', 'Jun': 'jun',
+      'Jul': 'jul', 'Aug': 'aug', 'Sep': 'sep', 'Oct': 'oct', 'Nov': 'nov', 'Dec': 'dec'
+    };
 
-          // Parse uploaded data and update budget
-          // This is a simplified version - in production, you'd do more validation
-          alert('✅ Budget data uploaded successfully!');
-          setShowUploadModal(false);
-          setUploadedFile(null);
-        } catch (error: any) {
-          alert('❌ Failed to parse file: ' + error.message);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames.find(n => /budget|monthly/i.test(n)) || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[];
+        if (rows.length < 2) {
+          alert('❌ File must have a header row and at least one data row.');
+          return;
         }
-      };
-      reader.readAsArrayBuffer(uploadedFile);
-    } catch (error: any) {
-      alert('❌ Failed to upload file: ' + error.message);
-    }
+        const header = (rows[0] || []).map((h: any) => String(h || '').trim());
+        const categoryCol = header.findIndex((h: string) => /category|line item|item/i.test(h));
+        if (categoryCol < 0) {
+          alert('❌ Could not find a "Category" or "Line Item" column.');
+          return;
+        }
+        const parseNum = (val: any): number => {
+          if (val == null || val === '') return 0;
+          const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
+          return isNaN(n) ? 0 : n;
+        };
+        // If values are small (e.g. 2.8, 3.1), assume Crores; else use as-is (already in rupees)
+        const scale = (v: number): number => {
+          if (v === 0) return 0;
+          if (Math.abs(v) < 10000 && Math.abs(v) >= 0.01) return v * 10000000; // Crores → rupees
+          return v;
+        };
+        const lineItems: BudgetLineItem[] = [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i] || [];
+          const category = String(row[categoryCol] ?? '').trim();
+          if (!category) continue;
+          const monthly: MonthlyBudget = {
+            jan: 0, feb: 0, mar: 0, apr: 0, may: 0, jun: 0,
+            jul: 0, aug: 0, sep: 0, oct: 0, nov: 0, dec: 0
+          };
+          header.forEach((h: string, col: number) => {
+            const key = monthColToKey[h];
+            if (key && row[col] !== undefined && row[col] !== null && row[col] !== '') {
+              monthly[key] = scale(parseNum(row[col]));
+            }
+          });
+          lineItems.push({
+            id: `upload-${i}-${category.slice(0, 20).replace(/\s/g, '-')}`,
+            category,
+            isHeader: /total|revenue|expenses|profit|gross|operating/i.test(category) && category.length < 25,
+            isEditable: true,
+            monthly,
+            priorYearActual: 0,
+            indent: 0
+          });
+        }
+        if (lineItems.length === 0) {
+          alert('❌ No valid rows found. Ensure columns include Category and month names (Jan–Dec).');
+          return;
+        }
+        setBudgetData(lineItems);
+        setShowUploadModal(false);
+        setUploadedFile(null);
+        alert(`✅ Loaded ${lineItems.length} budget line items from "${uploadedFile.name}". Cards will update from this data.`);
+      } catch (error: any) {
+        alert('❌ Failed to parse file: ' + (error?.message || String(error)));
+      }
+    };
+    reader.readAsArrayBuffer(uploadedFile);
   };
 
   const handleAISuggestion = async () => {
@@ -180,16 +258,17 @@ Format as a structured commentary.
   const exportBudgetExcel = () => {
     try {
       const workbook = XLSX.utils.book_new();
+      const summary = displaySummary;
 
-      // Sheet 1: Budget Summary
+      // Sheet 1: Budget Summary (uses computed values when budget data is loaded)
       const summaryData = [
         ['FY2025 Annual Budget Summary'],
         [],
         ['Metric', 'FY2025 Budget', 'FY2024 Actual', 'Change %'],
-        ['Total Revenue', budgetSummary.totalRevenue, budgetSummary.priorYearRevenue, ((budgetSummary.totalRevenue - budgetSummary.priorYearRevenue) / budgetSummary.priorYearRevenue * 100).toFixed(1) + '%'],
-        ['Total Expenses', budgetSummary.totalExpenses, budgetSummary.priorYearExpenses, ((budgetSummary.totalExpenses - budgetSummary.priorYearExpenses) / budgetSummary.priorYearExpenses * 100).toFixed(1) + '%'],
-        ['Net Profit', budgetSummary.netProfit, budgetSummary.priorYearNetProfit, ((budgetSummary.netProfit - budgetSummary.priorYearNetProfit) / budgetSummary.priorYearNetProfit * 100).toFixed(1) + '%'],
-        ['EBITDA', budgetSummary.ebitda, budgetSummary.priorYearEbitda, ((budgetSummary.ebitda - budgetSummary.priorYearEbitda) / budgetSummary.priorYearEbitda * 100).toFixed(1) + '%']
+        ['Total Revenue', summary.totalRevenue, summary.priorYearRevenue, (summary.priorYearRevenue ? ((summary.totalRevenue - summary.priorYearRevenue) / summary.priorYearRevenue * 100).toFixed(1) : '0') + '%'],
+        ['Total Expenses', summary.totalExpenses, summary.priorYearExpenses, (summary.priorYearExpenses ? ((summary.totalExpenses - summary.priorYearExpenses) / summary.priorYearExpenses * 100).toFixed(1) : '0') + '%'],
+        ['Net Profit', summary.netProfit, summary.priorYearNetProfit, (summary.priorYearNetProfit ? ((summary.netProfit - summary.priorYearNetProfit) / Math.abs(summary.priorYearNetProfit) * 100).toFixed(1) : '0') + '%'],
+        ['EBITDA', summary.ebitda, summary.priorYearEbitda, (summary.priorYearEbitda ? ((summary.ebitda - summary.priorYearEbitda) / summary.priorYearEbitda * 100).toFixed(1) : '0') + '%']
       ];
       const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
       XLSX.utils.book_append_sheet(workbook, ws1, 'Summary');
@@ -427,14 +506,14 @@ Format as a structured commentary.
         </div>
       </div>
 
-      {/* Budget Summary Cards */}
+      {/* Budget Summary Cards — computed from budget data when available */}
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           {[
-            { label: 'Total Revenue', value: budgetSummary.totalRevenue, prior: budgetSummary.priorYearRevenue, color: 'blue' },
-            { label: 'Total Expenses', value: budgetSummary.totalExpenses, prior: budgetSummary.priorYearExpenses, color: 'red' },
-            { label: 'Net Profit', value: budgetSummary.netProfit, prior: budgetSummary.priorYearNetProfit, color: 'green' },
-            { label: 'EBITDA', value: budgetSummary.ebitda, prior: budgetSummary.priorYearEbitda, color: 'purple' }
+            { label: 'Total Revenue', value: displaySummary.totalRevenue, prior: displaySummary.priorYearRevenue, color: 'blue' },
+            { label: 'Total Expenses', value: displaySummary.totalExpenses, prior: displaySummary.priorYearExpenses, color: 'red' },
+            { label: 'Net Profit', value: displaySummary.netProfit, prior: displaySummary.priorYearNetProfit, color: 'green' },
+            { label: 'EBITDA', value: displaySummary.ebitda, prior: displaySummary.priorYearEbitda, color: 'purple' }
           ].map((item, idx) => {
             const change = ((item.value - item.prior) / item.prior) * 100;
             return (

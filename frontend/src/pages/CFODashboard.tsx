@@ -249,13 +249,13 @@ export const CFODashboard = () => {
                 ))}
               </div>
 
-              {/* Upload Data Button */}
+              {/* Go to Dashboard (each section has its own upload) */}
               <button
-                onClick={() => navigate('/upload-data')}
+                onClick={() => navigate('/dashboard')}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
               >
                 <Upload className="w-4 h-4" />
-                <span>Upload Data</span>
+                <span>Go to sections</span>
               </button>
 
               {/* Export Dropdown */}

@@ -5,7 +5,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [react()],
   base: mode === 'production' ? '/finreportaicommercial/' : '/',
   server: {
-    port: 3000,
+    port: 3006,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

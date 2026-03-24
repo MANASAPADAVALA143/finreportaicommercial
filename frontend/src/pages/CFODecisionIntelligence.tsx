@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { Brain, ArrowLeft, Upload } from 'lucide-react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Brain, ArrowLeft, Upload, CheckCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import MorningBrief from '../components/cfo-decision/MorningBrief';
 import InvestmentDecision from '../components/cfo-decision/InvestmentDecision';
 import BuildVsBuy from '../components/cfo-decision/BuildVsBuy';
@@ -11,6 +11,7 @@ import DecisionAuditTrail from '../components/cfo-decision/DecisionAuditTrail';
 import CFODecisionUploadModal from '../components/cfo-decision/CFODecisionUploadModal';
 import { morningBriefData } from '../data/decisionMockData';
 import { AuditTrailEntry } from '../types/decisions';
+import type { MorningBriefItem } from '../types/decisions';
 import { loadCFODecisionData } from '../services/cfoDecisionDataService';
 
 const CFODecisionIntelligence: React.FC = () => {
@@ -20,6 +21,19 @@ const CFODecisionIntelligence: React.FC = () => {
   const [showMorningBrief, setShowMorningBrief] = useState(true);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedData, setUploadedData] = useState(loadCFODecisionData());
+
+  // On mount: read from localStorage so dashboard upload data appears (avoids stale initial state)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('finreport_cfo_decisions');
+      if (raw) {
+        const data = JSON.parse(raw);
+        setUploadedData(data);
+      }
+    } catch (e) {
+      console.error('CFO Decision load error', e);
+    }
+  }, []);
 
   const tabs = [
     { id: 'investment', name: 'Investment Decision', icon: '💰' },
@@ -52,8 +66,51 @@ const CFODecisionIntelligence: React.FC = () => {
     setShowMorningBrief(false);
   };
 
-  const criticalCount = morningBriefData.filter(item => item.urgency === 'critical' || item.urgency === 'warning').length;
-  const resolvedCount = morningBriefData.filter(item => item.urgency === 'info').length;
+  // When user has uploaded data, build Morning Brief from it so they see "something coming"
+  const morningBriefItems: MorningBriefItem[] = useMemo(() => {
+    if (!uploadedData) return morningBriefData;
+    const items: MorningBriefItem[] = [];
+    if (uploadedData.investment?.length > 0) {
+      const p = uploadedData.investment[0];
+      const roi = p.yearlyRevenue && p.investment ? ((p.yearlyRevenue - (p.yearlyCost || 0)) / p.investment * 100) : 0;
+      items.push({
+        urgency: roi < 15 ? 'warning' : 'info',
+        title: `${p.projectName || 'Investment'} — ROI ${roi.toFixed(0)}%`,
+        decision: roi < 15 ? 'Review project economics' : 'No action needed',
+        impact: p.investment ? `₹${(p.investment / 1e5).toFixed(1)}L investment` : '—',
+        action: 'investment'
+      });
+    }
+    if (uploadedData.risks?.length > 0) {
+      const r = uploadedData.risks.find((x: any) => (x.riskScore || 0) >= 70) || uploadedData.risks[0];
+      items.push({
+        urgency: (r.riskScore || 0) >= 70 ? 'critical' : (r.riskScore || 0) >= 50 ? 'warning' : 'info',
+        title: r.riskCategory || r.riskDescription || 'Risk item',
+        decision: (r.riskScore || 0) >= 70 ? 'Review mitigation' : 'Monitor',
+        impact: r.riskDescription || `Score ${r.riskScore || 0}`,
+        action: 'risk'
+      });
+    }
+    if (uploadedData.buildVsBuy?.length > 0) {
+      items.push({
+        urgency: 'info',
+        title: `${uploadedData.buildVsBuy.length} Build vs Buy scenario(s) loaded`,
+        decision: 'Review in Build vs Buy tab',
+        impact: '—',
+        action: 'build_vs_buy'
+      });
+    }
+    if (items.length === 0) return morningBriefData;
+    return items;
+  }, [uploadedData]);
+
+  const criticalCount = morningBriefItems.filter(item => item.urgency === 'critical' || item.urgency === 'warning').length;
+  const resolvedCount = morningBriefItems.filter(item => item.urgency === 'info').length;
+  const hasUploadedData = uploadedData && (
+    (uploadedData.investment?.length ?? 0) > 0 ||
+    (uploadedData.risks?.length ?? 0) > 0 ||
+    (uploadedData.buildVsBuy?.length ?? 0) > 0
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6">
@@ -83,19 +140,13 @@ const CFODecisionIntelligence: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-3">
-              <Link
-                to="/upload-data"
+              <button
+                type="button"
+                onClick={() => setShowUploadModal(true)}
                 className="px-4 py-2 bg-white text-amber-600 hover:bg-amber-50 rounded-lg transition-colors font-medium flex items-center gap-2 shadow-sm"
               >
                 <Upload className="w-4 h-4" />
                 <span>Upload Data</span>
-              </Link>
-
-              <button
-                onClick={() => setShowUploadModal(true)}
-                className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-colors font-medium flex items-center gap-2"
-              >
-                <span>Upload Decision Data</span>
               </button>
 
               <button
@@ -148,10 +199,18 @@ const CFODecisionIntelligence: React.FC = () => {
           </div>
         </div>
 
+        {/* Data loaded banner */}
+        {hasUploadedData && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-lg">
+            <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+            <span className="text-green-800 font-medium">Data loaded from upload — Morning Brief and tabs use your file.</span>
+          </div>
+        )}
+
         {/* Morning Brief (collapsible) */}
         {showMorningBrief && (
           <MorningBrief
-            items={morningBriefData}
+            items={morningBriefItems}
             onActionClick={handleMorningBriefAction}
           />
         )}

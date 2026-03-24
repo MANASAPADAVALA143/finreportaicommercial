@@ -11,31 +11,40 @@ class NovaService:
         self._client = None  # Lazy-load to avoid blocking startup
         self.model_id = "us.amazon.nova-lite-v1:0"
     
+    def _check_aws_credentials(self):
+        """Warn if credentials look like temporary (ASIA) or session token is set - CFO Decision needs long-lived IAM keys."""
+        key = (os.getenv("AWS_ACCESS_KEY_ID") or "").strip()
+        if key.upper().startswith("ASIA"):
+            print("[WARNING] AWS_ACCESS_KEY_ID looks like temporary credentials (ASIA). Use long-lived IAM user keys (AKIA) from IAM → Users → Security credentials → Create access key.")
+        if os.getenv("AWS_SESSION_TOKEN"):
+            print("[WARNING] AWS_SESSION_TOKEN is set. Remove it from .env for Bedrock; temporary/session keys often cause 'invalid security token'. Use long-lived IAM user keys only.")
+
     @property
     def client(self):
-        """Lazy-load AWS Bedrock client only when needed"""
+        """Lazy-load AWS Bedrock client only when needed. Uses only long-lived IAM keys (no session token)."""
         if self._client is None:
             try:
+                self._check_aws_credentials()
+                region = os.getenv("AWS_REGION", "us-east-1")
+                access_key = (os.getenv("AWS_ACCESS_KEY_ID") or "").strip()
+                secret_key = (os.getenv("AWS_SECRET_ACCESS_KEY") or "").strip()
+                if not access_key or not secret_key:
+                    raise ValueError("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in .env (backend folder)")
+                # Use only access key + secret; do NOT pass aws_session_token so temporary credentials are not used
                 self._client = boto3.client(
-                    'bedrock-runtime',
-                    region_name=os.getenv('AWS_REGION', 'us-east-1'),
-                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-                    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-                    config=Config(
-                        connect_timeout=5,
-                        read_timeout=10
-                    )
+                    "bedrock-runtime",
+                    region_name=region,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    config=Config(connect_timeout=5, read_timeout=60),
                 )
-                try:
-                    print("[INFO] AWS Bedrock client initialized successfully")
-                except:
-                    pass
+                print("[INFO] AWS Bedrock client initialized successfully (Nova/CFO Decision)")
             except Exception as e:
-                try:
-                    print(f"[WARNING] AWS Bedrock client initialization failed: {e}")
-                    print("   Falling back to rule-based analysis")
-                except:
-                    pass
+                err = str(e).lower()
+                if "invalid" in err or "security token" in err or "token" in err:
+                    print("[ERROR] AWS key not accepted. Use long-lived IAM user keys (AKIA...) from AWS Console → IAM → Users → Security credentials → Create access key. Remove AWS_SESSION_TOKEN from .env if present.")
+                print(f"[WARNING] AWS Bedrock client initialization failed: {e}")
+                print("   Nova/CFO Decision will fall back to rule-based analysis.")
                 self._client = None
         return self._client
     
@@ -153,7 +162,7 @@ CRITICAL RULES:
             if json_match:
                 analysis = json.loads(json_match[0])
                 
-                # Validate and ensure structure
+                # Validate and ensure structure (R2R Journal Entry anomaly detection with Nova)
                 return {
                     "entryId": entry_id,
                     "riskScore": int(analysis.get('riskScore', 50)),
@@ -170,7 +179,8 @@ CRITICAL RULES:
                         "percentile": float(analysis.get('statisticalAnalysis', {}).get('percentile', 50))
                     },
                     "explanation": analysis.get('explanation', ''),
-                    "recommendation": analysis.get('recommendation', 'REVIEW')
+                    "recommendation": analysis.get('recommendation', 'REVIEW'),
+                    "analysisSource": "amazon_nova",
                 }
             
             raise ValueError("Failed to parse Nova response")
@@ -323,7 +333,8 @@ CRITICAL RULES:
                 "percentile": round((risk_score / 100) * 99, 1)
             },
             "explanation": "\n\n".join(anomalies) if anomalies else "✅ Transaction appears normal and complies with standard controls.",
-            "recommendation": recommendation
+            "recommendation": recommendation,
+            "analysisSource": "rule_based",
         }
     
     def analyze_batch_with_ground_truth(
@@ -460,17 +471,27 @@ CRITICAL RULES:
     def invoke(self, prompt: str, model_id: str = None, max_tokens: int = 600, temperature: float = 0.3) -> str:
         """Raw invoke: send prompt to Bedrock, return response text. Used by CFO Decision Intelligence /api/nova/invoke."""
         if self.client is None:
-            raise RuntimeError("AWS Bedrock client not available. Set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION in .env")
+            raise RuntimeError(
+                "AWS Bedrock not available. In backend/.env set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (long-lived IAM user keys, not temporary). Remove AWS_SESSION_TOKEN if present."
+            )
         model = model_id or self.model_id
-        response = self.client.converse(
-            modelId=model,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={
-                "maxTokens": max_tokens,
-                "temperature": temperature,
-            },
-        )
-        return response["output"]["message"]["content"][0]["text"]
+        try:
+            response = self.client.converse(
+                modelId=model,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={
+                    "maxTokens": max_tokens,
+                    "temperature": temperature,
+                },
+            )
+            return response["output"]["message"]["content"][0]["text"]
+        except Exception as e:
+            msg = str(e)
+            if "InvalidClientTokenId" in msg or "security token" in msg.lower() or "UnrecognizedClientException" in msg:
+                raise RuntimeError(
+                    "AWS key not working: use long-lived IAM user keys (AKIA...) from AWS Console → IAM → Users → Security credentials → Create access key. Remove AWS_SESSION_TOKEN from backend/.env. Temporary (ASIA) keys will not work."
+                ) from e
+            raise
 
 # Singleton
 nova_service = NovaService()

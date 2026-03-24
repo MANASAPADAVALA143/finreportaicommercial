@@ -1,11 +1,11 @@
 // Helper to load FP&A data from localStorage
 // Each module reads only what it needs
 export const loadFPAActual = () => {
-    const stored = localStorage.getItem('fpa_actual');
+    const stored = localStorage.getItem('finreport_fpa_actuals') || localStorage.getItem('fpa_actual');
     return stored ? JSON.parse(stored) : null;
 };
 export const loadFPABudget = () => {
-    const stored = localStorage.getItem('fpa_budget');
+    const stored = localStorage.getItem('finreport_fpa_budget') || localStorage.getItem('fpa_budget');
     return stored ? JSON.parse(stored) : null;
 };
 export const loadFPAPriorYear = () => {
@@ -36,10 +36,27 @@ export const calculateVariance = (actual, budget) => {
         favorable: variance > 0 // For revenue, positive is favorable
     };
 };
+// BUG 2 FIX: Normalise scale (Lakhs vs Crores). If budget is 10x+ larger than actual, assume budget in Lakhs → convert to Crores.
+const normaliseBudgetScale = (actualData, budgetData) => {
+    if (!actualData || !budgetData)
+        return budgetData;
+    const ref = (actualData.totalRevenue || actualData.domesticRevenue || 0) || 1;
+    const budgetVal = budgetData.totalRevenue || budgetData.domesticRevenue || 0;
+    if (budgetVal > ref * 50) {
+        const scaled = {};
+        for (const k of Object.keys(budgetData)) {
+            const v = budgetData[k];
+            scaled[k] = typeof v === 'number' ? v / 100 : v;
+        }
+        return scaled;
+    }
+    return budgetData;
+};
 // Convert uploaded financial data to variance analysis format
 export const convertToVarianceData = (actualData, budgetData) => {
     if (!actualData || !budgetData)
         return [];
+    const budget = normaliseBudgetScale(actualData, budgetData);
     const varianceRows = [
         // Revenue Section
         {
@@ -62,60 +79,60 @@ export const convertToVarianceData = (actualData, budgetData) => {
             category: 'Domestic Revenue',
             isHeader: false,
             actual: actualData.domesticRevenue || 0,
-            budget: budgetData.domesticRevenue || 0,
-            variance: (actualData.domesticRevenue || 0) - (budgetData.domesticRevenue || 0),
-            variancePct: budgetData.domesticRevenue ? ((actualData.domesticRevenue - budgetData.domesticRevenue) / budgetData.domesticRevenue) * 100 : 0,
+            budget: budget.domesticRevenue || 0,
+            variance: (actualData.domesticRevenue || 0) - (budget.domesticRevenue || 0),
+            variancePct: budget.domesticRevenue ? ((actualData.domesticRevenue - budget.domesticRevenue) / budget.domesticRevenue) * 100 : 0,
             ytdActual: (actualData.domesticRevenue || 0) * 10, // Assuming Oct = 10 months
-            ytdBudget: (budgetData.domesticRevenue || 0) * 10,
-            ytdVariance: ((actualData.domesticRevenue || 0) - (budgetData.domesticRevenue || 0)) * 10,
-            ytdVariancePct: budgetData.domesticRevenue ? ((actualData.domesticRevenue - budgetData.domesticRevenue) / budgetData.domesticRevenue) * 100 : 0,
-            favorable: (actualData.domesticRevenue || 0) > (budgetData.domesticRevenue || 0),
-            threshold: Math.abs(budgetData.domesticRevenue ? ((actualData.domesticRevenue - budgetData.domesticRevenue) / budgetData.domesticRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.domesticRevenue ? ((actualData.domesticRevenue - budgetData.domesticRevenue) / budgetData.domesticRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.domesticRevenue || 0) * 10,
+            ytdVariance: ((actualData.domesticRevenue || 0) - (budget.domesticRevenue || 0)) * 10,
+            ytdVariancePct: budget.domesticRevenue ? ((actualData.domesticRevenue - budget.domesticRevenue) / budget.domesticRevenue) * 100 : 0,
+            favorable: (actualData.domesticRevenue || 0) > (budget.domesticRevenue || 0),
+            threshold: Math.abs(budget.domesticRevenue ? ((actualData.domesticRevenue - budget.domesticRevenue) / budget.domesticRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.domesticRevenue ? ((actualData.domesticRevenue - budget.domesticRevenue) / budget.domesticRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'export-revenue',
             category: 'Export Revenue',
             isHeader: false,
             actual: actualData.exportRevenue || 0,
-            budget: budgetData.exportRevenue || 0,
-            variance: (actualData.exportRevenue || 0) - (budgetData.exportRevenue || 0),
-            variancePct: budgetData.exportRevenue ? ((actualData.exportRevenue - budgetData.exportRevenue) / budgetData.exportRevenue) * 100 : 0,
+            budget: budget.exportRevenue || 0,
+            variance: (actualData.exportRevenue || 0) - (budget.exportRevenue || 0),
+            variancePct: budget.exportRevenue ? ((actualData.exportRevenue - budget.exportRevenue) / budget.exportRevenue) * 100 : 0,
             ytdActual: (actualData.exportRevenue || 0) * 10,
-            ytdBudget: (budgetData.exportRevenue || 0) * 10,
-            ytdVariance: ((actualData.exportRevenue || 0) - (budgetData.exportRevenue || 0)) * 10,
-            ytdVariancePct: budgetData.exportRevenue ? ((actualData.exportRevenue - budgetData.exportRevenue) / budgetData.exportRevenue) * 100 : 0,
-            favorable: (actualData.exportRevenue || 0) > (budgetData.exportRevenue || 0),
-            threshold: Math.abs(budgetData.exportRevenue ? ((actualData.exportRevenue - budgetData.exportRevenue) / budgetData.exportRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.exportRevenue ? ((actualData.exportRevenue - budgetData.exportRevenue) / budgetData.exportRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.exportRevenue || 0) * 10,
+            ytdVariance: ((actualData.exportRevenue || 0) - (budget.exportRevenue || 0)) * 10,
+            ytdVariancePct: budget.exportRevenue ? ((actualData.exportRevenue - budget.exportRevenue) / budget.exportRevenue) * 100 : 0,
+            favorable: (actualData.exportRevenue || 0) > (budget.exportRevenue || 0),
+            threshold: Math.abs(budget.exportRevenue ? ((actualData.exportRevenue - budget.exportRevenue) / budget.exportRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.exportRevenue ? ((actualData.exportRevenue - budget.exportRevenue) / budget.exportRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'service-revenue',
             category: 'Service Revenue',
             isHeader: false,
             actual: actualData.serviceRevenue || 0,
-            budget: budgetData.serviceRevenue || 0,
-            variance: (actualData.serviceRevenue || 0) - (budgetData.serviceRevenue || 0),
-            variancePct: budgetData.serviceRevenue ? ((actualData.serviceRevenue - budgetData.serviceRevenue) / budgetData.serviceRevenue) * 100 : 0,
+            budget: budget.serviceRevenue || 0,
+            variance: (actualData.serviceRevenue || 0) - (budget.serviceRevenue || 0),
+            variancePct: budget.serviceRevenue ? ((actualData.serviceRevenue - budget.serviceRevenue) / budget.serviceRevenue) * 100 : 0,
             ytdActual: (actualData.serviceRevenue || 0) * 10,
-            ytdBudget: (budgetData.serviceRevenue || 0) * 10,
-            ytdVariance: ((actualData.serviceRevenue || 0) - (budgetData.serviceRevenue || 0)) * 10,
-            ytdVariancePct: budgetData.serviceRevenue ? ((actualData.serviceRevenue - budgetData.serviceRevenue) / budgetData.serviceRevenue) * 100 : 0,
-            favorable: (actualData.serviceRevenue || 0) > (budgetData.serviceRevenue || 0),
-            threshold: Math.abs(budgetData.serviceRevenue ? ((actualData.serviceRevenue - budgetData.serviceRevenue) / budgetData.serviceRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.serviceRevenue ? ((actualData.serviceRevenue - budgetData.serviceRevenue) / budgetData.serviceRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.serviceRevenue || 0) * 10,
+            ytdVariance: ((actualData.serviceRevenue || 0) - (budget.serviceRevenue || 0)) * 10,
+            ytdVariancePct: budget.serviceRevenue ? ((actualData.serviceRevenue - budget.serviceRevenue) / budget.serviceRevenue) * 100 : 0,
+            favorable: (actualData.serviceRevenue || 0) > (budget.serviceRevenue || 0),
+            threshold: Math.abs(budget.serviceRevenue ? ((actualData.serviceRevenue - budget.serviceRevenue) / budget.serviceRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.serviceRevenue ? ((actualData.serviceRevenue - budget.serviceRevenue) / budget.serviceRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'total-revenue',
             category: 'Total Revenue',
             isHeader: false,
             actual: actualData.totalRevenue || 0,
-            budget: budgetData.totalRevenue || 0,
-            variance: (actualData.totalRevenue || 0) - (budgetData.totalRevenue || 0),
-            variancePct: budgetData.totalRevenue ? ((actualData.totalRevenue - budgetData.totalRevenue) / budgetData.totalRevenue) * 100 : 0,
+            budget: budget.totalRevenue || 0,
+            variance: (actualData.totalRevenue || 0) - (budget.totalRevenue || 0),
+            variancePct: budget.totalRevenue ? ((actualData.totalRevenue - budget.totalRevenue) / budget.totalRevenue) * 100 : 0,
             ytdActual: (actualData.totalRevenue || 0) * 10,
-            ytdBudget: (budgetData.totalRevenue || 0) * 10,
-            ytdVariance: ((actualData.totalRevenue || 0) - (budgetData.totalRevenue || 0)) * 10,
-            ytdVariancePct: budgetData.totalRevenue ? ((actualData.totalRevenue - budgetData.totalRevenue) / budgetData.totalRevenue) * 100 : 0,
-            favorable: (actualData.totalRevenue || 0) > (budgetData.totalRevenue || 0),
-            threshold: Math.abs(budgetData.totalRevenue ? ((actualData.totalRevenue - budgetData.totalRevenue) / budgetData.totalRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.totalRevenue ? ((actualData.totalRevenue - budgetData.totalRevenue) / budgetData.totalRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.totalRevenue || 0) * 10,
+            ytdVariance: ((actualData.totalRevenue || 0) - (budget.totalRevenue || 0)) * 10,
+            ytdVariancePct: budget.totalRevenue ? ((actualData.totalRevenue - budget.totalRevenue) / budget.totalRevenue) * 100 : 0,
+            favorable: (actualData.totalRevenue || 0) > (budget.totalRevenue || 0),
+            threshold: Math.abs(budget.totalRevenue ? ((actualData.totalRevenue - budget.totalRevenue) / budget.totalRevenue) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.totalRevenue ? ((actualData.totalRevenue - budget.totalRevenue) / budget.totalRevenue) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         // Expenses Section
         {
@@ -138,90 +155,90 @@ export const convertToVarianceData = (actualData, budgetData) => {
             category: 'Cost of Goods Sold',
             isHeader: false,
             actual: actualData.costOfGoodsSold || 0,
-            budget: budgetData.costOfGoodsSold || 0,
-            variance: (actualData.costOfGoodsSold || 0) - (budgetData.costOfGoodsSold || 0),
-            variancePct: budgetData.costOfGoodsSold ? ((actualData.costOfGoodsSold - budgetData.costOfGoodsSold) / budgetData.costOfGoodsSold) * 100 : 0,
+            budget: budget.costOfGoodsSold || 0,
+            variance: (actualData.costOfGoodsSold || 0) - (budget.costOfGoodsSold || 0),
+            variancePct: budget.costOfGoodsSold ? ((actualData.costOfGoodsSold - budget.costOfGoodsSold) / budget.costOfGoodsSold) * 100 : 0,
             ytdActual: (actualData.costOfGoodsSold || 0) * 10,
-            ytdBudget: (budgetData.costOfGoodsSold || 0) * 10,
-            ytdVariance: ((actualData.costOfGoodsSold || 0) - (budgetData.costOfGoodsSold || 0)) * 10,
-            ytdVariancePct: budgetData.costOfGoodsSold ? ((actualData.costOfGoodsSold - budgetData.costOfGoodsSold) / budgetData.costOfGoodsSold) * 100 : 0,
-            favorable: (actualData.costOfGoodsSold || 0) < (budgetData.costOfGoodsSold || 0),
-            threshold: Math.abs(budgetData.costOfGoodsSold ? ((actualData.costOfGoodsSold - budgetData.costOfGoodsSold) / budgetData.costOfGoodsSold) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.costOfGoodsSold ? ((actualData.costOfGoodsSold - budgetData.costOfGoodsSold) / budgetData.costOfGoodsSold) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.costOfGoodsSold || 0) * 10,
+            ytdVariance: ((actualData.costOfGoodsSold || 0) - (budget.costOfGoodsSold || 0)) * 10,
+            ytdVariancePct: budget.costOfGoodsSold ? ((actualData.costOfGoodsSold - budget.costOfGoodsSold) / budget.costOfGoodsSold) * 100 : 0,
+            favorable: (actualData.costOfGoodsSold || 0) < (budget.costOfGoodsSold || 0),
+            threshold: Math.abs(budget.costOfGoodsSold ? ((actualData.costOfGoodsSold - budget.costOfGoodsSold) / budget.costOfGoodsSold) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.costOfGoodsSold ? ((actualData.costOfGoodsSold - budget.costOfGoodsSold) / budget.costOfGoodsSold) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'payroll',
             category: 'Payroll Expenses',
             isHeader: false,
             actual: actualData.payroll || 0,
-            budget: budgetData.payroll || 0,
-            variance: (actualData.payroll || 0) - (budgetData.payroll || 0),
-            variancePct: budgetData.payroll ? ((actualData.payroll - budgetData.payroll) / budgetData.payroll) * 100 : 0,
+            budget: budget.payroll || 0,
+            variance: (actualData.payroll || 0) - (budget.payroll || 0),
+            variancePct: budget.payroll ? ((actualData.payroll - budget.payroll) / budget.payroll) * 100 : 0,
             ytdActual: (actualData.payroll || 0) * 10,
-            ytdBudget: (budgetData.payroll || 0) * 10,
-            ytdVariance: ((actualData.payroll || 0) - (budgetData.payroll || 0)) * 10,
-            ytdVariancePct: budgetData.payroll ? ((actualData.payroll - budgetData.payroll) / budgetData.payroll) * 100 : 0,
-            favorable: (actualData.payroll || 0) < (budgetData.payroll || 0),
-            threshold: Math.abs(budgetData.payroll ? ((actualData.payroll - budgetData.payroll) / budgetData.payroll) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.payroll ? ((actualData.payroll - budgetData.payroll) / budgetData.payroll) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.payroll || 0) * 10,
+            ytdVariance: ((actualData.payroll || 0) - (budget.payroll || 0)) * 10,
+            ytdVariancePct: budget.payroll ? ((actualData.payroll - budget.payroll) / budget.payroll) * 100 : 0,
+            favorable: (actualData.payroll || 0) < (budget.payroll || 0),
+            threshold: Math.abs(budget.payroll ? ((actualData.payroll - budget.payroll) / budget.payroll) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.payroll ? ((actualData.payroll - budget.payroll) / budget.payroll) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'admin',
             category: 'Admin Expenses',
             isHeader: false,
             actual: actualData.adminExpenses || 0,
-            budget: budgetData.adminExpenses || 0,
-            variance: (actualData.adminExpenses || 0) - (budgetData.adminExpenses || 0),
-            variancePct: budgetData.adminExpenses ? ((actualData.adminExpenses - budgetData.adminExpenses) / budgetData.adminExpenses) * 100 : 0,
+            budget: budget.adminExpenses || 0,
+            variance: (actualData.adminExpenses || 0) - (budget.adminExpenses || 0),
+            variancePct: budget.adminExpenses ? ((actualData.adminExpenses - budget.adminExpenses) / budget.adminExpenses) * 100 : 0,
             ytdActual: (actualData.adminExpenses || 0) * 10,
-            ytdBudget: (budgetData.adminExpenses || 0) * 10,
-            ytdVariance: ((actualData.adminExpenses || 0) - (budgetData.adminExpenses || 0)) * 10,
-            ytdVariancePct: budgetData.adminExpenses ? ((actualData.adminExpenses - budgetData.adminExpenses) / budgetData.adminExpenses) * 100 : 0,
-            favorable: (actualData.adminExpenses || 0) < (budgetData.adminExpenses || 0),
-            threshold: Math.abs(budgetData.adminExpenses ? ((actualData.adminExpenses - budgetData.adminExpenses) / budgetData.adminExpenses) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.adminExpenses ? ((actualData.adminExpenses - budgetData.adminExpenses) / budgetData.adminExpenses) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.adminExpenses || 0) * 10,
+            ytdVariance: ((actualData.adminExpenses || 0) - (budget.adminExpenses || 0)) * 10,
+            ytdVariancePct: budget.adminExpenses ? ((actualData.adminExpenses - budget.adminExpenses) / budget.adminExpenses) * 100 : 0,
+            favorable: (actualData.adminExpenses || 0) < (budget.adminExpenses || 0),
+            threshold: Math.abs(budget.adminExpenses ? ((actualData.adminExpenses - budget.adminExpenses) / budget.adminExpenses) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.adminExpenses ? ((actualData.adminExpenses - budget.adminExpenses) / budget.adminExpenses) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'marketing',
             category: 'Marketing Costs',
             isHeader: false,
             actual: actualData.marketingCosts || 0,
-            budget: budgetData.marketingCosts || 0,
-            variance: (actualData.marketingCosts || 0) - (budgetData.marketingCosts || 0),
-            variancePct: budgetData.marketingCosts ? ((actualData.marketingCosts - budgetData.marketingCosts) / budgetData.marketingCosts) * 100 : 0,
+            budget: budget.marketingCosts || 0,
+            variance: (actualData.marketingCosts || 0) - (budget.marketingCosts || 0),
+            variancePct: budget.marketingCosts ? ((actualData.marketingCosts - budget.marketingCosts) / budget.marketingCosts) * 100 : 0,
             ytdActual: (actualData.marketingCosts || 0) * 10,
-            ytdBudget: (budgetData.marketingCosts || 0) * 10,
-            ytdVariance: ((actualData.marketingCosts || 0) - (budgetData.marketingCosts || 0)) * 10,
-            ytdVariancePct: budgetData.marketingCosts ? ((actualData.marketingCosts - budgetData.marketingCosts) / budgetData.marketingCosts) * 100 : 0,
-            favorable: (actualData.marketingCosts || 0) < (budgetData.marketingCosts || 0),
-            threshold: Math.abs(budgetData.marketingCosts ? ((actualData.marketingCosts - budgetData.marketingCosts) / budgetData.marketingCosts) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.marketingCosts ? ((actualData.marketingCosts - budgetData.marketingCosts) / budgetData.marketingCosts) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.marketingCosts || 0) * 10,
+            ytdVariance: ((actualData.marketingCosts || 0) - (budget.marketingCosts || 0)) * 10,
+            ytdVariancePct: budget.marketingCosts ? ((actualData.marketingCosts - budget.marketingCosts) / budget.marketingCosts) * 100 : 0,
+            favorable: (actualData.marketingCosts || 0) < (budget.marketingCosts || 0),
+            threshold: Math.abs(budget.marketingCosts ? ((actualData.marketingCosts - budget.marketingCosts) / budget.marketingCosts) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.marketingCosts ? ((actualData.marketingCosts - budget.marketingCosts) / budget.marketingCosts) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'rent',
             category: 'Rent & Facilities',
             isHeader: false,
             actual: actualData.rentExpense || 0,
-            budget: budgetData.rentExpense || 0,
-            variance: (actualData.rentExpense || 0) - (budgetData.rentExpense || 0),
-            variancePct: budgetData.rentExpense ? ((actualData.rentExpense - budgetData.rentExpense) / budgetData.rentExpense) * 100 : 0,
+            budget: budget.rentExpense || 0,
+            variance: (actualData.rentExpense || 0) - (budget.rentExpense || 0),
+            variancePct: budget.rentExpense ? ((actualData.rentExpense - budget.rentExpense) / budget.rentExpense) * 100 : 0,
             ytdActual: (actualData.rentExpense || 0) * 10,
-            ytdBudget: (budgetData.rentExpense || 0) * 10,
-            ytdVariance: ((actualData.rentExpense || 0) - (budgetData.rentExpense || 0)) * 10,
-            ytdVariancePct: budgetData.rentExpense ? ((actualData.rentExpense - budgetData.rentExpense) / budgetData.rentExpense) * 100 : 0,
-            favorable: (actualData.rentExpense || 0) < (budgetData.rentExpense || 0),
-            threshold: Math.abs(budgetData.rentExpense ? ((actualData.rentExpense - budgetData.rentExpense) / budgetData.rentExpense) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.rentExpense ? ((actualData.rentExpense - budgetData.rentExpense) / budgetData.rentExpense) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.rentExpense || 0) * 10,
+            ytdVariance: ((actualData.rentExpense || 0) - (budget.rentExpense || 0)) * 10,
+            ytdVariancePct: budget.rentExpense ? ((actualData.rentExpense - budget.rentExpense) / budget.rentExpense) * 100 : 0,
+            favorable: (actualData.rentExpense || 0) < (budget.rentExpense || 0),
+            threshold: Math.abs(budget.rentExpense ? ((actualData.rentExpense - budget.rentExpense) / budget.rentExpense) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.rentExpense ? ((actualData.rentExpense - budget.rentExpense) / budget.rentExpense) * 100 : 0) > 5 ? 'warning' : 'ok'
         },
         {
             id: 'depreciation',
             category: 'Depreciation',
             isHeader: false,
             actual: actualData.depreciation || 0,
-            budget: budgetData.depreciation || 0,
-            variance: (actualData.depreciation || 0) - (budgetData.depreciation || 0),
-            variancePct: budgetData.depreciation ? ((actualData.depreciation - budgetData.depreciation) / budgetData.depreciation) * 100 : 0,
+            budget: budget.depreciation || 0,
+            variance: (actualData.depreciation || 0) - (budget.depreciation || 0),
+            variancePct: budget.depreciation ? ((actualData.depreciation - budget.depreciation) / budget.depreciation) * 100 : 0,
             ytdActual: (actualData.depreciation || 0) * 10,
-            ytdBudget: (budgetData.depreciation || 0) * 10,
-            ytdVariance: ((actualData.depreciation || 0) - (budgetData.depreciation || 0)) * 10,
-            ytdVariancePct: budgetData.depreciation ? ((actualData.depreciation - budgetData.depreciation) / budgetData.depreciation) * 100 : 0,
-            favorable: (actualData.depreciation || 0) < (budgetData.depreciation || 0),
-            threshold: Math.abs(budgetData.depreciation ? ((actualData.depreciation - budgetData.depreciation) / budgetData.depreciation) * 100 : 0) > 10 ? 'critical' : Math.abs(budgetData.depreciation ? ((actualData.depreciation - budgetData.depreciation) / budgetData.depreciation) * 100 : 0) > 5 ? 'warning' : 'ok'
+            ytdBudget: (budget.depreciation || 0) * 10,
+            ytdVariance: ((actualData.depreciation || 0) - (budget.depreciation || 0)) * 10,
+            ytdVariancePct: budget.depreciation ? ((actualData.depreciation - budget.depreciation) / budget.depreciation) * 100 : 0,
+            favorable: (actualData.depreciation || 0) < (budget.depreciation || 0),
+            threshold: Math.abs(budget.depreciation ? ((actualData.depreciation - budget.depreciation) / budget.depreciation) * 100 : 0) > 10 ? 'critical' : Math.abs(budget.depreciation ? ((actualData.depreciation - budget.depreciation) / budget.depreciation) * 100 : 0) > 5 ? 'warning' : 'ok'
         }
     ];
     return varianceRows;
@@ -591,6 +608,7 @@ export const convertBudgetToLineItems = (budgetData) => {
 export const generateForecastFromReal = (actualData, budgetData, monthlyData) => {
     if (!actualData || !budgetData)
         return { revenue: [], expenses: [] };
+    const budget = budgetData;
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     // Revenue Forecast
     const revenueForecast = months.map((month, idx) => {
@@ -610,7 +628,7 @@ export const generateForecastFromReal = (actualData, budgetData, monthlyData) =>
             // Forecast grows by 8% for future months
             forecastRevenue = isActual ? actualRevenue : actualRevenue * 1.08;
         }
-        const budgetMonthly = (budgetData.totalRevenue || 0) / 12;
+        const budgetMonthly = (budget.totalRevenue || 0) / 12;
         const lastYearMonthly = budgetMonthly * 0.92; // Estimate 92% of budget as prior year
         const variance = forecastRevenue - budgetMonthly;
         const variancePct = budgetMonthly > 0 ? (variance / budgetMonthly) * 100 : 0;
@@ -628,25 +646,33 @@ export const generateForecastFromReal = (actualData, budgetData, monthlyData) =>
             method: isActual ? 'Actual' : 'AI Forecast'
         };
     });
-    // Expense Forecast
+    // Expense Forecast — BUG 3 FIX: Use same growth rate as revenue so expenses are projected consistently (avoid 93% margin)
+    const totalBudgetExpenses = (budget.costOfGoodsSold || 0) + (budget.payroll || 0) + (budget.adminExpenses || 0) +
+        (budget.marketingCosts || 0) + (budget.distributionCosts || 0) + (budget.rentExpense || 0) + (budget.depreciation || 0);
+    const totalActualExpenses = (actualData.costOfGoodsSold || 0) + (actualData.payroll || 0) + (actualData.adminExpenses || 0) +
+        (actualData.marketingCosts || 0) + (actualData.distributionCosts || 0) + (actualData.rentExpense || 0) + (actualData.depreciation || 0);
+    const expenseGrowthRate = totalBudgetExpenses !== 0
+        ? (totalActualExpenses - totalBudgetExpenses) / totalBudgetExpenses
+        : 0.05;
     const expenseCategories = [
-        { name: 'Cost of Goods Sold', actual: actualData.costOfGoodsSold, budget: budgetData.costOfGoodsSold },
-        { name: 'Payroll & Benefits', actual: actualData.payroll, budget: budgetData.payroll },
-        { name: 'Administrative Expenses', actual: actualData.adminExpenses, budget: budgetData.adminExpenses },
-        { name: 'Marketing & Advertising', actual: actualData.marketingCosts, budget: budgetData.marketingCosts },
-        { name: 'Distribution & Logistics', actual: actualData.distributionCosts, budget: budgetData.distributionCosts },
-        { name: 'Rent & Facilities', actual: actualData.rentExpense, budget: budgetData.rentExpense },
-        { name: 'Depreciation', actual: actualData.depreciation, budget: budgetData.depreciation }
+        { name: 'Cost of Goods Sold', actual: actualData.costOfGoodsSold, budget: budget.costOfGoodsSold },
+        { name: 'Payroll & Benefits', actual: actualData.payroll, budget: budget.payroll },
+        { name: 'Administrative Expenses', actual: actualData.adminExpenses, budget: budget.adminExpenses },
+        { name: 'Marketing & Advertising', actual: actualData.marketingCosts, budget: budget.marketingCosts },
+        { name: 'Distribution & Logistics', actual: actualData.distributionCosts, budget: budget.distributionCosts },
+        { name: 'Rent & Facilities', actual: actualData.rentExpense, budget: budget.rentExpense },
+        { name: 'Depreciation', actual: actualData.depreciation, budget: budget.depreciation }
     ];
     const expenseForecast = expenseCategories.map(cat => {
-        const fy26Forecast = (cat.actual || 0) * 1.05; // 5% growth assumption
-        const variance = fy26Forecast - (cat.budget || 0);
-        const variancePct = (cat.budget || 0) > 0 ? (variance / (cat.budget || 0)) * 100 : 0;
+        const budgetExpenses = cat.budget || 0;
+        const forecastExpenses = budgetExpenses * (1 + expenseGrowthRate);
+        const variance = forecastExpenses - budgetExpenses;
+        const variancePct = budgetExpenses > 0 ? (variance / budgetExpenses) * 100 : 0;
         return {
             category: cat.name,
             fy25Actual: cat.actual || 0,
-            fy26: Math.round(fy26Forecast),
-            budget: cat.budget || 0,
+            fy26: Math.round(forecastExpenses),
+            budget: budgetExpenses,
             variance: Math.round(variance),
             variancePct,
             status: Math.abs(variancePct) > 10 ? 'warning' : 'on-track'
@@ -835,13 +861,23 @@ export const generateBoardPackSections = (actualData, budgetData) => {
     ];
     return sections;
 };
-// Check if required data is available for a module
+// Keys that loaders also check (e.g. UploadData uses finreport_*)
+const DATA_KEY_ALIASES = {
+    'fpa_actual': ['fpa_actual', 'finreport_fpa_actuals'],
+    'fpa_budget': ['fpa_budget', 'finreport_fpa_budget'],
+};
+function hasDataForKey(key) {
+    const aliases = DATA_KEY_ALIASES[key];
+    if (aliases) {
+        return aliases.some(k => !!localStorage.getItem(k));
+    }
+    return !!localStorage.getItem(key);
+}
 export const checkDataAvailability = (required) => {
     const missing = [];
     required.forEach(key => {
-        if (!localStorage.getItem(key)) {
+        if (!hasDataForKey(key))
             missing.push(key);
-        }
     });
     return {
         available: missing.length === 0,

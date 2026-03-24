@@ -1,5 +1,5 @@
 // FP&A Variance Analysis - Main P&L Variance Table Component
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
 import type { VarianceRow } from '../../types/fpa';
 import { 
@@ -21,6 +21,10 @@ interface Props {
 
 export const VarianceTable = ({ data: initialData, currency = "INR", onRowClick }: Props) => {
   const [data, setData] = useState(initialData);
+
+  useEffect(() => {
+    setData(initialData);
+  }, [initialData]);
 
   const handleToggleExpand = (rowId: string) => {
     setData(toggleRowExpansion(data, rowId));

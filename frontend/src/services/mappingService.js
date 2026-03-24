@@ -43,6 +43,14 @@ export const IFRS_LINE_ITEMS = [
     { value: "profitLoss.financeCosts", label: "Finance Costs / Interest Expense", statement: "profitLoss", category: "Finance" },
     { value: "profitLoss.incomeTax", label: "Income Tax Expense", statement: "profitLoss", category: "Tax" },
 ];
+// Liability-only options for dropdown when GL has credit balance (liability/equity)
+export const LIABILITY_MAPPING_OPTIONS = [
+    { value: "financialPosition.liabilities.current.tradePayables", label: "Trade & Other Payables" },
+    { value: "financialPosition.liabilities.current.accruedExpenses", label: "Accrued Expenses" },
+    { value: "financialPosition.liabilities.current.otherCurrent", label: "Other Current Liabilities" },
+    { value: "financialPosition.liabilities.nonCurrent.borrowings", label: "Long-term Borrowings" },
+    { value: "financialPosition.liabilities.nonCurrent.otherNonCurrent", label: "Other Non-Current Liabilities" },
+];
 // ==================== STORAGE KEYS ====================
 const STORAGE_KEY_MAPPINGS = "finreportai_company_mappings";
 const STORAGE_KEY_COMPANIES = "finreportai_companies";
@@ -213,6 +221,7 @@ const RULE_KEYWORDS = [
     { keyword: "goodwill", path: "financialPosition.assets.nonCurrent.intangibleAssets", confidence: 95 },
     { keyword: "accounts payable", path: "financialPosition.liabilities.current.tradePayables", confidence: 95 },
     { keyword: "trade payable", path: "financialPosition.liabilities.current.tradePayables", confidence: 95 },
+    { keyword: "accrued expenses", path: "financialPosition.liabilities.current.accruedExpenses", confidence: 95 },
     { keyword: "short-term loan", path: "financialPosition.liabilities.current.shortTermBorrowings", confidence: 90 },
     { keyword: "long-term debt", path: "financialPosition.liabilities.nonCurrent.borrowings", confidence: 95 },
     { keyword: "long-term loan", path: "financialPosition.liabilities.nonCurrent.borrowings", confidence: 95 },
@@ -282,15 +291,51 @@ function getRuleBasedMappings(entries) {
     return results;
 }
 // ==================== AI MAPPING SUGGESTIONS ====================
+const ACCRUED_EXPENSES_PATH = "financialPosition.liabilities.current.accruedExpenses";
+/** Force liability accounts (e.g. Accrued Expenses, account 2100) to map to liabilities, never to Revenue/income. */
+function fixLiabilitySuggestions(entries, results) {
+    const out = { ...results };
+    for (const entry of entries) {
+        const glCodeStr = String(entry.glCode ?? "").trim();
+        const name = (entry.accountName || "").toLowerCase();
+        const isLiabilityBalance = entry.credit > entry.debit;
+        const isAccruedExpenses = glCodeStr === "2100" ||
+            /accrued\s*expenses?/.test(name) ||
+            (name.includes("accrued") && isLiabilityBalance);
+        if (!isAccruedExpenses)
+            continue;
+        const r = out[entry.glCode] ?? out[glCodeStr] ?? out["2100"];
+        const suggested = (r?.suggestedMapping ?? "").toLowerCase();
+        const isWronglyIncome = !r?.suggestedMapping ||
+            suggested.startsWith("profitloss.") ||
+            suggested.includes("revenue") ||
+            suggested.includes("income");
+        if (isWronglyIncome || r?.suggestedMapping !== ACCRUED_EXPENSES_PATH) {
+            const fixed = {
+                ...r,
+                glCode: entry.glCode,
+                accountName: entry.accountName,
+                suggestedMapping: ACCRUED_EXPENSES_PATH,
+                confidence: 95,
+                alternatives: (r?.alternatives ?? []).filter((alt) => (alt.ifrsLine ?? "").toLowerCase() !== "profitloss.revenue" && !(alt.ifrsLine ?? "").toLowerCase().includes("income")),
+            };
+            out[entry.glCode] = fixed;
+            if (glCodeStr && glCodeStr !== String(entry.glCode))
+                out[glCodeStr] = fixed;
+        }
+    }
+    return out;
+}
 export async function getAISuggestions(entries) {
     if (entries.length === 0)
         return {};
     // 1) Prefer backend (no AWS token in browser)
     const backendResults = await getAISuggestionsFromBackend(entries);
-    if (backendResults && Object.keys(backendResults).length > 0)
-        return backendResults;
-    // 2) Fallback: rule-based mapping (no backend, no AWS — works offline)
-    return getRuleBasedMappings(entries);
+    const raw = backendResults && Object.keys(backendResults).length > 0
+        ? backendResults
+        : getRuleBasedMappings(entries);
+    // 2) Ensure Accrued Expenses (and similar liability accounts) never map to Revenue/income
+    return fixLiabilitySuggestions(entries, raw);
 }
 // ==================== HELPER: GET IFRS LINE ITEM INFO ====================
 export function getIFRSLineItemInfo(ifrsLine) {

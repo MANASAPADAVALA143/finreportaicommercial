@@ -10,6 +10,23 @@ from app.core.security import get_current_user
 router = APIRouter(prefix="/api/journal-entries", tags=["journal-entries"])
 
 
+@router.get("/nova-status")
+async def get_nova_status():
+    """
+    Check if Amazon Nova (Bedrock) is available for R2R journal entry anomaly detection.
+    No auth required. Use this to verify AWS keys and Nova integration.
+    """
+    client = nova_service.client  # Triggers lazy init
+    return {
+        "novaAvailable": client is not None,
+        "message": (
+            "Amazon Nova is available for R2R journal entry anomaly detection."
+            if client is not None
+            else "Nova unavailable. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in backend/.env (long-lived IAM user keys). Remove AWS_SESSION_TOKEN if present."
+        ),
+    }
+
+
 @router.post("/upload")
 async def upload_journal_entries(
     file: UploadFile = File(...),
@@ -159,18 +176,26 @@ async def upload_journal_entries(
         
         # Extract high-risk entries for quick review
         high_risk_entries = [r for r in analysis_result['results'] if r.get('riskLevel') == 'High'][:10]
-        
+        results = analysis_result['results']
+        nova_count = sum(1 for r in results if r.get('analysisSource') == 'amazon_nova')
+        rule_count = len(results) - nova_count
+
         return {
             "success": True,
             "file_name": file.filename,
             "threshold": threshold,
             "total": analysis_result['summary']['total'],
             "hasGroundTruth": ground_truth is not None,
-            "summary": analysis_result['summary'],
+            "summary": {
+                **analysis_result['summary'],
+                "novaEntryCount": nova_count,
+                "ruleBasedEntryCount": rule_count,
+                "novaUsed": nova_count > 0,
+            },
             "metrics": analysis_result['metrics'],
             "confusionMatrix": analysis_result['confusionMatrix'],
-            "results": analysis_result['results'],
-            "highRiskEntries": high_risk_entries
+            "results": results,
+            "highRiskEntries": high_risk_entries,
         }
     
     except pd.errors.EmptyDataError:

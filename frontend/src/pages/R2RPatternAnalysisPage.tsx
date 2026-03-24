@@ -1,7 +1,9 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
-import { analysePatterns, type PatternEntry } from "../services/patternAnalysis";
+import { analyzeEntries, analyzeEntriesWithHistory, type ScoredEntry } from "../services/patternAnalysis";
+import { callAI } from "../services/aiProvider";
+import { listClients, createClient, saveUpload, getClientHistory, type R2RClient } from "../services/r2rHistoryService";
 
 // ─── Design Tokens (matches CFO Decision Intelligence) ───────────────────────
 const C = {
@@ -30,6 +32,9 @@ const C = {
 };
 const font = "'DM Sans', 'Segoe UI', sans-serif";
 const mono = "'DM Mono', 'Consolas', monospace";
+
+const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
+const NOVA_INVOKE_URL = `${API_BASE.replace(/\/$/, "")}/api/nova/invoke`;
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 const Card = ({ children, style = {} }: { children: React.ReactNode; style?: React.CSSProperties }) => (
@@ -108,23 +113,14 @@ type JEEntryRow = {
   zscore: string;
   amt: number | null;
   dup: number | null;
+  dupMatchId?: string;
   user: number | null;
   time: number | null;
   acct: number | null;
   score: number;
   level: "HIGH" | "MEDIUM" | "LOW";
+  signals?: string[];
 };
-
-const jeEntriesStatic: JEEntryRow[] = [
-  { id: "JE-056", vendor: "Steel Corp",         account: "Miscellaneous Expense", postedBy: "Rajan", date: "22 Feb 26", tags: ["Wknd"],         amount: "₹4,20,000", zscore: "+2.96σ", amt: 70, dup: 100, user: null, time: null, acct: 55, score: 90,  level: "HIGH" },
-  { id: "JE-071", vendor: "Steel Corp",         account: "Raw Materials",          postedBy: "Priya", date: "31 Jan 26", tags: ["Wknd","M-End"], amount: "₹5,00,000", zscore: "+3.68σ", amt: 70, dup: null, user: 70,   time: null, acct: 55, score: 88,  level: "HIGH" },
-  { id: "JE-048", vendor: "Steel Corp",         account: "Raw Materials",          postedBy: "Priya", date: "26 Jan 26", tags: [],               amount: "₹4,80,000", zscore: "+3.50σ", amt: 70, dup: null, user: 70,   time: null, acct: null, score: 73,  level: "HIGH" },
-  { id: "JE-032", vendor: "New Machinery Ltd",  account: "Plant & Machinery",      postedBy: "Rajan", date: "22 Feb 26", tags: ["Wknd"],         amount: "₹5,20,000", zscore: "+3.86σ", amt: 70, dup: null, user: 70,   time: null, acct: null, score: 68,  level: "MEDIUM" },
-  { id: "JE-057", vendor: "Consulting Partners",account: "Director Loan Account",  postedBy: "Suresh",date: "28 Mar 26", tags: ["Wknd","M-End"], amount: "₹3,20,000", zscore: "+2.05σ", amt: 40, dup: null, user: 70,   time: null, acct: 55,  score: 52,  level: "MEDIUM" },
-  { id: "JE-022", vendor: "Global Imports",     account: "Purchase / COGS",        postedBy: "Priya", date: "14 Feb 26", tags: [],               amount: "₹2,10,000", zscore: "+1.82σ", amt: 40, dup: null, user: null, time: 55,   acct: null, score: 41,  level: "MEDIUM" },
-  { id: "JE-041", vendor: "Global Imports",     account: "Purchase / COGS",        postedBy: "Dev",   date: "03 Mar 26", tags: [],               amount: "₹2,10,000", zscore: "+1.79σ", amt: 40, dup: 70,   user: null, time: null, acct: null, score: 38,  level: "MEDIUM" },
-  { id: "JE-015", vendor: "Tech Solutions",     account: "Capex / IT",             postedBy: "Dev",   date: "05 Jan 26", tags: [],               amount: "₹1,80,000", zscore: "+1.20σ", amt: 30, dup: null, user: null, time: null, acct: null, score: 28,  level: "LOW" },
-];
 
 function formatAmountINR(n: number): string {
   const s = Math.round(n).toString();
@@ -171,20 +167,31 @@ function parseAmountStr(s: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+const FISCAL_MONTH_ORDER = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+
 function computeTrendByMonth(entries: JEEntryRow[]): { month: string; high: number; medium: number; low: number }[] {
-  const byMonth: Record<string,{ high: number; medium: number; low: number }> = {};
-  MONTH_NAMES.forEach(m => { byMonth[m] = { high: 0, medium: 0, low: 0 }; });
+  type Key = string;
+  const byKey: Record<Key, { year: number; monthIdx: number; high: number; medium: number; low: number }> = {};
   entries.forEach(e => {
     const dt = parseEntryDate(e.date);
     if (!dt) return;
-    const m = MONTH_NAMES[dt.getMonth()];
-    if (byMonth[m]) {
-      if (e.level === "HIGH") byMonth[m].high++;
-      else if (e.level === "MEDIUM") byMonth[m].medium++;
-      else byMonth[m].low++;
-    }
+    const year = dt.getFullYear();
+    const monthIdx = dt.getMonth();
+    const key = `${year}-${monthIdx}`;
+    if (!byKey[key]) byKey[key] = { year, monthIdx, high: 0, medium: 0, low: 0 };
+    if (e.level === "HIGH") byKey[key].high++;
+    else if (e.level === "MEDIUM") byKey[key].medium++;
+    else byKey[key].low++;
   });
-  return MONTH_NAMES.map(m => ({ month: m, ...byMonth[m] })).filter(x => x.high + x.medium + x.low > 0).slice(-6);
+  const sorted = Object.values(byKey)
+    .sort((a, b) => a.year * 12 + a.monthIdx - (b.year * 12 + b.monthIdx))
+    .slice(-6);
+  return sorted.map(({ year, monthIdx, high, medium, low }) => ({
+    month: MONTH_NAMES[monthIdx],
+    high,
+    medium,
+    low,
+  }));
 }
 
 function computeVendorPatterns(entries: JEEntryRow[]): { vendor: string; acct: string; count: number; avg: string; score: number; flag: string; action: "red"|"amber"|"green" }[] {
@@ -208,7 +215,7 @@ function computeVendorPatterns(entries: JEEntryRow[]): { vendor: string; acct: s
     const avg = avgNum >= 1e5 ? `₹${(avgNum/1e5).toFixed(2)}L` : formatAmountINR(avgNum);
     const score = Math.round(v.scores.reduce((a,b)=>a+b,0) / count);
     const flag = [...v.flags].slice(0,3).join(" + ") || "—";
-    const action: "red"|"amber"|"green" = score >= 70 ? "red" : score >= 35 ? "amber" : "green";
+    const action: "red"|"amber"|"green" = score >= 71 ? "red" : score >= 41 ? "amber" : "green";
     const acct = [...new Set(v.accounts)].slice(0,2).join(" / ") || "—";
     return { vendor, acct, count, avg, score, flag, action };
   }).sort((a,b) => b.score - a.score).slice(0, 10);
@@ -224,10 +231,10 @@ function computeUserPatterns(entries: JEEntryRow[]): { user: string; total: numb
   });
   return Object.entries(byUser).map(([user, v]) => {
     const total = v.scores.length;
-    const flagged = v.scores.filter(s => s >= 35).length;
+    const flagged = v.scores.filter(s => s >= 41).length;
     const rate = total ? (flagged / total * 100) : 0;
     const avg = total ? Math.round(v.scores.reduce((a,b)=>a+b,0) / total) : 0;
-    const profile: "red"|"amber"|"green" = avg >= 70 ? "red" : avg >= 35 ? "amber" : "green";
+    const profile: "red"|"amber"|"green" = avg >= 71 ? "red" : avg >= 41 ? "amber" : "green";
     return { user, total, flagged, rate: Math.round(rate * 10) / 10, avg, wknd: v.wknd, profile };
   }).sort((a,b) => b.avg - a.avg).slice(0, 10);
 }
@@ -268,12 +275,17 @@ function computePatternShift(entries: JEEntryRow[]): { type: string; icon: strin
   ];
 }
 
-function patternEntryToJEEntry(p: PatternEntry, index: number): JEEntryRow {
+function scoredEntryToJEEntry(p: ScoredEntry, index: number): JEEntryRow {
   const tags: string[] = [];
   if (p.isWeekend) tags.push("Wknd");
   if (p.isMonthEnd) tags.push("M-End");
-  const z = p.zScoreAmount;
+  const z = p.zAccount;
   const zscore = (z === 0 || Number.isNaN(z)) ? "—" : `${z >= 0 ? "+" : ""}${z.toFixed(2)}σ`;
+  const amt = Math.round(p.mlScore * 100);
+  const dup = p.ruleFlags.some(f => f.includes("Duplicate") || f.includes("Near-duplicate")) ? Math.round(p.rulesScore * 100) : null;
+  const user = Math.round(p.rulesScore * 100);
+  const time = p.isWeekend || p.isLateNight ? Math.round(p.rulesScore * 100) : null;
+  const acct = Math.round(p.statScore * 100);
   return {
     id: p.entryId || `JE-${String(index + 1).padStart(3, "0")}`,
     vendor: p.vendor || "—",
@@ -283,25 +295,26 @@ function patternEntryToJEEntry(p: PatternEntry, index: number): JEEntryRow {
     tags,
     amount: formatAmountINR(p.amount),
     zscore,
-    amt: p.modelScores.amount || null,
-    dup: p.modelScores.duplicate || null,
-    user: p.modelScores.user || null,
-    time: p.modelScores.timing || null,
-    acct: p.modelScores.account || null,
-    score: p.patternRiskScore,
+    amt: amt || null,
+    dup,
+    user: user || null,
+    time,
+    acct: acct || null,
+    score: p.finalScore,
     level: p.riskLevel,
+    signals: p.ruleFlags?.length ? p.ruleFlags : undefined,
   };
 }
 
-const ScorePill = ({ value }: { value: number | null | undefined }) => {
+const ScorePill = ({ value, title }: { value: number | null | undefined; title?: string }) => {
   if (value === null || value === undefined)
-    return <span style={{ color: C.textMute, fontSize: 16 }}>—</span>;
-  const hi = value >= 70;
+    return <span style={{ color: C.textMute, fontSize: 16 }} title={title}>—</span>;
+  const hi = value >= 71;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center",
       width: 36, height: 24, borderRadius: 5, fontSize: 11, fontWeight: 700, fontFamily: mono,
       background: hi ? C.redBg : C.bg, color: hi ? C.red : C.textSub,
-      border: `1px solid ${hi ? C.redBorder : C.border}` }}>
+      border: `1px solid ${hi ? C.redBorder : C.border}` }} title={title}>
       {value}
     </span>
   );
@@ -334,17 +347,55 @@ interface JESummaryTableProps {
   entries?: JEEntryRow[];
   totalAmt?: string;
   totalAnalysed?: number;
+  anomaliesCount?: number;
 }
 
-const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProps = {}) => {
+const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JESummaryTableProps = {}) => {
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "HIGH" | "MEDIUM" | "LOW">("ALL");
+  const [novaCache, setNovaCache] = useState<Record<string, string>>({});
+  const [novaLoading, setNovaLoading] = useState<string | null>(null);
   const hasData = entries != null && entries.length > 0;
   const jeEntries = hasData ? entries : [];
   const total = totalAnalysed ?? 0;
   const amt = totalAmt ?? "—";
+  const anomalies = anomaliesCount ?? 0;
   const filtered = filter === "ALL" ? jeEntries : jeEntries.filter(e => e.level === filter);
   const counts = { HIGH: jeEntries.filter(e=>e.level==="HIGH").length, MEDIUM: jeEntries.filter(e=>e.level==="MEDIUM").length, LOW: jeEntries.filter(e=>e.level==="LOW").length };
+
+  const fetchNovaExplanation = useCallback(async (e: JEEntryRow) => {
+    if (novaCache[e.id]) return;
+    setNovaLoading(e.id);
+    const systemPrompt = "You are a financial fraud detection assistant. Explain why a journal entry was flagged in 3 bullet points. Be specific and use plain English. Max 60 words total.";
+    const signalList = (e.signals && e.signals.length > 0) ? e.signals.join(", ") : "Amount, Duplicate, User, Timing, Account, Vendor (as triggered)";
+    const userPrompt = `Journal entry details:\nVendor: ${e.vendor}\nAmount: ${e.amount}\nPosted by: ${e.postedBy}\nDate: ${e.date}\nAccount: ${e.account}\nSignals triggered: ${signalList}\nRisk score: ${e.score}/100\nExplain why this is suspicious.`;
+    try {
+      const res = await fetch(NOVA_INVOKE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_id: "amazon.nova-lite-v1:0",
+          prompt: `${systemPrompt}\n\n${userPrompt}`,
+          max_tokens: 200,
+          temperature: 0.3,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { text?: string };
+      const text = (data.text ?? "").trim() || "No explanation available.";
+      setNovaCache(prev => ({ ...prev, [e.id]: text }));
+    } catch {
+      setNovaCache(prev => ({ ...prev, [e.id]: "Unable to load Nova analysis. Please try again." }));
+    } finally {
+      setNovaLoading(null);
+    }
+  }, [novaCache]);
+
+  const handleRowClick = useCallback((e: JEEntryRow) => {
+    const next = selected === e.id ? null : e.id;
+    setSelected(next);
+    if (next && !novaCache[next]) fetchNovaExplanation(e);
+  }, [selected, novaCache, fetchNovaExplanation]);
 
   if (!hasData) {
     return (
@@ -352,7 +403,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
         <div style={{ padding: "32px 24px", textAlign: "center", background: C.bg, borderRadius: 12, border: `1px dashed ${C.border}` }}>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: "0 0 8px 0" }}>All Flagged Journal Entries</h3>
           <p style={{ fontSize: 12, color: C.textSub, margin: 0 }}>
-            Upload journal entries above (or from Dashboard → Upload Data with an R2R/Journal sheet) to see analysis and flagged entries.
+            Upload journal entries above to see analysis and flagged entries.
           </p>
           <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 16 }}>
             <div style={{ padding: "6px 12px", borderRadius: 8, background: C.redBg, border: `1px solid ${C.redBorder}`, minWidth: 64 }}>
@@ -379,7 +430,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
         <div>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0 }}>All Flagged Journal Entries</h3>
           <p style={{ fontSize: 12, color: C.textSub, marginTop: 3 }}>
-            {jeEntries.length} flagged entries out of {total} JEs analysed · {amt} total exposure at risk
+            {total} JEs analysed · {anomalies} anomalies flagged · {amt} total exposure at risk
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -437,7 +488,8 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
             {filtered.map((e, i) => {
               const sel = selected === e.id;
               return (
-                <tr key={e.id} onClick={() => setSelected(sel ? null : e.id)}
+                <React.Fragment key={e.id}>
+                <tr onClick={() => handleRowClick(e)}
                   style={{ background: sel ? C.bluePale : i % 2 === 0 ? C.white : "#FAFBFC",
                     cursor: "pointer", borderTop: `1px solid ${C.borderLight}` }}>
                   <td style={{ padding: "12px 14px", whiteSpace: "nowrap", width: 90 }}>
@@ -480,7 +532,14 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
                   <td style={{ padding: "12px 12px", textAlign: "right" }}>
                     <div style={{ fontFamily: mono, fontSize: 13, fontWeight: 400, color: C.text }}>{e.amount}</div>
                   </td>
-                  {[e.amt, e.dup, e.user, e.time, e.acct].map((v, j) => (
+                  <td style={{ padding: "12px 8px", textAlign: "center" }}>
+                    <ScorePill value={e.amt} />
+                  </td>
+                  <td style={{ padding: "12px 8px", textAlign: "center" }}
+                    title={e.dupMatchId ? `Matches ${e.dupMatchId} (same vendor + amount)` : undefined}>
+                    <ScorePill value={e.dup} title={e.dupMatchId ? `Matches ${e.dupMatchId} (same vendor + amount)` : undefined} />
+                  </td>
+                  {[e.user, e.time, e.acct].map((v, j) => (
                     <td key={j} style={{ padding: "12px 8px", textAlign: "center" }}>
                       <ScorePill value={v} />
                     </td>
@@ -489,6 +548,35 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
                     <RiskBar score={e.score} level={e.level} />
                   </td>
                 </tr>
+                {sel && (
+                  <tr style={{ background: C.bluePale, borderTop: `1px solid ${C.blueBorder}` }}>
+                    <td colSpan={11} style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderLight}` }}>
+                      <div style={{ fontSize: 13, color: C.text }}>
+                        <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                          Nova Analysis — {e.id}
+                        </div>
+                        {novaLoading === e.id ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.textSub }}>
+                            <span style={{ width: 18, height: 18, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                            Loading Nova analysis…
+                          </div>
+                        ) : novaCache[e.id] ? (
+                          <>
+                            <p style={{ marginBottom: 10, lineHeight: 1.6 }}>This entry was flagged because:</p>
+                            <div style={{ marginBottom: 12, paddingLeft: 16, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                              {novaCache[e.id]}
+                            </div>
+                            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12 }}>
+                              <span style={{ fontWeight: 600, color: C.textMid }}>Risk Score: {e.score}/100 — {e.level}</span>
+                              <span style={{ color: C.textSub }}>Recommended Action: {e.level === "HIGH" ? "Review with finance manager" : e.level === "MEDIUM" ? "Escalate to CFO" : "Auto-clear"}</span>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -498,7 +586,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed }: JESummaryTableProp
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
         padding: "10px 4px 0", borderTop: `1px solid ${C.borderLight}`, marginTop: 4 }}>
         <p style={{ fontSize: 10, color: C.textMute }}>
-          <strong style={{ color: C.textSub }}>Columns:</strong> Amt = Amount model · Dup = Duplicate · User = Behaviour · Time = Timing · Acct = Account · Scores ≥ 70 flagged red
+          <strong style={{ color: C.textSub }}>Columns:</strong> Amt = Amount model · Dup = Duplicate · User = Behaviour · Time = Timing · Acct = Account · Scores ≥ 71 flagged red
         </p>
         <p style={{ fontSize: 10, color: C.textMute }}>Click row to select · Powered by Amazon Nova</p>
       </div>
@@ -606,8 +694,8 @@ const VendorTab = ({ data }: { data: DerivedStats }) => (
               <TD right>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
                   <span style={{ fontFamily: mono, fontWeight: 800, fontSize: 14,
-                    color: r.score >= 70 ? C.red : r.score >= 50 ? C.amber : C.green }}>{r.score}</span>
-                  <MiniBar pct={r.score} color={r.score >= 70 ? C.red : r.score >= 50 ? C.amber : C.green} />
+                    color: r.score >= 71 ? C.red : r.score >= 41 ? C.amber : C.green }}>{r.score}</span>
+                  <MiniBar pct={r.score} color={r.score >= 71 ? C.red : r.score >= 41 ? C.amber : C.green} />
                 </div>
               </TD>
               <TD><Badge label={r.flag} color={r.action} /></TD>
@@ -631,9 +719,9 @@ const VendorTab = ({ data }: { data: DerivedStats }) => (
                 <div style={{ fontSize: 11, color: C.textSub }}>{v.count}× flagged</div>
               </div>
               <span style={{ fontFamily: mono, fontWeight: 800, fontSize: 16,
-                color: v.score >= 70 ? C.red : v.score >= 50 ? C.amber : C.green }}>{v.score}</span>
+                color: v.score >= 71 ? C.red : v.score >= 41 ? C.amber : C.green }}>{v.score}</span>
             </div>
-            <MiniBar pct={v.score} color={v.score >= 70 ? C.red : v.score >= 50 ? C.amber : C.green} height={5} />
+            <MiniBar pct={v.score} color={v.score >= 71 ? C.red : v.score >= 41 ? C.amber : C.green} height={5} />
           </div>
         ))}
       </Card>
@@ -700,8 +788,8 @@ const UserTab = ({ data }: { data: DerivedStats }) => (
               <TD right>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
                   <span style={{ fontFamily: mono, fontWeight: 700, fontSize: 13,
-                    color: r.avg >= 70 ? C.red : r.avg >= 50 ? C.amber : C.green }}>{r.avg}</span>
-                  <MiniBar pct={r.avg} color={r.avg >= 70 ? C.red : r.avg >= 50 ? C.amber : C.green} />
+                    color: r.avg >= 71 ? C.red : r.avg >= 41 ? C.amber : C.green }}>{r.avg}</span>
+                  <MiniBar pct={r.avg} color={r.avg >= 71 ? C.red : r.avg >= 41 ? C.amber : C.green} />
                 </div>
               </TD>
               <TD right mono style={{ color: r.wknd > 1 ? C.red : r.wknd === 1 ? C.amber : C.textMute }}>
@@ -766,7 +854,7 @@ const StatTab = ({ data }: { data: DerivedStats }) => {
   <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
       <StatCard label="Unusual Amount Entries" value={String(unusualAmt)} sub="Amt score ≥ 70" color={C.red} bg={C.redBg} border={C.redBorder} />
-      <StatCard label="High Risk Entries" value={String(data.high)} sub="Score ≥ 55" color={C.amber} bg={C.amberBg} border={C.amberBorder} />
+      <StatCard label="High Risk Entries" value={String(data.high)} sub="Score ≥ 71" color={C.amber} bg={C.amberBg} border={C.amberBorder} />
       <StatCard label="Round Number Entries" value={String(roundNumbers)} sub="Potential fabrication flag" color={C.blue} />
     </div>
 
@@ -794,14 +882,14 @@ const StatTab = ({ data }: { data: DerivedStats }) => {
               <TD right mono style={{ fontWeight: 400, color: C.text }}>{r.amount}</TD>
               <TD>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <Badge label={r.score >= 70 ? "Extreme" : r.score >= 55 ? "Very High" : "High"} color={r.score >= 70 ? "red" : "amber"} />
-                  <MiniBar pct={r.score} color={r.score >= 70 ? C.red : C.amber} height={4} />
+                  <Badge label={r.score >= 71 ? "Extreme" : r.score >= 41 ? "Very High" : "High"} color={r.score >= 71 ? "red" : "amber"} />
+                  <MiniBar pct={r.score} color={r.score >= 71 ? C.red : C.amber} height={4} />
                 </div>
               </TD>
               <TD>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono,
-                    color: r.score >= 70 ? C.red : C.amber }}>{r.score}</span>
+                    color: r.score >= 71 ? C.red : C.amber }}>{r.score}</span>
                   <span style={{ fontSize: 10, color: C.textSub }}>/ 100</span>
                 </div>
               </TD>
@@ -829,7 +917,7 @@ const StatTab = ({ data }: { data: DerivedStats }) => {
                 </TD>
                 <TD mono style={{ fontWeight: 700, color: C.text }}>{r.amount}</TD>
                 <TD style={{ fontSize: 12, color: C.textSub }}>{r.vendor}</TD>
-                <TD><Badge label={r.score >= 70 ? "High" : r.score >= 35 ? "Watch" : "Note"} color={r.score >= 70 ? "red" : "amber"} /></TD>
+                <TD><Badge label={r.score >= 71 ? "High" : r.score >= 41 ? "Watch" : "Note"} color={r.score >= 71 ? "red" : "amber"} /></TD>
               </tr>
             ))}
           </tbody>
@@ -934,8 +1022,11 @@ const AIInsightsTab = ({ data }: { data: DerivedStats }) => (
         </tbody>
       </table>
       <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-        <button style={{ background: C.blue, color: C.white, border: "none", borderRadius: 8,
-          padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: font }}>
+        <button
+          onClick={handleExportReport}
+          style={{ background: C.blue, color: C.white, border: "none", borderRadius: 8,
+            padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: font }}
+        >
           Export Pattern Report
         </button>
         <button style={{ background: C.white, color: C.blue, border: `1.5px solid ${C.blue}`, borderRadius: 8,
@@ -963,47 +1054,67 @@ const tabs = [
 export default function R2RPatternAnalysisPage() {
   const navigate = useNavigate();
   const [active, setActive] = useState("trend");
-  const [rawRows, setRawRows] = useState<any[]>([]);
+  const [rawRows, setRawRows] = useState<any[]>(() => []); // always start empty — no demo data, no localStorage pre-load
   const [uploadFileName, setUploadFileName] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Load R2R journal entries from dashboard (standardised or legacy key)
+  const [clients, setClients] = useState<R2RClient[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [newClientName, setNewClientName] = useState("");
+
+  const [patternResult, setPatternResult] = useState<Awaited<ReturnType<typeof analyzeEntries>> | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+
   useEffect(() => {
-    const raw = localStorage.getItem('finreport_r2r_entries') || localStorage.getItem('r2r_journal_entries');
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        const entries = Array.isArray(parsed) ? parsed : (parsed?.rows ?? []);
-        if (entries?.length > 0) {
-          setRawRows(entries);
-          setUploadFileName(parsed?.fileName ?? 'Uploaded from Dashboard');
-        }
-      } catch (e) {
-        console.error('R2R load error', e);
-      }
-    }
+    setClientsLoading(true);
+    listClients()
+      .then(setClients)
+      .catch(() => setClients([]))
+      .finally(() => setClientsLoading(false));
   }, []);
 
-  const patternResult = useMemo(() => {
-    if (!rawRows.length) return null;
-    try {
-      return analysePatterns(rawRows);
-    } catch (e) {
-      console.error(e);
-      return null;
+  useEffect(() => {
+    if (!rawRows.length) {
+      setPatternResult(null);
+      return;
     }
-  }, [rawRows]);
+    let cancelled = false;
+    setAnalysisLoading(true);
+    const run = async () => {
+      try {
+        if (selectedClientId) {
+          await saveUpload(selectedClientId, rawRows, uploadFileName || undefined);
+          const { entries } = await getClientHistory(selectedClientId);
+          const res = await analyzeEntriesWithHistory(rawRows, entries, callAI);
+          if (!cancelled) setPatternResult(res);
+        } else {
+          const res = await analyzeEntries(rawRows, callAI);
+          if (!cancelled) setPatternResult(res);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.error(e);
+          setPatternResult(null);
+        }
+      } finally {
+        if (!cancelled) setAnalysisLoading(false);
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [rawRows, selectedClientId]);
 
   const jeEntriesFromUpload = useMemo(() => {
-    if (!patternResult?.patternEntries?.length) return [];
-    return patternResult.patternEntries
-      .map((p, i) => patternEntryToJEEntry(p, i))
+    if (!patternResult?.entries?.length) return [];
+    return patternResult.entries
+      .map((p, i) => scoredEntryToJEEntry(p, i))
       .sort((a, b) => b.score - a.score);
   }, [patternResult]);
 
   const totalAmtStr = useMemo(() => {
-    if (!patternResult?.patternEntries?.length) return "—";
-    const sum = patternResult.patternEntries.reduce((s, p) => s + p.amount, 0);
+    if (!patternResult?.entries?.length) return "—";
+    const sum = patternResult.entries.reduce((s, p) => s + p.amount, 0);
     if (sum >= 1e7) return formatAmountINR(sum) + " (" + (sum / 1e7).toFixed(1) + " Cr)";
     if (sum >= 1e5) return formatAmountINR(sum) + " (" + (sum / 1e5).toFixed(1) + "L)";
     return formatAmountINR(sum);
@@ -1036,6 +1147,52 @@ export default function R2RPatternAnalysisPage() {
     };
   }, [jeEntriesFromUpload]);
 
+  const handleExportReport = useCallback(() => {
+    try {
+      if (!jeEntriesFromUpload.length) {
+        alert("No data to export. Upload and analyse journal entries first.");
+        return;
+      }
+      const headers = ["Entry", "Vendor", "Account", "Posted By", "Date", "Amount", "AMT", "DUP", "USER", "TIME", "ACCT", "Risk Score", "Level", "Signals"];
+      const rows = jeEntriesFromUpload.map((e) => [
+        e.id,
+        e.vendor,
+        e.account,
+        e.postedBy,
+        e.date,
+        e.amount,
+        e.amt ?? "",
+        e.dup ?? "",
+        e.user ?? "",
+        e.time ?? "",
+        e.acct ?? "",
+        e.score,
+        e.level,
+        (e.signals || []).join("; "),
+      ]);
+      const filename = `R2R_Pattern_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      // Use blob + link click so download works reliably in all browsers
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      XLSX.utils.book_append_sheet(wb, ws, "Flagged JEs");
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      alert("Report downloaded: " + filename);
+    } catch (err: any) {
+      console.error("Export failed:", err);
+      alert("Export failed: " + (err?.message || "Unknown error"));
+    }
+  }, [jeEntriesFromUpload]);
+
   const handleFile = useCallback((file: File) => {
     setUploadError(null);
     const isCsv = file.name.toLowerCase().endsWith(".csv");
@@ -1057,10 +1214,29 @@ export default function R2RPatternAnalysisPage() {
           });
         } else {
           const wb = XLSX.read(data, { type: isCsv ? "string" : "array" });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          rows = XLSX.utils.sheet_to_json(sheet);
+          // Try all sheets; use one that looks like journal entries (has amount + date/vendor/account)
+          const trySheet = (name: string) => {
+            const sheet = wb.Sheets[name];
+            const arr = XLSX.utils.sheet_to_json(sheet) as any[];
+            if (arr.length < 2) return [];
+            const first = arr[0] || {};
+            const keys = Object.keys(first).map((k) => k.toLowerCase());
+            const hasAmount = keys.some((k) => k.includes("amount") || k.includes("debit") || k.includes("credit"));
+            const hasContext = keys.some((k) => k.includes("date") || k.includes("vendor") || k.includes("account") || k.includes("posted") || k.includes("user"));
+            if (hasAmount && (hasContext || keys.length >= 3)) return arr;
+            return [];
+          };
+          const preferred = wb.SheetNames.find((n) => /r2r|journal|entry|je/i.test(n));
+          rows = preferred ? trySheet(preferred) : [];
+          if (rows.length === 0) {
+            for (const name of wb.SheetNames) {
+              rows = trySheet(name);
+              if (rows.length > 0) break;
+            }
+          }
+          if (rows.length === 0) rows = trySheet(wb.SheetNames[0]);
         }
-        setRawRows(rows);
+        setRawRows(rows || []);
         setUploadFileName(file.name);
       } catch (err: any) {
         setUploadError(err?.message || "Parse error");
@@ -1090,10 +1266,10 @@ export default function R2RPatternAnalysisPage() {
 
   return (
     <div style={{ fontFamily: font, background: C.bg, minHeight: "100vh" }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500;700&display=swap');*{box-sizing:border-box;margin:0;padding:0;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500;700&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes spin{to{transform:rotate(360deg);}}`}</style>
 
       <div style={{ background: `linear-gradient(135deg, ${C.navy} 0%, #1E3A8A 50%, #1D4ED8 100%)`,
-        padding: "0 24px", boxShadow: "0 2px 12px rgba(15,45,94,0.3)" }}>
+        padding: "0 24px", boxShadow: "0 2px 12px rgba(15,45,94,0.3)", position: "relative", zIndex: 10 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 16, paddingBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <button
@@ -1124,27 +1300,31 @@ export default function R2RPatternAnalysisPage() {
               <div style={{ fontSize: 10, color: "#93C5FD", letterSpacing: "0.08em" }}>PERIOD</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.white }}>Oct 25 – Mar 26</div>
             </div>
-            <Link
-              to="/upload-data"
+            <span
               style={{ background: "rgba(255,255,255,0.2)", border: "1px solid rgba(255,255,255,0.3)",
                 color: C.white, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600,
-                textDecoration: "none", display: "flex", alignItems: "center", gap: 6 }}
+                display: "flex", alignItems: "center", gap: 6 }}
             >
-              ↑ Upload Data
-            </Link>
-            <button style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
-              color: C.white, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600,
-              cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+              ↑ Upload above
+            </span>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleExportReport(); }}
+              style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
+                color: C.white, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600,
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 6, position: "relative", zIndex: 11, flexShrink: 0 }}
+            >
               ⬇ Export Report
             </button>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 20, paddingBottom: 14 }}>
+        <div style={{ display: "flex", gap: 20, paddingBottom: 14, flexWrap: "wrap" }}>
           {[
             { icon: "🔴", text: derivedStats ? `${derivedStats.high} HIGH risk entries require review` : "Upload to see risk summary", color: "#FCA5A5" },
             { icon: "🤖", text: "87% AI confidence · Nova model", color: "#93C5FD" },
             { icon: "✅", text: derivedStats ? `${derivedStats.autoCleaned} entries auto-cleared by rules engine` : "Upload to see auto-cleared", color: "#86EFAC" },
+            { icon: "✦", text: "Powered by Amazon Nova", color: "#93C5FD" },
           ].map((s) => (
             <div key={s.text} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: s.color }}>
               <span>{s.icon}</span>{s.text}
@@ -1176,6 +1356,50 @@ export default function R2RPatternAnalysisPage() {
             <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Upload journal entries</span>
             <span style={{ fontSize: 12, color: C.textSub }}>CSV or Excel · Columns: Amount, Vendor, Account, Date, Posted By (or similar)</span>
           </div>
+          <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${C.borderLight}` }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>Client (optional — for learning over time)</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <select
+                value={selectedClientId ?? ""}
+                onChange={(e) => setSelectedClientId(e.target.value || null)}
+                style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, minWidth: 180 }}
+              >
+                <option value="">No client (one-off analysis)</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="text"
+                  placeholder="New client name"
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13, width: 160 }}
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!newClientName.trim()) return;
+                    try {
+                      const created = await createClient(newClientName.trim());
+                      setClients((prev) => [created, ...prev]);
+                      setSelectedClientId(created.id);
+                      setNewClientName("");
+                    } catch (err: any) {
+                      alert(err?.message || "Failed to create client");
+                    }
+                  }}
+                  style={{ padding: "8px 14px", borderRadius: 8, background: C.blue, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+                >
+                  Add client
+                </button>
+              </span>
+              {selectedClientId && (
+                <span style={{ fontSize: 11, color: C.green }}>✓ Saved to client · baseline from full history</span>
+              )}
+            </div>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <label style={{ cursor: "pointer", padding: "10px 18px", borderRadius: 8, background: C.blue, color: C.white, fontSize: 13, fontWeight: 600 }}>
               Choose file
@@ -1183,13 +1407,31 @@ export default function R2RPatternAnalysisPage() {
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
             </label>
             {uploadFileName && <span style={{ fontSize: 12, color: C.textSub }}>{uploadFileName} · {rawRows.length} rows</span>}
+            {jeEntriesFromUpload.length > 0 && (
+              <button
+                type="button"
+                onClick={handleExportReport}
+                style={{ padding: "10px 18px", borderRadius: 8, background: C.green, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}
+              >
+                ⬇ Download report (.xlsx)
+              </button>
+            )}
             {uploadError && <span style={{ fontSize: 12, color: C.red }}>{uploadError}</span>}
           </div>
         </Card>
+        {analysisLoading && (
+          <Card style={{ marginBottom: 12, background: C.bluePale, border: `1px solid ${C.blueBorder}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+              <div style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Running 4-layer hybrid analysis (ML + Statistical + Rules + Nova)…</span>
+            </div>
+          </Card>
+        )}
         <JESummaryTable
-          entries={jeEntriesFromUpload.length > 0 ? jeEntriesFromUpload : undefined}
-          totalAmt={jeEntriesFromUpload.length > 0 ? totalAmtStr : undefined}
+          entries={!analysisLoading && jeEntriesFromUpload.length > 0 ? jeEntriesFromUpload : undefined}
+          totalAmt={!analysisLoading && jeEntriesFromUpload.length > 0 ? totalAmtStr : undefined}
           totalAnalysed={rawRows.length > 0 ? rawRows.length : undefined}
+          anomaliesCount={derivedStats ? derivedStats.high + derivedStats.medium : undefined}
         />
         <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 20 }}>
           {renderTab()}

@@ -286,6 +286,74 @@ const parseDecisionAuditSheet = (rows: any[]): DecisionAuditData[] => {
 };
 
 // ============================================
+// FLEXIBLE HEADER-BASED PARSER (any sheet, any column order)
+// ============================================
+
+const norm = (s: string) => String(s || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+const pick = (row: Record<string, any>, ...keys: string[]): any => {
+  const r = row as any;
+  for (const k of keys) {
+    for (const key of Object.keys(r || {})) {
+      if (norm(key) === norm(k) || norm(key).includes(norm(k))) return r[key];
+    }
+  }
+  return undefined;
+};
+
+function tryParseAllSheetsFlexible(workbook: XLSX.WorkBook): Partial<CFODecisionUploadedData> {
+  const out: Partial<CFODecisionUploadedData> = {};
+  workbook.SheetNames.forEach((sheetName) => {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, any>[];
+    if (rows.length < 1) return;
+    const first = rows[0];
+    const headers = Object.keys(first || {}).map(norm);
+
+    // Investment: project name + investment/revenue/cost
+    if (headers.some(h => h.includes('investment') || h.includes('project')) && headers.some(h => h.includes('revenue') || h.includes('cost') || h.includes('amount'))) {
+      const arr: InvestmentDecisionData[] = rows.map(row => ({
+        projectName: parseString(pick(row, 'project name', 'project', 'name', 'description')),
+        investment: parseNumber(pick(row, 'investment', 'amount', 'initial cost')),
+        yearlyRevenue: parseNumber(pick(row, 'yearly revenue', 'revenue', 'annual revenue')),
+        yearlyCost: parseNumber(pick(row, 'yearly cost', 'cost', 'annual cost')),
+        discountRate: parseNumber(pick(row, 'discount rate', 'rate')) || 10,
+        projectYears: parseNumber(pick(row, 'years', 'project years')) || 5
+      })).filter(r => r.projectName || r.investment > 0);
+      if (arr.length > 0) out.investment = arr;
+    }
+
+    // Risks: risk + score/impact/likelihood
+    if (headers.some(h => h.includes('risk')) && headers.some(h => h.includes('score') || h.includes('impact') || h.includes('likelihood'))) {
+      const arr: RiskData[] = rows.map(row => ({
+        riskCategory: parseString(pick(row, 'risk category', 'category', 'type')),
+        riskDescription: parseString(pick(row, 'risk description', 'description', 'risk')),
+        likelihood: parseNumber(pick(row, 'likelihood', 'probability')) || 0,
+        impact: parseNumber(pick(row, 'impact')) || 0,
+        currentMitigation: parseString(pick(row, 'mitigation', 'current mitigation')),
+        riskScore: parseNumber(pick(row, 'risk score', 'score')) || 0
+      })).filter(r => r.riskDescription || r.riskCategory || r.riskScore > 0);
+      if (arr.length > 0) out.risks = arr;
+    }
+
+    // Build vs Buy: build cost, buy cost
+    if (headers.some(h => h.includes('build')) && headers.some(h => h.includes('buy'))) {
+      const arr: BuildVsBuyData[] = rows.map(row => ({
+        requirement: parseString(pick(row, 'requirement', 'description', 'name')),
+        buildInitialCost: parseNumber(pick(row, 'build initial', 'build cost', 'initial cost')),
+        buildMonthlyCost: parseNumber(pick(row, 'build monthly', 'build monthly cost')) || 0,
+        buildTimeMonths: parseNumber(pick(row, 'build time', 'build months')) || 12,
+        buyInitialCost: parseNumber(pick(row, 'buy initial', 'buy cost')),
+        buyMonthlyCost: parseNumber(pick(row, 'buy monthly', 'buy monthly cost')) || 0,
+        buyTimeMonths: parseNumber(pick(row, 'buy time', 'buy months')) || 6,
+        projectYears: parseNumber(pick(row, 'years', 'project years')) || 3
+      })).filter(r => r.requirement || r.buildInitialCost > 0 || r.buyInitialCost > 0);
+      if (arr.length > 0) out.buildVsBuy = arr;
+    }
+  });
+  return out;
+}
+
+// ============================================
 // MAIN PARSER
 // ============================================
 
@@ -303,29 +371,16 @@ export const parseCFODecisionFromWorkbook = (workbook: XLSX.WorkBook): CFODecisi
     uploadDate: new Date().toISOString()
   };
   
-  // Sheet name mappings (case-insensitive)
   const sheetMappings: { [key: string]: keyof CFODecisionUploadedData } = {
-    'cfo_decision_inputs': 'investment',
-    'cfo_decision': 'investment',
-    'decision_inputs': 'investment',
-    'investment_decisions': 'investment',
-    'investment': 'investment',
-    'build_vs_buy': 'buildVsBuy',
-    'buildvsbuy': 'buildVsBuy',
-    'internal_vs_external': 'internalVsExternal',
-    'internalvsexternal': 'internalVsExternal',
-    'outsource': 'internalVsExternal',
-    'hire_vs_automate': 'hireVsAutomate',
-    'hirevsautomate': 'hireVsAutomate',
-    'cost_cut_vs_invest': 'costCutVsInvest',
-    'costcutvsivest': 'costCutVsInvest',
-    'capital_allocation': 'capitalAllocation',
-    'capitalallocation': 'capitalAllocation',
-    'risk_dashboard': 'risks',
-    'risks': 'risks',
-    'decision_audit_trail': 'auditTrail',
-    'audit_trail': 'auditTrail',
-    'audit': 'auditTrail'
+    'cfo_decision_inputs': 'investment', 'cfo_decision': 'investment', 'decision_inputs': 'investment',
+    'investment_decisions': 'investment', 'investment': 'investment',
+    'build_vs_buy': 'buildVsBuy', 'buildvsbuy': 'buildVsBuy',
+    'internal_vs_external': 'internalVsExternal', 'internalvsexternal': 'internalVsExternal', 'outsource': 'internalVsExternal',
+    'hire_vs_automate': 'hireVsAutomate', 'hirevsautomate': 'hireVsAutomate',
+    'cost_cut_vs_invest': 'costCutVsInvest', 'costcutvsivest': 'costCutVsInvest',
+    'capital_allocation': 'capitalAllocation', 'capitalallocation': 'capitalAllocation',
+    'risk_dashboard': 'risks', 'risks': 'risks',
+    'decision_audit_trail': 'auditTrail', 'audit_trail': 'auditTrail', 'audit': 'auditTrail'
   };
   
   let sheetsProcessed = 0;
@@ -334,40 +389,32 @@ export const parseCFODecisionFromWorkbook = (workbook: XLSX.WorkBook): CFODecisi
     const normalizedName = sheetName.toLowerCase().replace(/[\s-]/g, '_');
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-    
-    if (rows.length <= 1) return; // Skip empty sheets
-    
+    if (rows.length <= 1) return;
     const mappedKey = sheetMappings[normalizedName];
     
-    if (mappedKey === 'investment') {
-      result.investment = parseInvestmentSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'buildVsBuy') {
-      result.buildVsBuy = parseBuildVsBuySheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'internalVsExternal') {
-      result.internalVsExternal = parseInternalVsExternalSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'hireVsAutomate') {
-      result.hireVsAutomate = parseHireVsAutomateSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'costCutVsInvest') {
-      result.costCutVsInvest = parseCostCutVsInvestSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'capitalAllocation') {
-      result.capitalAllocation = parseCapitalAllocationSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'risks') {
-      result.risks = parseRiskSheet(rows);
-      sheetsProcessed++;
-    } else if (mappedKey === 'auditTrail') {
-      result.auditTrail = parseDecisionAuditSheet(rows);
-      sheetsProcessed++;
-    }
+    if (mappedKey === 'investment') { result.investment = parseInvestmentSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'buildVsBuy') { result.buildVsBuy = parseBuildVsBuySheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'internalVsExternal') { result.internalVsExternal = parseInternalVsExternalSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'hireVsAutomate') { result.hireVsAutomate = parseHireVsAutomateSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'costCutVsInvest') { result.costCutVsInvest = parseCostCutVsInvestSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'capitalAllocation') { result.capitalAllocation = parseCapitalAllocationSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'risks') { result.risks = parseRiskSheet(rows); sheetsProcessed++; }
+    else if (mappedKey === 'auditTrail') { result.auditTrail = parseDecisionAuditSheet(rows); sheetsProcessed++; }
   });
   
+  // If no sheet matched by name, try flexible header-based parse on ALL sheets
   if (sheetsProcessed === 0) {
-    throw new Error('No valid sheets found. Please check sheet names.');
+    const flexible = tryParseAllSheetsFlexible(workbook);
+    if (flexible.investment?.length) result.investment = flexible.investment;
+    if (flexible.risks?.length) result.risks = flexible.risks;
+    if (flexible.buildVsBuy?.length) result.buildVsBuy = flexible.buildVsBuy;
+  }
+  
+  const hasAny = result.investment.length > 0 || result.buildVsBuy.length > 0 || result.risks.length > 0 ||
+    result.internalVsExternal.length > 0 || result.hireVsAutomate.length > 0 || result.costCutVsInvest.length > 0 ||
+    result.capitalAllocation.length > 0 || result.auditTrail.length > 0;
+  if (!hasAny) {
+    throw new Error('No decision data found in any sheet. Use sheets with columns like: Project Name, Investment, Revenue, or Risk, Score.');
   }
 
   return result;
@@ -394,6 +441,7 @@ export const saveCFODecisionData = (data: CFODecisionUploadedData): void => {
   localStorage.setItem('cfo_decision_risks', JSON.stringify(data.risks));
   localStorage.setItem('cfo_decision_audit_trail', JSON.stringify(data.auditTrail));
   localStorage.setItem('cfo_decision_upload_date', data.uploadDate);
+  localStorage.setItem('finreport_cfo_decisions', JSON.stringify(data));
 };
 
 export const loadCFODecisionData = (): CFODecisionUploadedData | null => {

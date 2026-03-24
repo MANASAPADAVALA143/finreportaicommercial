@@ -11,6 +11,7 @@ import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-r
 // Env vars MUST be prefixed with VITE_ so Vite exposes them to the browser.
 // Use: VITE_AWS_ACCESS_KEY_ID, VITE_AWS_SECRET_ACCESS_KEY, VITE_AWS_REGION
 // For temporary/SSO credentials also set: VITE_AWS_SESSION_TOKEN
+const apiBase = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "";
 const awsRegion = import.meta.env.VITE_AWS_REGION || "us-east-1";
 const accessKeyId = import.meta.env.VITE_AWS_ACCESS_KEY_ID || "";
 const secretAccessKey = import.meta.env.VITE_AWS_SECRET_ACCESS_KEY || "";
@@ -28,11 +29,34 @@ export async function callAI(prompt, options) {
     const temperature = options?.temperature || 0.3;
     try {
         // ===================================================
-        // AWS BEDROCK - AMAZON NOVA LITE
+        // AWS BEDROCK - AMAZON NOVA LITE (backend preferred)
+        // When VITE_API_URL is set, call backend so AWS credentials stay server-side.
         // ===================================================
         if (AI_PROVIDER === "aws-nova") {
+            if (apiBase) {
+                const res = await fetch(`${apiBase}/api/nova/invoke`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        prompt,
+                        model_id: "us.amazon.nova-lite-v1:0",
+                        max_tokens: maxTokens,
+                        temperature,
+                    }),
+                });
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(errText || `Backend returned ${res.status}`);
+                }
+                const data = await res.json();
+                const text = data?.text;
+                if (typeof text !== "string" || !text.trim()) {
+                    throw new Error("Empty response from Nova (backend)");
+                }
+                return text.trim();
+            }
             if (!accessKeyId || !secretAccessKey) {
-                throw new Error("AWS credentials not loaded. In frontend/.env use exactly: VITE_AWS_ACCESS_KEY_ID=... and VITE_AWS_SECRET_ACCESS_KEY=... (VITE_ prefix is required). Then restart the dev server.");
+                throw new Error("AWS credentials not configured. Either set VITE_API_URL to your backend URL (recommended: backend uses backend/.env AWS keys) or set VITE_AWS_ACCESS_KEY_ID and VITE_AWS_SECRET_ACCESS_KEY in frontend/.env and restart the dev server.");
             }
             const command = new ConverseCommand({
                 modelId: "us.amazon.nova-lite-v1:0",
@@ -117,7 +141,11 @@ export async function callAI(prompt, options) {
     }
     catch (error) {
         console.error(`AI Provider (${AI_PROVIDER}) Error:`, error);
-        throw new Error(`AI call failed: ${error.message}`);
+        const msg = error?.message || String(error);
+        if (/security token|invalid.*token|InvalidClientTokenId|SignatureDoesNotMatch/i.test(msg)) {
+            throw new Error("AWS security token is invalid or expired. Use the backend: set VITE_API_URL=http://localhost:8000 and put AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in backend/.env (no VITE_ keys in frontend). Or refresh your AWS credentials in frontend/.env and restart the dev server.");
+        }
+        throw new Error(`AI call failed: ${msg}`);
     }
 }
 // ==================== HELPER: EXTRACT JSON FROM AI RESPONSE ====================

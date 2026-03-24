@@ -1,61 +1,20 @@
 // FP&A Variance Analysis - Main Page
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { VarianceSummaryCards } from '../../components/fpa/VarianceSummaryCards';
 import { VarianceTable } from '../../components/fpa/VarianceTable';
-import { WaterfallChart } from '../../components/fpa/WaterfallChart';
-import { TrendChart } from '../../components/fpa/TrendChart';
-import { DepartmentChart } from '../../components/fpa/DepartmentChart';
 import { AICommentary } from '../../components/fpa/AICommentary';
 import { AlertsPanel } from '../../components/fpa/AlertsPanel';
-import { varianceData, departmentData, trendData, waterfallData } from '../../data/varianceMockData';
 import { calculateKPISummaries, extractVarianceAlerts, getPeriodLabel } from '../../utils/varianceUtils';
-import { loadFPAActual, loadFPABudget, checkDataAvailability, getMissingDataMessage, convertToVarianceData } from '../../utils/fpaDataLoader';
 import type { PeriodType, CompareType, DepartmentType, CurrencyType } from '../../types/fpa';
 
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
 
-  // Check data availability (both legacy and finreport_* keys)
-  const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);
-  const [actualData, setActualData] = useState<any>(null);
-  const [budgetData, setBudgetData] = useState<any>(null);
-  const [realVarianceData, setRealVarianceData] = useState<any[]>([]);
-
-  // On mount: read from localStorage so dashboard upload data appears immediately
-  useEffect(() => {
-    const budgetRaw = localStorage.getItem('finreport_fpa_budget') || localStorage.getItem('fpa_budget');
-    const actualRaw = localStorage.getItem('finreport_fpa_actuals') || localStorage.getItem('fpa_actual');
-    if (budgetRaw && actualRaw) {
-      try {
-        const budget = JSON.parse(budgetRaw);
-        const actual = JSON.parse(actualRaw);
-        setBudgetData(budget);
-        setActualData(actual);
-        if (actual && budget) {
-          const converted = convertToVarianceData(actual, budget);
-          setRealVarianceData(converted);
-        }
-      } catch (e) {
-        console.error('FPA load error', e);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (dataCheck.available && !actualData && !budgetData) {
-      const actual = loadFPAActual();
-      const budget = loadFPABudget();
-      setActualData(actual);
-      setBudgetData(budget);
-      if (actual && budget) {
-        const converted = convertToVarianceData(actual, budget);
-        setRealVarianceData(converted);
-      }
-    }
-  }, [dataCheck.available]);
+  // No auto-load from localStorage — only data from this page's "Upload Data" is shown (clean for video)
+  const [uploadedDataOnly, setUploadedDataOnly] = useState<any[]>([]);
 
   // Period Selection State
   const [periodType, setPeriodType] = useState<PeriodType>('monthly');
@@ -71,14 +30,19 @@ export const VarianceAnalysis = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadedData, setUploadedData] = useState<any[]>([]);
 
-  // Use real uploaded data if available, otherwise use mock data
-  const currentVarianceData = realVarianceData.length > 0 ? realVarianceData : (uploadedData.length > 0 ? uploadedData : varianceData);
+  // Only data uploaded on this page — no localStorage, no demo data (clean for video)
+  const currentVarianceData = uploadedDataOnly;
 
-  // Calculate summary data
-  const kpiSummaries = calculateKPISummaries(currentVarianceData);
-  const alerts = extractVarianceAlerts(currentVarianceData);
+  // Recompute cards, table, and alerts when data or selected period (month/quarter/year) changes
+  const kpiSummaries = useMemo(
+    () => calculateKPISummaries(currentVarianceData),
+    [currentVarianceData, month, quarter, year, periodType]
+  );
+  const alerts = useMemo(
+    () => extractVarianceAlerts(currentVarianceData),
+    [currentVarianceData, month, quarter, year, periodType]
+  );
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -107,13 +71,24 @@ export const VarianceAnalysis = () => {
         return Number.isNaN(n) ? 0 : n;
       };
 
+      // BUG 2 FIX: Normalise scale (Lakhs vs Crores). If budget is 10x+ larger than actual, assume budget in Lakhs → convert to Crores.
+      const normalise = (val: number, referenceVal: number): number => {
+        if (referenceVal != null && referenceVal !== 0 && val > referenceVal * 50) return val / 100;
+        return val;
+      };
+
       // Map uploaded data to VarianceRow format
       // Expected columns: Category, Actual, Budget, YTDActual, YTDBudget
       const mappedData = rows.map((row, index) => {
-        const actual = parseNum(row['Actual'] ?? row['actual'] ?? 0);
-        const budget = parseNum(row['Budget'] ?? row['budget'] ?? 0);
-        const ytdActual = parseNum(row['YTD Actual'] ?? row['YTDActual'] ?? row['ytdActual'] ?? actual * 6);
-        const ytdBudget = parseNum(row['YTD Budget'] ?? row['YTDBudget'] ?? row['ytdBudget'] ?? budget * 6);
+        let actual = parseNum(row['Actual'] ?? row['actual'] ?? 0);
+        let budget = parseNum(row['Budget'] ?? row['budget'] ?? 0);
+        let priorYear = parseNum(row['Prior Year'] ?? row['priorYear'] ?? 0);
+        // Apply scale normalisation: budget and priorYear to same scale as actual
+        budget = normalise(budget, actual);
+        priorYear = normalise(priorYear, actual);
+        let ytdActual = parseNum(row['YTD Actual'] ?? row['YTDActual'] ?? row['ytdActual'] ?? actual * 6);
+        let ytdBudget = parseNum(row['YTD Budget'] ?? row['YTDBudget'] ?? row['ytdBudget'] ?? budget * 6);
+        ytdBudget = normalise(ytdBudget, ytdActual);
         const variance = actual - budget;
         const variancePct = budget !== 0 ? (variance / budget) * 100 : 0;
         const ytdVariance = ytdActual - ytdBudget;
@@ -141,7 +116,7 @@ export const VarianceAnalysis = () => {
           ytdBudget,
           ytdVariance,
           ytdVariancePct,
-          priorYear: parseNum(row['Prior Year'] ?? row['priorYear'] ?? 0),
+          priorYear,
           priorYearVariancePct: 0,
           hasChildren: false,
           isExpanded: false,
@@ -150,7 +125,7 @@ export const VarianceAnalysis = () => {
         };
       });
 
-      setUploadedData(mappedData);
+      setUploadedDataOnly(mappedData);
       setShowUploadModal(false);
       alert(`✅ Successfully uploaded ${mappedData.length} variance items!`);
     } catch (error: any) {
@@ -161,21 +136,13 @@ export const VarianceAnalysis = () => {
   };
 
   const handleDownloadTemplate = () => {
-    // Create a template Excel file
+    // Empty template for upload — no demo data (clean for video / production)
     const templateData = [
       ['Variance Analysis Upload Template'],
       ['Fill in your variance data below. Required columns: Category, Actual, Budget'],
       [],
       ['Category', 'Actual', 'Budget', 'YTD Actual', 'YTD Budget', 'Prior Year', 'Is Header'],
-      ['Total Revenue', 33000000, 35000000, 198000000, 210000000, 28000000, 'TRUE'],
-      ['Domestic Sales', 25000000, 26000000, 150000000, 156000000, 22000000, 'FALSE'],
-      ['Export Sales', 8000000, 9000000, 48000000, 54000000, 6000000, 'FALSE'],
-      ['Cost of Sales', 18500000, 17000000, 111000000, 102000000, 15000000, 'FALSE'],
-      ['Gross Profit', 14500000, 18000000, 87000000, 108000000, 13000000, 'TRUE'],
-      ['Operating Expenses', 7650000, 6800000, 45900000, 40800000, 6500000, 'TRUE'],
-      ['Employee Benefits', 3200000, 3000000, 19200000, 18000000, 2800000, 'FALSE'],
-      ['Administrative Expenses', 1450000, 1200000, 8700000, 7200000, 1100000, 'FALSE'],
-      ['NET PROFIT', 5100000, 8100000, 30600000, 48600000, 4840000, 'TRUE']
+      ['', 0, 0, 0, 0, 0, 'FALSE']
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(templateData);
@@ -287,20 +254,12 @@ export const VarianceAnalysis = () => {
 
       XLSX.utils.book_append_sheet(workbook, detailSheet, 'Detailed Variance');
 
-      // Sheet 3: Department Breakdown
+      // Sheet 3: Department Breakdown (empty — no demo data)
       const deptData = [
         ['DEPARTMENT VARIANCE ANALYSIS'],
         ['Period:', periodLabel],
         [],
-        ['Department', 'Actual', 'Budget', 'Variance', 'Variance %', 'Status'],
-        ...departmentData.map(dept => [
-          dept.department,
-          dept.actual,
-          dept.budget,
-          dept.variance,
-          dept.variancePct.toFixed(2) + '%',
-          dept.favorable ? 'Under Budget' : 'Over Budget'
-        ])
+        ['Department', 'Actual', 'Budget', 'Variance', 'Variance %', 'Status']
       ];
 
       const deptSheet = XLSX.utils.aoa_to_sheet(deptData);
@@ -359,29 +318,6 @@ export const VarianceAnalysis = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50">
-      {/* Data Missing Warning Banner */}
-      {!dataCheck.available && (
-        <div className="bg-yellow-50 border-b-2 border-yellow-400 px-6 py-4">
-          <div className="max-w-[1600px] mx-auto flex items-center gap-3">
-            <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold text-yellow-900">
-                ⚠️ {getMissingDataMessage(dataCheck.missing)}
-              </p>
-              <p className="text-sm text-yellow-700 mt-1">
-                Go to FP&A Suite and click "Upload Data" to provide the required trial balance files.
-              </p>
-            </div>
-            <button
-              onClick={() => navigate('/fpa')}
-              className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors font-medium"
-            >
-              Upload Data
-            </button>
-          </div>
-        </div>
-      )}
-      
       {/* Header */}
       <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-40">
         <div className="max-w-[1600px] mx-auto px-6 py-4">
@@ -554,6 +490,18 @@ export const VarianceAnalysis = () => {
 
       {/* Main Content */}
       <div className="max-w-[1600px] mx-auto px-6 py-8">
+        {currentVarianceData.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <p className="text-gray-600 text-lg mb-2">No variance data yet</p>
+            <p className="text-gray-500 text-sm mb-6">Use the Upload Data button above to add your variance file and see the analysis.</p>
+            <button
+              onClick={() => setShowUploadModal(true)}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition"
+            >
+              Upload Data
+            </button>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Main Content Area (3 columns) */}
           <div className="lg:col-span-3 space-y-6">
@@ -562,15 +510,6 @@ export const VarianceAnalysis = () => {
 
             {/* Variance Table */}
             <VarianceTable data={currentVarianceData} currency={currency} />
-
-            {/* Waterfall Chart */}
-            <WaterfallChart data={waterfallData} currency={currency} />
-
-            {/* Trend Chart */}
-            <TrendChart data={trendData} currency={currency} />
-
-            {/* Department Chart */}
-            <DepartmentChart data={departmentData} currency={currency} />
 
             {/* AI Commentary */}
             <AICommentary
@@ -588,6 +527,7 @@ export const VarianceAnalysis = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* Upload Modal */}

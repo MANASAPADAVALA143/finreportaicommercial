@@ -41,6 +41,16 @@ interface ConfusionMatrix {
   falseNegative: number;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+interface CompanyOption {
+  id: string;
+  name: string;
+  industry?: string;
+  total_uploads?: number;
+  last_upload?: string | null;
+}
+
 export const R2RModule: React.FC = () => {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
@@ -51,57 +61,27 @@ export const R2RModule: React.FC = () => {
   const [confusionMatrix, setConfusionMatrix] = useState<ConfusionMatrix | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(null);
   const [showHighRiskModal, setShowHighRiskModal] = useState(false);
+
+  // Stateful R2R: company-specific learning (MindBridge-style)
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>('');
+  const [newCompanyName, setNewCompanyName] = useState('');
   
   // Threshold configuration
   const [sensitivityLevel, setSensitivityLevel] = useState<'conservative' | 'balanced' | 'strict'>('balanced');
   const [customThreshold, setCustomThreshold] = useState<number>(40);
 
-  // Central upload: data from "Upload Data" (one file, 6 sheets)
-  const [centralUpload, setCentralUpload] = useState<{ rows: any[]; fileName: string } | null>(null);
-
   useEffect(() => {
     const saved = localStorage.getItem('fraud_detection_threshold');
     if (saved) setCustomThreshold(Number(saved));
-    try {
-      const raw = localStorage.getItem('r2r_journal_entries');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const rows = Array.isArray(parsed) ? parsed : (parsed?.rows ?? []);
-        const fileName = Array.isArray(parsed) ? 'Uploaded from Dashboard' : (parsed?.fileName || 'Central upload');
-        if (rows.length > 0) setCentralUpload({ rows, fileName });
-      }
-    } catch {
-      // ignore
-    }
   }, []);
 
-  const runCentralUploadAnalysis = async () => {
-    if (!centralUpload) return;
-    const { rows, fileName } = centralUpload;
-    const headers = Object.keys(rows[0]);
-    const csv = [headers.join(','), ...rows.map((r: any) => headers.map((h) => (r[h] != null ? String(r[h]) : '')).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const file = new File([blob], (fileName || 'r2r_entries').replace(/\.[^.]+$/, '') + '.csv', { type: 'text/csv' });
-    setFile(file);
-    setLoading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('threshold', customThreshold.toString());
-    try {
-      const response = await axios.post('http://localhost:8000/api/journal-entries/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (response.data.success) {
-        setResults(response.data.results);
-        setSummary(response.data.summary);
-        setMetrics(response.data.metrics ?? null);
-        if (response.data.metrics?.confusionMatrix) setConfusionMatrix(response.data.metrics.confusionMatrix);
-        toast.success(`Analyzed ${response.data.summary?.total ?? 0} entries from central upload`);
-      }
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || err.message || 'Analysis failed');
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    fetch(`${API_BASE}/api/companies`)
+      .then((r) => r.json())
+      .then((data) => setCompanies(Array.isArray(data) ? data : []))
+      .catch(() => setCompanies([]));
+  }, []);
 
   // Save threshold preference when it changes
   useEffect(() => {
@@ -145,6 +125,24 @@ export const R2RModule: React.FC = () => {
     }
   };
 
+  const handleAddCompany = async () => {
+    const name = newCompanyName.trim();
+    if (!name) return;
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/companies?name=${encodeURIComponent(name)}&industry=General`,
+        { method: 'POST' }
+      );
+      const c = await r.json();
+      setCompanies((prev) => [...prev, { id: c.company_id, name: c.name, industry: c.industry }]);
+      setSelectedCompany(c.company_id);
+      setNewCompanyName('');
+      toast.success(`Company "${c.name}" added`);
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to add company');
+    }
+  };
+
   const handleUpload = async () => {
     if (!file) {
       toast.error('Please select a file (CSV or Excel)');
@@ -156,33 +154,54 @@ export const R2RModule: React.FC = () => {
     formData.append('file', file);
     formData.append('threshold', customThreshold.toString());
 
+    const useStateful = !!selectedCompany;
+    if (useStateful) {
+      formData.append('company_id', selectedCompany);
+    }
+
+    const url = useStateful
+      ? `${API_BASE}/api/analyze`
+      : `${API_BASE}/api/journal-entries/upload`;
+
     try {
-      console.log('📤 Uploading file:', file.name);
+      console.log('📤 Uploading file:', file.name, useStateful ? `(company: ${selectedCompany})` : '(stateless)');
       console.log('🎯 Detection threshold:', customThreshold);
-      
-      const response = await axios.post(
-        'http://localhost:8000/api/journal-entries/upload',
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
+
+      const response = await axios.post(url, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
 
       console.log('✅ Upload response:', response.data);
 
       if (response.data.success) {
-        setResults(response.data.results);
-        setSummary(response.data.summary);
-        setMetrics(response.data.metrics);
-        
-        // Fix: confusion matrix is inside metrics
-        if (response.data.metrics && response.data.metrics.confusionMatrix) {
-          setConfusionMatrix(response.data.metrics.confusionMatrix);
+        const data = response.data;
+        setResults(data.results || []);
+        setSummary(data.summary || null);
+        setMetrics(data.metrics ?? null);
+        if (data.metrics?.confusionMatrix) {
+          setConfusionMatrix(data.metrics.confusionMatrix);
+        } else {
+          setConfusionMatrix(null);
         }
-        
-        toast.success(`✅ Analyzed ${response.data.summary.total} entries! High Risk: ${response.data.summary.highRisk}`);
+
+        const summary = data.summary;
+        const novaUsed = summary?.novaUsed === true || (summary?.novaEntryCount != null && summary.novaEntryCount > 0);
+        toast.success(
+          useStateful
+            ? `✅ Stateful: ${data.total} entries, High: ${data.high ?? summary?.highRisk ?? 0}, baseline updated for next run`
+            : novaUsed
+              ? `✅ Analyzed ${summary?.total} entries with Amazon Nova. High Risk: ${summary?.highRisk}`
+              : `✅ Analyzed ${summary?.total} entries (rule-based). High Risk: ${summary?.highRisk}`
+        );
+        if (useStateful) {
+          setCompanies((prev) =>
+            prev.map((c) =>
+              c.id === selectedCompany
+                ? { ...c, total_uploads: (c.total_uploads ?? 0) + 1 }
+                : c
+            )
+          );
+        }
       }
     } catch (error: any) {
       console.error('❌ Upload error:', error);
@@ -205,21 +224,42 @@ export const R2RModule: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 p-8">
       <div className="container mx-auto max-w-7xl">
-        {/* Top bar: back + Upload Data */}
-        <div className="flex items-center justify-between mb-6">
+        {/* Top bar: back + Service 1 links + R2R Pattern */}
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <button
             onClick={() => navigate('/dashboard')}
             className="p-2 hover:bg-white/80 rounded-lg transition flex items-center gap-2 text-gray-700"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <Link
-            to="/upload-data"
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Data</span>
-          </Link>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-gray-500 mr-1">Service 1:</span>
+            <Link
+              to="/close-tracker"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium"
+            >
+              📋 Close Tracker
+            </Link>
+            <Link
+              to="/tb-variance"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium"
+            >
+              📊 TB Variance
+            </Link>
+            <Link
+              to="/bank-recon"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium"
+            >
+              🏦 Bank Recon
+            </Link>
+            <Link
+              to="/r2r-pattern"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition shadow-sm"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Upload journal entries (R2R Pattern)</span>
+            </Link>
+          </div>
         </div>
         {/* Header */}
         <div className="mb-8">
@@ -345,30 +385,44 @@ export const R2RModule: React.FC = () => {
           </div>
         </div>
 
-        {/* Central upload banner (one file → all modules) */}
-        {centralUpload && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6 flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <p className="font-semibold text-green-800">
-                Data loaded from central upload — <span className="font-bold">{centralUpload.rows.length} journal entries</span>
-              </p>
-              <p className="text-sm text-green-700">{centralUpload.fileName}</p>
-            </div>
-            <button
-              onClick={runCentralUploadAnalysis}
-              disabled={loading}
-              className="px-6 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
-            >
-              {loading ? 'Analyzing...' : 'Run R2R Analysis'}
-            </button>
-          </div>
-        )}
-
         {/* Upload Section */}
         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-8 mb-8">
           <div className="flex items-center gap-4">
             <Upload className="w-6 h-6 text-blue-600" />
             <h2 className="text-xl font-bold text-gray-900">Upload Journal Entries (CSV or Excel)</h2>
+          </div>
+
+          {/* Stateful R2R: Select client company (MindBridge-style learning) */}
+          <div className="mt-6 mb-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Select Client Company</label>
+            <p className="text-xs text-gray-500 mb-3">Choose a company to use company-specific baselines (accuracy improves over time).</p>
+            <select
+              value={selectedCompany}
+              onChange={(e) => setSelectedCompany(e.target.value)}
+              className="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">— Stateless (no company learning) —</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}{c.total_uploads != null ? ` (${c.total_uploads} uploads)` : ''}</option>
+              ))}
+            </select>
+            <div className="flex gap-2 mt-3">
+              <input
+                type="text"
+                placeholder="Or add new company..."
+                value={newCompanyName}
+                onChange={(e) => setNewCompanyName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddCompany())}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg"
+              />
+              <button
+                type="button"
+                onClick={handleAddCompany}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+              >
+                Add
+              </button>
+            </div>
           </div>
           
           <div className="mt-6 flex items-center gap-4">
@@ -431,7 +485,13 @@ export const R2RModule: React.FC = () => {
                   <BarChart3 className="w-6 h-6 text-blue-600" />
                   <div>
                     <h3 className="text-xl font-bold text-gray-900">AI Analysis Complete</h3>
-                    <p className="text-sm text-gray-600">Amazon Nova Lite risk assessment finished</p>
+                    <p className="text-sm text-gray-600">
+                      {summary?.novaUsed ? (
+                        <>Amazon Nova Lite risk assessment · {summary.novaEntryCount ?? summary.total} entries with Nova</>
+                      ) : (
+                        <>Rule-based analysis (Nova unavailable — check backend AWS keys)</>
+                      )}
+                    </p>
                   </div>
                 </div>
                 

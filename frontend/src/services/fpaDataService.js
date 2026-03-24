@@ -471,7 +471,7 @@ export const parseMultiSheetWorkbook = async (file) => {
     });
 };
 /**
- * Helper: Parse trial balance from rows (extracted from parseTrialBalance)
+ * Parse trial balance from rows (exported for central multi-sheet upload).
  */
 export const parseTrialBalanceFromRows = async (rows, fileName) => {
     if (rows.length === 0) {

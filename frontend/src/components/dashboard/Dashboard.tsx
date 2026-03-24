@@ -2,10 +2,8 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { 
   BarChart3, 
-  FileCheck,
   Zap,
   Target,
-  Upload,
   Brain,
   LayoutGrid
 } from 'lucide-react';
@@ -25,16 +23,16 @@ export const Dashboard: React.FC = () => {
 
   const modules = [
     {
-      icon: <FileCheck className="w-16 h-16 text-blue-400" />,
-      title: 'R2R / Month-End Close',
-      description: 'Sensitivity settings & backend upload. For analysis of uploaded journal entries, use R2R Pattern Engine below.',
+      icon: <LayoutGrid className="w-16 h-16 text-indigo-400" />,
+      title: 'R2R Service 1',
+      description: 'Close Tracker · TB Variance Analysis · Bank Reconciliation',
       link: '/r2r',
-      bgColor: 'bg-blue-500/10'
+      bgColor: 'bg-indigo-500/10'
     },
     {
       icon: <LayoutGrid className="w-16 h-16 text-indigo-400" />,
       title: 'R2R Pattern Engine',
-      description: 'View pattern analysis from dashboard upload — 7-model anomaly detection (Amount, Duplicate, User, Timing, Account, Vendor, Benford)',
+      description: 'Upload journal entries for 7-model anomaly detection (Amount, Duplicate, User, Timing, Account, Vendor, Benford)',
       link: '/r2r-pattern',
       bgColor: 'bg-indigo-500/10'
     },
@@ -76,16 +74,10 @@ export const Dashboard: React.FC = () => {
       <nav className="bg-slate-900/50 backdrop-blur-sm border-b border-slate-700">
         <div className="container mx-auto px-6 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-white">FinReport AI</h1>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/upload-data"
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
-            >
-              <Upload className="w-4 h-4" />
-              Upload Data
-            </Link>
-          </div>
         </div>
+        <p className="container mx-auto px-6 pb-2 text-sm text-slate-400">
+          Open a section below and upload data there to use it. Each section uses only its own uploads.
+        </p>
       </nav>
 
       {/* Agent Network Header */}
@@ -178,7 +170,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* #AmazonNova Badge */}
-        <div className="fixed bottom-4 right-4 flex flex-col gap-2 items-end">
+        <div className="fixed bottom-4 right-4">
           <a
             href="https://aws.amazon.com/bedrock/nova/"
             target="_blank"
@@ -187,26 +179,6 @@ export const Dashboard: React.FC = () => {
           >
             #AmazonNova
           </a>
-          <button
-            type="button"
-            onClick={() => {
-              const keys = [
-                'finreport_r2r_entries',
-                'finreport_trial_balance',
-                'finreport_fpa_budget',
-                'finreport_fpa_actuals',
-                'finreport_cfo_decisions',
-                'finreport_kpi_data',
-                'finreport_cfo_context',
-                'finreport_upload_timestamp',
-              ];
-              keys.forEach((k) => localStorage.removeItem(k));
-              window.location.reload();
-            }}
-            className="text-slate-500 hover:text-slate-400 text-xs font-medium"
-          >
-            Clear Data
-          </button>
         </div>
       </div>
     </div>

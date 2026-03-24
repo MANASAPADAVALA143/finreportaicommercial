@@ -123,16 +123,19 @@ Focus on immediate actions to mitigate highest risks.`
       type,
       dataKeys: Object.keys(data)
     });
-    
+    const msg = error?.message || '';
+    const isCredentialError = /credentials|security token|invalid.*token|AWS|\.env/i.test(msg);
     return {
-      recommendation: `Unable to generate recommendation. Error: ${error.message}. Please ensure AWS credentials are configured correctly.`,
+      recommendation: `Unable to generate recommendation. ${msg}${isCredentialError ? ' Use backend: set VITE_API_URL=http://localhost:8000 and configure backend/.env with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.' : ''}`,
       outcome: "review",
       confidence: 0,
       confidenceFactors: [{
         factor: "AI Service",
         status: "negative",
         impact: "high",
-        detail: "AI service is not available. Check AWS credentials in .env file."
+        detail: isCredentialError
+          ? "Use backend for Nova: set VITE_API_URL=http://localhost:8000 in frontend/.env and put AWS keys in backend/.env, then restart both servers."
+          : "AI service is not available. Check AWS credentials or backend .env file."
       }]
     };
   }

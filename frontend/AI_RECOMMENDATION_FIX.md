@@ -16,7 +16,7 @@ The frontend was missing AWS credentials in the `.env` file. While the AI provid
 
 ```env
 VITE_AWS_REGION=us-east-1
-VITE_AWS_ACCESS_KEY_ID=AKIAWOXZPMMGDBSLRFQH
+VITE_AWS_ACCESS_KEY_ID=your-access-key-id
 VITE_AWS_SECRET_ACCESS_KEY=Rj9l74K9u8g3+aznYz2RqxN2GtVJdqnv96IMWXoo
 ```
 

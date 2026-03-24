@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { parseCFODecisionFromWorkbook, saveCFODecisionData } from '../services/cfoDecisionDataService';
 import { parseTrialBalanceFromRows } from '../services/fpaDataService';
-import { saveCFOServicesContext, type CFOServicesContext } from '../types/cfoServicesContext';
+import { saveCFOServicesContext } from '../types/cfoServicesContext';
+import { parseCFOServicesContextFromRows } from '../utils/cfoContextParser';
 import { useAgentActivity } from '../context/AgentActivityContext';
 
 interface TrialBalanceRow {
@@ -62,7 +63,8 @@ export const UploadData: React.FC = () => {
       };
 
       const r2rData = getSheet(wb, ['r2r', 'journal']);
-      let ifrsData: any[] | null = getSheet(wb, ['trial', 'balance', 'ifrs']);
+      const trialBalanceSheetName = wb.SheetNames.find((n) => ['trial', 'balance', 'ifrs'].some((k) => n.toLowerCase().includes(k)));
+      let ifrsData: any[] | null = trialBalanceSheetName ? XLSX.utils.sheet_to_json(wb.Sheets[trialBalanceSheetName]) : null;
       const fpaData = getSheet(wb, ['fpa', 'budget', 'variance']);
       const cfoContextRows = getSheet(wb, ['cfo_services', 'context', 'services']);
       const kpiData = getSheet(wb, ['kpi']);
@@ -71,21 +73,29 @@ export const UploadData: React.FC = () => {
       try {
         cfoDecisionData = parseCFODecisionFromWorkbook(wb);
       } catch {
-        // if parser fails but we have raw CFO sheet, store raw rows so key exists
         if (cfoData?.length) {
           cfoDecisionData = { rawRows: cfoData, uploadDate: new Date().toISOString(), investment: [], buildVsBuy: [], internalVsExternal: [], hireVsAutomate: [], costCutVsInvest: [], capitalAllocation: [], risks: [], auditTrail: [] };
         }
       }
 
-      if (!ifrsData?.length && wb.SheetNames.length > 0) {
+      let ifrsTb: TrialBalanceRow[] = [];
+      if (ifrsData?.length) ifrsTb = parseTrialBalanceFromSheet(ifrsData);
+      if (ifrsTb.length === 0 && trialBalanceSheetName) {
+        ifrsTb = parseTrialBalanceFromSheetWithHeaderDetection(wb.Sheets[trialBalanceSheetName]);
+      }
+      if (ifrsTb.length === 0 && wb.SheetNames.length > 0) {
         for (const sheetName of wb.SheetNames) {
-          const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName]);
-          const tb = parseTrialBalanceFromSheet(rows);
-          if (tb.length > 0) {
-            ifrsData = tb.map((r) => ({ glCode: r.accountCode, accountName: r.accountName, accountType: r.accountType, debit: r.debit, credit: r.credit }));
-            break;
+          const sheet = wb.Sheets[sheetName];
+          ifrsTb = parseTrialBalanceFromSheetWithHeaderDetection(sheet);
+          if (ifrsTb.length === 0) {
+            const rows = XLSX.utils.sheet_to_json(sheet);
+            ifrsTb = parseTrialBalanceFromSheet(rows);
           }
+          if (ifrsTb.length > 0) break;
         }
+      }
+      if (ifrsTb.length > 0) {
+        ifrsData = ifrsTb.map((r) => ({ glCode: r.accountCode, accountName: r.accountName, accountType: r.accountType, debit: r.debit, credit: r.credit }));
       }
 
       const parsedData = {
@@ -120,7 +130,7 @@ export const UploadData: React.FC = () => {
       if (cfoDecisionData) localStorage.setItem('finreport_cfo_decisions', JSON.stringify(cfoDecisionData));
       if (kpiData?.length) localStorage.setItem('finreport_kpi_data', JSON.stringify(kpiData));
       if (cfoContextRows?.length) {
-        const ctx = parseCFOServicesContextSheet(cfoContextRows, file.name);
+        const ctx = parseCFOServicesContextFromRows(cfoContextRows || [], file.name);
         if (ctx) {
           localStorage.setItem('finreport_cfo_context', JSON.stringify(ctx));
           saveCFOServicesContext(ctx);
@@ -198,110 +208,49 @@ export const UploadData: React.FC = () => {
     }).filter((e) => e.accountName && (e.debit > 0 || e.credit > 0));
   }
 
-  function parseCFOServicesContextSheet(rows: any[], fileName: string): CFOServicesContext | null {
-    if (!rows.length) return null;
-    const get = (row: any, ...keys: string[]) => {
-      for (const k of keys) {
-        const v = row[k];
-        if (v !== undefined && v !== null && v !== '') return String(v).trim();
+  /** Try to parse trial balance from a sheet when the first row might be a title (find real header row). */
+  function parseTrialBalanceFromSheetWithHeaderDetection(sheet: any): TrialBalanceRow[] {
+    const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (rawRows.length < 2) return [];
+    const norm = (s: string) => String(s ?? '').trim().toLowerCase().replace(/\s*\(₹\)\s*/gi, '').replace(/\s+/g, ' ');
+    let headerRowIndex = -1;
+    let nameColIdx = -1, debitColIdx = -1, creditColIdx = -1, glColIdx = -1, typeColIdx = -1;
+    for (let r = 0; r < Math.min(rawRows.length, 10); r++) {
+      const row = rawRows[r];
+      if (!Array.isArray(row)) continue;
+      const cells = row.map((c: any) => norm(String(c ?? '')));
+      const hasDebit = cells.some((c) => c.includes('debit') || c === 'dr');
+      const hasCredit = cells.some((c) => c.includes('credit') || c === 'cr');
+      const hasName = cells.some((c) => (c.includes('account') && c.includes('name')) || c.includes('particulars') || c === 'name');
+      if (hasDebit && hasCredit && (hasName || cells.some((c) => c.includes('account') || c.includes('code')))) {
+        headerRowIndex = r;
+        for (let j = 0; j < cells.length; j++) {
+          const c = cells[j];
+          if (c.includes('debit') || c === 'dr') debitColIdx = j;
+          if (c.includes('credit') || c === 'cr') creditColIdx = j;
+          if ((c.includes('account') && c.includes('name')) || c.includes('particulars') || c === 'name') nameColIdx = j;
+          if ((c.includes('gl') && c.includes('code')) || c === 'code') glColIdx = j;
+          if (c.includes('account') && nameColIdx < 0) nameColIdx = j;
+          if (c.includes('type')) typeColIdx = j;
+        }
+        if (nameColIdx < 0) for (let j = 0; j < cells.length; j++) { if (cells[j].includes('account') || cells[j] === 'name') { nameColIdx = j; break; } }
+        break;
       }
-      return '';
-    };
-    const getNum = (row: any, ...keys: string[]) => {
-      const v = get(row, ...keys);
-      const n = parseFloat(String(v).replace(/[₹,%\s]/g, ''));
-      return Number.isFinite(n) ? n : 0;
-    };
-    const section = (name: string) => (row: any) =>
-      get(row, 'Section', 'Category', 'Type').toLowerCase().includes(name.toLowerCase().replace(/\s+/g, ' ').slice(0, 15));
-
-    const aiRows = rows.filter((r) => section('AI Assistant')(r) || (!get(r, 'Section', 'Category') && get(r, 'Metric', 'Name', 'Key')));
-    const kpiRows = rows.filter((r) => section('KPI')(r) || get(r, 'KPI', 'kpi'));
-    const healthRows = rows.filter((r) => section('Financial Health')(r) || section('Health Score')(r) || get(r, 'Overall', 'Grade', 'Profitability'));
-    const insightRows = rows.filter((r) => section('Strategic Insight')(r) || section('Insight')(r) || get(r, 'Priority', 'P1', 'P2', 'P3'));
-
-    let aiAssistantContext = '';
-    if (aiRows.length) {
-      aiAssistantContext = aiRows
-        .map((r) => {
-          const name = get(r, 'Metric', 'Name', 'Key', 'Label');
-          const value = get(r, 'Value', 'Amount', 'Score');
-          return name && value ? `${name}: ${value}` : '';
-        })
-        .filter(Boolean)
-        .join('\n');
     }
-    if (!aiAssistantContext && rows.length <= 30) {
-      aiAssistantContext = rows
-        .map((r) => {
-          const keys = Object.keys(r).filter((k) => !/section|category|type/i.test(k));
-          return keys.map((k) => `${k}: ${r[k]}`).join(' | ');
-        })
-        .filter(Boolean)
-        .join('\n');
+    if (headerRowIndex < 0 || debitColIdx < 0 || creditColIdx < 0 || nameColIdx < 0) return [];
+    const headerRow = rawRows[headerRowIndex] as any[];
+    const rowsAsObjects: any[] = [];
+    for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+      const row = rawRows[i] as any[];
+      if (!Array.isArray(row)) continue;
+      const obj: any = {};
+      for (let j = 0; j < Math.max(headerRow?.length ?? 0, row.length); j++) {
+        const key = headerRow?.[j] != null ? String(headerRow[j]) : `Col${j}`;
+        obj[key] = row[j];
+      }
+      rowsAsObjects.push(obj);
     }
-
-    const kpiAlerts = kpiRows.map((r, i) => {
-      const kpi = get(r, 'KPI', 'kpi', 'Metric', 'Name');
-      const current = getNum(r, 'Current', 'Value', 'Actual');
-      const threshold = getNum(r, 'Threshold', 'Critical', 'Warning', 'critical', 'warning');
-      const severity = (get(r, 'Severity', 'Alert', 'Status').toLowerCase().includes('critical') ? 'critical' : 'warning') as 'critical' | 'warning' | 'info';
-      return {
-        id: `cfo-alert-${i + 1}`,
-        kpi: kpi || `KPI ${i + 1}`,
-        current,
-        threshold: threshold || current,
-        severity,
-        message: get(r, 'Message', 'Description') || `${kpi}: ${current} vs threshold ${threshold}`,
-        recommendation: get(r, 'Recommendation', 'Action') || 'Review and take action.',
-        triggeredAt: new Date().toISOString(),
-      };
-    });
-
-    let healthScore: CFOServicesContext['healthScore'] = {
-      overall: 72,
-      grade: 'B',
-      components: { profitability: 72, liquidity: 81, efficiency: 68, growth: 74, stability: 55 },
-      trend: 'stable',
-      benchmarkVsIndustry: 70,
-      aiSummary: 'Financial health from CFO Services Context upload.',
-    };
-    if (healthRows.length) {
-      const first = healthRows[0];
-      const overall = getNum(first, 'Overall', 'Score', 'Total');
-      const grade = get(first, 'Grade', 'grade') || 'B';
-      healthScore = {
-        overall: overall || 72,
-        grade: (grade.toUpperCase().slice(0, 1) as 'A' | 'B' | 'C' | 'D' | 'F') || 'B',
-        components: {
-          profitability: getNum(first, 'Profitability', 'profitability') || 72,
-          liquidity: getNum(first, 'Liquidity', 'liquidity') || 81,
-          efficiency: getNum(first, 'Efficiency', 'efficiency') || 68,
-          growth: getNum(first, 'Growth', 'growth') || 74,
-          stability: getNum(first, 'Risk', 'Stability', 'stability', 'risk') || 55,
-        },
-        trend: (get(first, 'Trend', 'trend') || 'stable').toLowerCase() as 'improving' | 'stable' | 'declining',
-        benchmarkVsIndustry: getNum(first, 'Benchmark', 'benchmarkVsIndustry') || 70,
-        aiSummary: get(first, 'AI Summary', 'aiSummary', 'Summary') || healthScore.aiSummary,
-      };
-    }
-
-    const strategicInsightsSeeds = insightRows.slice(0, 6).map((r, i) => ({
-      id: `seed-${i + 1}`,
-      priority: (get(r, 'Priority', 'P1', 'P2', 'P3').toUpperCase().slice(0, 2) || 'P2') as 'P1' | 'P2' | 'P3',
-      category: get(r, 'Category', 'category') || 'risk',
-      trigger: get(r, 'Trigger', 'Description', 'Summary', 'Title') || '',
-      impact: get(r, 'Impact', 'impact'),
-      urgency: get(r, 'Urgency', 'urgency'),
-    }));
-
-    return {
-      aiAssistantContext: aiAssistantContext || 'Company financial context from upload.',
-      kpiAlerts: kpiAlerts.length ? kpiAlerts : [],
-      healthScore,
-      strategicInsightsSeeds,
-      fileName,
-    };
+    return parseTrialBalanceFromSheet(rowsAsObjects);
   }
 
   const parseFinancialFile = (file: File): Promise<ParsedFinancialData> => {
@@ -418,6 +367,9 @@ export const UploadData: React.FC = () => {
           </h1>
           <p className="text-slate-300 text-lg">
             Upload your Trial Balance (Excel or CSV) to power your CFO Dashboard
+          </p>
+          <p className="text-slate-400 text-sm mt-2">
+            One upload updates all sections: R2R, IFRS, FP&A, CFO Decision, and more.
           </p>
         </div>
 

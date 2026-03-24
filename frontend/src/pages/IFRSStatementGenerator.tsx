@@ -1,5 +1,5 @@
 // IFRS Statement Generator - Complete 3-Step Wizard
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { useNavigate, Link } from 'react-router-dom';
@@ -11,7 +11,7 @@ import {
   Building2, ShoppingCart, Cpu, Factory, Briefcase, Sparkles,
   DollarSign, AlertCircle, RefreshCw
 } from 'lucide-react';
-import { getAISuggestions, INDUSTRY_TEMPLATES } from '../services/mappingService';
+import { getAISuggestions, INDUSTRY_TEMPLATES, LIABILITY_MAPPING_OPTIONS } from '../services/mappingService';
 import type { AIMappingResult } from '../types/ifrs';
 import IFRSTabBar from '../components/IFRSTabBar';
 import { NoteTemplate } from '../components/ifrs-notes';
@@ -97,6 +97,8 @@ export const IFRSStatementGenerator = () => {
   const [commentaryContent, setCommentaryContent] = useState('');
   const [editedStatements, setEditedStatements] = useState<GeneratedStatements | null>(null);
 
+  const ACCRUED_EXPENSES_PATH = 'financialPosition.liabilities.current.accruedExpenses';
+
   // Load templates on mount - use built-in templates from mapping service
   useEffect(() => {
     loadTemplates();
@@ -104,16 +106,18 @@ export const IFRSStatementGenerator = () => {
 
   // On mount: read trial balance from localStorage and show step 2 immediately (no re-upload needed)
   useEffect(() => {
-    const raw = localStorage.getItem('finreport_trial_balance') || localStorage.getItem('ifrs_trial_balance');
+    const raw = localStorage.getItem('ifrs_trial_balance');
     if (!raw) return;
+    const norm = (s: string) => String(s || '').trim().toLowerCase().replace(/[\s_]+/g, '');
     const pick = (row: any, ...keys: string[]): string | number => {
-      const lower = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
       for (const k of keys) {
+        const nk = norm(k);
         for (const [header, val] of Object.entries(row || {})) {
-          if (val == null || val === '') continue;
-          if (lower(String(header)) === lower(k) || lower(String(header)).includes(lower(k))) return val as string | number;
+          if (val == null && val !== 0) continue;
+          if (norm(String(header)) === nk || norm(String(header)).includes(nk) || nk.includes(norm(String(header)))) return val as string | number;
         }
         if (row[k] != null && row[k] !== '') return row[k] as string | number;
+        if (row[nk] != null && row[nk] !== '') return row[nk] as string | number;
       }
       return '';
     };
@@ -122,8 +126,8 @@ export const IFRSStatementGenerator = () => {
       const tb = Array.isArray(data) ? data : (data?.trialBalance ?? []);
       if (!Array.isArray(tb) || tb.length === 0) return;
       const entries: TrialBalanceEntry[] = tb.map((row: any, i: number) => {
-        const glCode = String(pick(row, 'gl code', 'account code', 'glcode', 'accountcode', 'code', 'entry id') || (i + 1)).trim();
-        const accountName = String(pick(row, 'account name', 'accountname', 'name', 'description', 'account') || '').trim();
+        const glCode = String(pick(row, 'gl code', 'glCode', 'account code', 'accountcode', 'code', 'entry id') || (i + 1)).trim();
+        const accountName = String(pick(row, 'account name', 'accountName', 'accountname', 'name', 'description', 'account') || '').trim();
         const debit = parseFloat(String(pick(row, 'debit', 'debit balance', 'dr')).replace(/[₹,\s]/g, '')) || 0;
         const credit = parseFloat(String(pick(row, 'credit', 'credit balance', 'cr')).replace(/[₹,\s]/g, '')) || 0;
         let accountType = 'unknown';
@@ -151,13 +155,22 @@ export const IFRSStatementGenerator = () => {
               alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
                 path: alt.ifrsLine ?? '',
                 label: alt.label ?? ''
-              }));
+              })),
             };
           });
           setAiMappings(mappings);
           const initialMappings: Record<string, string> = {};
           mappings.forEach((m: IFRSMapping) => {
             if (m.confidence >= 80 && m.suggestedMapping !== 'unmapped') initialMappings[m.glCode] = m.suggestedMapping;
+          });
+          entries.forEach((entry) => {
+            const name = (entry.accountName || '').toLowerCase();
+            const glCodeStr = String(entry.glCode ?? '').trim();
+            if (glCodeStr === '2100' || /accrued\s*expenses?/.test(name) || (entry.credit > entry.debit && name.includes('accrued'))) {
+              const path = 'financialPosition.liabilities.current.accruedExpenses';
+              initialMappings[entry.glCode] = path;
+              if (glCodeStr !== String(entry.glCode)) initialMappings[glCodeStr] = path;
+            }
           });
           setUserMappings(initialMappings);
         } catch (e) {
@@ -181,6 +194,30 @@ export const IFRSStatementGenerator = () => {
       prev.includes(activeSection) ? prev : [...prev, activeSection]
     );
   }, [activeSection]);
+
+  // Correct Accrued Expenses: always map to Current Liabilities, never leave empty or as Revenue/other income
+  useEffect(() => {
+    if (trialBalance.length === 0) return;
+    setUserMappings((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const entry of trialBalance) {
+        const isLiability = entry.credit > entry.debit;
+        const name = (entry.accountName || '').toLowerCase();
+        const glCodeStr = String(entry.glCode ?? '').trim();
+        const isAccruedExpenses = glCodeStr === '2100' || /accrued\s*expenses?/.test(name) || (name.includes('accrued') && isLiability);
+        if (!isAccruedExpenses) continue;
+        const current = next[entry.glCode] ?? next[glCodeStr];
+        const wrong = !current || current.startsWith('profitLoss.') || /revenue|income/i.test(current);
+        if (wrong) {
+          next[entry.glCode] = ACCRUED_EXPENSES_PATH;
+          if (glCodeStr && glCodeStr !== String(entry.glCode)) next[glCodeStr] = ACCRUED_EXPENSES_PATH;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [trialBalance]);
 
   const loadTemplates = async () => {
     try {
@@ -218,47 +255,62 @@ export const IFRSStatementGenerator = () => {
     setUploadError(null);
     
     try {
-      // Parse file directly in browser using SheetJS
       const parsedData = await parseUploadedFile(file);
       setTrialBalance(parsedData);
-      
-      // Automatically trigger AI mapping (backend or rule-based)
-      const aiResults = await getAISuggestions(parsedData);
-      
-      // Convert AI results to IFRSMapping format (aiResults[glCode] is an object, not a string)
-      const mappings: IFRSMapping[] = parsedData.map(entry => {
-        const r = aiResults[entry.glCode];
-        const confidence = r?.confidence ?? 0;
-        const suggested = r?.suggestedMapping ?? '';
-        const status = confidence >= 80 ? 'mapped' : confidence >= 50 ? 'uncertain' : 'unmapped';
-        return {
+      try {
+        localStorage.setItem('ifrs_trial_balance', JSON.stringify(parsedData));
+      } catch (_) {}
+      // Show trial balance / mapping step immediately so user always sees data
+      setCurrentStep(2);
+      setUploading(false);
+
+      // Then load AI mapping suggestions in background (rule-based if backend unavailable)
+      try {
+        const aiResults = await getAISuggestions(parsedData);
+        const mappings: IFRSMapping[] = parsedData.map(entry => {
+          const r = aiResults[entry.glCode];
+          const confidence = r?.confidence ?? 0;
+          const suggested = r?.suggestedMapping ?? '';
+          const status = confidence >= 80 ? 'mapped' : confidence >= 50 ? 'uncertain' : 'unmapped';
+          return {
+            glCode: entry.glCode,
+            accountName: entry.accountName,
+            suggestedMapping: suggested || 'unmapped',
+            confidence,
+            status,
+            alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
+              path: alt.ifrsLine ?? '',
+              label: alt.label ?? ''
+            }))
+          };
+        });
+        setAiMappings(mappings);
+        const initialMappings: Record<string, string> = {};
+        mappings.forEach((m: IFRSMapping) => {
+          if (m.confidence >= 80 && m.suggestedMapping !== 'unmapped') {
+            initialMappings[m.glCode] = m.suggestedMapping;
+          }
+        });
+        parsedData.forEach((entry) => {
+          const name = (entry.accountName || '').toLowerCase();
+          if (/accrued\s*expenses?/.test(name) || (entry.credit > entry.debit && name.includes('accrued'))) {
+            initialMappings[entry.glCode] = 'financialPosition.liabilities.current.accruedExpenses';
+          }
+        });
+        setUserMappings(initialMappings);
+      } catch (e) {
+        console.error('IFRS AI mappings', e);
+        setAiMappings(parsedData.map(entry => ({
           glCode: entry.glCode,
           accountName: entry.accountName,
-          suggestedMapping: suggested || 'unmapped',
-          confidence,
-          status,
-          alternatives: (r?.alternatives ?? []).map((alt: { ifrsLine?: string; label?: string }) => ({
-            path: alt.ifrsLine ?? '',
-            label: alt.label ?? ''
-          }))
-        };
-      });
-      
-      setAiMappings(mappings);
-      
-      // Initialize user mappings with AI suggestions (high confidence only)
-      const initialMappings: Record<string, string> = {};
-      mappings.forEach((m: IFRSMapping) => {
-        if (m.confidence >= 80 && m.suggestedMapping !== 'unmapped') {
-          initialMappings[m.glCode] = m.suggestedMapping;
-        }
-      });
-      setUserMappings(initialMappings);
-      
-      setCurrentStep(2);
+          suggestedMapping: 'unmapped',
+          confidence: 0,
+          status: 'unmapped',
+          alternatives: []
+        })));
+      }
     } catch (error: any) {
-      setUploadError(error.message || 'Failed to parse file');
-    } finally {
+      setUploadError(error?.message || 'Failed to parse file');
       setUploading(false);
     }
   };
@@ -269,7 +321,7 @@ export const IFRSStatementGenerator = () => {
       .replace(/\s*\(₹\)\s*/gi, '').replace(/\s*\(rs\)\s*/gi, '')
       .replace(/\s+/g, ' ').trim();
 
-  // Parse Excel/CSV file in browser — accepts Trial_Balance_IFRS sheet and flexible column names
+  // Parse Excel/CSV — try every sheet; detect header row (in case row 1 is a title)
   const parseUploadedFile = (file: File): Promise<TrialBalanceEntry[]> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -277,63 +329,82 @@ export const IFRSStatementGenerator = () => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: 'array' });
-          const sheetName = workbook.SheetNames.includes('Trial_Balance_IFRS')
-            ? 'Trial_Balance_IFRS'
-            : workbook.SheetNames[0];
-          const sheet = workbook.Sheets[sheetName];
-          const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-          if (rows.length === 0) {
-            throw new Error('No valid data found in file. Expected columns: GL Code / Account Code / Code, Account Name / Name, Debit, Credit');
-          }
-          const headers = Object.keys(rows[0]);
-          const normalizedToOriginal: Record<string, string> = {};
-          headers.forEach((h) => {
-            const n = normalizeHeader(h);
-            if (n && !normalizedToOriginal[n]) normalizedToOriginal[n] = h;
-          });
-          const pick = (...keys: string[]): string | undefined => {
-            for (const k of keys) {
-              const orig = normalizedToOriginal[k];
-              if (orig) return orig;
+          const sheetNames = workbook.SheetNames.includes('Trial_Balance_IFRS')
+            ? ['Trial_Balance_IFRS', ...workbook.SheetNames.filter((n) => n !== 'Trial_Balance_IFRS')]
+            : workbook.SheetNames;
+          let lastError: string | null = null;
+          for (const sheetName of sheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            if (rawRows.length < 2) continue;
+            const norm = (s: string) => String(s ?? '').trim().toLowerCase().replace(/\s*\(₹\)\s*/gi, '').replace(/\s+/g, ' ');
+            let headerRowIndex = -1;
+            let nameColIdx = -1;
+            let debitColIdx = -1;
+            let creditColIdx = -1;
+            let glColIdx = -1;
+            let typeColIdx = -1;
+            for (let r = 0; r < Math.min(rawRows.length, 10); r++) {
+              const row = rawRows[r];
+              if (!Array.isArray(row)) continue;
+              const cells = row.map((c: any) => norm(String(c ?? '')));
+              const hasDebit = cells.some((c) => c.includes('debit') || c === 'dr');
+              const hasCredit = cells.some((c) => c.includes('credit') || c === 'cr');
+              const hasName = cells.some((c) => c.includes('account') && c.includes('name') || c.includes('particulars') || c === 'name' || c.includes('description'));
+              if (hasDebit && hasCredit && (hasName || cells.some((c) => c.includes('account') || c.includes('code')))) {
+                headerRowIndex = r;
+                for (let j = 0; j < cells.length; j++) {
+                  const c = cells[j];
+                  if (c.includes('debit') || c === 'dr') debitColIdx = j;
+                  if (c.includes('credit') || c === 'cr') creditColIdx = j;
+                  if ((c.includes('account') && c.includes('name')) || c.includes('particulars') || c === 'name' || c.includes('description')) nameColIdx = j;
+                  if ((c.includes('gl') && c.includes('code')) || c === 'code' || c.includes('account no')) glColIdx = j;
+                  if (c.includes('account') && !c.includes('name') && nameColIdx < 0) nameColIdx = j;
+                  if (c.includes('type')) typeColIdx = j;
+                }
+                if (nameColIdx < 0) for (let j = 0; j < cells.length; j++) { if (cells[j].includes('account') || cells[j] === 'name') { nameColIdx = j; break; } }
+                break;
+              }
             }
-            return undefined;
-          };
-          const glCol = pick('gl code', 'account code', 'code');
-          const nameCol = pick('account name', 'accountname', 'name', 'description');
-          const typeCol = pick('account type', 'accounttype', 'type');
-          const debitCol = pick('debit', 'debit balance', 'dr');
-          const creditCol = pick('credit', 'credit balance', 'cr');
-          if (!glCol || !nameCol || !debitCol || !creditCol) {
-            throw new Error(
-              `Missing required columns. Need: GL Code (or Account Code/Code), Account Name (or Name), Debit, Credit. Found: ${headers.join(', ')}`
-            );
-          }
-          const entries: TrialBalanceEntry[] = rows.map((row: any) => {
-            const glCode = String(row[glCol] ?? '').trim();
-            const accountName = String(row[nameCol] ?? '').trim();
-            const debitRaw = row[debitCol];
-            const creditRaw = row[creditCol];
-            const debit = parseFloat(String(debitRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
-            const credit = parseFloat(String(creditRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
-            let accountType = 'unknown';
-            if (typeCol && row[typeCol]) accountType = String(row[typeCol]).trim().toLowerCase();
-            if (accountType === 'unknown') {
-              if (debit > 0) accountType = 'asset/expense';
-              if (credit > 0) accountType = 'liability/equity/revenue';
+            if (headerRowIndex < 0 || debitColIdx < 0 || creditColIdx < 0 || nameColIdx < 0) {
+              const firstRow = rawRows[0];
+              lastError = `Sheet "${sheetName}": no header row with Debit/Credit/Account. First row: ${Array.isArray(firstRow) ? firstRow.slice(0, 6).join(', ') : ''}`;
+              continue;
             }
-            return {
-              glCode,
-              accountName,
-              debit,
-              credit,
-              accountType,
-              mappingStatus: 'unmapped' as const
-            };
-          }).filter((entry) => entry.glCode && entry.accountName);
-          if (entries.length === 0) {
-            throw new Error('No valid accounts found. Check that GL Code, Account Name, Debit and Credit columns have values. Found columns: ' + headers.join(', '));
+            const entries: TrialBalanceEntry[] = [];
+            for (let i = headerRowIndex + 1; i < rawRows.length; i++) {
+              const row = rawRows[i];
+              if (!Array.isArray(row)) continue;
+              const accountName = String(row[nameColIdx] ?? '').trim();
+              const debitRaw = row[debitColIdx];
+              const creditRaw = row[creditColIdx];
+              const debit = parseFloat(String(debitRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
+              const credit = parseFloat(String(creditRaw ?? 0).replace(/[₹,\s]/g, '')) || 0;
+              if (!accountName && debit === 0 && credit === 0) continue;
+              const glCode = glColIdx >= 0 ? String(row[glColIdx] ?? '').trim() : String(i - headerRowIndex);
+              let accountType = 'unknown';
+              if (typeColIdx >= 0 && row[typeColIdx]) accountType = String(row[typeColIdx]).trim().toLowerCase();
+              if (accountType === 'unknown') {
+                if (debit > 0) accountType = 'asset/expense';
+                if (credit > 0) accountType = 'liability/equity/revenue';
+              }
+              entries.push({
+                glCode: glCode || String(i - headerRowIndex),
+                accountName: accountName || `Line ${i - headerRowIndex}`,
+                debit,
+                credit,
+                accountType,
+                mappingStatus: 'unmapped' as const
+              });
+            }
+            const valid = entries.filter((e) => e.accountName && (e.debit > 0 || e.credit > 0));
+            if (valid.length > 0) {
+              resolve(valid);
+              return;
+            }
+            lastError = `Sheet "${sheetName}": no data rows with Debit/Credit values.`;
           }
-          resolve(entries);
+          reject(new Error(lastError || 'No valid data found. Need a sheet with a header row containing Debit, Credit, and Account Name (or Particulars).'));
         } catch (error: any) {
           reject(new Error(error.message || `Failed to parse file`));
         }
@@ -408,6 +479,15 @@ export const IFRSStatementGenerator = () => {
       mappings.forEach((m: IFRSMapping) => {
         if (m.confidence >= 80 && m.suggestedMapping !== 'unmapped') {
           initialMappings[m.glCode] = m.suggestedMapping;
+        }
+      });
+      entries.forEach((entry) => {
+        const name = (entry.accountName || '').toLowerCase();
+        const glCodeStr = String(entry.glCode ?? '').trim();
+        if (glCodeStr === '2100' || /accrued\s*expenses?/.test(name) || (entry.credit > entry.debit && name.includes('accrued'))) {
+          const path = 'financialPosition.liabilities.current.accruedExpenses';
+          initialMappings[entry.glCode] = path;
+          if (glCodeStr !== String(entry.glCode)) initialMappings[glCodeStr] = path;
         }
       });
       setUserMappings(initialMappings);
@@ -642,7 +722,13 @@ export const IFRSStatementGenerator = () => {
   const autoAcceptAll = () => {
     const newMappings = { ...userMappings };
     aiMappings.forEach(mapping => {
-      if (mapping.confidence >= 80) {
+      const code = String(mapping.glCode ?? '').trim();
+      const name = (mapping.accountName ?? '').toLowerCase();
+      const is2100OrAccrued = code === '2100' || /accrued\s*expenses?/.test(name);
+      if (is2100OrAccrued) {
+        newMappings[mapping.glCode] = ACCRUED_EXPENSES_PATH;
+        newMappings['2100'] = ACCRUED_EXPENSES_PATH;
+      } else if (mapping.confidence >= 80) {
         newMappings[mapping.glCode] = mapping.suggestedMapping;
       }
     });
@@ -650,7 +736,12 @@ export const IFRSStatementGenerator = () => {
   };
 
   const updateMapping = (glCode: string, mapping: string) => {
-    setUserMappings(prev => ({ ...prev, [glCode]: mapping }));
+    const key = typeof glCode === 'string' ? glCode : String(glCode);
+    setUserMappings(prev => {
+      const next = { ...prev, [key]: mapping };
+      if (key === '2100') next['2100'] = mapping;
+      return next;
+    });
   };
 
   const getMappingStats = () => {
@@ -676,9 +767,18 @@ export const IFRSStatementGenerator = () => {
       // Import and use client-side statement generator
       const { generateIFRSStatements } = await import('../services/statementGenerator');
       
+      const sanitizedMappings = { ...userMappings };
+      trialBalance.forEach((entry) => {
+        const code = String(entry?.glCode ?? '').trim();
+        const name = (entry?.accountName ?? '').toLowerCase();
+        if (code === '2100' || /accrued\s*expenses?/.test(name) || (entry.credit > entry.debit && name.includes('accrued'))) {
+          sanitizedMappings[entry.glCode] = ACCRUED_EXPENSES_PATH;
+          sanitizedMappings['2100'] = ACCRUED_EXPENSES_PATH;
+        }
+      });
       const result = generateIFRSStatements({
         trialBalance,
-        mappings: userMappings,
+        mappings: sanitizedMappings,
         entityName,
         periodEnd,
         currency
@@ -920,13 +1020,14 @@ export const IFRSStatementGenerator = () => {
               ))}
             </div>
 
-            <Link
-              to="/upload-data"
+            <button
+              type="button"
+              onClick={() => setCurrentStep(1)}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm"
             >
               <Upload className="w-4 h-4" />
-              <span>Upload Data</span>
-            </Link>
+              <span>Upload trial balance</span>
+            </button>
           </div>
         </div>
       </div>
@@ -949,6 +1050,7 @@ export const IFRSStatementGenerator = () => {
                 onDrop={handleDrop}
                 onUpload={handleUpload}
                 onLoadSample={loadSampleData}
+                onClearFile={() => { setFile(null); setUploadError(null); }}
               />
             </motion.div>
           )}
@@ -963,7 +1065,18 @@ export const IFRSStatementGenerator = () => {
               <Step2Mapping
                 trialBalance={trialBalance}
                 aiMappings={aiMappings}
-                userMappings={userMappings}
+                userMappings={(() => {
+                  const forced: Record<string, string> = { ...userMappings };
+                  trialBalance.forEach((e) => {
+                    const c = String(e?.glCode ?? '').trim();
+                    const n = (e?.accountName ?? '').toLowerCase();
+                    if (c === '2100' || /accrued\s*expenses?/.test(n) || (e.credit > e.debit && n.includes('accrued'))) {
+                      forced[e.glCode] = ACCRUED_EXPENSES_PATH;
+                      forced['2100'] = ACCRUED_EXPENSES_PATH;
+                    }
+                  });
+                  return forced;
+                })()}
                 selectedAccount={selectedAccount}
                 templates={templates}
                 searchQuery={searchQuery}
@@ -1048,7 +1161,10 @@ interface Step1Props {
   onDrop: (e: React.DragEvent) => void;
   onUpload: () => void;
   onLoadSample: () => void;
+  onClearFile: () => void;
 }
+
+const FILE_INPUT_ID = 'trial-balance-file-input';
 
 const Step1Upload: React.FC<Step1Props> = ({
   file,
@@ -1057,18 +1173,33 @@ const Step1Upload: React.FC<Step1Props> = ({
   onFileSelect,
   onDrop,
   onUpload,
-  onLoadSample
+  onLoadSample,
+  onClearFile
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   return (
     <div className="max-w-4xl mx-auto space-y-8">
-      {/* Upload Zone */}
+      {/* Upload Zone - click anywhere to open file picker when no file */}
       <motion.div
+        role={file ? undefined : 'button'}
+        tabIndex={file ? undefined : 0}
+        onKeyDown={file ? undefined : (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}
         className="bg-white rounded-2xl shadow-lg p-12 border-2 border-dashed border-gray-300"
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
+        onClick={() => { if (!file) fileInputRef.current?.click(); }}
         whileHover={{ borderColor: '#3b82f6' }}
       >
-        <div className="flex flex-col items-center text-center">
+        <input
+          id={FILE_INPUT_ID}
+          ref={fileInputRef}
+          type="file"
+          className="sr-only"
+          accept=".xlsx,.xls,.csv"
+          onChange={onFileSelect}
+          aria-label="Choose trial balance file"
+        />
+        <div className="flex flex-col items-center text-center" onClick={(e) => file && e.stopPropagation()}>
           <div className="w-24 h-24 bg-blue-100 rounded-full flex items-center justify-center mb-6">
             <Upload className="w-12 h-12 text-blue-600" />
           </div>
@@ -1088,20 +1219,21 @@ const Step1Upload: React.FC<Step1Props> = ({
                     <p className="text-sm text-gray-500">{(file.size / 1024).toFixed(2)} KB</p>
                   </div>
                 </div>
-                <CheckCircle className="w-6 h-6 text-green-500" />
+                <CheckCircle className="w-6 h-6 text-green-500 shrink-0" />
               </div>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onClearFile(); setTimeout(() => fileInputRef.current?.click(), 0); }}
+                className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Change file
+              </button>
             </div>
           ) : (
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                className="hidden"
-                accept=".xlsx,.xls,.csv"
-                onChange={onFileSelect}
-              />
-              <div className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+            <label htmlFor={FILE_INPUT_ID} className="cursor-pointer inline-block" onClick={(e) => e.stopPropagation()}>
+              <span className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium inline-block">
                 Browse Files
-              </div>
+              </span>
             </label>
           )}
           
@@ -1272,32 +1404,58 @@ const Step2Mapping: React.FC<Step2Props> = (props) => {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {props.aiMappings.map((mapping) => {
-                  const userMapping = props.userMappings[mapping.glCode];
-                  const isMapped = userMapping && userMapping !== 'unmapped';
+                  const glCodeStr = String(mapping.glCode ?? '').trim();
+                  const userMapping = props.userMappings[mapping.glCode] ?? props.userMappings[glCodeStr] ?? props.userMappings['2100'];
+                  const entry = props.trialBalance.find((a) => String(a?.glCode) === String(mapping.glCode));
+                  const isLiability = entry && (entry.credit > entry.debit || /liability|liabilities|equity|capital/.test((entry.accountType || '').toLowerCase()));
+                  const name = (mapping.accountName || '').toLowerCase();
+                  const isAccruedExpenses = glCodeStr === '2100' || /accrued\s*expenses?/.test(name) || (name.includes('accrued') && isLiability);
+                  const accruedPath = 'financialPosition.liabilities.current.accruedExpenses';
+                  const isIncomeMapping = !userMapping || userMapping.startsWith('profitLoss.') || /revenue|income/i.test(userMapping);
+                  const effectiveMapping = (isAccruedExpenses && (isIncomeMapping || userMapping !== accruedPath))
+                    ? accruedPath
+                    : (userMapping || '');
+                  const displayValue = isAccruedExpenses ? accruedPath : effectiveMapping;
+                  const isMapped = displayValue && displayValue !== 'unmapped';
+                  const useLiabilityDropdown = isLiability || isAccruedExpenses;
+                  const dropdownOptions = useLiabilityDropdown
+                    ? LIABILITY_MAPPING_OPTIONS
+                    : [
+                        ...(mapping.suggestedMapping && mapping.suggestedMapping !== 'unmapped'
+                          ? [{ value: mapping.suggestedMapping, label: `${mapping.suggestedMapping} (AI: ${mapping.confidence}%)` }]
+                          : []),
+                        ...(mapping.alternatives || []).map((alt) => ({ value: alt.path || '', label: alt.label || alt.path }))
+                      ].filter((o) => o.value);
                   
                   return (
                     <tr key={mapping.glCode} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm font-mono">{mapping.glCode}</td>
-                      <td className="px-4 py-3 text-sm">{mapping.accountName}</td>
-                      <td className="px-4 py-3 text-sm text-right">
-                        {props.trialBalance.find(a => a.glCode === mapping.glCode)?.debit.toLocaleString()}
+                      <td className="px-4 py-3 text-sm">
+                        {mapping.accountName}
+                        {isAccruedExpenses && (
+                          <span className="ml-1 text-xs text-blue-600 font-medium">(Current Liabilities)</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-sm text-right">
-                        {props.trialBalance.find(a => a.glCode === mapping.glCode)?.credit.toLocaleString()}
+                        {entry?.debit.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right">
+                        {entry?.credit.toLocaleString()}
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <select
-                          value={userMapping || ''}
+                          value={displayValue}
                           onChange={(e) => props.onUpdateMapping(mapping.glCode, e.target.value)}
                           className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
                         >
                           <option value="">Select mapping...</option>
-                          <option value={mapping.suggestedMapping}>
-                            {mapping.suggestedMapping} (AI: {mapping.confidence}%)
-                          </option>
-                          {mapping.alternatives?.map((alt, idx) => (
-                            <option key={alt.path || idx} value={alt.path || ''}>{alt.label || alt.path}</option>
-                          ))}
+                          {useLiabilityDropdown
+                            ? LIABILITY_MAPPING_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))
+                            : dropdownOptions.map((opt, idx) => (
+                                <option key={opt.value || idx} value={opt.value}>{opt.label}</option>
+                              ))}
                         </select>
                       </td>
                       <td className="px-4 py-3 text-center">

@@ -91,14 +91,18 @@ function initializeBalanceSheet(): BalanceSheet {
         shortTermBorrowings: 0,
         currentTaxPayable: 0,
         provisions: 0,
+        accruedExpenses: 0,
         otherCurrentLiabilities: 0,
+        otherCurrent: 0,
         total: 0
       },
       nonCurrent: {
         longTermBorrowings: 0,
+        borrowings: 0,
         deferredTax: 0,
         provisions: 0,
         otherNonCurrentLiabilities: 0,
+        otherNonCurrent: 0,
         total: 0
       },
       total: 0
@@ -288,19 +292,16 @@ function calculateBalanceSheetTotals(bs: BalanceSheet) {
   bs.assets.total = bs.assets.current.total + bs.assets.nonCurrent.total;
   
   // Current Liabilities Total
+  const lc = bs.liabilities.current as Record<string, number>;
   bs.liabilities.current.total =
-    bs.liabilities.current.tradePayables +
-    bs.liabilities.current.shortTermBorrowings +
-    bs.liabilities.current.currentTaxPayable +
-    bs.liabilities.current.provisions +
-    bs.liabilities.current.otherCurrentLiabilities;
+    (lc.tradePayables || 0) + (lc.shortTermBorrowings || 0) + (lc.currentTaxPayable || 0) +
+    (lc.provisions || 0) + (lc.accruedExpenses || 0) + (lc.otherCurrentLiabilities || 0);
   
   // Non-Current Liabilities Total
+  const lnc = bs.liabilities.nonCurrent as Record<string, number>;
   bs.liabilities.nonCurrent.total =
-    bs.liabilities.nonCurrent.longTermBorrowings +
-    bs.liabilities.nonCurrent.deferredTax +
-    bs.liabilities.nonCurrent.provisions +
-    bs.liabilities.nonCurrent.otherNonCurrentLiabilities;
+    (lnc.longTermBorrowings || 0) + (lnc.deferredTax || 0) +
+    (lnc.provisions || 0) + (lnc.otherNonCurrentLiabilities || 0);
   
   // Total Liabilities
   bs.liabilities.total = bs.liabilities.current.total + bs.liabilities.nonCurrent.total;

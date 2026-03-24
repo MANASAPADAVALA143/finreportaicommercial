@@ -2,7 +2,7 @@
 import { motion } from 'framer-motion';
 import { TrendingUp, TrendingDown, DollarSign, Target } from 'lucide-react';
 import type { KPISummary } from '../../types/fpa';
-import { formatCurrency, getVarianceArrow, getCardGradient, formatPercentage } from '../../utils/varianceUtils';
+import { formatCurrency, getVarianceArrow, getCardGradient, formatPercentage, getVarianceLabel, getVarianceColorForCard } from '../../utils/varianceUtils';
 import { useState, useEffect } from 'react';
 
 interface Props {
@@ -30,6 +30,9 @@ const KPICard = ({ summary, currency, index }: KPICardProps) => {
   const [count, setCount] = useState(0);
   const isFavorable = summary.favorable;
   const threshold = summary.threshold;
+  const varianceLabel = getVarianceLabel(summary.variancePct);
+  const cardType = summary.id === 'revenue' ? 'revenue' : summary.id === 'expenses' ? 'expense' : 'netProfit';
+  const varianceColor = getVarianceColorForCard(summary.variancePct, cardType);
 
   // Animated count-up effect
   useEffect(() => {
@@ -110,16 +113,18 @@ const KPICard = ({ summary, currency, index }: KPICardProps) => {
       {/* Variance */}
       <div className="flex items-center justify-between pt-3 border-t border-gray-200">
         <div className="flex items-center gap-2">
-          <span className={`text-lg font-semibold ${getTextColor()}`}>
+          <span className={`text-lg font-semibold ${
+            varianceColor === 'gray' ? 'text-gray-600' :
+            varianceColor === 'green' ? 'text-green-700' : 'text-red-700'
+          }`}>
             {getVarianceArrow(summary.variance)} {formatPercentage(summary.variancePct)}
           </span>
         </div>
         <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-          isFavorable 
-            ? 'bg-green-200 text-green-800' 
-            : 'bg-red-200 text-red-800'
+          varianceLabel === 'Neutral' ? 'bg-gray-200 text-gray-800' :
+          varianceLabel === 'Favorable' ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
         }`}>
-          {isFavorable ? '✅ Favorable' : '🔴 Unfavorable'}
+          {varianceLabel === 'Neutral' ? '➖ Neutral' : varianceLabel === 'Favorable' ? '✅ Favorable' : '🔴 Unfavorable'}
         </div>
       </div>
 

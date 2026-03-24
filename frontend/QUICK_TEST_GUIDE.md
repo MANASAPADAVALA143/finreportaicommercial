@@ -153,7 +153,7 @@ Get-Content .env
 Should show:
 ```
 VITE_AWS_REGION=us-east-1
-VITE_AWS_ACCESS_KEY_ID=AKIAWOXZPMMGDBSLRFQH
+VITE_AWS_ACCESS_KEY_ID=your-access-key-id
 VITE_AWS_SECRET_ACCESS_KEY=...
 ```
 

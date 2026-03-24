@@ -7,11 +7,47 @@ interface CFODecisionUploadModalProps {
   onUploadSuccess: () => void;
 }
 
+const SAMPLE_PATHS = [
+  'FinReportAI_Sample_Data_AllModules (3).xlsx',
+  'FinReportAI_Sample_Data_AllModules%20(3).xlsx',
+  'FinReportAI_Sample_Data_AllModules.xlsx',
+];
+
 const CFODecisionUploadModal: React.FC<CFODecisionUploadModalProps> = ({ onClose, onUploadSuccess }) => {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [sheetsLoaded, setSheetsLoaded] = useState<string[]>([]);
+
+  const loadSampleFromPublic = async () => {
+    setUploading(true);
+    setUploadStatus('idle');
+    setMessage('');
+    for (const path of SAMPLE_PATHS) {
+      try {
+        const res = await fetch('/' + path);
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        const file = new File([blob], path.replace(/%20/g, ' '), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const parsedData = await parseCFODecisionFile(file);
+        saveCFODecisionData(parsedData);
+        const loaded: string[] = [];
+        if (parsedData.investment.length > 0) loaded.push('Investment Decisions');
+        if (parsedData.buildVsBuy.length > 0) loaded.push('Build vs Buy');
+        if (parsedData.risks.length > 0) loaded.push('Risk Dashboard');
+        if (parsedData.internalVsExternal.length > 0) loaded.push('Internal vs External');
+        if (parsedData.hireVsAutomate.length > 0) loaded.push('Hire vs Automate');
+        setSheetsLoaded(loaded.length ? loaded : ['Data loaded']);
+        setUploadStatus('success');
+        setMessage(loaded.length ? `✅ Sample loaded: ${loaded.join(', ')}` : '✅ File loaded.');
+        setTimeout(() => { onUploadSuccess(); onClose(); }, 2000);
+        return;
+      } catch (_) { continue; }
+    }
+    setUploadStatus('error');
+    setMessage('Sample file not found in public folder. Upload your Excel file using "Choose File" above.');
+    setUploading(false);
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -110,6 +146,18 @@ const CFODecisionUploadModal: React.FC<CFODecisionUploadModalProps> = ({ onClose
               <Upload className="w-5 h-5" />
               {uploading ? 'Processing...' : 'Choose File'}
             </label>
+            <p className="mt-3 text-sm text-gray-500">
+              Or{' '}
+              <button
+                type="button"
+                onClick={loadSampleFromPublic}
+                disabled={uploading}
+                className="text-amber-600 hover:underline font-medium disabled:opacity-50"
+              >
+                load sample from public folder
+              </button>
+              {' '}(FinReportAI_Sample_Data_AllModules)
+            </p>
           </div>
 
           {/* Status Message */}
