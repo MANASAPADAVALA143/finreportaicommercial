@@ -177,7 +177,7 @@ export const mockHealthScore: FinancialHealthScore = {
 
 export const financialContext = `
 COMPANY FINANCIAL DATA — October 2025:
-Company: FinReport AI Commercial
+Company: FinReport AI
 
 P&L ACTUALS vs BUDGET:
 Revenue: ₹33.0Cr actual vs ₹35.0Cr budget (-5.7% unfavorable)

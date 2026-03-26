@@ -1286,7 +1286,7 @@ export default function R2RPatternAnalysisPage() {
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 11, color: "#93C5FD", fontWeight: 600, letterSpacing: "0.08em" }}>
-                  FINREPORTAI COMMERCIAL · R2R MODULE
+                  FINREPORT AI · R2R MODULE
                 </span>
               </div>
               <div style={{ fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: "-0.02em" }}>

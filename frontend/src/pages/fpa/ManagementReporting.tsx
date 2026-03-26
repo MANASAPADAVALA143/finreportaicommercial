@@ -343,7 +343,7 @@ const ManagementReporting: React.FC = () => {
               <h2 className="text-xl font-bold text-gray-900 mb-4">Live Preview</h2>
               <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 max-h-[600px] overflow-y-auto">
                 <div className="text-center mb-6 pb-4 border-b border-gray-300">
-                  <h3 className="text-2xl font-bold text-gray-900">FINREPORT AI COMMERCIAL</h3>
+                  <h3 className="text-2xl font-bold text-gray-900">FINREPORT AI</h3>
                   <p className="text-lg text-gray-700 mt-2">BOARD PACK — {period.toUpperCase()}</p>
                   <p className="text-sm text-gray-500 mt-1">Generated: {new Date().toLocaleDateString()}</p>
                 </div>
@@ -396,7 +396,7 @@ const ManagementReporting: React.FC = () => {
         <div className="max-w-[1800px] mx-auto mb-6">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
             <div className="border-t-4 border-b-4 border-gray-800 py-4 mb-6">
-              <h2 className="text-2xl font-bold text-center text-gray-900">FINREPORT AI COMMERCIAL — FLASH REPORT</h2>
+              <h2 className="text-2xl font-bold text-center text-gray-900">FINREPORT AI — FLASH REPORT</h2>
               <p className="text-center text-gray-600 mt-1">{period} | Generated: {new Date().toLocaleDateString()}</p>
             </div>
 
@@ -634,7 +634,7 @@ const ManagementReporting: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Subject:</label>
                 <input
                   type="text"
-                  defaultValue={`Board Pack — ${period} | FinReport AI Commercial`}
+                  defaultValue={`Board Pack — ${period} | FinReport AI`}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>

@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react';
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 const INVOKE_URL = `${API_BASE.replace(/\/$/, '')}/api/ai/invoke`;
-const SYSTEM_PROMPT = `You are a helpful assistant for FinReportAI Commercial, an AI finance platform. Answer in 2-3 sentences max. Be clear and non-technical.`;
+const SYSTEM_PROMPT = `You are a helpful assistant for FinReport AI (finreportai.com), an AI finance platform. Answer in 2-3 sentences max. Be clear and non-technical.`;
 const SUGGESTED_QUESTIONS = [
     'What does FinReportAI detect?',
     'How does anomaly scoring work?',

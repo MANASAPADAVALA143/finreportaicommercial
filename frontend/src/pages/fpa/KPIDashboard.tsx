@@ -167,7 +167,7 @@ const KPIDashboard: React.FC = () => {
 
             <div className="border-l border-gray-300 pl-6 ml-auto">
               <div className="flex items-center gap-4 text-sm text-gray-600">
-                <span><span className="font-semibold text-gray-900">Company:</span> FinReport AI Commercial</span>
+                <span><span className="font-semibold text-gray-900">Company:</span> FinReport AI</span>
                 <span><span className="font-semibold text-gray-900">Currency:</span> INR</span>
               </div>
             </div>

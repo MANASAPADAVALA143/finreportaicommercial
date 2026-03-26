@@ -515,7 +515,7 @@ export const VarianceAnalysis = () => {
             <AICommentary
               varianceData={currentVarianceData}
               period={periodLabel}
-              entityName="FinReport AI Commercial"
+              entityName="FinReport AI"
               currency={currency}
             />
           </div>

@@ -97,7 +97,7 @@ export const flashReportData = {
 export const commentaryPrompts = {
     executiveSummary: `You are a CFO writing an executive summary for the board of directors. Write 2 professional paragraphs.
 
-Period: October 2025 | Company: FinReport AI Commercial
+Period: October 2025 | Company: FinReport AI
 Revenue: ₹33.0Cr vs ₹35.0Cr budget (-5.7%)
 Gross Margin: 43.9% vs 51.4% budget (-7.5pp)
 EBITDA: ₹8.6Cr vs ₹9.0Cr (-3.9%)
