@@ -3,13 +3,13 @@ import type { KPIAlert, FinancialHealthScore } from './cfo';
 /** Parsed from CFO_Services_Context sheet (central upload). */
 
 export interface CFOServicesContext {
-  /** 22 financial metrics for AI Assistant / Nova */
+  /** 22 financial metrics for AI Assistant */
   aiAssistantContext: string;
   /** KPI Monitor: thresholds and current alerts (12 KPIs, 3 in alert state) */
   kpiAlerts: KPIAlert[];
   /** Financial Health Score: 5 components (Profitability, Liquidity, Efficiency, Growth, Risk) + overall + grade */
   healthScore: FinancialHealthScore;
-  /** 6 strategic insight seeds (P1/P2/P3) — Nova generates full insight from these */
+  /** 6 strategic insight seeds (P1/P2/P3) — AI expands into full insights */
   strategicInsightsSeeds: Array<{
     id: string;
     priority: 'P1' | 'P2' | 'P3';

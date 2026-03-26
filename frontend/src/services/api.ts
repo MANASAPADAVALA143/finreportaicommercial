@@ -120,31 +120,69 @@ class ApiClient {
     return response.data;
   }
 
-  // Nova AI
-  async analyzeWithNova(prompt: string, context?: any) {
-    const response = await this.client.post('/nova/analyze', {
-      prompt,
-      context,
-    });
+  /** CFO assistant chat — uses /api/ai (not /api/v1). Requires Bearer token if backend enforces auth. */
+  async analyzeWithAI(prompt: string, context?: unknown) {
+    const token = localStorage.getItem('access_token');
+    const response = await axios.post(
+      `${API_BASE_URL}/api/ai/analyze`,
+      { prompt, context, max_tokens: 2000, temperature: 0.3 },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }
+    );
     return response.data;
   }
 
-  async analyzeJournalEntryWithNova(entryData: any) {
-    const response = await this.client.post('/nova/analyze-entry', entryData);
+  /** @deprecated use analyzeWithAI */
+  async analyzeWithNova(prompt: string, context?: unknown) {
+    return this.analyzeWithAI(prompt, context);
+  }
+
+  async analyzeJournalEntryWithAI(entryData: unknown) {
+    const token = localStorage.getItem('access_token');
+    const response = await axios.post(
+      `${API_BASE_URL}/api/ai/analyze-entry`,
+      entryData,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }
+    );
     return response.data;
   }
 
-  async generateForecast(historicalData: any, period: string = 'next_quarter') {
-    const response = await this.client.post('/nova/forecast', historicalData, {
-      params: { period },
-    });
+  async generateForecast(historicalData: unknown, period: string = 'next_quarter') {
+    const token = localStorage.getItem('access_token');
+    const response = await axios.post(
+      `${API_BASE_URL}/api/ai/forecast`,
+      historicalData,
+      {
+        params: { period },
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }
+    );
     return response.data;
   }
 
-  async checkCompliance(financialData: any, standard: string = 'IFRS') {
-    const response = await this.client.post('/nova/compliance-check', financialData, {
-      params: { standard },
-    });
+  async checkCompliance(financialData: unknown, standard: string = 'IFRS') {
+    const token = localStorage.getItem('access_token');
+    const response = await axios.post(
+      `${API_BASE_URL}/api/ai/compliance-check`,
+      financialData,
+      {
+        params: { standard },
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }
+    );
     return response.data;
   }
 }

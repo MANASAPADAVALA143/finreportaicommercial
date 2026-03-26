@@ -126,7 +126,7 @@ Focus on immediate actions to mitigate highest risks.`
     const msg = error?.message || '';
     const isCredentialError = /credentials|security token|invalid.*token|AWS|\.env/i.test(msg);
     return {
-      recommendation: `Unable to generate recommendation. ${msg}${isCredentialError ? ' Use backend: set VITE_API_URL=http://localhost:8000 and configure backend/.env with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.' : ''}`,
+      recommendation: `Unable to generate recommendation. ${msg}${isCredentialError ? ' Set VITE_API_URL=http://localhost:8000 and ANTHROPIC_API_KEY or GOOGLE_API_KEY in backend/.env.' : ''}`,
       outcome: "review",
       confidence: 0,
       confidenceFactors: [{
@@ -134,8 +134,8 @@ Focus on immediate actions to mitigate highest risks.`
         status: "negative",
         impact: "high",
         detail: isCredentialError
-          ? "Use backend for Nova: set VITE_API_URL=http://localhost:8000 in frontend/.env and put AWS keys in backend/.env, then restart both servers."
-          : "AI service is not available. Check AWS credentials or backend .env file."
+          ? "Use backend LLM: set VITE_API_URL=http://localhost:8000 and ANTHROPIC_API_KEY or GOOGLE_API_KEY in backend/.env, then restart both servers."
+          : "AI service is not available. Check backend .env (LLM API keys) and VITE_API_URL."
       }]
     };
   }

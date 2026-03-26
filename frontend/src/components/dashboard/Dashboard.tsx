@@ -11,11 +11,11 @@ import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
 
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
-  { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + Nova' },
-  { id: 'ifrs', name: 'IFRS Reporting Agent', route: '/ifrs-generator', description: 'Maps trial balance to IFRS standards, generates 4 financial statements via Nova' },
-  { id: 'fpa', name: 'FP&A Intelligence Agent', route: '/fpa', description: 'Runs variance analysis, forecasting, scenario planning powered by Nova' },
-  { id: 'decision', name: 'CFO Decision Agent', route: '/cfo-decision', description: 'Analyses investment decisions, capital allocation, hire vs automate via Nova' },
-  { id: 'voice', name: 'CFO Voice Agent', route: '/cfo', description: 'Answers financial questions by voice using Nova 2 Sonic speech-to-speech' },
+  { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
+  { id: 'ifrs', name: 'IFRS Reporting Agent', route: '/ifrs-generator', description: 'Maps trial balance to IFRS standards and generates financial statements with AI assistance' },
+  { id: 'fpa', name: 'FP&A Intelligence Agent', route: '/fpa', description: 'Runs variance analysis, forecasting, and scenario planning with AI' },
+  { id: 'decision', name: 'CFO Decision Agent', route: '/cfo-decision', description: 'Analyses investment decisions, capital allocation, hire vs automate with AI' },
+  { id: 'voice', name: 'CFO Voice Agent', route: '/cfo', description: 'Answers financial questions by voice via the CFO assistant' },
 ];
 
 export const Dashboard: React.FC = () => {
@@ -128,7 +128,7 @@ export const Dashboard: React.FC = () => {
             FinReport AI
           </h1>
           <p className="text-xl text-gray-300">
-            Enterprise Financial Intelligence Platform powered by Amazon Nova
+            Enterprise Financial Intelligence Platform with AI-powered insights
           </p>
         </div>
 
@@ -169,16 +169,10 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* #AmazonNova Badge */}
         <div className="fixed bottom-4 right-4">
-          <a
-            href="https://aws.amazon.com/bedrock/nova/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block px-3 py-1.5 bg-slate-700/80 hover:bg-slate-600 text-slate-300 text-xs font-medium rounded-lg border border-slate-600 transition-colors"
-          >
-            #AmazonNova
-          </a>
+          <span className="inline-block px-3 py-1.5 bg-slate-700/80 text-slate-300 text-xs font-medium rounded-lg border border-slate-600">
+            AI · Anthropic / Gemini
+          </span>
         </div>
       </div>
     </div>

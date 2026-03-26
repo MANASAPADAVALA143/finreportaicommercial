@@ -485,7 +485,7 @@ export const CFODashboard = () => {
             {/* AI Insights Card */}
             <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-2xl shadow-xl border border-blue-200 p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-gray-900">Nova AI Insights</h3>
+                <h3 className="text-lg font-bold text-gray-900">AI Insights</h3>
                 <div className="px-3 py-1 bg-blue-500 text-white text-xs font-semibold rounded-full">
                   Amazon Nova
                 </div>
@@ -821,7 +821,7 @@ export const CFODashboard = () => {
           <div className="p-4 border-b border-gray-200 flex items-center justify-between">
             <div>
               <h3 className="font-bold text-gray-900">Ask CFO AI</h3>
-              <p className="text-xs text-gray-600">Powered by Amazon Nova</p>
+              <p className="text-xs text-gray-600">Powered by AI</p>
             </div>
             <button onClick={() => setShowChatBot(false)}>
               <X className="w-5 h-5" />

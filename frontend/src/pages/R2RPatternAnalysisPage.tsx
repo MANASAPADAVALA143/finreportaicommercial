@@ -34,7 +34,7 @@ const font = "'DM Sans', 'Segoe UI', sans-serif";
 const mono = "'DM Mono', 'Consolas', monospace";
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
-const NOVA_INVOKE_URL = `${API_BASE.replace(/\/$/, "")}/api/nova/invoke`;
+const AI_INVOKE_URL = `${API_BASE.replace(/\/$/, "")}/api/ai/invoke`;
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 const Card = ({ children, style = {} }: { children: React.ReactNode; style?: React.CSSProperties }) => (
@@ -374,7 +374,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model_id: "amazon.nova-lite-v1:0",
+          model_id: "",
           prompt: `${systemPrompt}\n\n${userPrompt}`,
           max_tokens: 200,
           temperature: 0.3,
@@ -385,7 +385,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
       const text = (data.text ?? "").trim() || "No explanation available.";
       setNovaCache(prev => ({ ...prev, [e.id]: text }));
     } catch {
-      setNovaCache(prev => ({ ...prev, [e.id]: "Unable to load Nova analysis. Please try again." }));
+      setNovaCache(prev => ({ ...prev, [e.id]: "Unable to load AI analysis. Please try again." }));
     } finally {
       setNovaLoading(null);
     }
@@ -558,7 +558,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
                         {novaLoading === e.id ? (
                           <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.textSub }}>
                             <span style={{ width: 18, height: 18, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                            Loading Nova analysis…
+                            Loading AI analysis…
                           </div>
                         ) : novaCache[e.id] ? (
                           <>
@@ -588,7 +588,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
         <p style={{ fontSize: 10, color: C.textMute }}>
           <strong style={{ color: C.textSub }}>Columns:</strong> Amt = Amount model · Dup = Duplicate · User = Behaviour · Time = Timing · Acct = Account · Scores ≥ 71 flagged red
         </p>
-        <p style={{ fontSize: 10, color: C.textMute }}>Click row to select · Powered by Amazon Nova</p>
+        <p style={{ fontSize: 10, color: C.textMute }}>Click row to select · AI-powered explanations</p>
       </div>
     </Card>
   );
@@ -976,7 +976,7 @@ const AIInsightsTab = ({ data }: { data: DerivedStats }) => (
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
-            🤖 AI Pattern Summary <span style={{ fontSize: 11, color: C.textSub, fontWeight: 400 }}>Amazon Nova · AWS Bedrock</span>
+            🤖 AI Pattern Summary <span style={{ fontSize: 11, color: C.textSub, fontWeight: 400 }}>LLM-assisted</span>
           </div>
           <div style={{ fontSize: 12, color: C.textSub, marginTop: 2 }}>Generated {new Date().toLocaleDateString()} · {data.total} JEs analysed · {data.high} HIGH risk flagged</div>
         </div>
@@ -1292,7 +1292,7 @@ export default function R2RPatternAnalysisPage() {
               <div style={{ fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: "-0.02em" }}>
                 Journal Entry Pattern Analysis
               </div>
-              <div style={{ fontSize: 11, color: "#93C5FD" }}>AI-powered anomaly patterns · Amazon Nova · {derivedStats ? `${derivedStats.total} JEs analysed · ${derivedStats.high + derivedStats.medium} flagged` : "Upload file to see analysis"}</div>
+              <div style={{ fontSize: 11, color: "#93C5FD" }}>AI-powered anomaly patterns · {derivedStats ? `${derivedStats.total} JEs analysed · ${derivedStats.high + derivedStats.medium} flagged` : "Upload file to see analysis"}</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -1324,7 +1324,7 @@ export default function R2RPatternAnalysisPage() {
             { icon: "🔴", text: derivedStats ? `${derivedStats.high} HIGH risk entries require review` : "Upload to see risk summary", color: "#FCA5A5" },
             { icon: "🤖", text: "87% AI confidence · Nova model", color: "#93C5FD" },
             { icon: "✅", text: derivedStats ? `${derivedStats.autoCleaned} entries auto-cleared by rules engine` : "Upload to see auto-cleared", color: "#86EFAC" },
-            { icon: "✦", text: "Powered by Amazon Nova", color: "#93C5FD" },
+            { icon: "✦", text: "Powered by AI (Claude / Gemini)", color: "#93C5FD" },
           ].map((s) => (
             <div key={s.text} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: s.color }}>
               <span>{s.icon}</span>{s.text}
@@ -1423,7 +1423,7 @@ export default function R2RPatternAnalysisPage() {
           <Card style={{ marginBottom: 12, background: C.bluePale, border: `1px solid ${C.blueBorder}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
               <div style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Running 4-layer hybrid analysis (ML + Statistical + Rules + Nova)…</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Running 4-layer hybrid analysis (ML + Statistical + Rules + LLM)…</span>
             </div>
           </Card>
         )}

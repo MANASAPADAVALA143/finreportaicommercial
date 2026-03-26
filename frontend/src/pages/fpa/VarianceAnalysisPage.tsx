@@ -866,7 +866,7 @@ export function VarianceAnalysisPage() {
                 {!aiNarrative && !aiLoading && (
                   <div className="rounded-xl border p-8 text-center" style={{ background: colors.card, borderColor: colors.border }}>
                     <p className="mb-4" style={{ color: colors.text }}>
-                      Generate CFO-ready narrative and line-by-line commentary powered by AWS Nova.
+                      Generate CFO-ready narrative and line-by-line commentary powered by AI.
                     </p>
                     <button
                       onClick={generateAINarrative}
@@ -883,7 +883,7 @@ export function VarianceAnalysisPage() {
                   <div className="rounded-xl border p-8" style={{ background: colors.card, borderColor: colors.border }}>
                     <p className="mb-4 flex items-center gap-2" style={{ color: colors.text }}>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      Nova is analysing {rawItems.length} line items across {analysis?.department_summary.length ?? 0} departments...
+                      AI is analysing {rawItems.length} line items across {analysis?.department_summary.length ?? 0} departments...
                     </p>
                     <div className="space-y-2 text-sm" style={{ color: colors.muted }}>
                       <p>✅ Data validated</p>

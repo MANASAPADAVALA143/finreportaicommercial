@@ -2,9 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
-const INVOKE_URL = `${API_BASE.replace(/\/$/, '')}/api/nova/invoke`;
+const INVOKE_URL = `${API_BASE.replace(/\/$/, '')}/api/ai/invoke`;
 
-const SYSTEM_PROMPT = `You are a helpful assistant for FinReportAI Commercial, an AI finance platform powered by Amazon Nova. Answer in 2-3 sentences max. Be clear and non-technical.`;
+const SYSTEM_PROMPT = `You are a helpful assistant for FinReportAI Commercial, an AI finance platform. Answer in 2-3 sentences max. Be clear and non-technical.`;
 
 const SUGGESTED_QUESTIONS = [
   'What does FinReportAI detect?',
@@ -39,7 +39,7 @@ export const LandingNovaBot: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model_id: 'amazon.nova-lite-v1:0',
+          model_id: '',
           prompt,
           max_tokens: 300,
           temperature: 0.3,
@@ -75,7 +75,7 @@ export const LandingNovaBot: React.FC = () => {
         aria-label="Ask Nova"
       >
         <MessageCircle className="w-5 h-5" />
-        Ask Nova
+        Ask AI
       </button>
 
       {/* Chat panel */}
@@ -85,7 +85,7 @@ export const LandingNovaBot: React.FC = () => {
           style={{ maxHeight: 'calc(100vh - 120px)' }}
         >
           <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
-            <span className="font-semibold">Nova Assistant</span>
+            <span className="font-semibold">AI Assistant</span>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -127,7 +127,7 @@ export const LandingNovaBot: React.FC = () => {
                   }`}
                 >
                   {m.role === 'assistant' && (
-                    <p className="text-xs font-semibold text-blue-600 mb-1">Nova ✦</p>
+                    <p className="text-xs font-semibold text-blue-600 mb-1">Assistant ✦</p>
                   )}
                   <p className="whitespace-pre-wrap">{m.text}</p>
                 </div>
@@ -137,7 +137,7 @@ export const LandingNovaBot: React.FC = () => {
               <div className="flex justify-start">
                 <div className="px-3 py-2 rounded-lg bg-white border border-slate-200 flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Nova is thinking...</span>
+                  <span>Thinking...</span>
                 </div>
               </div>
             )}

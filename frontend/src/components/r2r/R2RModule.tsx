@@ -185,12 +185,16 @@ export const R2RModule: React.FC = () => {
         }
 
         const summary = data.summary;
-        const novaUsed = summary?.novaUsed === true || (summary?.novaEntryCount != null && summary.novaEntryCount > 0);
+        const aiUsed =
+          summary?.aiUsed === true ||
+          summary?.novaUsed === true ||
+          (summary?.aiEntryCount != null && summary.aiEntryCount > 0) ||
+          (summary?.novaEntryCount != null && summary.novaEntryCount > 0);
         toast.success(
           useStateful
             ? `✅ Stateful: ${data.total} entries, High: ${data.high ?? summary?.highRisk ?? 0}, baseline updated for next run`
-            : novaUsed
-              ? `✅ Analyzed ${summary?.total} entries with Amazon Nova. High Risk: ${summary?.highRisk}`
+            : aiUsed
+              ? `✅ Analyzed ${summary?.total} entries with AI risk assessment. High Risk: ${summary?.highRisk}`
               : `✅ Analyzed ${summary?.total} entries (rule-based). High Risk: ${summary?.highRisk}`
         );
         if (useStateful) {
@@ -265,7 +269,7 @@ export const R2RModule: React.FC = () => {
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 flex items-center gap-3 mb-2">
             <FileText className="w-10 h-10 text-blue-600" />
-            Record to Report (R2R) - Amazon Nova AI
+            Record to Report (R2R) — AI-assisted analysis
           </h1>
           <p className="text-lg text-gray-600">Upload journal entries for complete ML-powered fraud analysis with SHAP & metrics</p>
         </div>
@@ -437,7 +441,7 @@ export const R2RModule: React.FC = () => {
               disabled={loading || !file}
               className="px-8 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all transform hover:scale-105"
             >
-              {loading ? 'Analyzing...' : 'Analyze with Nova AI'}
+              {loading ? 'Analyzing...' : 'Analyze with AI'}
             </button>
           </div>
           
@@ -478,7 +482,7 @@ export const R2RModule: React.FC = () => {
               </div>
             </div>
 
-            {/* Amazon Nova AI Analysis Summary */}
+            {/* AI analysis summary */}
             {metrics && (
               <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-xl border border-blue-200 p-8 mb-8">
                 <div className="flex items-center gap-3 mb-4">
@@ -486,10 +490,10 @@ export const R2RModule: React.FC = () => {
                   <div>
                     <h3 className="text-xl font-bold text-gray-900">AI Analysis Complete</h3>
                     <p className="text-sm text-gray-600">
-                      {summary?.novaUsed ? (
-                        <>Amazon Nova Lite risk assessment · {summary.novaEntryCount ?? summary.total} entries with Nova</>
+                      {summary?.aiUsed || summary?.novaUsed ? (
+                        <>LLM risk assessment · {summary.aiEntryCount ?? summary.novaEntryCount ?? summary.total} entries with AI</>
                       ) : (
-                        <>Rule-based analysis (Nova unavailable — check backend AWS keys)</>
+                        <>Rule-based analysis (configure ANTHROPIC_API_KEY or GOOGLE_API_KEY in backend/.env)</>
                       )}
                     </p>
                   </div>

@@ -256,7 +256,7 @@ export const LivePLView: React.FC<LivePLViewProps> = ({ result, baseResult, onRe
       <div className="rounded-lg bg-[#111827] border border-[#1E2D45] p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-[#F1F5F9]">
-            Nova AI Analysis — {result.scenarioType.charAt(0).toUpperCase() + result.scenarioType.slice(1)} Case
+            AI Analysis — {result.scenarioType.charAt(0).toUpperCase() + result.scenarioType.slice(1)} Case
           </h3>
           <button
             onClick={handleRegenerate}

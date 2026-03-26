@@ -106,12 +106,12 @@ const CheckIcon = ({ ok }: { ok: boolean | null }) => (
   <span style={{ fontSize: 14 }}>{ok === true ? "✅" : ok === false ? "❌" : "⚠️"}</span>
 );
 
-// ─── Nova prompt builder per decision type ───────────────────────────────────
-type NovaDecisionType = "investment" | "buildvsbuy" | "internalexternal" | "hirevsautomate";
-type NovaInputs = Record<string, string | number | undefined>;
+// ─── Decision prompt builder per type ───────────────────────────────────
+type DecisionAIType = "investment" | "buildvsbuy" | "internalexternal" | "hirevsautomate";
+type DecisionInputs = Record<string, string | number | undefined>;
 
-function buildNovaPrompt(type: NovaDecisionType, inputs: NovaInputs = {}): string {
-  const prompts: Record<NovaDecisionType, string> = {
+function buildDecisionPrompt(type: DecisionAIType, inputs: DecisionInputs = {}): string {
+  const prompts: Record<DecisionAIType, string> = {
     investment: `You are a CFO-level financial advisor for an Indian company. Analyse this capital investment and respond ONLY with a JSON object — no markdown, no preamble.
 
 Input data:
@@ -168,21 +168,21 @@ Respond with this exact JSON structure:
   return prompts[type] ?? prompts.investment;
 }
 
-// ─── Call AWS Bedrock Nova via backend ───────────────────────────────────────
-async function callNova(type: NovaDecisionType, inputs: NovaInputs = {}): Promise<{
+// ─── Call backend LLM (Anthropic / Gemini) ───────────────────────────────────────
+async function callDecisionAI(type: DecisionAIType, inputs: DecisionInputs = {}): Promise<{
   decision: string;
   confidence: number;
   summary: string;
   factors: { label: string; detail: string; ok: boolean | null }[];
   action: string;
 }> {
-  const prompt = buildNovaPrompt(type, inputs);
+  const prompt = buildDecisionPrompt(type, inputs);
   const API_URL = (typeof window !== "undefined" && (window as unknown as { FINREPORTAI_API_URL?: string }).FINREPORTAI_API_URL) || "http://localhost:8000";
-  const res = await fetch(`${API_URL}/api/nova/invoke`, {
+  const res = await fetch(`${API_URL}/api/ai/invoke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model_id: "amazon.nova-lite-v1:0",
+      model_id: "",
       prompt,
       max_tokens: 600,
       temperature: 0.3,
@@ -199,9 +199,9 @@ async function callNova(type: NovaDecisionType, inputs: NovaInputs = {}): Promis
   return JSON.parse(raw) as { decision: string; confidence: number; summary: string; factors: { label: string; detail: string; ok: boolean | null }[]; action: string };
 }
 
-// ─── AI Recommendation Panel (real Nova calls) ────────────────────────────────
-const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType; inputs?: NovaInputs }) => {
-  const [result, setResult] = useState<Awaited<ReturnType<typeof callNova>> | null>(null);
+// ─── AI Recommendation Panel (backend LLM) ────────────────────────────────
+const AIPanel = ({ type = "investment", inputs = {} }: { type?: DecisionAIType; inputs?: DecisionInputs }) => {
+  const [result, setResult] = useState<Awaited<ReturnType<typeof callDecisionAI>> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -210,7 +210,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
     setError(null);
     setResult(null);
     try {
-      const data = await callNova(type as NovaDecisionType, inputs);
+      const data = await callDecisionAI(type as DecisionAIType, inputs);
       setResult(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -235,7 +235,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
             🤖 AI Recommendation
-            <span style={{ fontWeight: 400, color: C.textSub, fontSize: 11 }}>Amazon Nova Lite · AWS Bedrock</span>
+            <span style={{ fontWeight: 400, color: C.textSub, fontSize: 11 }}>AI · Claude / Gemini (backend)</span>
           </div>
           <div style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>Powered by generative AI — review before acting</div>
         </div>
@@ -254,7 +254,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
           <span style={{ fontSize: 22 }}>🤖</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: C.blue }}>Ready to analyse</div>
-            <div style={{ fontSize: 11, color: C.textSub }}>Click Generate — Amazon Nova will analyse your inputs via AWS Bedrock</div>
+            <div style={{ fontSize: 11, color: C.textSub }}>Click Generate — the backend LLM will analyse your inputs</div>
           </div>
           <button onClick={handleGenerate} style={{ background: C.blue, color: C.white, border: "none",
             borderRadius: 7, padding: "8px 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font }}>
@@ -272,7 +272,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
                 animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` }} />
             ))}
           </div>
-          <span style={{ fontSize: 13, color: C.blue, fontWeight: 500 }}>Amazon Nova is analysing your inputs...</span>
+          <span style={{ fontSize: 13, color: C.blue, fontWeight: 500 }}>AI is analysing your inputs...</span>
           <style>{`@keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1.2)}}`}</style>
         </div>
       )}
@@ -281,7 +281,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
         <div style={{ background: C.redBg, border: `1px solid ${C.redBorder}`, borderRadius: 8,
           padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 3 }}>⚠️ Nova API Error</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 3 }}>⚠️ AI API Error</div>
             <div style={{ fontSize: 11, color: C.red }}>{error}</div>
           </div>
           <button onClick={handleGenerate} style={{ background: C.red, color: C.white, border: "none",
@@ -326,7 +326,7 @@ const AIPanel = ({ type = "investment", inputs = {} }: { type?: NovaDecisionType
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: C.textMute }}>Generated by Amazon Nova Lite · AWS Bedrock · Not financial advice</span>
+            <span style={{ fontSize: 10, color: C.textMute }}>Generated by AI · Not financial advice</span>
             <button onClick={handleGenerate} style={{ background: "none", border: "none",
               fontSize: 11, color: C.textSub, cursor: "pointer", textDecoration: "underline" }}>
               Re-generate ↺
@@ -1020,7 +1020,7 @@ export default function CFODecisionIntelligencePage() {
               <div style={{ fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: "-0.02em" }}>
                 CFO Decision Intelligence
               </div>
-              <div style={{ fontSize: 11, color: "#93C5FD" }}>Strategic decisions powered by Amazon Nova AI</div>
+              <div style={{ fontSize: 11, color: "#93C5FD" }}>Strategic decisions powered by AI</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 10 }}>

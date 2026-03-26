@@ -1,8 +1,9 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     # App
     APP_NAME: str = "FinReport AI"
     VERSION: str = "1.0.0"
@@ -16,10 +17,10 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str
     SUPABASE_SERVICE_KEY: Optional[str] = None
     
-    # AWS
+    # AWS (optional — only for Transcribe/S3/Polly if you use voice upload pipeline)
     AWS_REGION: str = "us-east-1"
-    AWS_ACCESS_KEY_ID: str
-    AWS_SECRET_ACCESS_KEY: str
+    AWS_ACCESS_KEY_ID: Optional[str] = None
+    AWS_SECRET_ACCESS_KEY: Optional[str] = None
     
     # Security
     SECRET_KEY: str
@@ -29,8 +30,4 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3004", "http://localhost:3006", "http://localhost:5173"]
     
-    class Config:
-        env_file = ".env"
-
-
 settings = Settings()

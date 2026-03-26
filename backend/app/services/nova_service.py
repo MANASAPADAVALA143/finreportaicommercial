@@ -1,53 +1,15 @@
-import boto3
-from botocore.config import Config
 import json
-import os
 import re
 from typing import Dict, List, Any
-from datetime import datetime
+
+from app.services import llm_service
 
 class NovaService:
-    def __init__(self):
-        self._client = None  # Lazy-load to avoid blocking startup
-        self.model_id = "us.amazon.nova-lite-v1:0"
-    
-    def _check_aws_credentials(self):
-        """Warn if credentials look like temporary (ASIA) or session token is set - CFO Decision needs long-lived IAM keys."""
-        key = (os.getenv("AWS_ACCESS_KEY_ID") or "").strip()
-        if key.upper().startswith("ASIA"):
-            print("[WARNING] AWS_ACCESS_KEY_ID looks like temporary credentials (ASIA). Use long-lived IAM user keys (AKIA) from IAM → Users → Security credentials → Create access key.")
-        if os.getenv("AWS_SESSION_TOKEN"):
-            print("[WARNING] AWS_SESSION_TOKEN is set. Remove it from .env for Bedrock; temporary/session keys often cause 'invalid security token'. Use long-lived IAM user keys only.")
+    """Journal-entry analysis and batch helpers. LLM calls go through llm_service (Anthropic or Gemini)."""
 
-    @property
-    def client(self):
-        """Lazy-load AWS Bedrock client only when needed. Uses only long-lived IAM keys (no session token)."""
-        if self._client is None:
-            try:
-                self._check_aws_credentials()
-                region = os.getenv("AWS_REGION", "us-east-1")
-                access_key = (os.getenv("AWS_ACCESS_KEY_ID") or "").strip()
-                secret_key = (os.getenv("AWS_SECRET_ACCESS_KEY") or "").strip()
-                if not access_key or not secret_key:
-                    raise ValueError("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set in .env (backend folder)")
-                # Use only access key + secret; do NOT pass aws_session_token so temporary credentials are not used
-                self._client = boto3.client(
-                    "bedrock-runtime",
-                    region_name=region,
-                    aws_access_key_id=access_key,
-                    aws_secret_access_key=secret_key,
-                    config=Config(connect_timeout=5, read_timeout=60),
-                )
-                print("[INFO] AWS Bedrock client initialized successfully (Nova/CFO Decision)")
-            except Exception as e:
-                err = str(e).lower()
-                if "invalid" in err or "security token" in err or "token" in err:
-                    print("[ERROR] AWS key not accepted. Use long-lived IAM user keys (AKIA...) from AWS Console → IAM → Users → Security credentials → Create access key. Remove AWS_SESSION_TOKEN from .env if present.")
-                print(f"[WARNING] AWS Bedrock client initialization failed: {e}")
-                print("   Nova/CFO Decision will fall back to rule-based analysis.")
-                self._client = None
-        return self._client
-    
+    def __init__(self):
+        pass
+
     def _sanitize(self, value):
         """Sanitize string to ASCII for Windows compatibility"""
         if isinstance(value, str):
@@ -135,23 +97,14 @@ CRITICAL RULES:
 - SHAP values must sum to ~100%"""
 
         try:
-            # Check if AWS client is available
-            if self.client is None:
+            if not llm_service.is_configured():
                 try:
-                    print(f"[WARNING] AWS not available for {entry_id}, using rule-based analysis")
-                except:
+                    print(f"[WARNING] LLM not configured for {entry_id}, using rule-based analysis")
+                except Exception:
                     pass
                 return self._rule_based_analysis(entry, threshold=threshold)
-            
-            response = self.client.converse(
-                modelId=self.model_id,
-                messages=[{
-                    "role": "user",
-                    "content": [{"text": prompt}]
-                }]
-            )
-            
-            text = response['output']['message']['content'][0]['text']
+
+            text = llm_service.invoke(prompt, max_tokens=1500, temperature=0.3)
             
             # Clean response
             text = text.strip()
@@ -180,15 +133,15 @@ CRITICAL RULES:
                     },
                     "explanation": analysis.get('explanation', ''),
                     "recommendation": analysis.get('recommendation', 'REVIEW'),
-                    "analysisSource": "amazon_nova",
+                    "analysisSource": "llm",
                 }
             
-            raise ValueError("Failed to parse Nova response")
+            raise ValueError("Failed to parse LLM response")
             
         except Exception as e:
             try:
-                print(f"[ERROR] Nova analysis error: {str(e)}")
-            except:
+                print(f"[ERROR] LLM journal analysis error: {str(e)}")
+            except Exception:
                 pass
             # Fallback to rule-based
             return self._rule_based_analysis(entry, threshold=threshold)
@@ -469,29 +422,43 @@ CRITICAL RULES:
         }
 
     def invoke(self, prompt: str, model_id: str = None, max_tokens: int = 600, temperature: float = 0.3) -> str:
-        """Raw invoke: send prompt to Bedrock, return response text. Used by CFO Decision Intelligence /api/nova/invoke."""
-        if self.client is None:
-            raise RuntimeError(
-                "AWS Bedrock not available. In backend/.env set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (long-lived IAM user keys, not temporary). Remove AWS_SESSION_TOKEN if present."
-            )
-        model = model_id or self.model_id
-        try:
-            response = self.client.converse(
-                modelId=model,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={
-                    "maxTokens": max_tokens,
-                    "temperature": temperature,
-                },
-            )
-            return response["output"]["message"]["content"][0]["text"]
-        except Exception as e:
-            msg = str(e)
-            if "InvalidClientTokenId" in msg or "security token" in msg.lower() or "UnrecognizedClientException" in msg:
-                raise RuntimeError(
-                    "AWS key not working: use long-lived IAM user keys (AKIA...) from AWS Console → IAM → Users → Security credentials → Create access key. Remove AWS_SESSION_TOKEN from backend/.env. Temporary (ASIA) keys will not work."
-                ) from e
-            raise
+        """Raw LLM invoke for CFO Decision, FP&A, IFRS helpers, etc. (/api/ai/invoke)."""
+        return llm_service.invoke(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model_id=model_id,
+        )
 
-# Singleton
+    def generate_financial_analysis(
+        self,
+        prompt: str,
+        context: dict = None,
+        max_tokens: int = 1000,
+        temperature: float = 0.3,
+    ) -> dict:
+        full = prompt
+        if context is not None:
+            full = f"{prompt}\n\nContext:\n{json.dumps(context, default=str)}"
+        text = llm_service.invoke(full, max_tokens=max_tokens, temperature=temperature)
+        return {
+            "response": text,
+            "confidence": 0.82,
+            "metadata": {"provider": llm_service.provider_label()},
+        }
+
+    def generate_forecast(self, historical_data: dict, period: str = "next_quarter") -> dict:
+        p = (
+            f"You are a financial analyst. Given the historical data below, produce a concise forecast for {period}. "
+            "Use bullet points and state key assumptions.\n\nData:\n"
+            f"{json.dumps(historical_data, default=str)}"
+        )
+        text = llm_service.invoke(p, max_tokens=2000, temperature=0.35)
+        return {"forecast": text, "period": period, "provider": llm_service.provider_label()}
+
+    def analyze_batch(self, entries: List[dict]) -> List[dict]:
+        return [self.analyze_journal_entry(e) for e in entries]
+
+
+# Singleton (name kept for import stability)
 nova_service = NovaService()

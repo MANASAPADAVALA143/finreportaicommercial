@@ -13,7 +13,7 @@ export const NovaAssistant: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: 'Hello! I\'m your Amazon Nova AI financial assistant. I can help you with financial analysis, forecasting, compliance checks, and more. How can I assist you today?'
+      content: 'Hello! I\'m your AI financial assistant. I can help you with financial analysis, forecasting, compliance checks, and more. How can I assist you today?'
     }
   ]);
   const [input, setInput] = useState('');
@@ -36,7 +36,7 @@ export const NovaAssistant: React.FC = () => {
         confidence: response.confidence
       }]);
     } catch (error) {
-      toast.error('Failed to get response from Nova');
+      toast.error('Failed to get response from AI');
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: 'I apologize, but I encountered an error processing your request. Please try again.'
@@ -62,8 +62,8 @@ export const NovaAssistant: React.FC = () => {
           <div className="flex items-center gap-4">
             <Bot className="w-12 h-12" />
             <div>
-              <h1 className="text-3xl font-bold">Amazon Nova AI Assistant</h1>
-              <p className="text-cyan-100">Your intelligent financial advisor powered by AWS</p>
+              <h1 className="text-3xl font-bold">AI Financial Assistant</h1>
+              <p className="text-cyan-100">Powered by your backend (Claude or Gemini)</p>
             </div>
           </div>
         </div>

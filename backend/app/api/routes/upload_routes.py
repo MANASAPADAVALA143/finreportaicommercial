@@ -10,19 +10,22 @@ from app.core.security import get_current_user
 router = APIRouter(prefix="/api/journal-entries", tags=["journal-entries"])
 
 
-@router.get("/nova-status")
-async def get_nova_status():
+@router.get("/ai-status")
+async def get_ai_status():
     """
-    Check if Amazon Nova (Bedrock) is available for R2R journal entry anomaly detection.
-    No auth required. Use this to verify AWS keys and Nova integration.
+    Check if an LLM (Anthropic or Gemini) is configured for R2R journal entry analysis.
     """
-    client = nova_service.client  # Triggers lazy init
+    from app.services import llm_service
+
+    ok = llm_service.is_configured()
     return {
-        "novaAvailable": client is not None,
+        "aiAvailable": ok,
+        "novaAvailable": ok,
+        "provider": llm_service.provider_label() if ok else None,
         "message": (
-            "Amazon Nova is available for R2R journal entry anomaly detection."
-            if client is not None
-            else "Nova unavailable. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in backend/.env (long-lived IAM user keys). Remove AWS_SESSION_TOKEN if present."
+            f"{llm_service.provider_label()} is configured for journal entry AI analysis."
+            if ok
+            else "LLM unavailable. Set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY, or AI_PROVIDER=gemini and GOOGLE_API_KEY in backend/.env"
         ),
     }
 
@@ -162,7 +165,7 @@ async def upload_journal_entries(
         # Convert to dict
         entries = df.to_dict('records')
         
-        # Analyze with Nova AI - Complete ML analysis with metrics + custom threshold
+        # Analyze with LLM + rules - Complete analysis with metrics + custom threshold
         try:
             print(f"\n[START] Analyzing with threshold: {threshold}")
         except:
@@ -177,8 +180,8 @@ async def upload_journal_entries(
         # Extract high-risk entries for quick review
         high_risk_entries = [r for r in analysis_result['results'] if r.get('riskLevel') == 'High'][:10]
         results = analysis_result['results']
-        nova_count = sum(1 for r in results if r.get('analysisSource') == 'amazon_nova')
-        rule_count = len(results) - nova_count
+        ai_count = sum(1 for r in results if r.get("analysisSource") == "llm")
+        rule_count = len(results) - ai_count
 
         return {
             "success": True,
@@ -188,9 +191,11 @@ async def upload_journal_entries(
             "hasGroundTruth": ground_truth is not None,
             "summary": {
                 **analysis_result['summary'],
-                "novaEntryCount": nova_count,
+                "aiEntryCount": ai_count,
+                "novaEntryCount": ai_count,
                 "ruleBasedEntryCount": rule_count,
-                "novaUsed": nova_count > 0,
+                "aiUsed": ai_count > 0,
+                "novaUsed": ai_count > 0,
             },
             "metrics": analysis_result['metrics'],
             "confusionMatrix": analysis_result['confusionMatrix'],
@@ -224,7 +229,7 @@ async def analyze_single_entry(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Analyze single journal entry with Nova AI.
+    Analyze single journal entry with LLM-assisted analysis.
     
     Entry should have: id, date, account, description, debit, credit, preparer, approver
     """
@@ -271,7 +276,7 @@ async def analyze_batch_entries(
         raise HTTPException(status_code=400, detail="Maximum 1000 entries per batch")
     
     try:
-        results = await nova_service.analyze_batch(entries)
+        results = nova_service.analyze_batch(entries)
         
         # Summary statistics
         total_risk_score = sum(r.get('riskScore', 0) for r in results)

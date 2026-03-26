@@ -133,7 +133,7 @@ const CFODecisionIntelligence: React.FC = () => {
                 <div>
                   <h1 className="text-3xl font-bold">CFO Decision Intelligence</h1>
                   <p className="text-amber-50 text-sm">
-                    Strategic decisions powered by Amazon Nova AI
+                    Strategic decisions powered by AI
                   </p>
                 </div>
               </div>

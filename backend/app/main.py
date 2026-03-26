@@ -4,7 +4,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.routes import upload_routes, auth_routes, cfo_dashboard, ifrs_statements, nova, fpa_variance, r2r_history, stateful_journal
+from app.api.routes import upload_routes, auth_routes, cfo_dashboard, ifrs_statements, nova, nova_legacy, fpa_variance, r2r_history, stateful_journal
 from app.db import init_db
 
 app = FastAPI(
@@ -33,6 +33,7 @@ app.include_router(upload_routes.router)
 app.include_router(cfo_dashboard.router)
 app.include_router(ifrs_statements.router)
 app.include_router(nova.router, prefix="/api")
+app.include_router(nova_legacy.router, prefix="/api")
 app.include_router(fpa_variance.router)
 app.include_router(r2r_history.router)
 app.include_router(stateful_journal.router)

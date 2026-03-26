@@ -443,7 +443,7 @@ const BuildVsBuy: React.FC<BuildVsBuyProps> = ({ onSaveToAudit }) => {
             <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200 p-6">
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">🤖 AI Recommendation (Amazon Nova)</h3>
+                  <h3 className="text-lg font-semibold text-gray-900">🤖 AI Recommendation</h3>
                   <p className="text-sm text-gray-600 mt-1">Powered by AWS Bedrock</p>
                 </div>
                 <div className="text-right">

@@ -28,7 +28,12 @@ function App() {
   return (
     <AgentActivityProvider>
       <ClientProvider>
-      <BrowserRouter>
+      <BrowserRouter
+        future={{
+          v7_startTransition: true,
+          v7_relativeSplatPath: true,
+        }}
+      >
         <Routes>
           {/* Landing Page - First page users see */}
           <Route path="/" element={<LandingPage />} />

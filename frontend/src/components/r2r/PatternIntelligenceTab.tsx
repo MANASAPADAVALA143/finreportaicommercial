@@ -80,8 +80,8 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
       const isAuthError = /invalid|403|UnrecognizedClient|security token|credentials/i.test(msg);
       setNovaSummary(
         isAuthError
-          ? 'Nova summary unavailable: AWS credentials are missing or invalid. Set VITE_AWS_ACCESS_KEY_ID and VITE_AWS_SECRET_ACCESS_KEY in .env (and VITE_AWS_REGION if needed), then restart the app.'
-          : 'Unable to generate Nova summary. Review the metrics above.'
+          ? 'AI summary unavailable: set VITE_API_URL and configure ANTHROPIC_API_KEY or GOOGLE_API_KEY in backend/.env, then restart.'
+          : 'Unable to generate AI summary. Review the metrics above.'
       );
     } finally {
       setNovaLoading(false);
@@ -149,7 +149,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
           <p className="text-2xl font-bold text-gray-900">{s.anomalyRate}%</p>
         </div>
         <div className="bg-white rounded-xl shadow border border-gray-200 p-4">
-          <p className="text-xs text-gray-500 uppercase">Nova Calls</p>
+          <p className="text-xs text-gray-500 uppercase">LLM calls</p>
           <p className="text-2xl font-bold text-purple-600">{s.novaCallsMade}</p>
         </div>
       </div>
@@ -191,7 +191,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
       <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-6">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-            <Shield className="w-5 h-5 text-blue-600" /> Nova AI Summary
+            <Shield className="w-5 h-5 text-blue-600" /> AI Summary
           </h3>
           <button
             onClick={handleNovaSummary}
@@ -210,7 +210,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
           <div>
             <h3 className="text-base font-bold text-gray-900">Pattern Risk Entries</h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              ML 40% · Statistical 30% · Rules 20% · Nova 10% (HIGH risk only)
+              ML 40% · Statistical 30% · Rules 20% · LLM 10% (HIGH risk only)
             </p>
           </div>
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
@@ -244,7 +244,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
             { label: 'ML anomalies', count: result.entries.filter((e) => e.mlScore >= 0.7).length, color: 'border-red-200 bg-red-50', textColor: 'text-red-700', icon: '💰' },
             { label: 'Statistical flags', count: result.entries.filter((e) => e.statScore >= 0.7).length, color: 'border-orange-200 bg-orange-50', textColor: 'text-orange-700', icon: '📊' },
             { label: 'Rules triggered', count: result.entries.filter((e) => e.rulesScore >= 0.4).length, color: 'border-amber-200 bg-amber-50', textColor: 'text-amber-700', icon: '📋' },
-            { label: 'Nova explained', count: result.entries.filter((e) => e.novaExplanation).length, color: 'border-purple-200 bg-purple-50', textColor: 'text-purple-700', icon: '🤖' },
+            { label: 'AI explained', count: result.entries.filter((e) => e.novaExplanation).length, color: 'border-purple-200 bg-purple-50', textColor: 'text-purple-700', icon: '🤖' },
           ].map((card) => (
             <div key={card.label} className={`rounded-lg border ${card.color} p-3`}>
               <div className="flex items-center justify-between">
@@ -345,7 +345,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
                               )}
                               {entry.novaExplanation && (
                                 <p className="text-xs text-gray-600 mt-2 p-2 bg-blue-50 rounded border border-blue-100">
-                                  <strong>Nova:</strong> {entry.novaExplanation}
+                                  <strong>AI:</strong> {entry.novaExplanation}
                                 </p>
                               )}
                               <div className="flex gap-2 items-center mt-3 flex-wrap">
@@ -391,7 +391,7 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
           )}
         </div>
         <div className="flex items-center gap-6 mt-3 px-1 flex-wrap">
-          <p className="text-xs text-gray-400">ML / Stat / Rules / Nova = 0–100% · Click row to expand flags and Nova explanation · Feedback improves model</p>
+          <p className="text-xs text-gray-400">ML / Stat / Rules / LLM = 0–100% · Click row to expand flags and AI explanation · Feedback improves model</p>
         </div>
       </div>
 

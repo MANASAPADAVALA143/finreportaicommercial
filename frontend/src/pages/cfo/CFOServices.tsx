@@ -206,7 +206,7 @@ USER QUESTION: ${userMessage}`;
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
-      const res = await fetch(`${API_BASE}/api/nova/voice`, {
+      const res = await fetch(`${API_BASE}/api/ai/voice`, {
         method: 'POST',
         headers,
         body: formData,
@@ -235,7 +235,7 @@ USER QUESTION: ${userMessage}`;
         role: 'assistant',
         content: data.text_response,
         timestamp: new Date().toISOString(),
-        sources: ['Voice AI · Nova 2 Sonic'],
+        sources: ['Voice AI · CFO Assistant'],
       };
       setMessages((prev) => [...prev, newUserMsg, newAssistantMsg]);
       markActive('voice');
@@ -387,7 +387,7 @@ USER QUESTION: ${userMessage}`;
               <span className="text-xs text-gray-500">Excel/CSV with sheet: CFO_Services_Context</span>
               <div className="text-right">
                 <div className="text-sm text-gray-600">Powered by</div>
-                <div className="font-semibold text-purple-600">Amazon Nova</div>
+                <div className="font-semibold text-purple-600">AI Assistant</div>
               </div>
             </div>
           </div>
@@ -475,7 +475,7 @@ USER QUESTION: ${userMessage}`;
                           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
                           <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                         </div>
-                        <span className="text-sm text-gray-600">Nova is thinking...</span>
+                        <span className="text-sm text-gray-600">Assistant is thinking...</span>
                       </div>
                     ) : (
                       <>
@@ -513,7 +513,7 @@ USER QUESTION: ${userMessage}`;
 
             {/* Voice AI Panel */}
             <div className="border-t border-gray-200 p-4 bg-gradient-to-br from-slate-50 to-blue-50">
-              <div className="text-sm font-semibold text-gray-800 mb-3">🎙 Ask Nova by Voice</div>
+              <div className="text-sm font-semibold text-gray-800 mb-3">🎙 Ask by Voice</div>
               {!supportsMediaRecorder ? (
                 <p className="text-sm text-amber-700">Voice not supported in this browser. Use Chrome or Edge.</p>
               ) : (
@@ -547,13 +547,13 @@ USER QUESTION: ${userMessage}`;
                       ) : (
                         <Mic size={18} />
                       )}
-                      {voiceState === 'recording' ? 'Listening...' : voiceState === 'processing' ? 'Nova is thinking...' : 'Hold to Speak'}
+                      {voiceState === 'recording' ? 'Listening...' : voiceState === 'processing' ? 'Thinking...' : 'Hold to Speak'}
                     </button>
                     <span className={`text-xs ${voiceState === 'speaking' ? 'text-blue-600 font-medium' : 'text-gray-600'}`}>
                       {voiceState === 'idle' && '● Ready to listen'}
                       {voiceState === 'recording' && '● Listening...'}
-                      {voiceState === 'processing' && '● Nova is thinking...'}
-                      {voiceState === 'speaking' && '● Nova is speaking...'}
+                      {voiceState === 'processing' && '● Thinking...'}
+                      {voiceState === 'speaking' && '● Speaking reply...'}
                       {voiceState === 'error' && '● Could not understand, try again'}
                     </span>
                   </div>
@@ -567,7 +567,7 @@ USER QUESTION: ${userMessage}`;
                   {lastVoiceResponse && (
                     <div className="flex flex-wrap items-start gap-3">
                       <div className="flex-1 min-w-0">
-                        <span className="text-gray-600 text-sm">Nova replied: </span>
+                        <span className="text-gray-600 text-sm">Assistant: </span>
                         <p className="text-gray-800 text-sm mt-0.5">{lastVoiceResponse}</p>
                       </div>
                       {voiceAudioUrl && (
@@ -1007,7 +1007,7 @@ USER QUESTION: ${userMessage}`;
             <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl border-2 border-purple-200 p-6">
               <div className="flex items-center gap-3 mb-4">
                 <Sparkles className="text-purple-600" size={24} />
-                <h3 className="text-lg font-bold text-gray-900">AI DIAGNOSIS (Nova)</h3>
+                <h3 className="text-lg font-bold text-gray-900">AI DIAGNOSIS</h3>
               </div>
               <p className="text-gray-700 leading-relaxed mb-4">{healthScore.aiSummary}</p>
             </div>

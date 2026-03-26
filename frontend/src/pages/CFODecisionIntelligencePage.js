@@ -57,7 +57,7 @@ const BtnOutline = ({ children, active, onClick }) => (_jsx("button", { onClick:
         borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: font, flex: 1 }, children: children }));
 const Divider = () => _jsx("div", { style: { borderTop: `1px solid ${C.borderLight}`, margin: "16px 0" } });
 const CheckIcon = ({ ok }) => (_jsx("span", { style: { fontSize: 14 }, children: ok === true ? "✅" : ok === false ? "❌" : "⚠️" }));
-function buildNovaPrompt(type, inputs = {}) {
+function buildDecisionPrompt(type, inputs = {}) {
     const prompts = {
         investment: `You are a CFO-level financial advisor for an Indian company. Analyse this capital investment and respond ONLY with a JSON object — no markdown, no preamble.
 
@@ -111,15 +111,15 @@ Respond with this exact JSON structure:
     };
     return prompts[type] ?? prompts.investment;
 }
-// ─── Call AWS Bedrock Nova via backend ───────────────────────────────────────
-async function callNova(type, inputs = {}) {
-    const prompt = buildNovaPrompt(type, inputs);
+// ─── Call backend LLM (Anthropic / Gemini) ───────────────────────────────────────
+async function callDecisionAI(type, inputs = {}) {
+    const prompt = buildDecisionPrompt(type, inputs);
     const API_URL = (typeof window !== "undefined" && window.FINREPORTAI_API_URL) || "http://localhost:8000";
-    const res = await fetch(`${API_URL}/api/nova/invoke`, {
+    const res = await fetch(`${API_URL}/api/ai/invoke`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            model_id: "amazon.nova-lite-v1:0",
+            model_id: "",
             prompt,
             max_tokens: 600,
             temperature: 0.3,
@@ -133,7 +133,7 @@ async function callNova(type, inputs = {}) {
     const raw = data.text.replace(/```json|```/g, "").trim();
     return JSON.parse(raw);
 }
-// ─── AI Recommendation Panel (real Nova calls) ────────────────────────────────
+// ─── AI Recommendation Panel (backend LLM) ────────────────────────────────
 const AIPanel = ({ type = "investment", inputs = {} }) => {
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -143,7 +143,7 @@ const AIPanel = ({ type = "investment", inputs = {} }) => {
         setError(null);
         setResult(null);
         try {
-            const data = await callNova(type, inputs);
+            const data = await callDecisionAI(type, inputs);
             setResult(data);
         }
         catch (e) {
@@ -160,19 +160,19 @@ const AIPanel = ({ type = "investment", inputs = {} }) => {
     const isCredentialError = error && /security token|invalid.*token|AI call failed|credentials|\.env/i.test(error);
     const borderColor = loading ? C.blueLight : isCredentialError ? C.blue : error ? C.red : result ? decisionColor : C.blue;
     const decisionIcon = decisionColor === C.green ? "✅" : decisionColor === C.amber ? "⚠️" : "❌";
-    return (_jsxs(Card, { style: { borderLeft: `4px solid ${borderColor}` }, children: [_jsxs("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }, children: [_jsxs("div", { children: [_jsxs("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }, children: ["\uD83E\uDD16 AI Recommendation", _jsx("span", { style: { fontWeight: 400, color: C.textSub, fontSize: 11 }, children: "Amazon Nova Lite \u00B7 AWS Bedrock" })] }), _jsx("div", { style: { fontSize: 11, color: C.textSub, marginTop: 2 }, children: "Powered by generative AI \u2014 review before acting" })] }), _jsxs("div", { style: { textAlign: "right" }, children: [_jsx("div", { style: { fontSize: 22, fontWeight: 900, fontFamily: mono,
+    return (_jsxs(Card, { style: { borderLeft: `4px solid ${borderColor}` }, children: [_jsxs("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }, children: [_jsxs("div", { children: [_jsxs("div", { style: { fontSize: 13, fontWeight: 700, color: C.text, display: "flex", alignItems: "center", gap: 6 }, children: ["\uD83E\uDD16 AI Recommendation", _jsx("span", { style: { fontWeight: 400, color: C.textSub, fontSize: 11 }, children: "AI \u00B7 Claude / Gemini (backend)" })] }), _jsx("div", { style: { fontSize: 11, color: C.textSub, marginTop: 2 }, children: "Powered by generative AI \u2014 review before acting" })] }), _jsxs("div", { style: { textAlign: "right" }, children: [_jsx("div", { style: { fontSize: 22, fontWeight: 900, fontFamily: mono,
                                     color: result ? (result.confidence >= 75 ? C.green : result.confidence >= 50 ? C.amber : C.red) : C.textMute }, children: result ? `${result.confidence}%` : "—" }), _jsx("div", { style: { fontSize: 10, color: C.textSub, letterSpacing: "0.06em" }, children: "CONFIDENCE" })] })] }), !result && !loading && (!error || isCredentialError) && (_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12, padding: "14px 16px",
-                    background: C.bluePale, borderRadius: 8, border: `1px solid ${C.blueBorder}` }, children: [_jsx("span", { style: { fontSize: 22 }, children: "\uD83E\uDD16" }), _jsxs("div", { style: { flex: 1 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: C.blue }, children: "Ready to analyse" }), _jsx("div", { style: { fontSize: 11, color: C.textSub }, children: "Click Generate \u2014 Amazon Nova will analyse your inputs via AWS Bedrock" })] }), _jsx("button", { onClick: handleGenerate, style: { background: C.blue, color: C.white, border: "none",
+                    background: C.bluePale, borderRadius: 8, border: `1px solid ${C.blueBorder}` }, children: [_jsx("span", { style: { fontSize: 22 }, children: "\uD83E\uDD16" }), _jsxs("div", { style: { flex: 1 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: C.blue }, children: "Ready to analyse" }), _jsx("div", { style: { fontSize: 11, color: C.textSub }, children: "Click Generate \u2014 the backend LLM will analyse your inputs" })] }), _jsx("button", { onClick: handleGenerate, style: { background: C.blue, color: C.white, border: "none",
                             borderRadius: 7, padding: "8px 18px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: font }, children: "Generate \u25B6" })] })), loading && (_jsxs("div", { style: { padding: "20px 16px", background: C.bluePale, borderRadius: 8,
                     border: `1px solid ${C.blueBorder}`, display: "flex", alignItems: "center", gap: 12 }, children: [_jsx("div", { style: { display: "flex", gap: 5 }, children: [0, 1, 2].map(i => (_jsx("div", { style: { width: 8, height: 8, borderRadius: "50%", background: C.blue,
-                                animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` } }, i))) }), _jsx("span", { style: { fontSize: 13, color: C.blue, fontWeight: 500 }, children: "Amazon Nova is analysing your inputs..." }), _jsx("style", { children: `@keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1.2)}}` })] })), error && !loading && !/security token|invalid.*token|AI call failed|credentials|\.env/i.test(error) && (_jsxs("div", { style: { background: C.redBg, border: `1px solid ${C.redBorder}`, borderRadius: 8,
-                    padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [_jsxs("div", { children: [_jsx("div", { style: { fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 3 }, children: "\u26A0\uFE0F Nova API Error" }), _jsx("div", { style: { fontSize: 11, color: C.red }, children: error })] }), _jsx("button", { onClick: handleGenerate, style: { background: C.red, color: C.white, border: "none",
+                                animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite` } }, i))) }), _jsx("span", { style: { fontSize: 13, color: C.blue, fontWeight: 500 }, children: "AI is analysing your inputs..." }), _jsx("style", { children: `@keyframes pulse{0%,100%{opacity:0.3;transform:scale(0.8)}50%{opacity:1;transform:scale(1.2)}}` })] })), error && !loading && !/security token|invalid.*token|AI call failed|credentials|\.env/i.test(error) && (_jsxs("div", { style: { background: C.redBg, border: `1px solid ${C.redBorder}`, borderRadius: 8,
+                    padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [_jsxs("div", { children: [_jsx("div", { style: { fontSize: 12, fontWeight: 700, color: C.red, marginBottom: 3 }, children: "\u26A0\uFE0F AI API Error" }), _jsx("div", { style: { fontSize: 11, color: C.red }, children: error })] }), _jsx("button", { onClick: handleGenerate, style: { background: C.red, color: C.white, border: "none",
                             borderRadius: 7, padding: "8px 14px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: font, whiteSpace: "nowrap" }, children: "Retry \u21BA" })] })), result && !loading && (_jsxs("div", { style: { display: "flex", flexDirection: "column", gap: 12 }, children: [_jsxs("div", { style: { display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 16px",
                             background: decisionColor === C.green ? C.greenBg : decisionColor === C.amber ? C.amberBg : C.redBg,
                             borderRadius: 8, border: `1px solid ${decisionColor === C.green ? C.greenBorder : decisionColor === C.amber ? C.amberBorder : C.redBorder}` }, children: [_jsx("span", { style: { fontSize: 18, marginTop: 1 }, children: decisionIcon }), _jsxs("div", { children: [_jsx("div", { style: { fontSize: 12, fontWeight: 800, color: decisionColor, letterSpacing: "0.06em", marginBottom: 4 }, children: result.decision }), _jsx("div", { style: { fontSize: 12, color: C.textMid, lineHeight: 1.6 }, children: result.summary })] })] }), _jsx("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }, children: (result.factors || []).map((f, i) => (_jsxs("div", { style: { padding: "10px 12px", borderRadius: 7,
                                 background: f.ok === true ? C.greenBg : f.ok === false ? C.redBg : C.amberBg,
                                 border: `1px solid ${f.ok === true ? C.greenBorder : f.ok === false ? C.redBorder : C.amberBorder}` }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }, children: [_jsx("span", { style: { fontSize: 12 }, children: f.ok === true ? "✅" : f.ok === false ? "❌" : "⚠️" }), _jsx("span", { style: { fontSize: 11, fontWeight: 700, color: C.text }, children: f.label })] }), _jsx("div", { style: { fontSize: 11, color: C.textSub, lineHeight: 1.4 }, children: f.detail })] }, i))) }), _jsxs("div", { style: { padding: "10px 14px", background: C.bg, borderRadius: 7,
-                            border: `1px solid ${C.border}`, fontSize: 12 }, children: [_jsx("strong", { style: { color: C.text }, children: "\uD83D\uDCCB Recommended Action: " }), _jsx("span", { style: { color: C.textMid }, children: result.action })] }), _jsxs("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [_jsx("span", { style: { fontSize: 10, color: C.textMute }, children: "Generated by Amazon Nova Lite \u00B7 AWS Bedrock \u00B7 Not financial advice" }), _jsx("button", { onClick: handleGenerate, style: { background: "none", border: "none",
+                            border: `1px solid ${C.border}`, fontSize: 12 }, children: [_jsx("strong", { style: { color: C.text }, children: "\uD83D\uDCCB Recommended Action: " }), _jsx("span", { style: { color: C.textMid }, children: result.action })] }), _jsxs("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" }, children: [_jsx("span", { style: { fontSize: 10, color: C.textMute }, children: "Generated by AI \u00B7 Not financial advice" }), _jsx("button", { onClick: handleGenerate, style: { background: "none", border: "none",
                                     fontSize: 11, color: C.textSub, cursor: "pointer", textDecoration: "underline" }, children: "Re-generate \u21BA" })] })] }))] }));
 };
 // ─── CFO Decision Panel ──────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ export default function CFODecisionIntelligencePage() {
     return (_jsxs("div", { style: { fontFamily: font, background: C.bg, minHeight: "100vh" }, children: [_jsx("style", { children: `@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500;700&display=swap');*{box-sizing:border-box;margin:0;padding:0;}` }), showBrief && _jsx(MorningBriefPanel, { onClose: () => setShowBrief(false) }), _jsxs("div", { style: { background: `linear-gradient(135deg, ${C.navy} 0%, #1E3A8A 50%, #1D4ED8 100%)`,
                     padding: "0 24px", boxShadow: "0 2px 12px rgba(15,45,94,0.3)" }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 16, paddingBottom: 10 }, children: [_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 12 }, children: [_jsx("button", { onClick: () => navigate("/dashboard"), style: { background: "rgba(255,255,255,0.1)", border: "none", color: "#93C5FD",
                                             borderRadius: 6, width: 32, height: 32, cursor: "pointer", fontSize: 14 }, children: "\u2190" }), _jsx("div", { style: { width: 36, height: 36, borderRadius: 9, background: "rgba(255,255,255,0.15)",
-                                            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }, children: "\uD83E\uDDE0" }), _jsxs("div", { children: [_jsx("div", { style: { fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: "-0.02em" }, children: "CFO Decision Intelligence" }), _jsx("div", { style: { fontSize: 11, color: "#93C5FD" }, children: "Strategic decisions powered by Amazon Nova AI" })] })] }), _jsxs("div", { style: { display: "flex", gap: 10 }, children: [_jsx("button", { style: { background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
+                                            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }, children: "\uD83E\uDDE0" }), _jsxs("div", { children: [_jsx("div", { style: { fontSize: 18, fontWeight: 800, color: C.white, letterSpacing: "-0.02em" }, children: "CFO Decision Intelligence" }), _jsx("div", { style: { fontSize: 11, color: "#93C5FD" }, children: "Strategic decisions powered by AI" })] })] }), _jsxs("div", { style: { display: "flex", gap: 10 }, children: [_jsx("button", { style: { background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
                                             color: C.white, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600,
                                             cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }, children: "\u2B06 Upload Data" }), _jsxs("button", { onClick: () => setShowBrief(true), style: { background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.2)",
                                             color: C.white, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600,

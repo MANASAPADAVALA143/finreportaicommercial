@@ -228,6 +228,8 @@ async def analyze_journal_entries(
             "highRisk": high,
             "mediumRisk": medium,
             "lowRisk": low,
+            "aiUsed": False,
+            "aiEntryCount": 0,
             "novaUsed": False,
             "novaEntryCount": 0,
         },

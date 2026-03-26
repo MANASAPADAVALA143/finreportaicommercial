@@ -11,7 +11,6 @@ import json
 from datetime import datetime
 
 from app.services.ifrs_mapper import IFRSMapper
-from app.services.nova_service import NovaService
 
 router = APIRouter(prefix="/api/ifrs", tags=["ifrs-statements"])
 
