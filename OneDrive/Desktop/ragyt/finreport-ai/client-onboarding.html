@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • Client Onboarding</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    /* ── Onboarding-specific styles ──────────────────────────────────── */
+    .tab-bar { display:flex; gap:6px; margin-bottom:18px; background:var(--card-bg); border:1px solid var(--border); border-radius:14px; padding:6px; width:fit-content; }
+    .tab-btn { background:transparent; border:none; color:var(--muted); padding:8px 16px; border-radius:10px; cursor:pointer; font-family:var(--font); font-size:.9rem; font-weight:600; transition:.2s ease; white-space:nowrap; }
+    .tab-btn.active { background:rgba(45,212,207,0.12); color:var(--cyan); }
+    .tab-btn:hover:not(.active) { color:var(--text); background:rgba(255,255,255,0.04); }
+    .tab-pane { display:none; }
+    .tab-pane.active { display:block; }
+
+    /* Status badges */
+    .status-pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+    .status-intake { background:rgba(107,140,174,.18); color:#6B8CAE; }
+    .status-documents_pending { background:rgba(251,146,60,.18); color:#FB923C; }
+    .status-in_review { background:rgba(167,139,250,.18); color:#A78BFA; }
+    .status-complete { background:rgba(52,211,153,.18); color:#34D399; }
+
+    /* Progress bar */
+    .progress-bar-wrap { background:rgba(45,212,207,.1); border-radius:999px; height:6px; overflow:hidden; flex:1; }
+    .progress-bar-fill { height:100%; border-radius:999px; background:var(--gradient); transition:width .4s ease; }
+
+    /* Form grid */
+    .form-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+    .form-group { display:flex; flex-direction:column; gap:5px; }
+    .form-group label { color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+    .form-group input, .form-group select, .form-group textarea {
+      background:#0B162A; border:1px solid rgba(255,255,255,.1); color:#EEF2FF;
+      border-radius:8px; padding:10px 12px; font-family:var(--font); font-size:.9rem;
+      transition:.2s ease; outline:none;
+    }
+    .form-group input:focus, .form-group select:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba(45,212,207,.12); }
+    .form-group select option { background:#0D1B2E; }
+
+    /* Checklist items */
+    .doc-item { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:var(--card-inner); border:1px solid rgba(255,255,255,.06); margin-bottom:6px; }
+    .doc-item .doc-name { flex:1; font-size:.9rem; }
+    .doc-item .doc-priority { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; }
+    .priority-critical { background:rgba(248,113,113,.15); color:#F87171; }
+    .priority-important { background:rgba(251,146,60,.15); color:#FB923C; }
+    .priority-optional { background:rgba(107,140,174,.15); color:#6B8CAE; }
+    .doc-check { width:18px; height:18px; border-radius:5px; cursor:pointer; accent-color:var(--cyan); }
+
+    /* Client cards */
+    .client-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr 1fr auto; align-items:center; gap:12px; padding:12px 14px; border-radius:10px; background:var(--card-inner); border:1px solid rgba(255,255,255,.06); margin-bottom:8px; transition:.2s ease; }
+    .client-row:hover { border-color:rgba(45,212,207,.25); }
+    .client-name { font-weight:700; font-size:.9rem; }
+    .client-company { color:var(--muted); font-size:.8rem; margin-top:2px; }
+    .client-flag { font-size:1.1rem; }
+
+    /* Timeline */
+    .timeline { position:relative; padding-left:28px; }
+    .timeline::before { content:''; position:absolute; left:9px; top:0; bottom:0; width:2px; background:rgba(45,212,207,.2); }
+    .timeline-item { position:relative; margin-bottom:20px; }
+    .timeline-item::before { content:''; position:absolute; left:-23px; top:3px; width:12px; height:12px; border-radius:50%; border:2px solid var(--border); background:var(--card-bg); }
+    .timeline-item.done::before { background:var(--cyan); border-color:var(--cyan); box-shadow:0 0 8px rgba(45,212,207,.5); }
+    .timeline-step { font-weight:700; font-size:.9rem; }
+    .timeline-date { color:var(--muted); font-size:.78rem; margin-top:2px; font-family:var(--mono); }
+
+    /* Upload zone */
+    .upload-zone { border:2px dashed rgba(45,212,207,.3); border-radius:14px; padding:36px 20px; text-align:center; cursor:pointer; transition:.2s ease; background:rgba(45,212,207,.03); }
+    .upload-zone:hover, .upload-zone.drag-over { border-color:var(--cyan); background:rgba(45,212,207,.07); }
+    .upload-zone input[type=file] { display:none; }
+
+    /* WhatsApp preview */
+    .wa-bubble { background:#1A3A2A; border:1px solid rgba(52,211,153,.2); border-radius:16px; border-bottom-left-radius:4px; padding:14px 16px; font-size:.88rem; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-width:420px; color:#E8F5E9; font-family:var(--font); }
+    .wa-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+    .wa-avatar { width:38px; height:38px; border-radius:50%; background:var(--gradient); display:grid; place-items:center; font-weight:800; font-size:.85rem; }
+
+    /* KPI strip */
+    .kpi-strip { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+    .kpi-mini { background:var(--card-bg); border:1px solid var(--border); border-radius:14px; padding:14px; }
+    .kpi-mini .label { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+    .kpi-mini .value { font-family:var(--mono); font-size:1.6rem; font-weight:800; margin:4px 0 2px; }
+
+    /* Section dividers */
+    .section-label { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:18px 0 8px; font-weight:700; }
+
+    /* Verify result */
+    .verify-result { border-radius:10px; padding:12px 14px; margin-top:10px; font-size:.88rem; }
+    .verify-ok { background:rgba(52,211,153,.12); border:1px solid rgba(52,211,153,.25); color:#34D399; }
+    .verify-fail { background:rgba(248,113,113,.12); border:1px solid rgba(248,113,113,.25); color:#F87171; }
+
+    /* Spinner */
+    .spin { display:inline-block; width:16px; height:16px; border:2px solid rgba(45,212,207,.3); border-top-color:var(--cyan); border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* Service checkboxes */
+    .service-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:6px; }
+    .service-item { display:flex; align-items:center; gap:8px; background:var(--card-inner); border:1px solid rgba(255,255,255,.07); border-radius:8px; padding:8px 10px; cursor:pointer; transition:.15s; }
+    .service-item:hover { border-color:rgba(45,212,207,.3); }
+    .service-item input { accent-color:var(--cyan); }
+
+    /* Empty state */
+    .empty-state { text-align:center; padding:48px 20px; color:var(--muted); }
+    .empty-state .icon { font-size:2.5rem; margin-bottom:12px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="#">📊 Financial Analysis</a>
+      <a href="#">📁 Reports</a>
+      <a class="active" href="client-onboarding.html">🤝 Client Onboarding</a>
+      <a href="#">⚙️ Settings</a>
+    </nav>
+    <div style="text-align:center;">
+      <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+      <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">CA Portal</div>
+      <div style="color:#6B8CAE;font-size:.85rem;">Onboarding Engine • <span style="color:#34D399;">●</span><span> Online</span></div>
+    </div>
+  </aside>
+
+  <!-- ── Main ──────────────────────────────────────────────────────────── -->
+  <main class="main">
+    <div class="top-header">
+      <div>
+        <div style="font-size:20px;font-weight:700;">Client Onboarding Engine</div>
+        <div class="meta">AI-powered document collection for CA/CPA firms — 6 countries</div>
+      </div>
+      <div class="actions">
+        <div class="badge" id="currentDate"></div>
+        <button class="btn-cta" style="padding:8px 16px;" onclick="showTab('intake')">+ New Client</button>
+      </div>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="kpi-strip" id="kpiStrip">
+      <div class="kpi-mini"><div class="label">Total Clients</div><div class="value" id="kTotal">—</div><div style="font-size:.8rem;color:var(--muted);">All onboarded</div></div>
+      <div class="kpi-mini"><div class="label">Complete</div><div class="value" id="kComplete" style="color:var(--green);">—</div><div style="font-size:.8rem;color:var(--muted);">Fully onboarded</div></div>
+      <div class="kpi-mini"><div class="label">In Review</div><div class="value" id="kReview" style="color:var(--purple);">—</div><div style="font-size:.8rem;color:var(--muted);">Docs received</div></div>
+      <div class="kpi-mini"><div class="label">Pending Docs</div><div class="value" id="kPending" style="color:var(--amber);">—</div><div style="font-size:.8rem;color:var(--muted);">Awaiting submission</div></div>
+    </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="showTab('clients')" id="tab-clients">👥 Clients</button>
+      <button class="tab-btn" onclick="showTab('intake')" id="tab-intake">➕ New Client</button>
+      <button class="tab-btn" onclick="showTab('checklist')" id="tab-checklist">📋 Doc Checklist</button>
+      <button class="tab-btn" onclick="showTab('upload')" id="tab-upload">📤 Upload & Verify</button>
+      <button class="tab-btn" onclick="showTab('whatsapp')" id="tab-whatsapp">💬 WhatsApp</button>
+      <button class="tab-btn" onclick="showTab('timeline')" id="tab-timeline">🕐 Timeline</button>
+      <button class="tab-btn" onclick="showTab('markets')" id="tab-markets">🌍 Markets</button>
+      <button class="tab-btn" onclick="showTab('pricing')" id="tab-pricing">💰 Pricing</button>
+      <button class="tab-btn" onclick="showTab('roi')" id="tab-roi">📈 ROI Calc</button>
+    </div>
+
+    <!-- ── Tab: Clients ─────────────────────────────────────────────── -->
+    <div class="tab-pane active" id="pane-clients">
+      <div class="card" style="padding:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div class="section-title">All Clients</div>
+          <input id="searchClients" placeholder="🔍 Search clients..." oninput="filterClients()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:7px 12px;font-family:var(--font);font-size:.85rem;outline:none;width:220px;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr auto;gap:12px;padding:0 14px 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">
+          <span>Client / Company</span><span>Country</span><span>Entity</span><span>Status</span><span>Docs</span><span>Actions</span>
+        </div>
+        <!-- Sample clients shown before DB data loads -->
+        <div id="sampleClients">
+          <div class="client-row" style="background:rgba(45,212,207,0.03);">
+            <div><div class="client-name">Harrington &amp; Sons Ltd</div><div class="client-company">Started 2 days ago</div></div>
+            <div>🇬🇧 UK</div><div style="font-size:.8rem;color:var(--muted);">Limited Company</div>
+            <div><span class="status-pill status-in_review">In Review</span></div>
+            <div style="display:flex;align-items:center;gap:8px;min-width:100px;"><div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:85%;background:var(--green)"></div></div><span style="font-family:var(--mono);font-size:.78rem;color:var(--green);">85%</span></div>
+            <div style="font-size:.8rem;color:var(--muted);">Sample</div>
+          </div>
+          <div class="client-row">
+            <div><div class="client-name">Patel Technologies Inc</div><div class="client-company">Started 4 days ago</div></div>
+            <div>🇺🇸 USA</div><div style="font-size:.8rem;color:var(--muted);">S-Corporation</div>
+            <div><span class="status-pill status-documents_pending">Docs Pending</span></div>
+            <div style="display:flex;align-items:center;gap:8px;min-width:100px;"><div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:60%;background:var(--amber)"></div></div><span style="font-family:var(--mono);font-size:.78rem;color:var(--amber);">60%</span></div>
+            <div style="font-size:.8rem;color:var(--muted);">Sample</div>
+          </div>
+          <div class="client-row">
+            <div><div class="client-name">Al Mansouri Trading LLC</div><div class="client-company">Started 6 days ago</div></div>
+            <div>🇦🇪 UAE</div><div style="font-size:.8rem;color:var(--muted);">LLC</div>
+            <div><span class="status-pill status-documents_pending">Docs Pending</span></div>
+            <div style="display:flex;align-items:center;gap:8px;min-width:100px;"><div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:35%;background:var(--red)"></div></div><span style="font-family:var(--mono);font-size:.78rem;color:var(--red);">35%</span></div>
+            <div style="font-size:.8rem;color:var(--muted);">Sample</div>
+          </div>
+          <div class="client-row">
+            <div><div class="client-name">Sydney Ventures Pty</div><div class="client-company">Started 1 day ago</div></div>
+            <div>🇦🇺 Australia</div><div style="font-size:.8rem;color:var(--muted);">Pty Ltd</div>
+            <div><span class="status-pill status-intake">Intake</span></div>
+            <div style="display:flex;align-items:center;gap:8px;min-width:100px;"><div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:20%"></div></div><span style="font-family:var(--mono);font-size:.78rem;color:var(--cyan);">20%</span></div>
+            <div style="font-size:.8rem;color:var(--muted);">Sample</div>
+          </div>
+          <div class="client-row">
+            <div><div class="client-name">Sharma &amp; Associates</div><div class="client-company">Started 3 days ago</div></div>
+            <div>🇮🇳 India</div><div style="font-size:.8rem;color:var(--muted);">Private Limited</div>
+            <div><span class="status-pill status-in_review">In Review</span></div>
+            <div style="display:flex;align-items:center;gap:8px;min-width:100px;"><div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:70%;background:var(--green)"></div></div><span style="font-family:var(--mono);font-size:.78rem;color:var(--green);">70%</span></div>
+            <div style="font-size:.8rem;color:var(--muted);">Sample</div>
+          </div>
+          <div style="text-align:center;padding:10px;font-size:.8rem;color:var(--muted);border-top:1px solid var(--border);margin-top:8px;">↑ Sample data — register clients to see real data</div>
+        </div>
+        <div id="clientList" style="display:none;"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab: New Client Intake ───────────────────────────────────── -->
+    <div class="tab-pane" id="pane-intake">
+      <div class="card" style="padding:20px;max-width:820px;">
+        <div class="section-title" style="margin-bottom:18px;">New Client Intake Form</div>
+        <form id="intakeForm" onsubmit="submitIntake(event)">
+
+          <div class="section-label">Contact Information</div>
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label>Contact Person Name *</label>
+              <input type="text" id="f-name" placeholder="Rajesh Sharma" required />
+            </div>
+            <div class="form-group">
+              <label>Company / Business Name *</label>
+              <input type="text" id="f-company" placeholder="Acme Solutions Pvt. Ltd." required />
+            </div>
+          </div>
+          <div class="form-grid-2" style="margin-top:10px;">
+            <div class="form-group">
+              <label>Email Address *</label>
+              <input type="email" id="f-email" placeholder="rajesh@acme.com" required />
+            </div>
+            <div class="form-group">
+              <label>WhatsApp Number (with country code)</label>
+              <input type="text" id="f-whatsapp" placeholder="+919876543210" />
+            </div>
+          </div>
+
+          <div class="section-label">Business Details</div>
+          <div class="form-grid-3" style="margin-top:0;">
+            <div class="form-group">
+              <label>Country *</label>
+              <select id="f-country" onchange="onCountryChange()" required>
+                <option value="">Select country</option>
+                <option>India</option>
+                <option>UK</option>
+                <option>USA</option>
+                <option>UAE</option>
+                <option>Australia</option>
+                <option>Singapore</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Entity Type *</label>
+              <select id="f-entity" required>
+                <option value="">Select entity type</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Financial Year</label>
+              <select id="f-year">
+                <option>FY 2024-25</option>
+                <option>FY 2023-24</option>
+                <option>FY 2025-26</option>
+                <option>CY 2024</option>
+                <option>CY 2025</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-label">Services Required</div>
+          <div class="service-grid" id="servicesGrid">
+            <label class="service-item"><input type="checkbox" value="Tax Filing"> Tax Filing</label>
+            <label class="service-item"><input type="checkbox" value="Audit"> Audit</label>
+            <label class="service-item"><input type="checkbox" value="GST / VAT"> GST / VAT</label>
+            <label class="service-item"><input type="checkbox" value="Bookkeeping"> Bookkeeping</label>
+            <label class="service-item"><input type="checkbox" value="Payroll"> Payroll</label>
+            <label class="service-item"><input type="checkbox" value="Advisory"> Advisory</label>
+            <label class="service-item"><input type="checkbox" value="Incorporation"> Incorporation</label>
+            <label class="service-item"><input type="checkbox" value="IFRS Compliance"> IFRS Compliance</label>
+            <label class="service-item"><input type="checkbox" value="Transfer Pricing"> Transfer Pricing</label>
+          </div>
+
+          <div id="intakeDocPreview" style="display:none;margin-top:16px;">
+            <div class="section-label">Documents Required (Auto-generated)</div>
+            <div id="previewList" style="max-height:200px;overflow-y:auto;"></div>
+          </div>
+
+          <div style="margin-top:20px;display:flex;gap:10px;">
+            <button type="submit" class="btn-cta" style="padding:10px 28px;" id="intakeSubmitBtn">Register Client &amp; Generate Checklist</button>
+            <button type="button" class="btn-ghost btn-cta" onclick="resetIntake()" style="padding:10px 20px;">Reset</button>
+          </div>
+          <div id="intakeMsg" style="margin-top:10px;font-size:.88rem;"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ── Tab: Document Checklist ──────────────────────────────────── -->
+    <div class="tab-pane" id="pane-checklist">
+      <div style="display:grid;grid-template-columns:300px 1fr;gap:14px;">
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:14px;">Filter Checklist</div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Country</label>
+            <select id="cl-country" onchange="onChecklistCountryChange()">
+              <option value="">Select country</option>
+              <option>India</option><option>UK</option><option>USA</option>
+              <option>UAE</option><option>Australia</option><option>Singapore</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Entity Type</label>
+            <select id="cl-entity" onchange="loadChecklist()">
+              <option value="">Select entity</option>
+            </select>
+          </div>
+          <div style="margin-top:16px;padding:12px;background:var(--card-inner);border-radius:10px;font-size:.82rem;color:var(--muted);">
+            <div style="margin-bottom:6px;"><span style="color:#F87171;">●</span> Critical — required to begin</div>
+            <div style="margin-bottom:6px;"><span style="color:#FB923C;">●</span> Important — needed for filing</div>
+            <div><span style="color:#6B8CAE;">●</span> Optional — recommended</div>
+          </div>
+          <button class="btn-cta" style="width:100%;margin-top:12px;padding:9px;" onclick="printChecklist()">Print Checklist</button>
+        </div>
+        <div class="card" style="padding:16px;" id="checklistPanel">
+          <div class="empty-state"><div class="icon">📋</div>Select a country and entity type to view the document checklist.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Upload & Verify ─────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-upload">
+      <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;">
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:14px;">Select Client</div>
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>Client</label>
+            <select id="up-client" onchange="loadClientDocs()">
+              <option value="">Select client</option>
+            </select>
+          </div>
+          <div id="up-client-info" style="display:none;">
+            <div style="padding:10px;background:var(--card-inner);border-radius:10px;font-size:.85rem;margin-bottom:12px;">
+              <div id="up-client-name" style="font-weight:700;"></div>
+              <div id="up-client-meta" style="color:var(--muted);font-size:.78rem;margin-top:3px;"></div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                <div class="progress-bar-wrap"><div class="progress-bar-fill" id="up-progress-bar" style="width:0%"></div></div>
+                <span id="up-progress-pct" style="font-family:var(--mono);font-size:.8rem;color:var(--cyan);min-width:32px;">0%</span>
+              </div>
+            </div>
+            <div class="section-label">Pending Documents</div>
+            <div id="up-doc-list" style="max-height:260px;overflow-y:auto;"></div>
+          </div>
+        </div>
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:14px;">Upload &amp; AI Verify</div>
+          <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="handleDrop(event)">
+            <input type="file" id="fileInput" onchange="handleFileSelect(event)" accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx" />
+            <div style="font-size:2rem;margin-bottom:8px;">📁</div>
+            <div style="font-weight:700;margin-bottom:4px;">Drop file here or click to browse</div>
+            <div style="color:var(--muted);font-size:.85rem;">PDF, JPG, PNG, DOCX, XLSX — max 10MB</div>
+          </div>
+          <div id="selectedFile" style="display:none;margin-top:10px;padding:10px 12px;background:var(--card-inner);border-radius:10px;font-size:.88rem;display:flex;align-items:center;gap:10px;"></div>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="btn-cta" style="flex:1;padding:10px;" onclick="markDocReceived()" id="markReceivedBtn" disabled>✅ Mark Received</button>
+            <button class="btn-cta" style="flex:1;padding:10px;background:linear-gradient(135deg,#A78BFA,#2DD4CF);" onclick="verifyDocument()" id="verifyBtn" disabled>🔍 AI Verify</button>
+          </div>
+          <div id="verifyResult" style="margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: WhatsApp ────────────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-whatsapp">
+      <div style="display:grid;grid-template-columns:340px 1fr;gap:14px;">
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:14px;">Send Message</div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Client</label>
+            <select id="wa-client" onchange="loadWATemplate()">
+              <option value="">Select client</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:10px;">
+            <label>Message Type</label>
+            <select id="wa-type" onchange="loadWATemplate()">
+              <option value="welcome">Welcome Message</option>
+              <option value="reminder">Document Reminder</option>
+              <option value="complete">Onboarding Complete</option>
+            </select>
+          </div>
+          <div id="wa-client-info" style="display:none;margin-bottom:10px;padding:10px;background:var(--card-inner);border-radius:10px;font-size:.83rem;color:var(--muted);">
+            <span id="wa-number"></span>
+          </div>
+          <button class="btn-cta" style="width:100%;padding:10px;" onclick="sendWhatsApp()" id="waSendBtn">Send via WhatsApp</button>
+          <div id="waSendResult" style="margin-top:8px;font-size:.85rem;"></div>
+          <div style="margin-top:12px;padding:10px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:10px;font-size:.8rem;color:#F87171;">
+            ⚠️ WATI API key required in .env to actually send messages. Preview always works.
+          </div>
+        </div>
+        <div class="card" style="padding:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <div class="section-title">Message Preview</div>
+            <select id="wa-preview-country" onchange="loadWAPreviewByCountry()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:6px 10px;font-family:var(--font);font-size:.83rem;">
+              <option value="">Country templates</option>
+              <option>India</option><option>UK</option><option>USA</option>
+              <option>UAE</option><option>Australia</option><option>Singapore</option>
+            </select>
+          </div>
+          <div class="wa-header">
+            <div class="wa-avatar">CA</div>
+            <div>
+              <div style="font-weight:700;font-size:.9rem;">CA Firm</div>
+              <div style="color:var(--muted);font-size:.78rem;">WhatsApp Business</div>
+            </div>
+          </div>
+          <div class="wa-bubble" id="waBubble">Select a client and message type to preview the WhatsApp template.</div>
+          <div style="text-align:right;margin-top:6px;font-size:.75rem;color:var(--muted);">Sent via WATI ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Status Timeline ─────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-timeline">
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:14px;">
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:14px;">Select Client</div>
+          <div class="form-group">
+            <label>Client</label>
+            <select id="tl-client" onchange="loadTimeline()">
+              <option value="">Select client</option>
+            </select>
+          </div>
+          <div id="tl-summary" style="margin-top:12px;display:none;">
+            <div class="section-label">Progress</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <div class="progress-bar-wrap"><div class="progress-bar-fill" id="tl-progress" style="width:0%"></div></div>
+              <span id="tl-pct" style="font-family:var(--mono);font-size:.85rem;color:var(--cyan);min-width:36px;">0%</span>
+            </div>
+            <div id="tl-docs-summary" style="font-size:.83rem;color:var(--muted);"></div>
+          </div>
+        </div>
+        <div class="card" style="padding:16px;">
+          <div class="section-title" style="margin-bottom:18px;">Onboarding Timeline</div>
+          <div id="timelinePanel">
+            <div class="empty-state"><div class="icon">🕐</div>Select a client to view their onboarding timeline.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Global Markets ──────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-markets">
+      <div style="margin-bottom:16px;"><div style="font-size:20px;font-weight:700;">Global Markets</div><div style="color:var(--muted);font-size:.88rem;margin-top:2px;">Client Onboarding Engine coverage — 6 major markets</div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇺🇸</div>
+          <div style="font-weight:700;font-size:1rem;">United States</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">52,000+ CPA firms • $2M–$50M revenue firms</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">IRS Filing</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">1040/1120</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">QuickBooks</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">Sales Tax</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">$15K–$25K <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ $3K–$5K/month retainer</div>
+        </div>
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇬🇧</div>
+          <div style="font-weight:700;font-size:1rem;">United Kingdom</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">30,000+ ACCA/ICAEW firms • MTD compliance</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(167,139,250,.1);color:var(--purple);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">HMRC MTD</span>
+            <span style="background:rgba(167,139,250,.1);color:var(--purple);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">SA100</span>
+            <span style="background:rgba(167,139,250,.1);color:var(--purple);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">CT600</span>
+            <span style="background:rgba(167,139,250,.1);color:var(--purple);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">IFRS</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">£8K–£15K <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ £1.5K–£3K/month retainer</div>
+        </div>
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇦🇪</div>
+          <div style="font-weight:700;font-size:1rem;">UAE / Dubai</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">New Corporate Tax • VAT mandatory • Fast growing</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(251,146,60,.1);color:var(--amber);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">FTA VAT</span>
+            <span style="background:rgba(251,146,60,.1);color:var(--amber);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">Corp Tax</span>
+            <span style="background:rgba(251,146,60,.1);color:var(--amber);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">Free Zone</span>
+            <span style="background:rgba(251,146,60,.1);color:var(--amber);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">IFRS</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">$12K–$20K <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ $2K–$4K/month retainer</div>
+        </div>
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇦🇺</div>
+          <div style="font-weight:700;font-size:1rem;">Australia</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">CPA Australia members • BAS/PAYG/Super</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(52,211,153,.1);color:var(--green);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">ATO</span>
+            <span style="background:rgba(52,211,153,.1);color:var(--green);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">BAS</span>
+            <span style="background:rgba(52,211,153,.1);color:var(--green);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">Super</span>
+            <span style="background:rgba(52,211,153,.1);color:var(--green);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">PAYG</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">AUD 18K–28K <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ AUD 3K–5K/month retainer</div>
+        </div>
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇮🇳</div>
+          <div style="font-weight:700;font-size:1rem;">India</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">70,000+ CA firms • GST + IT + MCA complexity</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(244,114,182,.1);color:var(--pink);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">GST</span>
+            <span style="background:rgba(244,114,182,.1);color:var(--pink);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">ITR</span>
+            <span style="background:rgba(244,114,182,.1);color:var(--pink);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">TDS</span>
+            <span style="background:rgba(244,114,182,.1);color:var(--pink);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">MCA</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">₹3L–₹8L <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ ₹50K–₹1L/month retainer</div>
+        </div>
+        <div class="card" style="padding:20px;transition:.2s ease;" onmouseover="this.style.borderColor='rgba(45,212,207,.35)'" onmouseout="this.style.borderColor='rgba(45,212,207,.12)'">
+          <div style="font-size:2rem;margin-bottom:10px;">🇸🇬</div>
+          <div style="font-weight:700;font-size:1rem;">Singapore</div>
+          <div style="color:var(--muted);font-size:.82rem;margin:4px 0 12px;">ACCA hub • IFRS mandatory • Regional HQs</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">IRAS</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">GST</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">IFRS</span>
+            <span style="background:rgba(45,212,207,.1);color:var(--cyan);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;">ACRA</span>
+          </div>
+          <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--cyan);">SGD 18K–25K <span style="font-size:.75rem;font-weight:400;color:var(--muted);">build fee</span></div>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:3px;">+ SGD 3K–4K/month retainer</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Pricing ─────────────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-pricing">
+      <div style="margin-bottom:20px;"><div style="font-size:20px;font-weight:700;">Pricing — AI OS for CA/CPA Firms</div><div style="color:var(--muted);font-size:.88rem;margin-top:2px;">Powered by FinReportAI + Claude AI</div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;">
+        <div class="card" style="padding:24px;position:relative;">
+          <div class="badge" style="margin-bottom:10px;display:inline-block;">STARTER</div>
+          <div style="font-family:var(--mono);font-size:2rem;font-weight:800;margin:8px 0 4px;">$10,000</div>
+          <div style="color:var(--muted);font-size:.83rem;margin-bottom:16px;">One-time build fee + $2K/month</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;font-size:.88rem;">
+            <div>✓ Client Onboarding Engine</div>
+            <div>✓ WhatsApp automation</div>
+            <div>✓ Document checklist (1 country)</div>
+            <div>✓ Email follow-up sequences</div>
+            <div>✓ Basic status dashboard</div>
+            <div>✓ 30-day support</div>
+          </div>
+          <button class="btn-cta" style="width:100%;padding:10px;background:transparent;border:1px solid var(--cyan);color:var(--cyan);">Book Discovery Call</button>
+        </div>
+        <div class="card" style="padding:24px;position:relative;border-color:rgba(45,212,207,.4);box-shadow:0 0 30px rgba(45,212,207,.08);">
+          <div style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--gradient);color:#fff;font-size:10px;font-weight:800;padding:4px 14px;border-radius:999px;letter-spacing:.06em;white-space:nowrap;">MOST POPULAR</div>
+          <div class="badge" style="margin-bottom:10px;display:inline-block;">PROFESSIONAL</div>
+          <div style="font-family:var(--mono);font-size:2rem;font-weight:800;color:var(--cyan);margin:8px 0 4px;">$20,000</div>
+          <div style="color:var(--muted);font-size:.83rem;margin-bottom:16px;">One-time build fee + $4K/month</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;font-size:.88rem;">
+            <div>✓ All 3 core builds</div>
+            <div>✓ Multi-country (up to 3)</div>
+            <div>✓ AI document verification</div>
+            <div>✓ Advisory dashboard</div>
+            <div>✓ FinReportAI IFRS integration</div>
+            <div>✓ 90-day support + training</div>
+          </div>
+          <button class="btn-cta" style="width:100%;padding:10px;">Start with Free Pilot</button>
+        </div>
+        <div class="card" style="padding:24px;">
+          <div class="badge" style="margin-bottom:10px;display:inline-block;">ENTERPRISE</div>
+          <div style="font-family:var(--mono);font-size:2rem;font-weight:800;margin:8px 0 4px;">$50,000</div>
+          <div style="color:var(--muted);font-size:.83rem;margin-bottom:16px;">One-time build fee + $8K/month</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:20px;font-size:.88rem;">
+            <div>✓ All 5 builds complete</div>
+            <div>✓ All 6 countries</div>
+            <div>✓ White label branding</div>
+            <div>✓ Practice management system</div>
+            <div>✓ Custom integrations</div>
+            <div>✓ 12-month dedicated support</div>
+          </div>
+          <button class="btn-cta" style="width:100%;padding:10px;background:transparent;border:1px solid var(--cyan);color:var(--cyan);">Contact Enterprise</button>
+        </div>
+      </div>
+      <div class="card" style="padding:20px;">
+        <div class="section-title" style="margin-bottom:16px;">🇮🇳 India Pricing (CA Firms)</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+          <div style="background:var(--card-inner);border-radius:10px;padding:16px;">
+            <div style="font-weight:700;margin-bottom:6px;">India Starter</div>
+            <div style="font-family:var(--mono);font-size:1.6rem;font-weight:800;color:var(--cyan);">₹2.5L</div>
+            <div style="color:var(--muted);font-size:.8rem;margin-bottom:10px;">Build + ₹25K/month</div>
+            <div style="font-size:.83rem;">✓ Client Onboarding<br>✓ GST reminder bot<br>✓ WhatsApp automation</div>
+          </div>
+          <div style="background:var(--card-inner);border-radius:10px;padding:16px;border:1px solid rgba(45,212,207,.3);">
+            <div style="font-weight:700;margin-bottom:6px;">🌟 India Professional</div>
+            <div style="font-family:var(--mono);font-size:1.6rem;font-weight:800;color:var(--cyan);">₹5L</div>
+            <div style="color:var(--muted);font-size:.8rem;margin-bottom:10px;">Build + ₹50K/month</div>
+            <div style="font-size:.83rem;">✓ All 3 core builds<br>✓ IFRS + Ind AS<br>✓ FinReportAI integration</div>
+          </div>
+          <div style="background:var(--card-inner);border-radius:10px;padding:16px;">
+            <div style="font-weight:700;margin-bottom:6px;">💎 India Enterprise</div>
+            <div style="font-family:var(--mono);font-size:1.6rem;font-weight:800;color:var(--cyan);">₹12L</div>
+            <div style="color:var(--muted);font-size:.8rem;margin-bottom:10px;">Build + ₹1L/month</div>
+            <div style="font-size:.83rem;">✓ All 5 builds<br>✓ Multi-country<br>✓ White label</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Tab: ROI Calculator ───────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-roi">
+      <div style="margin-bottom:20px;"><div style="font-size:20px;font-weight:700;">ROI Calculator</div><div style="color:var(--muted);font-size:.88rem;margin-top:2px;">Calculate your firm's return on AI investment</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="card" style="padding:24px;">
+          <div class="section-title" style="margin-bottom:18px;">Your Firm's Numbers</div>
+          <div class="form-group" style="margin-bottom:14px;"><label>New clients per year</label><input type="number" id="roi-clients" value="80" oninput="calcROI()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:9px 12px;font-family:var(--mono);outline:none;width:100%;"></div>
+          <div class="form-group" style="margin-bottom:14px;"><label>Staff hours per onboarding (current)</label><input type="number" id="roi-hours" value="10" oninput="calcROI()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:9px 12px;font-family:var(--mono);outline:none;width:100%;"></div>
+          <div class="form-group" style="margin-bottom:14px;"><label>Average staff hourly cost ($)</label><input type="number" id="roi-rate" value="55" oninput="calcROI()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:9px 12px;font-family:var(--mono);outline:none;width:100%;"></div>
+          <div class="form-group" style="margin-bottom:14px;"><label>Average client annual value ($)</label><input type="number" id="roi-cval" value="5000" oninput="calcROI()" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:9px 12px;font-family:var(--mono);outline:none;width:100%;"></div>
+          <div class="form-group"><label>Client churn from poor onboarding (%)</label><input type="number" id="roi-churn" value="20" oninput="calcROI()" min="0" max="100" style="background:#0B162A;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:9px 12px;font-family:var(--mono);outline:none;width:100%;"></div>
+        </div>
+        <div class="card" style="padding:24px;background:linear-gradient(135deg,var(--card-bg),#0A1628);">
+          <div class="section-title" style="margin-bottom:18px;">✨ Your ROI Analysis</div>
+          <div style="display:flex;flex-direction:column;gap:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">Current annual onboarding cost</span>
+              <span id="roi-current" style="font-family:var(--mono);font-weight:800;color:var(--red);">$44,000</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">After AI (90% reduction)</span>
+              <span id="roi-after" style="font-family:var(--mono);font-weight:800;color:var(--green);">$4,400</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">Labor savings per year</span>
+              <span id="roi-labour" style="font-family:var(--mono);font-weight:800;color:var(--green);">$39,600</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">Revenue saved (reduced churn)</span>
+              <span id="roi-churn-save" style="font-family:var(--mono);font-weight:800;color:var(--green);">$80,000</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">Total annual benefit</span>
+              <span id="roi-total" style="font-family:var(--mono);font-weight:800;color:var(--cyan);">$119,600</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);">
+              <span style="color:var(--muted);font-size:.88rem;">Payback period</span>
+              <span id="roi-payback" style="font-family:var(--mono);font-weight:800;color:var(--green);">2 months</span>
+            </div>
+          </div>
+          <div style="margin-top:20px;background:rgba(45,212,207,.08);border:1px solid rgba(45,212,207,.2);border-radius:12px;padding:20px;text-align:center;">
+            <div style="color:var(--muted);font-size:.82rem;margin-bottom:4px;">First Year ROI</div>
+            <div id="roi-pct" style="font-family:var(--mono);font-size:3rem;font-weight:800;color:var(--cyan);">498%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Toast ─────────────────────────────────────────────────────────────── -->
+<div id="toastContainer" style="position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px;"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allClients = [];
+let selectedDocId = null;
+let selectedClientId = null;
+let selectedFile = null;
+
+const COUNTRY_ENTITIES = {
+  India: ['Private Limited', 'LLP', 'Sole Proprietorship', 'Partnership Firm'],
+  UK: ['Limited Company', 'LLP', 'Sole Trader'],
+  USA: ['Corporation (C-Corp)', 'LLC', 'S-Corporation', 'Sole Proprietorship'],
+  UAE: ['LLC', 'Free Zone Company', 'Branch of Foreign Company'],
+  Australia: ['Pty Ltd', 'Trust', 'Sole Trader'],
+  Singapore: ['Private Limited (Pte. Ltd.)', 'Sole Proprietorship']
+};
+
+const COUNTRY_FLAGS = { India:'🇮🇳', UK:'🇬🇧', USA:'🇺🇸', UAE:'🇦🇪', Australia:'🇦🇺', Singapore:'🇸🇬' };
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'clients') loadClients();
+  if (name === 'upload' || name === 'whatsapp' || name === 'timeline') populateClientDropdowns();
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const colors = { info: 'var(--cyan)', success: 'var(--green)', error: 'var(--red)', warn: 'var(--amber)' };
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.style.borderColor = colors[type] || 'var(--cyan)';
+  el.style.bottom = 'auto';
+  el.innerHTML = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ── Date ───────────────────────────────────────────────────────────────────
+document.getElementById('currentDate').textContent = new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+
+// ── API helpers ─────────────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const res = await fetch('/api/onboarding' + path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...opts
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+  return res.json();
+}
+
+// ── Load clients ────────────────────────────────────────────────────────────
+async function loadClients() {
+  try {
+    const data = await api('/clients');
+    allClients = data.clients || [];
+    maybeShowRealClients(allClients);
+    updateKPIs(allClients);
+    populateClientDropdowns();
+  } catch (e) { toast('Failed to load clients: ' + e.message, 'error'); }
+}
+
+function updateKPIs(clients) {
+  document.getElementById('kTotal').textContent = clients.length;
+  document.getElementById('kComplete').textContent = clients.filter(c => c.status === 'complete').length;
+  document.getElementById('kReview').textContent = clients.filter(c => c.status === 'in_review').length;
+  document.getElementById('kPending').textContent = clients.filter(c => c.status === 'documents_pending' || c.status === 'intake').length;
+}
+
+function renderClients(clients) {
+  const el = document.getElementById('clientList');
+  if (!clients.length) {
+    el.innerHTML = '<div class="empty-state"><div class="icon">📂</div>No clients yet. <a href="#" onclick="showTab(\'intake\')" style="color:var(--cyan);">Add your first client →</a></div>';
+    return;
+  }
+  el.innerHTML = clients.map(c => `
+    <div class="client-row">
+      <div>
+        <div class="client-name">${escHtml(c.name)}</div>
+        <div class="client-company">${escHtml(c.company)}</div>
+      </div>
+      <div>${COUNTRY_FLAGS[c.country] || ''} ${escHtml(c.country)}</div>
+      <div style="font-size:.8rem;color:var(--muted);">${escHtml(c.entity_type)}</div>
+      <div><span class="status-pill status-${c.status}">${c.status.replace('_',' ')}</span></div>
+      <div style="display:flex;align-items:center;gap:8px;min-width:100px;">
+        <div class="progress-bar-wrap" style="width:60px;"><div class="progress-bar-fill" style="width:${c.completion_pct}%"></div></div>
+        <span style="font-family:var(--mono);font-size:.78rem;color:var(--cyan);">${c.completion_pct}%</span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="openClientTimeline(${c.id})" title="Timeline" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.8rem;">🕐</button>
+        <button onclick="openClientUpload(${c.id})" title="Documents" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.8rem;">📂</button>
+        <button onclick="openClientWA(${c.id})" title="WhatsApp" style="background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:7px;padding:5px 9px;cursor:pointer;font-size:.8rem;">💬</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function filterClients() {
+  const q = document.getElementById('searchClients').value.toLowerCase();
+  const filtered = allClients.filter(c =>
+    c.name.toLowerCase().includes(q) ||
+    c.company.toLowerCase().includes(q) ||
+    c.country.toLowerCase().includes(q)
+  );
+  renderClients(filtered);
+}
+
+function populateClientDropdowns() {
+  const selects = ['up-client', 'wa-client', 'tl-client'];
+  selects.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Select client</option>' +
+      allClients.map(c => `<option value="${c.id}" ${c.id == cur ? 'selected' : ''}>${escHtml(c.company)} — ${escHtml(c.name)}</option>`).join('');
+  });
+}
+
+// ── Quick nav from client list ──────────────────────────────────────────────
+function openClientTimeline(id) {
+  document.getElementById('tl-client').value = id;
+  showTab('timeline');
+  loadTimeline();
+}
+function openClientUpload(id) {
+  document.getElementById('up-client').value = id;
+  showTab('upload');
+  loadClientDocs();
+}
+function openClientWA(id) {
+  document.getElementById('wa-client').value = id;
+  showTab('whatsapp');
+  loadWATemplate();
+}
+
+// ── Intake form ─────────────────────────────────────────────────────────────
+function onCountryChange() {
+  const country = document.getElementById('f-country').value;
+  const entitySel = document.getElementById('f-entity');
+  entitySel.innerHTML = '<option value="">Select entity type</option>';
+  if (COUNTRY_ENTITIES[country]) {
+    COUNTRY_ENTITIES[country].forEach(e => {
+      const o = document.createElement('option');
+      o.value = e; o.textContent = e;
+      entitySel.appendChild(o);
+    });
+  }
+  previewChecklist();
+}
+
+async function previewChecklist() {
+  const country = document.getElementById('f-country').value;
+  const entity = document.getElementById('f-entity').value;
+  const preview = document.getElementById('intakeDocPreview');
+  if (!country || !entity) { preview.style.display = 'none'; return; }
+  try {
+    const data = await api(`/checklist/${encodeURIComponent(country)}/${encodeURIComponent(entity)}`);
+    const list = [...data.critical, ...data.important, ...data.optional];
+    document.getElementById('previewList').innerHTML = list.map(d =>
+      `<div class="doc-item"><span class="doc-priority priority-${d.priority}">${d.priority}</span><span class="doc-name">${escHtml(d.name)}</span></div>`
+    ).join('');
+    preview.style.display = 'block';
+  } catch { preview.style.display = 'none'; }
+}
+
+document.getElementById('f-entity').addEventListener('change', previewChecklist);
+
+async function submitIntake(e) {
+  e.preventDefault();
+  const btn = document.getElementById('intakeSubmitBtn');
+  const msg = document.getElementById('intakeMsg');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span> Registering...';
+  msg.textContent = '';
+
+  const services = Array.from(document.querySelectorAll('#servicesGrid input:checked')).map(i => i.value);
+  try {
+    const data = await api('/client', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('f-name').value,
+        company: document.getElementById('f-company').value,
+        email: document.getElementById('f-email').value,
+        whatsapp: document.getElementById('f-whatsapp').value,
+        country: document.getElementById('f-country').value,
+        entity_type: document.getElementById('f-entity').value,
+        financial_year: document.getElementById('f-year').value,
+        services
+      })
+    });
+    toast(`✅ ${data.client.company} registered! Checklist generated with ${data.client.total_docs} documents.`, 'success');
+    msg.innerHTML = `<span style="color:var(--green);">✅ Client registered! ID: #${data.client_id} — ${data.client.total_docs} documents in checklist.</span>`;
+    resetIntake();
+    allClients.unshift(data.client);
+    updateKPIs(allClients);
+    maybeShowRealClients(allClients);
+  } catch (err) {
+    msg.innerHTML = `<span style="color:var(--red);">❌ ${err.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Register Client & Generate Checklist';
+  }
+}
+
+function resetIntake() {
+  document.getElementById('intakeForm').reset();
+  document.getElementById('f-entity').innerHTML = '<option value="">Select entity type</option>';
+  document.getElementById('intakeDocPreview').style.display = 'none';
+  document.querySelectorAll('#servicesGrid input').forEach(i => i.checked = false);
+}
+
+// ── Checklist tab ───────────────────────────────────────────────────────────
+function onChecklistCountryChange() {
+  const country = document.getElementById('cl-country').value;
+  const entitySel = document.getElementById('cl-entity');
+  entitySel.innerHTML = '<option value="">Select entity</option>';
+  if (COUNTRY_ENTITIES[country]) {
+    COUNTRY_ENTITIES[country].forEach(e => {
+      const o = document.createElement('option'); o.value = e; o.textContent = e;
+      entitySel.appendChild(o);
+    });
+  }
+  document.getElementById('checklistPanel').innerHTML = '<div class="empty-state"><div class="icon">📋</div>Now select an entity type.</div>';
+}
+
+async function loadChecklist() {
+  const country = document.getElementById('cl-country').value;
+  const entity = document.getElementById('cl-entity').value;
+  if (!country || !entity) return;
+  const panel = document.getElementById('checklistPanel');
+  panel.innerHTML = '<div style="padding:20px;text-align:center;"><span class="spin"></span></div>';
+  try {
+    const data = await api(`/checklist/${encodeURIComponent(country)}/${encodeURIComponent(entity)}`);
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div><span style="font-size:1.3rem;">${COUNTRY_FLAGS[country]||''}</span> <strong>${escHtml(country)}</strong> — ${escHtml(entity)}</div>
+        <span style="font-family:var(--mono);font-size:.85rem;color:var(--cyan);">${data.total} documents</span>
+      </div>
+      ${renderChecklistSection('Critical Documents', data.critical, 'critical')}
+      ${renderChecklistSection('Important Documents', data.important, 'important')}
+      ${renderChecklistSection('Optional Documents', data.optional, 'optional')}
+    `;
+  } catch (err) {
+    panel.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderChecklistSection(title, docs, priority) {
+  if (!docs.length) return '';
+  return `
+    <div class="section-label">${title} (${docs.length})</div>
+    ${docs.map((d, i) => `
+      <div class="doc-item">
+        <span style="font-family:var(--mono);font-size:.75rem;color:var(--muted);min-width:22px;">${i+1}.</span>
+        <span class="doc-priority priority-${priority}">${priority}</span>
+        <span class="doc-name">${escHtml(d.name)}</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+function printChecklist() {
+  window.print();
+}
+
+// ── Upload & Verify ─────────────────────────────────────────────────────────
+async function loadClientDocs() {
+  const id = document.getElementById('up-client').value;
+  if (!id) { document.getElementById('up-client-info').style.display = 'none'; return; }
+  try {
+    const c = await api('/client/' + id);
+    document.getElementById('up-client-name').textContent = c.company + ' — ' + c.name;
+    document.getElementById('up-client-meta').textContent = `${c.country} • ${c.entity_type} • ${c.financial_year || ''}`;
+    document.getElementById('up-progress-bar').style.width = c.completion_pct + '%';
+    document.getElementById('up-progress-pct').textContent = c.completion_pct + '%';
+
+    const pending = c.docs.filter(d => !d.received);
+    document.getElementById('up-doc-list').innerHTML = pending.length ? pending.map(d => `
+      <div class="doc-item" style="cursor:pointer;${selectedDocId == d.id ? 'border-color:var(--cyan);' : ''}" onclick="selectDoc(${d.id}, this)">
+        <span class="doc-priority priority-${d.priority}">${d.priority}</span>
+        <span class="doc-name" style="font-size:.82rem;">${escHtml(d.document_name)}</span>
+        ${d.verified_by_ai ? `<span title="${escHtml(d.ai_reason||'')}" style="font-size:.75rem;color:${d.verified ? 'var(--green)' : 'var(--red)'};">${d.verified ? '✅' : '❌'}</span>` : ''}
+      </div>
+    `).join('') : '<div style="color:var(--green);text-align:center;padding:14px;">✅ All documents received!</div>';
+
+    document.getElementById('up-client-info').style.display = 'block';
+    selectedClientId = id;
+  } catch (err) { toast('Failed to load client docs: ' + err.message, 'error'); }
+}
+
+function selectDoc(id, el) {
+  selectedDocId = id;
+  document.querySelectorAll('#up-doc-list .doc-item').forEach(e => e.style.borderColor = '');
+  el.style.borderColor = 'var(--cyan)';
+  document.getElementById('markReceivedBtn').disabled = !selectedFile;
+  document.getElementById('verifyBtn').disabled = !selectedFile;
+}
+
+function handleFileSelect(e) {
+  setSelectedFile(e.target.files[0]);
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setSelectedFile(e.dataTransfer.files[0]);
+}
+
+function setSelectedFile(file) {
+  selectedFile = file;
+  const el = document.getElementById('selectedFile');
+  const ext = file.name.split('.').pop().toUpperCase();
+  el.style.display = 'flex';
+  el.innerHTML = `<span style="background:rgba(45,212,207,.15);color:var(--cyan);padding:3px 8px;border-radius:6px;font-size:.75rem;font-weight:700;">${ext}</span> <span style="flex:1;">${escHtml(file.name)}</span> <span style="color:var(--muted);font-size:.78rem;">${(file.size/1024).toFixed(0)} KB</span>`;
+  if (selectedDocId) {
+    document.getElementById('markReceivedBtn').disabled = false;
+    document.getElementById('verifyBtn').disabled = false;
+  }
+}
+
+async function markDocReceived() {
+  if (!selectedDocId || !selectedClientId) { toast('Select a client and document first', 'warn'); return; }
+  try {
+    const data = await api(`/client/${selectedClientId}/document`, {
+      method: 'POST',
+      body: JSON.stringify({ document_id: selectedDocId, received: true })
+    });
+    toast(`Document marked received. Completion: ${data.completion_pct}%`, 'success');
+    selectedDocId = null;
+    selectedFile = null;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('selectedFile').style.display = 'none';
+    document.getElementById('markReceivedBtn').disabled = true;
+    document.getElementById('verifyBtn').disabled = true;
+    loadClientDocs();
+    loadClients();
+  } catch (err) { toast('Error: ' + err.message, 'error'); }
+}
+
+async function verifyDocument() {
+  if (!selectedDocId || !selectedClientId || !selectedFile) { toast('Select a client, document, and file first', 'warn'); return; }
+  const btn = document.getElementById('verifyBtn');
+  btn.innerHTML = '<span class="spin"></span> Verifying...';
+  btn.disabled = true;
+  document.getElementById('verifyResult').innerHTML = '';
+  try {
+    const data = await api(`/client/${selectedClientId}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ document_id: selectedDocId, filename: selectedFile.name })
+    });
+    const cls = data.verified ? 'verify-ok' : 'verify-fail';
+    const icon = data.verified ? '✅' : '❌';
+    document.getElementById('verifyResult').innerHTML = `
+      <div class="verify-result ${cls}">
+        <strong>${icon} ${data.verified ? 'Verified' : 'Not Verified'}</strong> <span style="font-size:.78rem;opacity:.7;">${data.confidence} confidence</span><br>
+        <span style="font-size:.85rem;">${escHtml(data.reason)}</span><br>
+        <span style="font-size:.78rem;opacity:.7;">Detected: ${escHtml(data.document_type || 'Unknown')}</span>
+      </div>`;
+    if (data.verified) loadClientDocs();
+  } catch (err) {
+    document.getElementById('verifyResult').innerHTML = `<div class="verify-result verify-fail">❌ Verification failed: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.textContent = '🔍 AI Verify';
+    btn.disabled = false;
+  }
+}
+
+// ── WhatsApp ────────────────────────────────────────────────────────────────
+async function loadWATemplate() {
+  const clientId = document.getElementById('wa-client').value;
+  const type = document.getElementById('wa-type').value;
+  if (!clientId) { document.getElementById('wa-client-info').style.display = 'none'; return; }
+
+  const client = allClients.find(c => c.id == clientId);
+  if (client) {
+    const infoEl = document.getElementById('wa-client-info');
+    document.getElementById('wa-number').textContent = `📱 ${client.whatsapp || 'No WhatsApp number set'} • ${COUNTRY_FLAGS[client.country]||''} ${client.country}`;
+    infoEl.style.display = 'block';
+  }
+
+  // Load preview via fetching template data
+  try {
+    const c = client || await api('/client/' + clientId);
+    const pendingDocs = (c.docs || []).filter(d => !d.received && d.priority === 'critical').map((d, i) => `${i+1}. ${d.document_name}`).join('\n');
+    const dueDate = new Date(Date.now() + 5 * 86400000).toLocaleDateString('en-GB');
+
+    const TEMPLATES = {
+      India: {
+        welcome: `Hello ${c.name} 🙏,\n\nWelcome to our CA firm! We're delighted to begin your onboarding for *${c.company}*.\n\nWe need the following documents to get started:\n• PAN Card & Aadhaar\n• GST Registration Certificate\n• Latest 2 years ITR\n\nPlease upload them at: http://localhost:3000/client-onboarding.html\n\n— Team`,
+        reminder: `Dear ${c.name},\n\nThis is a gentle reminder that we're awaiting the following documents for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nKindly submit them by *${dueDate}* to avoid delays in filing.\n\nUpload: http://localhost:3000/client-onboarding.html`,
+        complete: `✅ Dear ${c.name},\n\nAll documents for *${c.company}* have been received and verified.\n\nYour onboarding is *complete*! Our team will begin processing within 2 business days.\n\nThank you for your prompt submission. 🙏`
+      },
+      UK: {
+        welcome: `Hello ${c.name},\n\nWelcome to our accountancy practice! We're pleased to commence onboarding for *${c.company}*.\n\nTo proceed, please provide:\n• Companies House documents\n• UTR Number\n• Last 2 years' statutory accounts\n\nUpload portal: http://localhost:3000/client-onboarding.html\n\nKind regards`,
+        reminder: `Dear ${c.name},\n\nWe're still awaiting the following documents for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nCould you please submit by *${dueDate}*?\n\nUpload: http://localhost:3000/client-onboarding.html`,
+        complete: `✅ Dear ${c.name},\n\nWe've received all required documents for *${c.company}*.\n\nOnboarding is now complete. We'll be in touch within 2 working days.\n\nBest regards`
+      },
+      USA: {
+        welcome: `Hi ${c.name},\n\nGreat to have you on board! Starting onboarding for *${c.company}*.\n\nPlease have these ready:\n• EIN Letter\n• Last 2 years' tax returns\n• 3 months bank statements\n\nUpload here: http://localhost:3000/client-onboarding.html`,
+        reminder: `Hi ${c.name},\n\nQuick reminder — we need docs for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nDeadline: *${dueDate}*\nUpload: http://localhost:3000/client-onboarding.html`,
+        complete: `✅ Hi ${c.name},\n\nAll set! We've received everything for *${c.company}*.\n\nOur team will reach out within 1-2 business days. Welcome aboard! 🎉`
+      },
+      UAE: {
+        welcome: `مرحبا ${c.name} / Hello ${c.name},\n\nWelcome! Initiating onboarding for *${c.company}*.\n\nRequired:\n• Trade License\n• Emirates ID (all partners)\n• VAT Registration (TRN)\n• 6 months bank statements\n\nUpload: http://localhost:3000/client-onboarding.html\n\nShukran / Thank you`,
+        reminder: `Dear ${c.name},\n\nThe following docs are pending for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nPlease submit by *${dueDate}* to comply with UAE FTA requirements.\n\nUpload: http://localhost:3000/client-onboarding.html`,
+        complete: `✅ Dear ${c.name},\n\nAll documents for *${c.company}* received.\n\nOnboarding complete! We'll send your engagement letter within 48 hours.\n\nThank you 🌟`
+      },
+      Australia: {
+        welcome: `Hi ${c.name},\n\nWelcome! Starting onboarding for *${c.company}*.\n\nWe'll need:\n• ACN / ABN Certificate\n• Last 2 years' financial statements\n• BAS Statements (4 quarters)\n\nUpload here: http://localhost:3000/client-onboarding.html\n\nCheers!`,
+        reminder: `Hi ${c.name},\n\nFriendly reminder — waiting on docs for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nCould you get these in by *${dueDate}*?\n\nUpload: http://localhost:3000/client-onboarding.html\n\nThanks heaps!`,
+        complete: `✅ G'day ${c.name},\n\nBeaut news! All documents for *${c.company}* are in.\n\nOnboarding complete — our team will be in touch shortly. Welcome! 🦘`
+      },
+      Singapore: {
+        welcome: `Dear ${c.name},\n\nWarm greetings! Commencing onboarding for *${c.company}*.\n\nPlease prepare:\n• ACRA Business Profile\n• Last 2 years' financial statements\n• 3 months bank statements\n\nUpload portal: http://localhost:3000/client-onboarding.html\n\nThank you`,
+        reminder: `Dear ${c.name},\n\nThe following documents are pending for *${c.company}*:\n\n${pendingDocs || 'See checklist'}\n\nKindly submit by *${dueDate}*.\n\nUpload: http://localhost:3000/client-onboarding.html`,
+        complete: `✅ Dear ${c.name},\n\nAll documents for *${c.company}* received.\n\nOnboarding complete. We'll contact you within 2 working days.\n\nWith regards`
+      }
+    };
+
+    const country = c.country || 'India';
+    const msg = TEMPLATES[country]?.[type] || TEMPLATES['India'][type];
+    document.getElementById('waBubble').textContent = msg;
+  } catch {}
+}
+
+function loadWAPreviewByCountry() {
+  const country = document.getElementById('wa-preview-country').value;
+  if (!country) return;
+  const type = document.getElementById('wa-type').value;
+  const SAMPLE = {
+    welcome: `Hello [Client Name],\n\nWelcome to our CA firm! We're delighted to begin your onboarding.\n\nWe need the following documents to get started.\nPlease upload them at: http://localhost:3000/client-onboarding.html\n\n— Team`,
+    reminder: `Dear [Client Name],\n\nThis is a gentle reminder that we're awaiting documents.\n\nKindly submit them by [Due Date] to avoid delays.\n\nUpload: http://localhost:3000/client-onboarding.html`,
+    complete: `✅ Dear [Client Name],\n\nAll documents have been received and verified.\n\nYour onboarding is complete! Our team will begin processing within 2 business days. 🙏`
+  };
+  document.getElementById('waBubble').textContent = `[${country} Template]\n\n` + SAMPLE[type];
+}
+
+async function sendWhatsApp() {
+  const clientId = document.getElementById('wa-client').value;
+  const type = document.getElementById('wa-type').value;
+  if (!clientId) { toast('Select a client first', 'warn'); return; }
+  const btn = document.getElementById('waSendBtn');
+  btn.innerHTML = '<span class="spin"></span> Sending...';
+  btn.disabled = true;
+  try {
+    const data = await api(`/client/${clientId}/whatsapp`, {
+      method: 'POST',
+      body: JSON.stringify({ template_type: type })
+    });
+    const resultEl = document.getElementById('waSendResult');
+    if (data.wati_configured) {
+      resultEl.innerHTML = `<span style="color:var(--green);">✅ Message sent to ${escHtml(data.whatsapp)}</span>`;
+      toast('WhatsApp message sent!', 'success');
+    } else {
+      resultEl.innerHTML = `<span style="color:var(--amber);">⚠️ Logged (ID: ${data.message_id}) — WATI not configured, add WATI_API_KEY to .env to send</span>`;
+      toast('Message logged. Add WATI_API_KEY to send.', 'warn');
+    }
+  } catch (err) {
+    document.getElementById('waSendResult').innerHTML = `<span style="color:var(--red);">❌ ${escHtml(err.message)}</span>`;
+  } finally {
+    btn.textContent = 'Send via WhatsApp';
+    btn.disabled = false;
+  }
+}
+
+// ── Timeline ────────────────────────────────────────────────────────────────
+async function loadTimeline() {
+  const id = document.getElementById('tl-client').value;
+  if (!id) { document.getElementById('tl-summary').style.display = 'none'; return; }
+  const panel = document.getElementById('timelinePanel');
+  panel.innerHTML = '<div style="padding:20px;text-align:center;"><span class="spin"></span></div>';
+  try {
+    const data = await api('/client/' + id + '/status');
+    document.getElementById('tl-progress').style.width = data.completion_pct + '%';
+    document.getElementById('tl-pct').textContent = data.completion_pct + '%';
+    const ds = data.docs_summary;
+    document.getElementById('tl-docs-summary').innerHTML = `
+      <div>📄 ${ds.received}/${ds.total} docs received</div>
+      <div>✅ ${ds.verified} verified</div>
+      ${ds.critical_pending.length ? `<div style="color:var(--amber);margin-top:6px;font-size:.78rem;">⚠️ Critical pending:<br>${ds.critical_pending.slice(0,3).map(escHtml).join('<br>')}</div>` : '<div style="color:var(--green);margin-top:6px;">✅ All critical docs in!</div>'}
+    `;
+    document.getElementById('tl-summary').style.display = 'block';
+
+    panel.innerHTML = `
+      <div style="margin-bottom:18px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:1.3rem;">${COUNTRY_FLAGS[allClients.find(c=>c.id==id)?.country]||''}</span>
+        <div>
+          <div style="font-weight:700;">${escHtml(data.company)}</div>
+          <div style="color:var(--muted);font-size:.82rem;">Status: <span class="status-pill status-${data.status}">${data.status.replace('_',' ')}</span></div>
+        </div>
+      </div>
+      <div class="timeline">
+        ${data.timeline.map(t => `
+          <div class="timeline-item ${t.done ? 'done' : ''}">
+            <div class="timeline-step">${t.icon} ${escHtml(t.step)}</div>
+            <div class="timeline-date">${t.date ? new Date(t.date).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : t.done ? 'Completed' : 'Pending'}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="margin-top:16px;padding:12px;background:var(--card-inner);border-radius:10px;font-size:.83rem;">
+        <strong>Messages Sent:</strong> ${data.messages_sent}
+        &nbsp;|&nbsp; <strong>Completion:</strong> <span style="color:var(--cyan);font-family:var(--mono);">${data.completion_pct}%</span>
+      </div>
+    `;
+  } catch (err) {
+    panel.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${escHtml(err.message)}</div>`;
+  }
+}
+
+// ── Utils ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── ROI Calculator ──────────────────────────────────────────────────────────
+function calcROI() {
+  const clients = parseInt(document.getElementById('roi-clients')?.value) || 80;
+  const hours = parseInt(document.getElementById('roi-hours')?.value) || 10;
+  const rate = parseInt(document.getElementById('roi-rate')?.value) || 55;
+  const cval = parseInt(document.getElementById('roi-cval')?.value) || 5000;
+  const churn = parseInt(document.getElementById('roi-churn')?.value) || 20;
+  const current = clients * hours * rate;
+  const after = Math.round(current * 0.1);
+  const labour = current - after;
+  const churned = Math.round(clients * (churn / 100));
+  const churnSave = Math.round(churned * cval * 0.75);
+  const total = labour + churnSave;
+  const payback = Math.max(1, Math.round((20000 / total) * 12));
+  const roi = Math.round(((total - 20000) / 20000) * 100);
+  const f = n => '$' + n.toLocaleString();
+  const s = (id, v) => { const e = document.getElementById(id); if(e) e.textContent = v; };
+  s('roi-current', f(current)); s('roi-after', f(after)); s('roi-labour', f(labour));
+  s('roi-churn-save', f(churnSave)); s('roi-total', f(total));
+  s('roi-payback', payback + ' months'); s('roi-pct', roi + '%');
+}
+
+// ── Show real clients if any exist ──────────────────────────────────────────
+function maybeShowRealClients(clients) {
+  if (clients.length > 0) {
+    document.getElementById('sampleClients').style.display = 'none';
+    document.getElementById('clientList').style.display = 'block';
+    renderClients(clients);
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+loadClients();
+calcROI();
+</script>
+</body>
+</html>

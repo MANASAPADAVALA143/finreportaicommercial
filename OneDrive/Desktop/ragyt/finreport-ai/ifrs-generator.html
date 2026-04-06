@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • IFRS Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="logo">■ FinReport<span class="ai">AI</span></div>
+      <nav class="nav">
+        <a href="dashboard.html">🏠 Dashboard</a>
+        <a class="active" href="ifrs-generator.html">📄 IFRS Generator</a>
+        <a href="#">📊 Financial Analysis</a>
+        <a href="#">📁 Reports</a>
+        <a href="client-onboarding.html">🤝 Client Onboarding</a>
+        <a href="#">⚙️ Settings</a>
+      </nav>
+      <div style="text-align:center;">
+        <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+        <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">CFO Portal</div>
+        <div style="color:#6B8CAE;font-size:.85rem;">Global Corp PLC • <span style="color:#34D399;">●</span><span>Online</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="top-header">
+        <div>
+          <div style="font-size:20px;font-weight:700;">IFRS Generator</div>
+          <div class="meta">AI Disclosure Suite • Claude</div>
+        </div>
+        <div class="actions">
+          <div class="badge" id="currentDate2"></div>
+          <button class="btn-cta" id="headerGenerate">Generate IFRS Report</button>
+        </div>
+      </div>
+
+      <div class="form-layout">
+        <section class="input-card">
+          <h3>Financial Data Input</h3>
+          <p style="color:#6B8CAE;">Enter data to generate audit-ready IFRS disclosures</p>
+          <label>Company Name <input id="companyName" type="text" placeholder="Global Corp PLC" /></label>
+          <label>Reporting Period <select id="period"><option>Q1 2025</option><option>Q2 2025</option><option>Q3 2025</option><option>Q4 2025</option><option>FY 2025</option><option>FY 2024</option></select></label>
+          <label>Industry <select id="industry"><option>Technology</option><option>Manufacturing</option><option>Financial Services</option><option>Healthcare</option><option>Retail</option><option>Construction</option><option>Services</option></select></label>
+          <label>Currency <select id="currency"><option>USD $</option><option>EUR €</option><option>GBP £</option><option>INR ₹</option><option>AED د.إ</option></select></label>
+
+          <label>Revenue <input id="revenue" type="number" placeholder="4280000" /></label>
+          <label>Cost of Goods Sold <input id="cogs" type="number" placeholder="1650000" /></label>
+          <label>Operating Expenses <input id="opex" type="number" placeholder="920000" /></label>
+          <label>Lease Payments/month <input id="lease" type="number" placeholder="20000" /></label>
+          <label>Financial Assets <input id="assets" type="number" placeholder="2100000" /></label>
+          <label>Financial Liabilities <input id="liabilities" type="number" placeholder="850000" /></label>
+          <label>Cash & Equivalents <input id="cash" type="number" placeholder="435000" /></label>
+
+          <label>Notes to Generate</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px;">
+            <label><input type="checkbox" checked> IFRS 15</label>
+            <label><input type="checkbox" checked> IFRS 16</label>
+            <label><input type="checkbox" checked> IFRS 9</label>
+            <label><input type="checkbox" checked> IAS 1</label>
+            <label><input type="checkbox" checked> IAS 8</label>
+          </div>
+
+          <label>Report tone</label>
+          <div style="display:flex;gap:10px;">
+            <button id="toneStd" class="btn-ghost">Standard</button>
+            <button id="tonePremium" class="btn-ghost">Big 4 Premium</button>
+          </div>
+
+          <label>Output format</label>
+          <div style="display:flex;gap:12px;margin-top:4px;">
+            <label><input type="radio" name="format" checked> Both</label>
+            <label><input type="radio" name="format"> PDF only</label>
+            <label><input type="radio" name="format"> DOCX only</label>
+          </div>
+
+          <button id="generate" class="btn-cta full-btn">✨ Generate IFRS Disclosures</button>
+        </section>
+
+        <section class="output-card">
+          <div style="display:flex;justify-content:space-between;align-items:center; margin-bottom:10px;">
+            <div><strong>IFRS Disclosure Notes</strong></div>
+            <div style="display:flex;gap:6px;"><span style="background:rgba(45,212,207,.2);color:#2DD4CF;padding:2px 8px;border-radius:999px;">AI-Generated</span><span style="background:rgba(52,211,153,.2);color:#34D399;padding:2px 8px;border-radius:999px;">Audit-Ready</span><span style="background:rgba(167,139,250,.2);color:#A78BFA;padding:2px 8px;border-radius:999px;">IFRS 2025</span></div>
+          </div>
+          <div id="outputArea" class="placeholder">
+            <div>📄 Ready to Generate</div>
+            <div style="color:#6B8CAE; margin-top:12px;">Enter financial data and click Generate</div>
+          </div>
+          <div class="toolbar">
+            <button id="copyBtn">📋 Copy</button>
+            <button id="pdfBtn">⬇ PDF</button>
+            <button id="docxBtn">⬇ DOCX</button>
+            <button id="printBtn">🖨 Print</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="ifrs.js"></script>
+</body>
+</html>

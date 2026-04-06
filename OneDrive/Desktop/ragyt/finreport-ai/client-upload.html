@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Upload Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0D1B2E; --card: #111E30; --inner: #142035;
+      --cyan: #2DD4CF; --green: #34D399; --red: #F87171;
+      --amber: #FB923C; --purple: #A78BFA;
+      --text: #EEF2FF; --muted: #6B8CAE;
+      --border: rgba(45,212,207,0.12);
+      --gradient: linear-gradient(135deg,#2DD4CF,#A78BFA);
+      --font: 'Plus Jakarta Sans',sans-serif;
+      --mono: 'JetBrains Mono',monospace;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font-family:var(--font); min-height:100vh; }
+
+    header {
+      background:#0A1628; border-bottom:1px solid var(--border);
+      padding:16px 28px; display:flex; align-items:center; justify-content:space-between;
+    }
+    .logo { font-weight:800; font-size:1.1rem; }
+    .logo span { color:var(--purple); }
+    .secure-badge {
+      display:flex; align-items:center; gap:6px; font-size:.78rem;
+      color:var(--green); background:rgba(52,211,153,.1);
+      border:1px solid rgba(52,211,153,.2); border-radius:999px; padding:4px 10px;
+    }
+
+    .container { max-width:720px; margin:0 auto; padding:32px 20px 60px; }
+
+    .client-card {
+      background:var(--card); border:1px solid var(--border); border-radius:16px;
+      padding:20px; margin-bottom:20px;
+    }
+    .client-name { font-size:1.1rem; font-weight:800; }
+    .client-meta { color:var(--muted); font-size:.85rem; margin-top:4px; }
+
+    .progress-wrap { margin-top:14px; }
+    .progress-label { display:flex; justify-content:space-between; font-size:.82rem; margin-bottom:6px; }
+    .progress-label span:last-child { font-family:var(--mono); color:var(--cyan); }
+    .progress-bar { background:rgba(45,212,207,.1); border-radius:999px; height:8px; overflow:hidden; }
+    .progress-fill { height:100%; border-radius:999px; background:var(--gradient); transition:width .4s ease; }
+
+    .section-title { font-weight:700; font-size:.95rem; margin-bottom:10px; }
+    .priority-label { font-size:10px; font-weight:700; text-transform:uppercase; padding:2px 8px; border-radius:999px; }
+    .p-critical { background:rgba(248,113,113,.15); color:#F87171; }
+    .p-important { background:rgba(251,146,60,.15); color:#FB923C; }
+    .p-optional { background:rgba(107,140,174,.15); color:#6B8CAE; }
+
+    .doc-card {
+      background:var(--inner); border:1px solid rgba(255,255,255,.06);
+      border-radius:12px; padding:14px 16px; margin-bottom:8px;
+      transition:.2s ease;
+    }
+    .doc-card.done { border-color:rgba(52,211,153,.3); opacity:.7; }
+    .doc-card.verifying { border-color:rgba(45,212,207,.3); }
+    .doc-header { display:flex; align-items:center; gap:10px; }
+    .doc-name { flex:1; font-weight:600; font-size:.9rem; }
+    .doc-status { font-size:.8rem; margin-top:6px; color:var(--muted); padding-left:2px; }
+    .doc-status.ok { color:var(--green); }
+    .doc-status.fail { color:var(--red); }
+
+    .upload-zone {
+      margin-top:10px; border:2px dashed rgba(45,212,207,.25); border-radius:10px;
+      padding:16px; text-align:center; cursor:pointer; transition:.2s ease;
+      background:rgba(45,212,207,.02);
+    }
+    .upload-zone:hover, .upload-zone.drag-over { border-color:var(--cyan); background:rgba(45,212,207,.07); }
+    .upload-zone input { display:none; }
+    .upload-zone .hint { font-size:.8rem; color:var(--muted); margin-top:4px; }
+
+    .btn-upload {
+      display:inline-block; background:var(--gradient); color:#fff;
+      border:none; border-radius:999px; padding:9px 22px;
+      font-weight:800; font-size:.85rem; cursor:pointer; margin-top:10px;
+    }
+    .btn-upload:disabled { opacity:.5; cursor:not-allowed; }
+
+    .spin { display:inline-block; width:14px; height:14px; border:2px solid rgba(45,212,207,.3); border-top-color:var(--cyan); border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    .all-done {
+      text-align:center; padding:48px 20px;
+      background:var(--card); border:1px solid rgba(52,211,153,.3);
+      border-radius:16px; margin-top:20px;
+    }
+    .all-done .icon { font-size:3rem; margin-bottom:12px; }
+    .all-done h2 { font-size:1.3rem; font-weight:800; color:var(--green); margin-bottom:8px; }
+    .all-done p { color:var(--muted); font-size:.9rem; }
+
+    .error-card {
+      text-align:center; padding:48px 20px;
+      background:var(--card); border:1px solid rgba(248,113,113,.2); border-radius:16px;
+    }
+    .loading-card { text-align:center; padding:48px 20px; color:var(--muted); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">■ FinReport<span>AI</span> — Secure Upload</div>
+  <div class="secure-badge">🔒 Encrypted & Secure</div>
+</header>
+
+<div class="container">
+  <div id="app"></div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const clientId = params.get('id') || params.get('client_id');
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api/onboarding' + path, opts);
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+  return res.json();
+}
+
+async function init() {
+  const app = document.getElementById('app');
+
+  if (!clientId) {
+    app.innerHTML = `<div class="error-card"><div style="font-size:2.5rem;margin-bottom:12px;">❌</div><h2 style="color:var(--red);">Invalid Link</h2><p style="color:var(--muted);margin-top:8px;">This upload link is invalid or has expired.<br>Please contact your accountant for a new link.</p></div>`;
+    return;
+  }
+
+  app.innerHTML = `<div class="loading-card"><span class="spin"></span><p style="margin-top:12px;">Loading your document checklist...</p></div>`;
+
+  try {
+    const client = await api('/client/' + clientId);
+    renderPortal(client);
+  } catch (err) {
+    app.innerHTML = `<div class="error-card"><div style="font-size:2.5rem;margin-bottom:12px;">⚠️</div><h2>Unable to Load</h2><p style="color:var(--muted);margin-top:8px;">${err.message}</p></div>`;
+  }
+}
+
+function renderPortal(client) {
+  const app = document.getElementById('app');
+  const pending = client.docs.filter(d => !d.received);
+  const received = client.docs.filter(d => d.received);
+  const pct = client.completion_pct;
+
+  if (pct === 100) {
+    app.innerHTML = `
+      <div class="all-done">
+        <div class="icon">🎉</div>
+        <h2>All Documents Submitted!</h2>
+        <p>Thank you, ${escHtml(client.name)}. We've received everything needed for <strong>${escHtml(client.company)}</strong>.<br>Our team will begin processing within 2 business days.</p>
+      </div>`;
+    return;
+  }
+
+  const countryFlags = { India:'🇮🇳', UK:'🇬🇧', USA:'🇺🇸', UAE:'🇦🇪', Australia:'🇦🇺', Singapore:'🇸🇬' };
+
+  app.innerHTML = `
+    <div class="client-card">
+      <div class="client-name">${escHtml(client.company)}</div>
+      <div class="client-meta">${countryFlags[client.country] || ''} ${escHtml(client.country)} • ${escHtml(client.entity_type)} • ${escHtml(client.financial_year || '')}</div>
+      <div class="client-meta" style="margin-top:2px;">Hello, ${escHtml(client.name)} — please upload the documents listed below.</div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>${received.length} of ${client.docs.length} documents submitted</span><span>${pct}%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="main-bar" style="width:${pct}%"></div></div>
+      </div>
+    </div>
+
+    ${pending.length ? `
+      <div class="section-title">📋 Documents Required (${pending.length} remaining)</div>
+      <div id="pending-docs">
+        ${pending.map(d => renderDocCard(d)).join('')}
+      </div>
+    ` : ''}
+
+    ${received.length ? `
+      <div class="section-title" style="margin-top:20px;">✅ Submitted (${received.length})</div>
+      ${received.map(d => `
+        <div class="doc-card done">
+          <div class="doc-header">
+            <span>${d.verified ? '✅' : '📄'}</span>
+            <span class="priority-label p-${d.priority}">${d.priority}</span>
+            <span class="doc-name">${escHtml(d.document_name)}</span>
+          </div>
+          ${d.verified_by_ai ? `<div class="doc-status ok">AI Verified: ${escHtml(d.ai_reason || 'Confirmed')}</div>` : '<div class="doc-status ok">Received</div>'}
+        </div>
+      `).join('')}
+    ` : ''}
+  `;
+
+  // Attach upload handlers
+  pending.forEach(doc => attachUpload(doc));
+}
+
+function renderDocCard(doc) {
+  return `
+    <div class="doc-card" id="doc-card-${doc.id}">
+      <div class="doc-header">
+        <span>📄</span>
+        <span class="priority-label p-${doc.priority}">${doc.priority}</span>
+        <span class="doc-name">${escHtml(doc.document_name)}</span>
+      </div>
+      <div class="upload-zone" id="zone-${doc.id}"
+        onclick="document.getElementById('file-${doc.id}').click()"
+        ondragover="event.preventDefault();this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event, ${doc.id})">
+        <input type="file" id="file-${doc.id}" accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx"
+          onchange="handleFileChange(event, ${doc.id})">
+        <div>📁 <strong>Drop file here</strong> or tap to browse</div>
+        <div class="hint">PDF, JPG, PNG, DOCX, XLSX • Max 10MB</div>
+      </div>
+      <div id="status-${doc.id}" class="doc-status"></div>
+    </div>
+  `;
+}
+
+function attachUpload(doc) {
+  // already attached via inline handlers
+}
+
+function handleDrop(e, docId) {
+  e.preventDefault();
+  document.getElementById('zone-' + docId)?.classList.remove('drag-over');
+  const file = e.dataTransfer?.files?.[0];
+  if (file) uploadFile(docId, file);
+}
+
+function handleFileChange(e, docId) {
+  const file = e.target.files?.[0];
+  if (file) uploadFile(docId, file);
+}
+
+async function uploadFile(docId, file) {
+  const card = document.getElementById('doc-card-' + docId);
+  const zone = document.getElementById('zone-' + docId);
+  const statusEl = document.getElementById('status-' + docId);
+
+  if (!card || !zone || !statusEl) return;
+
+  // Show uploading state
+  zone.innerHTML = `<span class="spin"></span> Uploading <strong>${escHtml(file.name)}</strong>...`;
+  zone.style.pointerEvents = 'none';
+  statusEl.textContent = '';
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('document_id', docId);
+
+  try {
+    const res = await fetch(`/api/onboarding/client/${clientId}/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+    card.classList.add('done');
+    zone.innerHTML = `✅ <strong>${escHtml(file.name)}</strong> uploaded`;
+
+    // Show AI verification result
+    if (data.verification) {
+      const v = data.verification;
+      statusEl.className = 'doc-status ' + (v.verified ? 'ok' : 'fail');
+      statusEl.innerHTML = v.verified
+        ? `🤖 AI Verified: ${escHtml(v.reason)} <span style="opacity:.6;">(${v.confidence})</span>`
+        : `⚠️ AI Flag: ${escHtml(v.reason)}`;
+    } else {
+      statusEl.className = 'doc-status ok';
+      statusEl.textContent = '✅ Uploaded successfully';
+    }
+
+    // Update progress bar
+    document.getElementById('main-bar').style.width = data.completion_pct + '%';
+
+    // If all done, reload after short delay
+    if (data.completion_pct === 100) {
+      setTimeout(() => init(), 2000);
+    }
+
+  } catch (err) {
+    zone.innerHTML = `❌ Upload failed — tap to try again`;
+    zone.style.pointerEvents = '';
+    statusEl.className = 'doc-status fail';
+    statusEl.textContent = err.message;
+  }
+}
+
+function escHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>

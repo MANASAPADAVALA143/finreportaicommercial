@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • CFO Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="logo">■ FinReport<span class="ai">AI</span></div>
+      <nav class="nav">
+        <a class="active" href="dashboard.html">🏠 Dashboard</a>
+        <a href="ifrs-generator.html">📄 IFRS Generator</a>
+        <a href="#">📊 Financial Analysis</a>
+        <a href="#">📁 Reports</a>
+        <a href="client-onboarding.html">🤝 Client Onboarding</a>
+        <a href="#">⚙️ Settings</a>
+      </nav>
+      <div style="text-align:center;">
+        <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+        <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">CFO Portal</div>
+        <div style="color:#6B8CAE;font-size:.85rem;">Global Corp PLC • <span style="color:#34D399;">●</span><span>Online</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="top-header">
+        <div>
+          <div style="font-size:20px;font-weight:700;">CFO Dashboard</div>
+          <div class="meta">FY 2025 — Global Corp PLC</div>
+        </div>
+        <div class="actions">
+          <div class="badge" id="currentDate"></div>
+          <button class="btn-cta" style="padding:8px 14px;" onclick="window.location.href='ifrs-generator.html'">Generate IFRS Report</button>
+          <div style="position:relative;cursor:pointer;">🔔<span style="position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:#F87171;"></span></div>
+        </div>
+      </div>
+
+      <section class="kpi-grid">
+        <article class="kpi-card"><div style="float:right;">💠</div><div class="label">Total Revenue</div><div class="value" data-count="4.28">$4.28M</div><div class="ch" style="color:#34D399;">+12.4%</div><canvas id="spark-1" class="sparkline"></canvas></article>
+        <article class="kpi-card"><div style="float:right;">🟣</div><div class="label">Net Profit</div><div class="value" data-count="1.84">$1.84M</div><div class="ch" style="color:#34D399;">+8.2%</div><canvas id="spark-2" class="sparkline"></canvas></article>
+        <article class="kpi-card"><div style="float:right;">🟢</div><div class="label">Operating Expenses</div><div class="value" data-count="2.10">$2.10M</div><div class="ch" style="color:#34D399;">-3.1%</div><canvas id="spark-3" class="sparkline"></canvas></article>
+        <article class="kpi-card"><div style="float:right;">🟠</div><div class="label">EBITDA Margin</div><div class="value" data-count="42.8">42.8%</div><div class="ch" style="color:#34D399;">+5.6%</div><canvas id="spark-4" class="sparkline"></canvas></article>
+      </section>
+
+      <section class="section grid-2">
+        <div class="card">
+          <div class="section-title">Revenue & Profit Trend</div>
+          <canvas id="revenueTrend"></canvas>
+        </div>
+        <div class="card">
+          <div class="section-title">Revenue by Segment</div>
+          <canvas id="segmentDonut"></canvas>
+          <div style="margin-top:12px; display:flex; justify-content:space-between; font-size:.9rem; color:#6B8CAE;">
+            <span>Product Sales 42%</span><span>Prof. Services 28%</span><span>SaaS 18%</span><span>Other 12%</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section grid-3">
+        <div class="card"><div class="section-title">Quarterly Performance</div><canvas id="quarterlyBars"></canvas></div>
+        <div class="card"><div class="section-title">Cash Flow Analysis</div><canvas id="waterfall"></canvas></div>
+        <div class="card"><div class="section-title">IFRS Compliance Radar</div><canvas id="radarChart"></canvas></div>
+      </section>
+
+      <section class="section grid-2-58">
+        <div class="card table-wrap">
+          <div class="section-title">Financial Summary</div>
+          <table class="table-style">
+            <thead><tr><th>Metric</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>YTD</th><th>vs Budget</th></tr></thead>
+            <tbody>
+              <tr><td>Revenue</td><td>980</td><td>1100</td><td>1320</td><td>900</td><td>4300</td><td style="color:#34D399;">+4.2%</td></tr>
+              <tr><td>COGS</td><td>380</td><td>420</td><td>510</td><td>340</td><td>1650</td><td style="color:#F87171;">-1.8%</td></tr>
+              <tr><td>Gross Profit</td><td>600</td><td>680</td><td>810</td><td>560</td><td>2650</td><td style="color:#34D399;">+8.1%</td></tr>
+              <tr><td>Operating Exp</td><td>240</td><td>260</td><td>240</td><td>180</td><td>920</td><td style="color:#F87171;">-3.1%</td></tr>
+              <tr class="netprofit"><td>EBITDA</td><td>360</td><td>420</td><td>570</td><td>380</td><td>1730</td><td style="color:#34D399;">+12.4%</td></tr>
+              <tr><td>Net Profit</td><td>280</td><td>340</td><td>460</td><td>310</td><td>1390</td><td style="color:#34D399;">+8.2%</td></tr>
+              <tr><td>EPS ($)</td><td>0.42</td><td>0.51</td><td>0.69</td><td>0.46</td><td>2.08</td><td style="color:#34D399;">+6.7%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ai-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><div>✨ <strong>AI Financial Insights</strong></div><span style="background:rgba(167,139,250,.2);color:#A78BFA;border-radius:999px;padding:4px 8px;font-size:12px;">Powered by Claude</span></div>
+          <div class="ai-card"><strong>🟢 Revenue +12.4%</strong><div style="font-size:.88rem;color:#6B8CAE;">Strong Q3 performance driving annual targets ahead of plan</div></div>
+          <div class="ai-card"><strong>🟡 IFRS 15 — Q3 review recommended</strong><div style="font-size:.88rem;color:#6B8CAE;">Variable consideration clauses require disclosure update</div></div>
+          <div class="ai-card"><strong>🟢 Operating leverage improving</strong><div style="font-size:.88rem;color:#6B8CAE;">Costs down 3.1% while revenue grew 12.4% — strong efficiency</div></div>
+          <div class="ai-card"><strong>🟡 Cash conversion: 42 days</strong><div style="font-size:.88rem;color:#6B8CAE;">Industry average 38 days — receivables optimization needed</div></div>
+          <button class="btn-cta" style="width:100%;margin-top:10px;" onclick="window.location.href='ifrs-generator.html'">Generate Full IFRS Report →</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
