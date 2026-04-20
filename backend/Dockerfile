@@ -52,9 +52,10 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+# Railway (and similar) set PORT at runtime — must listen on that port, not a fixed 8000.
+# Health check hits the same port the app binds to.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import os,urllib.request; p=os.environ.get('PORT','8000'); urllib.request.urlopen(f'http://127.0.0.1:{p}/health', timeout=5)"
 
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application (shell form so ${PORT} expands)
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
