@@ -1,7 +1,10 @@
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -54,7 +57,12 @@ add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 @app.on_event("startup")
 def startup():
-    init_db()
+    # DB init must not block the process from listening: Railway healthchecks /health
+    # while startup hooks run; a failing Postgres URL would otherwise fail the deploy.
+    try:
+        init_db()
+    except Exception:
+        logger.exception("init_db failed — API will run but DB-backed routes may error until fixed")
 
 
 # Routes
@@ -78,20 +86,17 @@ app.include_router(excel_addon_routes.router)
 app.include_router(voice_inbound.router)
 
 if settings.ENABLE_FASTAPI_MCP:
-    import logging
-
-    _log = logging.getLogger(__name__)
     try:
         from fastapi_mcp import FastApiMCP
 
         FastApiMCP(app).mount()
     except ImportError:
-        _log.warning(
+        logger.warning(
             "fastapi-mcp is not installed; MCP is disabled (pip install fastapi-mcp)."
         )
     except Exception as e:
         # Do not fail the whole API if MCP mount breaks in production.
-        _log.warning("fastapi-mcp mount skipped: %s", e)
+        logger.warning("fastapi-mcp mount skipped: %s", e)
 
 @app.get("/")
 async def root():
