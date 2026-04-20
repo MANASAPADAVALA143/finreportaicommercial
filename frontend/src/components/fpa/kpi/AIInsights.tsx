@@ -94,7 +94,7 @@ Be specific, use numbers, CFO tone, max 200 words total.`;
           </div>
           <div>
             <h3 className="text-lg font-bold text-gray-900">AI CFO Insights</h3>
-            <p className="text-sm text-gray-600">Powered by AWS Nova</p>
+            <p className="text-sm text-gray-600">Powered by AI (backend Claude)</p>
           </div>
         </div>
         

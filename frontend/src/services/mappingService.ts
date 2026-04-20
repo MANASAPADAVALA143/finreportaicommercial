@@ -219,6 +219,8 @@ function normalizeBackendPath(path: string): string {
 // ==================== AI MAPPING VIA BACKEND (NO AWS TOKEN IN BROWSER) ====================
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
+const TENANT_ID =
+  (import.meta.env.VITE_TENANT_ID && String(import.meta.env.VITE_TENANT_ID).trim()) || "default";
 
 async function getAISuggestionsFromBackend(
   entries: TrialBalanceEntry[]
@@ -234,7 +236,10 @@ async function getAISuggestionsFromBackend(
     const url = `${API_BASE_URL.replace(/\/$/, "")}/api/ifrs/ai-mapping`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-ID": TENANT_ID,
+      },
       body: JSON.stringify(body),
     });
     if (!res.ok) return null;

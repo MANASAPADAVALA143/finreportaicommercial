@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import pandas as pd
 import io
-from app.services.nova_service import nova_service
+from app.services.journal_ai_service import journal_ai_service
 from app.core.database import get_db
 from app.core.security import get_current_user
 
@@ -20,12 +20,11 @@ async def get_ai_status():
     ok = llm_service.is_configured()
     return {
         "aiAvailable": ok,
-        "novaAvailable": ok,
         "provider": llm_service.provider_label() if ok else None,
         "message": (
             f"{llm_service.provider_label()} is configured for journal entry AI analysis."
             if ok
-            else "LLM unavailable. Set AI_PROVIDER=anthropic and ANTHROPIC_API_KEY, or AI_PROVIDER=gemini and GOOGLE_API_KEY in backend/.env"
+            else "LLM unavailable. Set ANTHROPIC_API_KEY in backend/.env"
         ),
     }
 
@@ -171,7 +170,7 @@ async def upload_journal_entries(
         except:
             pass
         
-        analysis_result = nova_service.analyze_batch_with_ground_truth(
+        analysis_result = journal_ai_service.analyze_batch_with_ground_truth(
             entries, 
             ground_truth, 
             threshold=threshold
@@ -192,10 +191,8 @@ async def upload_journal_entries(
             "summary": {
                 **analysis_result['summary'],
                 "aiEntryCount": ai_count,
-                "novaEntryCount": ai_count,
                 "ruleBasedEntryCount": rule_count,
                 "aiUsed": ai_count > 0,
-                "novaUsed": ai_count > 0,
             },
             "metrics": analysis_result['metrics'],
             "confusionMatrix": analysis_result['confusionMatrix'],
@@ -245,7 +242,7 @@ async def analyze_single_entry(
         )
     
     try:
-        result = nova_service.analyze_journal_entry(entry)
+        result = journal_ai_service.analyze_journal_entry(entry)
         
         return {
             "success": True,
@@ -276,7 +273,7 @@ async def analyze_batch_entries(
         raise HTTPException(status_code=400, detail="Maximum 1000 entries per batch")
     
     try:
-        results = nova_service.analyze_batch(entries)
+        results = journal_ai_service.analyze_batch(entries)
         
         # Summary statistics
         total_risk_score = sum(r.get('riskScore', 0) for r in results)

@@ -131,6 +131,12 @@ export const FPASuite = () => {
               <div>
                 <h1 className="text-3xl font-bold text-gray-900">FP&A Suite</h1>
                 <p className="text-gray-600 mt-1">Financial Planning & Analysis Tools</p>
+                <Link
+                  to="/excel-suite"
+                  className="inline-block mt-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+                >
+                  Excel AI Suite →
+                </Link>
               </div>
             </div>
             

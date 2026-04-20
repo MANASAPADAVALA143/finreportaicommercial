@@ -8,15 +8,15 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:help": "node -e \"console.log(['Backend (separate terminal): cd ../backend  then  python -m uvicorn app.main:app --reload --port 8000','Frontend: npm run dev  (http://localhost:3006)','frontend/.env: VITE_API_URL=http://localhost:8000','backend/.env: ANTHROPIC_API_KEY=sk-ant-...'].join('\\n'))\"",
     "build": "vite build",
-    "build:deploy": "vite build",
+    "build:deploy": "vite build --mode github-pages",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "predeploy": "npm run build:deploy",
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.997.0",
     "@supabase/supabase-js": "^2.39.3",
     "axios": "^1.6.5",
     "clsx": "^2.1.0",

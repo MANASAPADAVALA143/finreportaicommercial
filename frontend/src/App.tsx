@@ -1,82 +1,234 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
 import { LandingPage } from './components/landing/LandingPage';
-import { Dashboard } from './components/dashboard/Dashboard';
-import { R2RModule } from './components/r2r/R2RModule';
-import R2RPatternAnalysisPage from './pages/R2RPatternAnalysisPage';
-import { TBVariancePage } from './pages/TBVariancePage';
-import { BankReconciliationPage } from './pages/BankReconciliationPage';
-import { CloseTrackerPage } from './pages/CloseTrackerPage';
-import { NovaAssistant } from './components/nova/NovaAssistant';
-import { CFODashboard } from './pages/CFODashboard';
-import { IFRSStatementGenerator } from './pages/IFRSStatementGenerator';
-import { FPASuite } from './pages/fpa/FPASuite';
-import { VarianceAnalysis } from './pages/fpa/VarianceAnalysis';
-import { VarianceAnalysisPage } from './pages/fpa/VarianceAnalysisPage';
-import BudgetManagement from './pages/fpa/BudgetManagement';
-import KPIDashboard from './pages/fpa/KPIDashboard';
-import ForecastingEngine from './pages/fpa/ForecastingEngine';
-import ScenarioPlanning from './pages/fpa/ScenarioPlanning';
-import { ScenarioEngine } from './pages/fpa/ScenarioEngine';
-import ManagementReporting from './pages/fpa/ManagementReporting';
-import CFOServices from './pages/cfo/CFOServices.tsx';
-import CFODecisionIntelligence from './pages/CFODecisionIntelligence';
+
+function chunkLoadErrorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function ChunkLoadErrorScreen({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        padding: 24,
+        background: '#0f172a',
+        color: '#e2e8f0',
+        fontFamily: 'system-ui, sans-serif',
+      }}
+    >
+      <h1 style={{ fontSize: 18, marginBottom: 12 }}>This page failed to load</h1>
+      <p style={{ color: '#94a3b8', marginBottom: 16, maxWidth: 560, lineHeight: 1.5 }}>
+        This usually means the browser cached an old build or the dev server moved ports. Try{' '}
+        <strong>Ctrl+Shift+R</strong> (hard refresh). Use the exact URL from the terminal where you ran{' '}
+        <code style={{ color: '#f8fafc' }}>npm run dev</code> (this app uses port{' '}
+        <code style={{ color: '#f8fafc' }}>3006</code>). Do not open <code style={{ color: '#f8fafc' }}>dist/index.html</code>{' '}
+        directly.
+      </p>
+      <pre
+        style={{
+          background: '#020617',
+          padding: 16,
+          borderRadius: 8,
+          fontSize: 12,
+          color: '#fca5a5',
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {message}
+      </pre>
+    </div>
+  );
+}
+
+/** Lazy route imports that reject (network, stale cache) bypass React Error Boundaries; recover with a visible screen. */
+function safeLazy<T extends ComponentType<object>>(loader: () => Promise<{ default: T }>) {
+  return lazy(() =>
+    loader().catch((err: unknown) => {
+      console.error('Route chunk failed to load:', err);
+      const message = chunkLoadErrorMessage(err);
+      const Fallback = () => <ChunkLoadErrorScreen message={message} />;
+      return { default: Fallback as unknown as T };
+    })
+  );
+}
+
+// Home is eager so a failed lazy chunk can’t leave `/` blank (lazy rejections bypass Error Boundaries).
+const Dashboard = safeLazy(() =>
+  import('./components/dashboard/Dashboard').then((m) => ({ default: m.Dashboard }))
+);
+const R2RModule = safeLazy(() =>
+  import('./components/r2r/R2RModule').then((m) => ({ default: m.R2RModule }))
+);
+const R2RPatternAnalysisPage = safeLazy(() => import('./pages/R2RPatternAnalysisPage'));
+const TBVariancePage = safeLazy(() =>
+  import('./pages/TBVariancePage').then((m) => ({ default: m.TBVariancePage }))
+);
+const BankReconciliationPage = safeLazy(() =>
+  import('./pages/BankReconciliationPage').then((m) => ({ default: m.BankReconciliationPage }))
+);
+const CloseTrackerPage = safeLazy(() =>
+  import('./pages/CloseTrackerPage').then((m) => ({ default: m.CloseTrackerPage }))
+);
+const NovaAssistant = safeLazy(() =>
+  import('./components/nova/NovaAssistant').then((m) => ({ default: m.NovaAssistant }))
+);
+const CFODashboard = safeLazy(() =>
+  import('./pages/CFODashboard').then((m) => ({ default: m.CFODashboard }))
+);
+const IFRSStatementGenerator = safeLazy(() =>
+  import('./pages/IFRSStatementGenerator').then((m) => ({ default: m.IFRSStatementGenerator }))
+);
+const IFRSStatementPage = safeLazy(() => import('./pages/ifrs-statement/IFRSStatementPage'));
+const TallyIntegrationPage = safeLazy(() => import('./pages/erp/TallyIntegrationPage'));
+const FPASuite = safeLazy(() =>
+  import('./pages/fpa/FPASuite').then((m) => ({ default: m.FPASuite }))
+);
+const ExcelSuite = safeLazy(() =>
+  import('./pages/excel/ExcelSuite').then((m) => ({ default: m.ExcelSuite }))
+);
+const ExcelSuiteToolPage = safeLazy(() =>
+  import('./pages/excel/ExcelSuiteToolPage').then((m) => ({ default: m.ExcelSuiteToolPage }))
+);
+const VarianceAnalysis = safeLazy(() =>
+  import('./pages/fpa/VarianceAnalysis').then((m) => ({ default: m.VarianceAnalysis }))
+);
+const VarianceAnalysisPage = safeLazy(() =>
+  import('./pages/fpa/VarianceAnalysisPage').then((m) => ({ default: m.VarianceAnalysisPage }))
+);
+const BudgetManagement = safeLazy(() => import('./pages/fpa/BudgetManagement'));
+const KPIDashboard = safeLazy(() => import('./pages/fpa/KPIDashboard'));
+const ForecastingEngine = safeLazy(() => import('./pages/fpa/ForecastingEngine'));
+const ScenarioEngine = safeLazy(() =>
+  import('./pages/fpa/ScenarioEngine').then((m) => ({ default: m.ScenarioEngine }))
+);
+const ManagementReporting = safeLazy(() => import('./pages/fpa/ManagementReporting'));
+const CFOServices = safeLazy(() => import('./pages/cfo/CFOServices.tsx'));
+const CFODecisionIntelligence = safeLazy(() => import('./pages/CFODecisionIntelligence'));
+const BookkeepingLayout = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingLayout').then((m) => ({ default: m.BookkeepingLayout }))
+);
+const BookkeepingUploadPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingUploadPage').then((m) => ({
+    default: m.BookkeepingUploadPage,
+  }))
+);
+const BookkeepingReviewPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingReviewPage').then((m) => ({
+    default: m.BookkeepingReviewPage,
+  }))
+);
+const BookkeepingAnomaliesPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingAnomaliesPage').then((m) => ({
+    default: m.BookkeepingAnomaliesPage,
+  }))
+);
+const BookkeepingMissingReceiptsPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingMissingReceiptsPage').then((m) => ({
+    default: m.BookkeepingMissingReceiptsPage,
+  }))
+);
+const BookkeepingReconPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingReconPage').then((m) => ({
+    default: m.BookkeepingReconPage,
+  }))
+);
+const BookkeepingMonthlyPage = safeLazy(() =>
+  import('./pages/bookkeeping/BookkeepingMonthlyPage').then((m) => ({
+    default: m.BookkeepingMonthlyPage,
+  }))
+);
+const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
+
+/** Matches Vite `base` (root vs GitHub Pages subpath). */
+const normalizedBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '') || '/';
+const routerBasename = normalizedBase === '/' ? undefined : normalizedBase;
+
+function RouteFallback() {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        background: '#0f172a',
+        color: '#e2e8f0',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 14,
+      }}
+    >
+      Loading…
+    </div>
+  );
+}
 
 function App() {
   return (
     <AgentActivityProvider>
       <ClientProvider>
-      <BrowserRouter
-        future={{
-          v7_startTransition: true,
-          v7_relativeSplatPath: true,
-        }}
-      >
-        <Routes>
-          {/* Landing Page - First page users see */}
-          <Route path="/" element={<LandingPage />} />
-          
-          {/* Auth routes disabled for hackathon - redirect to dashboard */}
-          <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/register" element={<Navigate to="/dashboard" replace />} />
-          
-          {/* Main Dashboard - Module cards after "Launch Dashboard" */}
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/cfo-dashboard" element={<CFODashboard />} />
-          <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
-          <Route path="/r2r" element={<R2RModule />} />
-          <Route path="/r2r-pattern" element={<R2RPatternAnalysisPage />} />
-          <Route path="/tb-variance" element={<TBVariancePage />} />
-          <Route path="/bank-recon" element={<BankReconciliationPage />} />
-          <Route path="/close-tracker" element={<CloseTrackerPage />} />
-          <Route path="/nova" element={<NovaAssistant />} />
-          
-          {/* FP&A Suite Routes */}
-          <Route path="/fpa" element={<FPASuite />} />
-          <Route path="/fpa/variance" element={<VarianceAnalysis />} />
-          <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-          <Route path="/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-          <Route path="/fpa/budget" element={<BudgetManagement />} />
-          <Route path="/fpa/kpi" element={<KPIDashboard />} />
-          <Route path="/fpa/forecast" element={<ForecastingEngine />} />
-          <Route path="/fpa/scenario" element={<ScenarioEngine />} />
-          <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
-          <Route path="/fpa/reports" element={<ManagementReporting />} />
-          
-          {/* CFO Services Routes */}
-          <Route path="/cfo" element={<CFOServices />} />
-          <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
-          <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
-          <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
-          <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
-          
-          {/* CFO Decision Intelligence */}
-          <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
-        </Routes>
-      </BrowserRouter>
-      <Toaster position="top-right" />
+        <BrowserRouter
+          basename={routerBasename}
+          future={{
+            v7_startTransition: true,
+            v7_relativeSplatPath: true,
+          }}
+        >
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/get-demo" element={<GetDemoPage />} />
+              <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/register" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/cfo-dashboard" element={<CFODashboard />} />
+              <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
+              <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
+              <Route path="/board-pack" element={<IFRSStatementPage />} />
+              <Route path="/erp/tally" element={<TallyIntegrationPage />} />
+              <Route path="/r2r" element={<R2RModule />} />
+              <Route path="/r2r-pattern" element={<R2RPatternAnalysisPage />} />
+              <Route path="/tb-variance" element={<TBVariancePage />} />
+              <Route path="/bank-recon" element={<BankReconciliationPage />} />
+              <Route path="/bank-recon/analytics" element={<BankReconciliationPage />} />
+              <Route path="/bank-recon/workspace/:workspaceId" element={<BankReconciliationPage />} />
+              <Route path="/close-tracker" element={<CloseTrackerPage />} />
+              <Route path="/nova" element={<NovaAssistant />} />
+              <Route path="/fpa" element={<FPASuite />} />
+              <Route path="/excel-suite" element={<ExcelSuite />} />
+              <Route path="/excel-suite/:slug" element={<ExcelSuiteToolPage />} />
+              <Route path="/fpa/variance" element={<VarianceAnalysis />} />
+              <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
+              <Route path="/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
+              <Route path="/fpa/budget" element={<BudgetManagement />} />
+              <Route path="/fpa/kpi" element={<KPIDashboard />} />
+              <Route path="/fpa/forecast" element={<ForecastingEngine />} />
+              <Route path="/fpa/scenario" element={<ScenarioEngine />} />
+              <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
+              <Route path="/fpa/reports" element={<ManagementReporting />} />
+              <Route path="/cfo" element={<CFOServices />} />
+              <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
+              <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
+              <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
+              <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
+              <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
+              <Route path="/bookkeeping" element={<BookkeepingLayout />}>
+                <Route index element={<Navigate to="/bookkeeping/upload" replace />} />
+                <Route path="upload" element={<BookkeepingUploadPage />} />
+                <Route path="review" element={<BookkeepingReviewPage />} />
+                <Route path="anomalies" element={<BookkeepingAnomaliesPage />} />
+                <Route path="missing-receipts" element={<BookkeepingMissingReceiptsPage />} />
+                <Route path="reconciliation" element={<BookkeepingReconPage />} />
+                <Route path="monthly" element={<BookkeepingMonthlyPage />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+        <Toaster position="top-right" />
       </ClientProvider>
     </AgentActivityProvider>
   );

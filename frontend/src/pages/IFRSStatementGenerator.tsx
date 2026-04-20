@@ -108,13 +108,20 @@ export const IFRSStatementGenerator = () => {
   useEffect(() => {
     const raw = localStorage.getItem('ifrs_trial_balance');
     if (!raw) return;
-    const norm = (s: string) => String(s || '').trim().toLowerCase().replace(/[\s_]+/g, '');
+    /** Match Excel headers like "Debit (₹ Lakhs)", "Account Code" (same idea as TB upload). */
+    const norm = (s: string) =>
+      String(s || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s*\(₹\)\s*/gi, ' ')
+        .replace(/[^a-z0-9]+/g, '');
     const pick = (row: any, ...keys: string[]): string | number => {
       for (const k of keys) {
         const nk = norm(k);
         for (const [header, val] of Object.entries(row || {})) {
           if (val == null && val !== 0) continue;
-          if (norm(String(header)) === nk || norm(String(header)).includes(nk) || nk.includes(norm(String(header)))) return val as string | number;
+          const hn = norm(String(header));
+          if (hn === nk || hn.includes(nk) || nk.includes(hn)) return val as string | number;
         }
         if (row[k] != null && row[k] !== '') return row[k] as string | number;
         if (row[nk] != null && row[nk] !== '') return row[nk] as string | number;
@@ -126,10 +133,30 @@ export const IFRSStatementGenerator = () => {
       const tb = Array.isArray(data) ? data : (data?.trialBalance ?? []);
       if (!Array.isArray(tb) || tb.length === 0) return;
       const entries: TrialBalanceEntry[] = tb.map((row: any, i: number) => {
-        const glCode = String(pick(row, 'gl code', 'glCode', 'account code', 'accountcode', 'code', 'entry id') || (i + 1)).trim();
-        const accountName = String(pick(row, 'account name', 'accountName', 'accountname', 'name', 'description', 'account') || '').trim();
-        const debit = parseFloat(String(pick(row, 'debit', 'debit balance', 'dr')).replace(/[₹,\s]/g, '')) || 0;
-        const credit = parseFloat(String(pick(row, 'credit', 'credit balance', 'cr')).replace(/[₹,\s]/g, '')) || 0;
+        const glCode = String(
+          pick(row, 'glcode', 'gl code', 'accountcode', 'account code', 'code', 'entry id') || (i + 1)
+        ).trim();
+        const accountName = String(
+          pick(
+            row,
+            'accountname',
+            'account name',
+            'accountdescription',
+            'account description',
+            'gldescription',
+            'gl description',
+            'name',
+            'description'
+          ) || ''
+        ).trim();
+        const debit =
+          parseFloat(
+            String(pick(row, 'debit', 'debitlakhs', 'debit balance', 'dr', 'debitamount')).replace(/[₹,\s]/g, '')
+          ) || 0;
+        const credit =
+          parseFloat(
+            String(pick(row, 'credit', 'creditlakhs', 'credit balance', 'cr', 'creditamount')).replace(/[₹,\s]/g, '')
+          ) || 0;
         let accountType = 'unknown';
         if (debit > 0) accountType = 'asset/expense';
         if (credit > 0) accountType = 'liability/equity/revenue';
@@ -357,10 +384,25 @@ export const IFRSStatementGenerator = () => {
                   const c = cells[j];
                   if (c.includes('debit') || c === 'dr') debitColIdx = j;
                   if (c.includes('credit') || c === 'cr') creditColIdx = j;
-                  if ((c.includes('account') && c.includes('name')) || c.includes('particulars') || c === 'name' || c.includes('description')) nameColIdx = j;
-                  if ((c.includes('gl') && c.includes('code')) || c === 'code' || c.includes('account no')) glColIdx = j;
-                  if (c.includes('account') && !c.includes('name') && nameColIdx < 0) nameColIdx = j;
-                  if (c.includes('type')) typeColIdx = j;
+                  if (
+                    (c.includes('account') && c.includes('name')) ||
+                    c.includes('particulars') ||
+                    c === 'name' ||
+                    (c.includes('account') && c.includes('description')) ||
+                    (c.includes('description') && !c.includes('code'))
+                  ) {
+                    nameColIdx = j;
+                  }
+                  if (
+                    (c.includes('gl') && c.includes('code')) ||
+                    c === 'code' ||
+                    c.includes('account no') ||
+                    (c.includes('account') && c.includes('code') && !c.includes('name') && !c.includes('description'))
+                  ) {
+                    glColIdx = j;
+                  }
+                  if (c.includes('account') && !c.includes('name') && !c.includes('description') && nameColIdx < 0) nameColIdx = j;
+                  if (c.includes('type') || c.includes('category') || c.includes('ifrs')) typeColIdx = j;
                 }
                 if (nameColIdx < 0) for (let j = 0; j < cells.length; j++) { if (cells[j].includes('account') || cells[j] === 'name') { nameColIdx = j; break; } }
                 break;
@@ -1204,9 +1246,20 @@ const Step1Upload: React.FC<Step1Props> = ({
             <Upload className="w-12 h-12 text-blue-600" />
           </div>
           
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Upload Trial Balance</h2>
-          <p className="text-gray-600 mb-8">
-            Drag and drop your file here, or click to browse
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">IFRS Generator — upload trial balance</h2>
+          <p className="text-gray-600 mb-2">
+            Drag and drop your file here, or click to browse. Parsing runs in your browser; mapping step calls the API at{" "}
+            <code className="text-xs bg-gray-100 px-1 rounded">/api/ifrs/ai-mapping</code> when the backend is up (otherwise rule-based
+            suggestions are used).
+          </p>
+          <p className="text-sm text-gray-500 mb-8 max-w-xl mx-auto">
+            Expected columns: <strong>Account / GL code</strong>, <strong>account name or description</strong>, <strong>debit</strong>,{" "}
+            <strong>credit</strong> — including headers like &quot;Debit (₹ Lakhs)&quot; and &quot;IFRS Category&quot;. For server-side TB
+            upload + disclosures, use{" "}
+            <Link to="/ifrs-statement" className="text-blue-600 hover:underline font-medium">
+              IFRS Statement (Week 3)
+            </Link>
+            .
           </p>
           
           {file ? (

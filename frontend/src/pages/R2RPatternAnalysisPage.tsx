@@ -1,9 +1,16 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
-import { analyzeEntries, analyzeEntriesWithHistory, type ScoredEntry } from "../services/patternAnalysis";
-import { callAI } from "../services/aiProvider";
+import {
+  analyzePatternBackend,
+  type AnalyzeEntriesResult,
+  type PatternEngineExtras,
+  type PatternSensitivity,
+  type ScoredEntry,
+} from "../services/patternAnalysis";
 import { listClients, createClient, saveUpload, getClientHistory, type R2RClient } from "../services/r2rHistoryService";
+import { postR2RFeedback, getFeedbackHistory, type R2RFeedback } from "../services/r2rLearning.service";
+import LearningDashboardTab from "../components/r2r/LearningDashboardTab";
 
 // ─── Design Tokens (matches CFO Decision Intelligence) ───────────────────────
 const C = {
@@ -35,6 +42,35 @@ const mono = "'DM Mono', 'Consolas', monospace";
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
 const AI_INVOKE_URL = `${API_BASE.replace(/\/$/, "")}/api/ai/invoke`;
+
+const LS_R2R_SENSITIVITY = "r2r_sensitivity";
+const LS_R2R_THRESHOLD = "r2r_threshold";
+
+function loadR2rSensitivity(): PatternSensitivity {
+  const s = localStorage.getItem(LS_R2R_SENSITIVITY);
+  if (s === "conservative" || s === "balanced" || s === "strict") return s;
+  return "balanced";
+}
+
+function loadR2rThresholdStr(): string {
+  return (
+    localStorage.getItem(LS_R2R_THRESHOLD) ||
+    localStorage.getItem("fraud_detection_threshold") ||
+    "40"
+  );
+}
+
+const R2R_PRESET_THRESHOLD: Record<PatternSensitivity, string> = {
+  conservative: "20",
+  balanced: "40",
+  strict: "70",
+};
+
+const R2R_SENSITIVITY_TITLE: Record<PatternSensitivity, string> = {
+  conservative: "Conservative",
+  balanced: "Balanced",
+  strict: "Strict",
+};
 
 // ─── Shared UI Atoms ─────────────────────────────────────────────────────────
 const Card = ({ children, style = {} }: { children: React.ReactNode; style?: React.CSSProperties }) => (
@@ -110,6 +146,8 @@ type JEEntryRow = {
   date: string;
   tags: string[];
   amount: string;
+  /** Raw amount for exports and aggregates */
+  amountNum: number;
   zscore: string;
   amt: number | null;
   dup: number | null;
@@ -120,7 +158,24 @@ type JEEntryRow = {
   score: number;
   level: "HIGH" | "MEDIUM" | "LOW";
   signals?: string[];
+  plainEnglish?: string;
 };
+
+function actionRequiredForLevel(level: "HIGH" | "MEDIUM" | "LOW"): string {
+  if (level === "HIGH") return "Immediate review — obtain supporting docs";
+  if (level === "MEDIUM") return "Review in next 5 business days";
+  return "Include in sample review";
+}
+
+function formatReportAnalysisDate(d: Date): string {
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function plainEnglishLine(e: JEEntryRow): string {
+  if (e.plainEnglish?.trim()) return e.plainEnglish.trim();
+  const s = e.signals?.length ? e.signals.slice(0, 3).join("; ") : "";
+  return s || "Elevated composite risk — obtain supporting documentation.";
+}
 
 function formatAmountINR(n: number): string {
   const s = Math.round(n).toString();
@@ -294,6 +349,7 @@ function scoredEntryToJEEntry(p: ScoredEntry, index: number): JEEntryRow {
     date: p.date || "—",
     tags,
     amount: formatAmountINR(p.amount),
+    amountNum: p.amount,
     zscore,
     amt: amt || null,
     dup,
@@ -303,6 +359,7 @@ function scoredEntryToJEEntry(p: ScoredEntry, index: number): JEEntryRow {
     score: p.finalScore,
     level: p.riskLevel,
     signals: p.ruleFlags?.length ? p.ruleFlags : undefined,
+    plainEnglish: p.plainEnglishReason,
   };
 }
 
@@ -348,13 +405,178 @@ interface JESummaryTableProps {
   totalAmt?: string;
   totalAnalysed?: number;
   anomaliesCount?: number;
+  engineExtras?: PatternEngineExtras | null;
+  /** When set, HIGH/MEDIUM rows show approve/reject learning actions (POST /api/r2r/feedback). */
+  learningClientId?: string | null;
+  onLearningFeedback?: () => void;
 }
 
-const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JESummaryTableProps = {}) => {
+const ReasonChips = ({ items }: { items: string[] }) => (
+  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 280 }}>
+    {items.slice(0, 2).map((t) => (
+      <span
+        key={t}
+        style={{
+          fontSize: 9,
+          fontWeight: 600,
+          padding: "3px 8px",
+          borderRadius: 4,
+          background: C.bluePale,
+          color: C.blue,
+          border: `1px solid ${C.blueBorder}`,
+          lineHeight: 1.3,
+        }}
+      >
+        {t.length > 42 ? `${t.slice(0, 40)}…` : t}
+      </span>
+    ))}
+    {items.length === 0 && <span style={{ fontSize: 11, color: C.textMute }}>—</span>}
+  </div>
+);
+
+function PatternEngineInsights({ extra }: { extra: PatternEngineExtras }) {
+  const mb = extra.model_breakdown;
+  const dist = extra.score_distribution || [];
+  const maxC = Math.max(1, ...dist.map((x) => x.count));
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+        gap: 16,
+        marginBottom: 4,
+      }}
+    >
+      <Card>
+        <SectionTitle sub="Detectors contributing this run">Models Used This Analysis</SectionTitle>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 13, color: C.textMid }}>
+          {[
+            ["Isolation Forest", mb.isolation_forest_detected, "detected"],
+            ["DBSCAN", mb.dbscan_noise_points, "noise pts"],
+            ["Local Outlier Factor", mb.local_outlier_detected, "detected"],
+            ["Rules Engine", mb.rules_engine_flagged_rows, "rows with rule hits"],
+            ["Behavioural", mb.behavioural_anomalies, "anomalies"],
+          ].map(([label, n, suf]) => (
+            <li
+              key={String(label)}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                padding: "10px 0",
+                borderBottom: `1px solid ${C.borderLight}`,
+                fontFamily: font,
+              }}
+            >
+              <span style={{ color: C.text, fontWeight: 600 }}>{label}</span>
+              <span style={{ fontFamily: mono, fontWeight: 800, color: C.blue }}>
+                {n} <span style={{ fontWeight: 500, color: C.textSub, fontSize: 11 }}>{suf}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+      <Card>
+        <SectionTitle sub="Entries per composite risk band">Score distribution</SectionTitle>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 4 }}>
+          {dist.map((b) => (
+            <div key={b.band} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ width: 52, fontSize: 11, fontWeight: 700, color: C.textSub, fontFamily: mono }}>{b.band}</span>
+              <div style={{ flex: 1, height: 10, borderRadius: 999, background: C.bg, overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${Math.min(100, (b.count / maxC) * 100)}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: C.blue,
+                    transition: "width 0.4s ease",
+                  }}
+                />
+              </div>
+              <span style={{ width: 36, textAlign: "right", fontFamily: mono, fontSize: 12, fontWeight: 800, color: C.text }}>
+                {b.count}
+              </span>
+            </div>
+          ))}
+          {dist.length === 0 && <p style={{ fontSize: 12, color: C.textSub }}>No distribution data.</p>}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+const ScoreValueBadge = ({ score }: { score: number }) => {
+  const tier = score >= 70 ? "high" : score >= 40 ? "mid" : "low";
+  const cfg =
+    tier === "high"
+      ? { bg: C.redBg, text: C.red, border: C.redBorder }
+      : tier === "mid"
+        ? { bg: C.amberBg, text: C.amber, border: C.amberBorder }
+        : { bg: C.greenBg, text: C.green, border: C.greenBorder };
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 44,
+        padding: "4px 8px",
+        borderRadius: 6,
+        fontSize: 13,
+        fontWeight: 800,
+        fontFamily: mono,
+        background: cfg.bg,
+        color: cfg.text,
+        border: `1px solid ${cfg.border}`,
+      }}
+    >
+      {score}
+    </span>
+  );
+};
+
+const JESummaryTable = ({
+  entries,
+  totalAmt,
+  totalAnalysed,
+  anomaliesCount,
+  engineExtras,
+  learningClientId,
+  onLearningFeedback,
+}: JESummaryTableProps = {}) => {
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<"ALL" | "HIGH" | "MEDIUM" | "LOW">("ALL");
   const [novaCache, setNovaCache] = useState<Record<string, string>>({});
   const [novaLoading, setNovaLoading] = useState<string | null>(null);
+  const [fbSummary, setFbSummary] = useState({ total: 0, approved: 0, rejected: 0, needs: 0 });
+  const [entryFb, setEntryFb] = useState<Record<string, R2RFeedback>>({});
+  const [fbComments, setFbComments] = useState<Record<string, string>>({});
+  const [fbSubmitting, setFbSubmitting] = useState<string | null>(null);
+  const [fbToast, setFbToast] = useState<string | null>(null);
+
+  const refreshFbSummary = useCallback(async () => {
+    if (!learningClientId) {
+      setFbSummary({ total: 0, approved: 0, rejected: 0, needs: 0 });
+      return;
+    }
+    try {
+      const h = await getFeedbackHistory(learningClientId);
+      const items = (h.items || []) as { feedback?: string }[];
+      setFbSummary({
+        total: h.count ?? items.length,
+        approved: items.filter((x) => x.feedback === "approved").length,
+        rejected: items.filter((x) => x.feedback === "rejected").length,
+        needs: items.filter((x) => x.feedback === "needs_review").length,
+      });
+    } catch {
+      setFbSummary({ total: 0, approved: 0, rejected: 0, needs: 0 });
+    }
+  }, [learningClientId]);
+
+  useEffect(() => {
+    void refreshFbSummary();
+  }, [refreshFbSummary, learningClientId, entries?.length]);
   const hasData = entries != null && entries.length > 0;
   const jeEntries = hasData ? entries : [];
   const total = totalAnalysed ?? 0;
@@ -370,7 +592,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
     const signalList = (e.signals && e.signals.length > 0) ? e.signals.join(", ") : "Amount, Duplicate, User, Timing, Account, Vendor (as triggered)";
     const userPrompt = `Journal entry details:\nVendor: ${e.vendor}\nAmount: ${e.amount}\nPosted by: ${e.postedBy}\nDate: ${e.date}\nAccount: ${e.account}\nSignals triggered: ${signalList}\nRisk score: ${e.score}/100\nExplain why this is suspicious.`;
     try {
-      const res = await fetch(NOVA_INVOKE_URL, {
+      const res = await fetch(AI_INVOKE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -430,8 +652,31 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
         <div>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0 }}>All Flagged Journal Entries</h3>
           <p style={{ fontSize: 12, color: C.textSub, marginTop: 3 }}>
-            {total} JEs analysed · {anomalies} anomalies flagged · {amt} total exposure at risk
+            Total: {total}
+            {engineExtras
+              ? ` · High: ${counts.HIGH} · Medium: ${counts.MEDIUM} · Low: ${counts.LOW} · Flagged: ${engineExtras.flagged_pct.toFixed(1)}%`
+              : ""}
+            {!engineExtras ? ` · ${anomalies} anomalies flagged` : ""} · {amt} total exposure at risk
           </p>
+          {learningClientId ? (
+            <p style={{ fontSize: 11, color: C.green, marginTop: 6, fontWeight: 600 }}>
+              Learning: {fbSummary.total} reviewed · {fbSummary.approved} approved · {fbSummary.rejected} rejected
+              {fbSummary.needs ? ` · ${fbSummary.needs} needs review` : ""}
+            </p>
+          ) : (
+            <p style={{ fontSize: 11, color: C.textMute, marginTop: 6 }}>
+              Select a <strong>client</strong> above to save approve/reject feedback and train client-specific thresholds.
+            </p>
+          )}
+          {fbToast ? <p style={{ fontSize: 11, color: C.blue, marginTop: 4 }}>{fbToast}</p> : null}
+          {engineExtras && engineExtras.models_used?.length ? (
+            <p style={{ fontSize: 11, color: C.textMid, marginTop: 6, maxWidth: 720, lineHeight: 1.45 }}>
+              <strong style={{ color: C.textSub }}>Models:</strong> {engineExtras.models_used.slice(0, 2).join(" · ")}
+              {engineExtras.models_used.length > 2
+                ? ` · +${engineExtras.models_used.length - 2} more (sensitivity: ${engineExtras.sensitivity})`
+                : ` · (sensitivity: ${engineExtras.sensitivity})`}
+            </p>
+          ) : null}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {[
@@ -464,7 +709,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
       </div>
 
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1040 }}>
           <thead>
             <tr style={{ background: `linear-gradient(to right, ${C.navy}, #1E3A8A)` }}>
               {[
@@ -472,7 +717,9 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
                 { label: "Date / Tags" }, { label: "Amount", right: true },
                 { label: "Amt",  tip: "Amount model" }, { label: "Dup", tip: "Duplicate check" },
                 { label: "User", tip: "User behaviour" }, { label: "Time", tip: "Timing" },
-                { label: "Acct", tip: "Account model" }, { label: "Risk Score", right: true },
+                { label: "Acct", tip: "Account model" },
+                { label: "Top reasons", tip: "First signals from rules + ML" },
+                { label: "Risk Score", right: true },
               ].map((h) => (
                 <th key={h.label} title={h.tip || ""} style={{
                   padding: "11px 12px", textAlign: (h as { right?: boolean }).right ? "right" : "left",
@@ -544,16 +791,38 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
                       <ScorePill value={v} />
                     </td>
                   ))}
+                  <td style={{ padding: "12px 10px", verticalAlign: "top" }}>
+                    <ReasonChips items={e.signals && e.signals.length ? e.signals : []} />
+                  </td>
                   <td style={{ padding: "12px 12px", textAlign: "right" }}>
-                    <RiskBar score={e.score} level={e.level} />
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                      <ScoreValueBadge score={e.score} />
+                      <RiskBar score={e.score} level={e.level} />
+                    </div>
                   </td>
                 </tr>
                 {sel && (
                   <tr style={{ background: C.bluePale, borderTop: `1px solid ${C.blueBorder}` }}>
-                    <td colSpan={11} style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderLight}` }}>
+                    <td colSpan={12} style={{ padding: "16px 20px", borderBottom: `1px solid ${C.borderLight}` }}>
                       <div style={{ fontSize: 13, color: C.text }}>
                         <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
                           Nova Analysis — {e.id}
+                          {entryFb[e.id] ? (
+                            <span
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 800,
+                                padding: "2px 8px",
+                                borderRadius: 4,
+                                background: C.greenBg,
+                                color: C.green,
+                                border: `1px solid ${C.greenBorder}`,
+                                letterSpacing: "0.06em",
+                              }}
+                            >
+                              REVIEWED · {entryFb[e.id].toUpperCase()}
+                            </span>
+                          ) : null}
                         </div>
                         {novaLoading === e.id ? (
                           <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.textSub }}>
@@ -572,6 +841,105 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
                             </div>
                           </>
                         ) : null}
+
+                        {learningClientId && (e.level === "HIGH" || e.level === "MEDIUM") ? (
+                          <div
+                            style={{
+                              marginTop: 18,
+                              paddingTop: 14,
+                              borderTop: `1px dashed ${C.blueBorder}`,
+                            }}
+                            onClick={(ev) => ev.stopPropagation()}
+                          >
+                            <div style={{ fontWeight: 800, marginBottom: 8, color: C.navy }}>Human review (learning loop)</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                              {(
+                                [
+                                  { key: "approved" as const, label: "Approve — valid entry", bg: C.green, icon: "✅" },
+                                  { key: "rejected" as const, label: "Reject — real risk", bg: C.red, icon: "❌" },
+                                  { key: "needs_review" as const, label: "Needs review", bg: C.amber, icon: "⚠️" },
+                                ]
+                              ).map((b) => (
+                                <button
+                                  key={b.key}
+                                  type="button"
+                                  disabled={!!entryFb[e.id] || fbSubmitting === e.id}
+                                  onClick={async () => {
+                                    if (!learningClientId) return;
+                                    setFbSubmitting(e.id);
+                                    setFbToast(null);
+                                    try {
+                                      const reasons =
+                                        e.signals && e.signals.length
+                                          ? [...e.signals]
+                                          : [plainEnglishLine(e)];
+                                      await postR2RFeedback({
+                                        client_id: learningClientId,
+                                        entry_id: e.id,
+                                        entry_data: {
+                                          account: e.account,
+                                          amount: e.amountNum,
+                                          user: e.postedBy,
+                                          date: e.date,
+                                          description: `${e.vendor} — ${plainEnglishLine(e)}`,
+                                          risk_score: e.score,
+                                          risk_level: e.level,
+                                          risk_reasons: reasons,
+                                        },
+                                        feedback: b.key,
+                                        comment: fbComments[e.id] || "",
+                                        reviewed_by: "ca_manager",
+                                      });
+                                      setEntryFb((prev) => ({ ...prev, [e.id]: b.key }));
+                                      setFbToast("Feedback saved. System is learning ✓");
+                                      await refreshFbSummary();
+                                      onLearningFeedback?.();
+                                    } catch (err: unknown) {
+                                      setFbToast(err instanceof Error ? err.message : "Feedback failed");
+                                    } finally {
+                                      setFbSubmitting(null);
+                                    }
+                                  }}
+                                  style={{
+                                    padding: "8px 12px",
+                                    borderRadius: 8,
+                                    border: "none",
+                                    background: b.bg,
+                                    color: C.white,
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    cursor: entryFb[e.id] ? "default" : "pointer",
+                                    opacity: entryFb[e.id] ? 0.45 : 1,
+                                    fontFamily: font,
+                                  }}
+                                >
+                                  {b.icon} {b.label}
+                                </button>
+                              ))}
+                            </div>
+                            <label style={{ fontSize: 12, color: C.textSub, display: "block", maxWidth: 480 }}>
+                              Comment (optional)
+                              <input
+                                type="text"
+                                value={fbComments[e.id] || ""}
+                                disabled={!!entryFb[e.id]}
+                                onChange={(ev) =>
+                                  setFbComments((prev) => ({ ...prev, [e.id]: ev.target.value }))
+                                }
+                                placeholder="e.g. legitimate month-end accrual"
+                                style={{
+                                  display: "block",
+                                  width: "100%",
+                                  marginTop: 6,
+                                  padding: "8px 10px",
+                                  borderRadius: 8,
+                                  border: `1px solid ${C.border}`,
+                                  fontSize: 13,
+                                }}
+                              />
+                            </label>
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -586,7 +954,7 @@ const JESummaryTable = ({ entries, totalAmt, totalAnalysed, anomaliesCount }: JE
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
         padding: "10px 4px 0", borderTop: `1px solid ${C.borderLight}`, marginTop: 4 }}>
         <p style={{ fontSize: 10, color: C.textMute }}>
-          <strong style={{ color: C.textSub }}>Columns:</strong> Amt = Amount model · Dup = Duplicate · User = Behaviour · Time = Timing · Acct = Account · Scores ≥ 71 flagged red
+          <strong style={{ color: C.textSub }}>Columns:</strong> Amt / Dup / User / Time / Acct = sub-scores · Top reasons = rules + ML · Risk badge: green &lt;40 · amber 40–69 · red 70+
         </p>
         <p style={{ fontSize: 10, color: C.textMute }}>Click row to select · AI-powered explanations</p>
       </div>
@@ -1049,6 +1417,7 @@ const tabs = [
   { id: "user",    label: "User Behaviour",      icon: "👤" },
   { id: "stats",   label: "Statistical Analysis", icon: "📊" },
   { id: "ai",      label: "AI Insights",          icon: "🤖" },
+  { id: "learning", label: "Learning",          icon: "🧠" },
 ];
 
 export default function R2RPatternAnalysisPage() {
@@ -1063,8 +1432,20 @@ export default function R2RPatternAnalysisPage() {
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [newClientName, setNewClientName] = useState("");
 
-  const [patternResult, setPatternResult] = useState<Awaited<ReturnType<typeof analyzeEntries>> | null>(null);
+  const [patternResult, setPatternResult] = useState<AnalyzeEntriesResult | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [sensitivity, setSensitivity] = useState<PatternSensitivity>(() => loadR2rSensitivity());
+  const [customThresholdStr, setCustomThresholdStr] = useState(() => loadR2rThresholdStr());
+  const [analysisBannerLabel, setAnalysisBannerLabel] = useState<string | null>(null);
+  const [materialityAmountStr, setMaterialityAmountStr] = useState("");
+  const [materialityPctStr, setMaterialityPctStr] = useState("");
+  const [learningRefresh, setLearningRefresh] = useState(0);
+
+  useEffect(() => {
+    localStorage.setItem(LS_R2R_SENSITIVITY, sensitivity);
+    localStorage.setItem(LS_R2R_THRESHOLD, customThresholdStr);
+    localStorage.setItem("fraud_detection_threshold", customThresholdStr);
+  }, [sensitivity, customThresholdStr]);
 
   useEffect(() => {
     setClientsLoading(true);
@@ -1077,25 +1458,48 @@ export default function R2RPatternAnalysisPage() {
   useEffect(() => {
     if (!rawRows.length) {
       setPatternResult(null);
+      setAnalysisBannerLabel(null);
       return;
     }
     let cancelled = false;
     setAnalysisLoading(true);
+    setUploadError(null);
     const run = async () => {
+      const fromLs = localStorage.getItem(LS_R2R_SENSITIVITY);
+      const safeSens: PatternSensitivity =
+        fromLs === "conservative" || fromLs === "balanced" || fromLs === "strict"
+          ? fromLs
+          : sensitivity;
+      const th =
+        localStorage.getItem(LS_R2R_THRESHOLD) ||
+        localStorage.getItem("fraud_detection_threshold") ||
+        customThresholdStr ||
+        "40";
+      if (!cancelled) {
+        setAnalysisBannerLabel(
+          `Analysing with: ${R2R_SENSITIVITY_TITLE[safeSens]} threshold (${th}+)`
+        );
+      }
       try {
         if (selectedClientId) {
           await saveUpload(selectedClientId, rawRows, uploadFileName || undefined);
-          const { entries } = await getClientHistory(selectedClientId);
-          const res = await analyzeEntriesWithHistory(rawRows, entries, callAI);
-          if (!cancelled) setPatternResult(res);
-        } else {
-          const res = await analyzeEntries(rawRows, callAI);
-          if (!cancelled) setPatternResult(res);
+          await getClientHistory(selectedClientId);
         }
+        const res = await analyzePatternBackend(
+          rawRows,
+          safeSens,
+          API_BASE,
+          th,
+          materialityAmountStr,
+          materialityPctStr
+        );
+        if (!cancelled) setPatternResult(res);
       } catch (e) {
         if (!cancelled) {
           console.error(e);
           setPatternResult(null);
+          setAnalysisBannerLabel(null);
+          setUploadError(e instanceof Error ? e.message : "Pattern analysis failed. Is the API running on port 8000?");
         }
       } finally {
         if (!cancelled) setAnalysisLoading(false);
@@ -1103,7 +1507,7 @@ export default function R2RPatternAnalysisPage() {
     };
     run();
     return () => { cancelled = true; };
-  }, [rawRows, selectedClientId]);
+  }, [rawRows, selectedClientId, sensitivity, customThresholdStr, materialityAmountStr, materialityPctStr]);
 
   const jeEntriesFromUpload = useMemo(() => {
     if (!patternResult?.entries?.length) return [];
@@ -1153,29 +1557,135 @@ export default function R2RPatternAnalysisPage() {
         alert("No data to export. Upload and analyse journal entries first.");
         return;
       }
-      const headers = ["Entry", "Vendor", "Account", "Posted By", "Date", "Amount", "AMT", "DUP", "USER", "TIME", "ACCT", "Risk Score", "Level", "Signals"];
-      const rows = jeEntriesFromUpload.map((e) => [
+      const clientName =
+        (selectedClientId && clients.find((c) => c.id === selectedClientId)?.name) || "Client";
+      const total = jeEntriesFromUpload.length;
+      const high = jeEntriesFromUpload.filter((e) => e.level === "HIGH").length;
+      const medium = jeEntriesFromUpload.filter((e) => e.level === "MEDIUM").length;
+      const low = jeEntriesFromUpload.filter((e) => e.level === "LOW").length;
+      const flaggedPct = total ? Math.round(((high + medium) / total) * 1000) / 10 : 0;
+      const dates = jeEntriesFromUpload
+        .map((e) => parseEntryDate(e.date))
+        .filter((d): d is Date => d != null && !isNaN(d.getTime()));
+      const periodStr =
+        dates.length >= 2
+          ? `${formatReportAnalysisDate(new Date(Math.min(...dates.map((d) => d.getTime()))))} – ${formatReportAnalysisDate(new Date(Math.max(...dates.map((d) => d.getTime()))))}`
+          : dates.length === 1
+            ? formatReportAnalysisDate(dates[0])
+            : "—";
+      const analysisDateStr = formatReportAnalysisDate(new Date());
+
+      const flaggedSorted = jeEntriesFromUpload
+        .filter((e) => e.level === "HIGH" || e.level === "MEDIUM")
+        .sort((a, b) => b.score - a.score);
+      const top10 = flaggedSorted.slice(0, 10);
+
+      const summarySheet: (string | number)[][] = [
+        ["AI ANOMALY DETECTION REPORT"],
+        [],
+        ["Company:", clientName],
+        ["Period:", periodStr],
+        ["Total entries analysed:", total],
+        ["High risk:", high, "Medium:", medium, "Low:", low],
+        ["Flagged rate (%):", flaggedPct],
+        ["Analysis date:", analysisDateStr],
+        [],
+        ["TOP 10 ENTRIES REQUIRING IMMEDIATE REVIEW"],
+        [
+          "Entry ID",
+          "Account",
+          "Amount (₹)",
+          "User",
+          "Date",
+          "Risk score",
+          "Plain English Reason",
+        ],
+        ...top10.map((e) => [
+          e.id,
+          e.account,
+          Math.round(e.amountNum),
+          e.postedBy,
+          e.date,
+          e.score,
+          plainEnglishLine(e),
+        ]),
+      ];
+
+      const flaggedHeaders = [
+        "Entry ID",
+        "Account",
+        "Amount (₹)",
+        "User",
+        "Date",
+        "Risk score",
+        "Level",
+        "Plain English Reason",
+        "Action Required",
+      ];
+      const flaggedRows = flaggedSorted.map((e) => [
         e.id,
-        e.vendor,
         e.account,
+        Math.round(e.amountNum),
         e.postedBy,
         e.date,
-        e.amount,
-        e.amt ?? "",
-        e.dup ?? "",
-        e.user ?? "",
-        e.time ?? "",
-        e.acct ?? "",
         e.score,
         e.level,
-        (e.signals || []).join("; "),
+        plainEnglishLine(e),
+        actionRequiredForLevel(e.level),
       ]);
-      const filename = `R2R_Pattern_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
 
-      // Use blob + link click so download works reliably in all browsers
+      type Agg = { n: number; high: number; medium: number; low: number; sumScore: number };
+      const byAccount = new Map<string, Agg>();
+      const byUser = new Map<string, Agg>();
+      const byMonth = new Map<string, Agg>();
+      for (const e of jeEntriesFromUpload) {
+        const bump = (m: Map<string, Agg>, key: string) => {
+          const cur = m.get(key) || { n: 0, high: 0, medium: 0, low: 0, sumScore: 0 };
+          cur.n += 1;
+          cur.sumScore += e.score;
+          if (e.level === "HIGH") cur.high += 1;
+          else if (e.level === "MEDIUM") cur.medium += 1;
+          else cur.low += 1;
+          m.set(key, cur);
+        };
+        bump(byAccount, e.account || "—");
+        bump(byUser, e.postedBy || "—");
+        const d = parseEntryDate(e.date);
+        const mk = d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : "Unknown";
+        bump(byMonth, mk);
+      }
+      const sortAgg = (m: Map<string, Agg>) =>
+        [...m.entries()]
+          .map(([k, v]) => ({
+            key: k,
+            ...v,
+            avgScore: v.n ? Math.round(v.sumScore / v.n) : 0,
+          }))
+          .sort((a, b) => b.avgScore - a.avgScore);
+
+      const riskBreakdown: (string | number)[][] = [
+        ["RISK BREAKDOWN — BY ACCOUNT"],
+        ["Account", "Entries", "HIGH", "MEDIUM", "LOW", "Avg risk score"],
+        ...sortAgg(byAccount).map((r) => [r.key, r.n, r.high, r.medium, r.low, r.avgScore]),
+        [],
+        ["RISK BREAKDOWN — BY USER"],
+        ["User", "Entries", "HIGH", "MEDIUM", "LOW", "Avg risk score"],
+        ...sortAgg(byUser).map((r) => [r.key, r.n, r.high, r.medium, r.low, r.avgScore]),
+        [],
+        ["RISK BREAKDOWN — BY MONTH (posting date)"],
+        ["Month", "Entries", "HIGH", "MEDIUM", "LOW", "Avg risk score"],
+        ...sortAgg(byMonth).map((r) => [r.key, r.n, r.high, r.medium, r.low, r.avgScore]),
+      ];
+
+      const filename = `R2R_Pattern_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
       const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-      XLSX.utils.book_append_sheet(wb, ws, "Flagged JEs");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summarySheet), "Executive Summary");
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.aoa_to_sheet([flaggedHeaders, ...flaggedRows]),
+        "All Flagged Entries"
+      );
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(riskBreakdown), "Risk Breakdown");
       const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const url = URL.createObjectURL(blob);
@@ -1191,7 +1701,7 @@ export default function R2RPatternAnalysisPage() {
       console.error("Export failed:", err);
       alert("Export failed: " + (err?.message || "Unknown error"));
     }
-  }, [jeEntriesFromUpload]);
+  }, [jeEntriesFromUpload, selectedClientId, clients]);
 
   const handleFile = useCallback((file: File) => {
     setUploadError(null);
@@ -1253,6 +1763,15 @@ export default function R2RPatternAnalysisPage() {
         Upload journal entries above to see analysis
       </div>
     );
+    if (active === "learning") {
+      return (
+        <LearningDashboardTab
+          clientId={selectedClientId}
+          clientLabel={selectedClientId ? clients.find((c) => c.id === selectedClientId)?.name : undefined}
+          refreshToken={learningRefresh}
+        />
+      );
+    }
     if (!derivedStats) return emptyMsg;
     switch (active) {
       case "trend":  return <TrendTab data={derivedStats} />;
@@ -1352,9 +1871,99 @@ export default function R2RPatternAnalysisPage() {
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px", display: "flex", flexDirection: "column", gap: 20 }}>
         <Card style={{ marginBottom: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Upload journal entries</span>
             <span style={{ fontSize: 12, color: C.textSub }}>CSV or Excel · Columns: Amount, Vendor, Account, Date, Posted By (or similar)</span>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>
+              Detection sensitivity (syncs with{" "}
+              <button
+                type="button"
+                onClick={() => navigate("/r2r")}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  color: C.blue,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  fontSize: 12,
+                }}
+              >
+                /r2r
+              </button>
+              ; custom slider value: <strong style={{ color: C.text }}>{customThresholdStr}+</strong>)
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {(
+                [
+                  { id: "conservative" as const, label: "Conservative", hint: "Preset 20+" },
+                  { id: "balanced" as const, label: "Balanced", hint: "Preset 40+" },
+                  { id: "strict" as const, label: "Strict", hint: "Preset 70+" },
+                ]
+              ).map((opt) => (
+                <label
+                  key={opt.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: `1.5px solid ${sensitivity === opt.id ? C.blue : C.border}`,
+                    background: sensitivity === opt.id ? C.bluePale : C.white,
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="r2r-sensitivity"
+                    checked={sensitivity === opt.id}
+                    onChange={() => {
+                      setSensitivity(opt.id);
+                      setCustomThresholdStr(R2R_PRESET_THRESHOLD[opt.id]);
+                    }}
+                  />
+                  <span style={{ fontWeight: 600, color: C.text }}>{opt.label}</span>
+                  <span style={{ color: C.textSub, fontSize: 11 }}>{opt.hint}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>
+              Materiality (optional — applied before ML; drops petty-cash noise)
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+              <label style={{ fontSize: 12, color: C.textMid, display: "flex", alignItems: "center", gap: 6 }}>
+                Min amount (₹)
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0 = off"
+                  value={materialityAmountStr}
+                  onChange={(e) => setMaterialityAmountStr(e.target.value)}
+                  style={{ width: 100, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13 }}
+                />
+              </label>
+              <label style={{ fontSize: 12, color: C.textMid, display: "flex", alignItems: "center", gap: 6 }}>
+                Min % of largest posting
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0 = off"
+                  value={materialityPctStr}
+                  onChange={(e) => setMaterialityPctStr(e.target.value)}
+                  style={{ width: 72, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13 }}
+                />
+              </label>
+              <span style={{ fontSize: 11, color: C.textSub, maxWidth: 320 }}>
+                % uses max |amount| in the file: e.g. 5 keeps rows ≥ 5% of that max. Both filters apply together if set.
+              </span>
+            </div>
           </div>
           <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${C.borderLight}` }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>Client (optional — for learning over time)</div>
@@ -1423,15 +2032,84 @@ export default function R2RPatternAnalysisPage() {
           <Card style={{ marginBottom: 12, background: C.bluePale, border: `1px solid ${C.blueBorder}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
               <div style={{ width: 24, height: 24, border: `2px solid ${C.border}`, borderTopColor: C.blue, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Running 4-layer hybrid analysis (ML + Statistical + Rules + LLM)…</span>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Running server pattern engine (Isolation Forest · DBSCAN · LOF · Rules · Behavioural)…</span>
             </div>
           </Card>
         )}
+        {!analysisLoading &&
+        jeEntriesFromUpload.length > 0 &&
+        patternResult?.engineExtras?.analysis_label && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 4,
+            }}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "6px 12px",
+                borderRadius: 999,
+                background: C.navy,
+                color: "#E0E7FF",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: "0.02em",
+              }}
+            >
+              Analysing with: {patternResult.engineExtras.analysis_label}
+            </span>
+            {patternResult.engineExtras.threshold_profile ? (
+              <span style={{ fontSize: 11, color: C.textSub }}>
+                Server cutoffs: High≥{patternResult.engineExtras.threshold_profile.high_threshold} · Medium≥
+                {patternResult.engineExtras.threshold_profile.medium_threshold}
+                {patternResult.engineExtras.threshold_profile.custom_threshold_applied
+                  ? " · custom threshold applied"
+                  : ""}
+              </span>
+            ) : null}
+          </div>
+        )}
+        {analysisLoading && analysisBannerLabel && (
+          <div style={{ marginBottom: 8 }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "6px 12px",
+                borderRadius: 999,
+                background: "#E0E7FF",
+                color: C.navy,
+                fontSize: 12,
+                fontWeight: 700,
+                border: `1px solid ${C.blueBorder}`,
+              }}
+            >
+              {analysisBannerLabel}
+            </span>
+          </div>
+        )}
+        {patternResult?.engineExtras && !analysisLoading && jeEntriesFromUpload.length > 0 ? (
+          <PatternEngineInsights extra={patternResult.engineExtras} />
+        ) : null}
         <JESummaryTable
           entries={!analysisLoading && jeEntriesFromUpload.length > 0 ? jeEntriesFromUpload : undefined}
           totalAmt={!analysisLoading && jeEntriesFromUpload.length > 0 ? totalAmtStr : undefined}
-          totalAnalysed={rawRows.length > 0 ? rawRows.length : undefined}
+          totalAnalysed={
+            derivedStats
+              ? derivedStats.total
+              : rawRows.length > 0
+                ? rawRows.length
+                : undefined
+          }
           anomaliesCount={derivedStats ? derivedStats.high + derivedStats.medium : undefined}
+          engineExtras={patternResult?.engineExtras ?? null}
+          learningClientId={selectedClientId}
+          onLearningFeedback={() => setLearningRefresh((n) => n + 1)}
         />
         <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 20 }}>
           {renderTab()}

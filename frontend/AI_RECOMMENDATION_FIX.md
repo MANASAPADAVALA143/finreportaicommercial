@@ -6,18 +6,16 @@ CFO Decision Intelligence module was showing:
 - Confidence: 0%
 - No AI insights being generated
 
-## Root Cause
-The frontend was missing AWS credentials in the `.env` file. While the AI provider service (`aiProvider.ts`) was correctly implemented, it couldn't access AWS Bedrock because the environment variables were not set.
+## Root Cause (historical)
+Earlier docs assumed AWS Bedrock in the browser. The app now uses **backend Anthropic only**: `frontend/.env` needs **`VITE_API_URL`** (e.g. `http://localhost:8000`) and **`backend/.env`** needs **`ANTHROPIC_API_KEY`**. No `VITE_AWS_*` variables are required.
 
 ## Solution Applied
 
-### 1. Created `.env` file with AWS Credentials
+### 1. Minimal `frontend/.env`
 **Location:** `frontend/.env`
 
 ```env
-VITE_AWS_REGION=us-east-1
-VITE_AWS_ACCESS_KEY_ID=your-access-key-id
-VITE_AWS_SECRET_ACCESS_KEY=Rj9l74K9u8g3+aznYz2RqxN2GtVJdqnv96IMWXoo
+VITE_API_URL=http://localhost:8000
 ```
 
 ### 2. Enhanced Error Handling
@@ -62,18 +60,13 @@ Vite only loads environment variables at startup, so the server was restarted to
 ## Technical Details
 
 ### AI Provider Architecture
-The system uses a **swappable AI provider** architecture:
+The CFO UI calls **`frontend/src/services/aiProvider.ts`**, which defaults to the **backend** path:
 
 ```typescript
-// Change this one line to swap providers:
-const AI_PROVIDER: "aws-nova" | "claude" | "openai" = "aws-nova";
+const AI_PROVIDER: "backend" | "claude" | "openai" = "backend";
 ```
 
-**Current Provider:** AWS Bedrock - Amazon Nova Lite
-- Model ID: `us.amazon.nova-lite-v1:0`
-- Region: `us-east-1`
-- Max Tokens: 2000
-- Temperature: 0.3 (deterministic)
+**Current setup:** `backend` → `POST {VITE_API_URL}/api/ai/invoke` → **Anthropic Claude** (`ANTHROPIC_API_KEY` in `backend/.env`). No AWS Bedrock and no `VITE_AWS_*` variables.
 
 ### How AI Recommendations Work
 
@@ -85,7 +78,7 @@ const AI_PROVIDER: "aws-nova" | "claude" | "openai" = "aws-nova";
    - IRR > hurdle rate + 5%: +10%
    - Payback < 3 years: +5%
    - Cash position weak: -15%
-4. **Prompt sent to Amazon Nova** with structured financial data
+4. **Prompt sent to the backend Claude endpoint** with structured financial data
 5. **AI returns recommendation** (Approve/Reject/Conditional/Hybrid)
 6. **Response parsed** and displayed with confidence factors
 
@@ -104,33 +97,20 @@ Each decision type has specific confidence factors:
 - Team Capability - High impact
 - Customization Need - Medium impact
 
-## AWS Credentials Security
+## API key security (Anthropic)
 
-**⚠️ Important Notes:**
-1. The `.env` file is in `.gitignore` - credentials won't be committed to Git
-2. For production deployment, use AWS IAM roles instead of access keys
-3. For team collaboration, each developer should have their own `.env` file
-4. Consider using AWS Secrets Manager for production
+**Important:**
+1. Keep **`backend/.env`** (with `ANTHROPIC_API_KEY`) out of Git — it should stay server-side only.
+2. **`frontend/.env`** should only expose **`VITE_API_URL`** (no LLM secrets in the browser bundle).
+3. In production, inject the API key from your host’s secret store / IAM-backed config, not from the repo.
 
-## Cost Optimization
+## Cost
 
-**Amazon Nova Lite Pricing:**
-- Input: $0.00006 per 1K tokens
-- Output: $0.00024 per 1K tokens
+Usage is billed per **Anthropic** pricing for the model configured on the server (see your Anthropic dashboard). CFO prompts are short; cost is typically low versus enterprise planning tools, but exact $ depends on model and volume.
 
-**Average Cost Per Decision:**
-- Prompt: ~500 tokens = $0.00003
-- Response: ~300 tokens = $0.00007
-- **Total: ~$0.0001 per AI recommendation**
-
-**Monthly Cost Estimate:**
-- 100 decisions/day × 30 days = 3,000 decisions
-- 3,000 × $0.0001 = **$0.30/month** 🎯
-
-Compare to competitors:
-- Anaplan AI: $300-500/user/month
-- Workday Adaptive: $400+/user/month
-- **This system: $0.30/month total** ⚡
+Compare to competitors (order-of-magnitude positioning only):
+- Anaplan AI, Workday Adaptive, Pigment: hundreds of dollars per user per month for comparable suites
+- This stack: you pay **Anthropic API usage** + your own infra
 
 ## Troubleshooting
 
@@ -151,7 +131,7 @@ Compare to competitors:
    - Look for "VITE v5.4.21 ready" message
    - Should be less than 5 minutes old
 
-4. **Test AWS credentials directly:**
+4. **Test backend LLM path:**
    - Add this to any component:
    ```typescript
    import { testAIConnection } from '../services/aiProvider';
@@ -159,25 +139,26 @@ Compare to competitors:
    const test = await testAIConnection();
    console.log('AI Test:', test);
    ```
+   - Expect `provider: "backend"` and `success: true` when `VITE_API_URL` and `ANTHROPIC_API_KEY` are valid.
 
-5. **Check AWS credentials are valid:**
-   - Ensure `VITE_` prefix is present (required by Vite)
-   - Ensure no extra spaces or quotes in .env file
-   - Ensure region is `us-east-1` (where Nova Lite is available)
+5. **Check backend LLM config:**
+   - `frontend/.env`: `VITE_API_URL=http://localhost:8000` (or your API URL)
+   - `backend/.env`: `ANTHROPIC_API_KEY=sk-ant-...` set and valid
+   - Backend running (`uvicorn` on the same port as `VITE_API_URL`)
 
 ### Common Errors:
 
-**Error: "Empty response from AWS Nova"**
-- Cause: AWS credentials invalid or region incorrect
-- Fix: Verify credentials in .env, ensure region is us-east-1
+**Error: "Set VITE_API_URL to your backend URL" / empty response**
+- Cause: Frontend cannot reach the API, or backend returned no text
+- Fix: Start backend, confirm `VITE_API_URL`, restart `npm run dev`
 
 **Error: "AI call failed: Network error"**
-- Cause: No internet connection or AWS service down
-- Fix: Check internet connection, try again in a few minutes
+- Cause: Backend not running, wrong URL, or CORS
+- Fix: Open `/health` on the API base URL; align `VITE_API_URL` with that host/port
 
-**Error: "Access denied"**
-- Cause: AWS credentials don't have Bedrock permissions
-- Fix: In AWS Console, add `AmazonBedrockFullAccess` policy to IAM user
+**Error: 500 from `/api/ai/invoke`**
+- Cause: Missing/invalid `ANTHROPIC_API_KEY`, quota, or model error
+- Fix: Check backend logs and `backend/.env`
 
 ## Success Metrics
 
@@ -187,11 +168,11 @@ Once working, you should see:
 ✅ **Confidence Scores:** 65-95% (based on data quality)
 ✅ **Recommendation Quality:** Specific, actionable, with exact numbers
 ✅ **Consistency:** Same inputs = same outputs (temperature 0.3)
-✅ **Cost:** $0.0001 per recommendation (~$0.30/month for 100 decisions/day)
+✅ **Cost:** driven by Anthropic usage (see Anthropic billing / dashboards)
 
 ## Production Readiness Checklist
 
-- [x] AI provider integrated (AWS Bedrock Nova Lite)
+- [x] AI provider integrated (backend Anthropic Claude)
 - [x] Error handling implemented
 - [x] Logging for debugging
 - [x] Environment variables configured
@@ -204,19 +185,19 @@ Once working, you should see:
 
 ## Next Steps for Production
 
-1. **Set up AWS IAM role** for production (remove hardcoded keys)
+1. **Store `ANTHROPIC_API_KEY` in a secrets manager** in production (never in the frontend bundle)
 2. **Add rate limiting** to prevent abuse
 3. **Implement caching** for identical prompts
 4. **Track AI accuracy** vs CFO overrides (already in Audit Trail)
 5. **Add user feedback** mechanism for AI recommendations
 6. **Consider A/B testing** different AI models
-7. **Monitor AWS costs** via CloudWatch
+7. **Monitor LLM usage/cost** in Anthropic (and your API logs)
 
 ---
 
 **Status:** ✅ **PRODUCTION READY**
 
-All 8 tabs of CFO Decision Intelligence are now fully functional with AI recommendations powered by Amazon Nova Lite at 1/1000th the cost of competing platforms.
+All 8 tabs of CFO Decision Intelligence use AI recommendations via **backend Anthropic Claude** (not Bedrock in the browser).
 
 **Your product is now comparable to:**
 - ✅ Anaplan ($400/user/month)
@@ -224,7 +205,7 @@ All 8 tabs of CFO Decision Intelligence are now fully functional with AI recomme
 - ✅ Pigment ($300/user/month)
 - ✅ Vena ($350/user/month)
 
-**But built by YOU for $0.30/month** 🚀
+**Operating cost** is mainly **Anthropic token usage** on your own terms.
 
 ---
 

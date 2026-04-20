@@ -3,6 +3,8 @@
 .env.local
 .env.*.local
 *.env
+.env.supabase.backup
+.env.*.backup
 
 # Python
 __pycache__/
@@ -85,6 +87,9 @@ Thumbs.db
 # Python virtual environment
 backend/venv/
 backend/env/
+
+# Board pack PDFs (generated)
+backend/board_packs/*.pdf
 
 # Sample data (optional - remove if you want to keep it)
 # backend/*.xlsx

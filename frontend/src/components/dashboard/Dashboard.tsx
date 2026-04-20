@@ -5,14 +5,15 @@ import {
   Zap,
   Target,
   Brain,
-  LayoutGrid
+  LayoutGrid,
+  FileSpreadsheet
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
 
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
   { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
-  { id: 'ifrs', name: 'IFRS Reporting Agent', route: '/ifrs-generator', description: 'Maps trial balance to IFRS standards and generates financial statements with AI assistance' },
+  { id: 'ifrs', name: 'IFRS Reporting Agent', route: '/ifrs-statement', description: 'Uploads trial balance, runs GL→IFRS AI mapping, and supports mapping review workflow' },
   { id: 'fpa', name: 'FP&A Intelligence Agent', route: '/fpa', description: 'Runs variance analysis, forecasting, and scenario planning with AI' },
   { id: 'decision', name: 'CFO Decision Agent', route: '/cfo-decision', description: 'Analyses investment decisions, capital allocation, hire vs automate with AI' },
   { id: 'voice', name: 'CFO Voice Agent', route: '/cfo', description: 'Answers financial questions by voice via the CFO assistant' },
@@ -44,6 +45,14 @@ export const Dashboard: React.FC = () => {
       bgColor: 'bg-green-500/10'
     },
     {
+      icon: <FileSpreadsheet className="w-16 h-16 text-emerald-400" />,
+      title: 'Excel AI Suite',
+      description: 'Upload Excel — AI-enhanced workbooks for variance, budget, forecast, KPI, board pack, and more',
+      link: '/excel-suite',
+      bgColor: 'bg-emerald-500/10',
+      badge: 'New'
+    },
+    {
       icon: <Target className="w-16 h-16 text-purple-400" />,
       title: 'CFO Services',
       description: 'AI Assistant, Insights, Monitoring & Financial Health Dashboard',
@@ -52,10 +61,18 @@ export const Dashboard: React.FC = () => {
     },
     {
       icon: <Zap className="w-16 h-16 text-orange-400" />,
-      title: 'IFRS',
-      description: 'IFRS Statement Generator - Convert Trial Balance to Financial Statements',
-      link: '/ifrs-generator',
+      title: 'IFRS Statement',
+      description: 'Week 1: Upload trial balance, run GL AI mapping, and confirm/override mappings',
+      link: '/ifrs-statement',
       bgColor: 'bg-orange-500/10',
+      badge: 'New'
+    },
+    {
+      icon: <LayoutGrid className="w-16 h-16 text-cyan-400" />,
+      title: 'ERP — Tally',
+      description: 'Connect Tally Prime / ERP 9, import trial balance, pre-map by ledger group, AI fills gaps',
+      link: '/erp/tally',
+      bgColor: 'bg-cyan-500/10',
       badge: 'New'
     },
     {
@@ -65,6 +82,14 @@ export const Dashboard: React.FC = () => {
       link: '/cfo-decision',
       bgColor: 'bg-amber-500/10',
       badge: 'NEW'
+    },
+    {
+      icon: <Zap className="w-16 h-16 text-emerald-400" />,
+      title: 'Bookkeeping Autopilot',
+      description: 'Bank upload, rules + Claude categorisation, anomalies, receipts, GL reconcile, monthly PDF',
+      link: '/bookkeeping',
+      bgColor: 'bg-emerald-500/10',
+      badge: 'New'
     }
   ];
 

@@ -1,0 +1,27 @@
+{
+  "name": "Gnanova Finance OS",
+  "version": "1.0.0",
+  "description": "AI finance assistant for CFOs and FP&A teams. Built on FinReportAI engine.",
+  "skills": [
+    "variance-analysis",
+    "month-end-close",
+    "journal-entry-prep",
+    "audit-support",
+    "pl-commentary"
+  ],
+  "commands": [
+    "/variance",
+    "/month-end",
+    "/journal-entry",
+    "/audit",
+    "/pl-commentary",
+    "/anomaly-check"
+  ],
+  "connectors": [
+    {
+      "name": "FinReportAI",
+      "type": "mcp",
+      "url": "https://your-finreportai-railway-url.up.railway.app/mcp"
+    }
+  ]
+}

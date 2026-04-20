@@ -59,6 +59,8 @@ export interface ScoredEntry {
   ruleFlags: string[];
   novaExplanation?: string;
   novaRiskScore?: number;
+  /** Backend R2R pattern engine human-readable line for exports. */
+  plainEnglishReason?: string;
   userLabel?: 1 | 0;
   reviewedBy?: string;
   reviewTimestamp?: string;
@@ -82,10 +84,52 @@ export interface FraudPatternAlert {
 }
 
 // ─── NORMALISE (Excel/CSV column names → canonical) ───────────────
+function parseAmountField(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.abs(v);
+  const s = String(v)
+    .replace(/,/g, '')
+    .replace(/[₹$\s£€]/g, '')
+    .trim();
+  if (!s) return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? Math.abs(n) : null;
+}
+
+/** Debit/credit columns: use whichever side is non-zero (fixes `0 ?? credit` → 0 bug). */
+function normaliseJournalAmount(raw: Record<string, unknown>): number {
+  let debitLike: number | null = null;
+  let creditLike: number | null = null;
+  let amountLike: number | null = null;
+  for (const [k, val] of Object.entries(raw)) {
+    const kl = k.toLowerCase().replace(/\s+/g, ' ');
+    const parsed = parseAmountField(val);
+    if (parsed === null || parsed === 0) continue;
+    if (/\bdebit\b/.test(kl) && !/\bcredit\b/.test(kl)) debitLike = parsed;
+    else if (/\bcredit\b/.test(kl) && !/\bdebit\b/.test(kl)) creditLike = parsed;
+    else if (
+      kl === 'amount' ||
+      (kl.includes('amount') && !kl.includes('debit') && !kl.includes('credit'))
+    ) {
+      amountLike = parsed;
+    }
+  }
+  if (debitLike != null && debitLike > 0) return debitLike;
+  if (creditLike != null && creditLike > 0) return creditLike;
+  const d0 = parseAmountField(raw.debit ?? raw.Debit ?? raw.DR ?? raw.dr);
+  const c0 = parseAmountField(raw.credit ?? raw.Credit ?? raw.CR ?? raw.cr);
+  if (c0 != null && c0 > 0 && (d0 == null || d0 === 0)) return c0;
+  if (d0 != null && d0 > 0) return d0;
+  const single =
+    amountLike ??
+    parseAmountField(
+      raw.amount ?? raw.Amount ?? raw['Amount (₹)'] ?? raw['Amount(₹)'] ?? raw.AMOUNT
+    );
+  return single ?? 0;
+}
+
 function normaliseEntry(raw: any): any {
-  const amount = Number(
-    raw.amount ?? raw.Amount ?? raw['Amount (₹)'] ?? raw['Amount(₹)'] ?? raw.AMOUNT ?? raw.Debit ?? raw.Credit ?? 0
-  );
+  const amount = normaliseJournalAmount(raw);
   const account = String(
     raw.account ?? raw.Account ?? raw.GLAccount ?? raw['GL Account'] ?? ''
   ).trim() || 'Unknown';
@@ -651,6 +695,34 @@ export function applyUserFeedback(
 }
 
 // ─── MAIN ASYNC ENTRY: analyze entries with Nova for HIGH only ───
+export type PatternSensitivity = 'conservative' | 'balanced' | 'strict';
+
+export interface PatternEngineModelBreakdown {
+  isolation_forest_detected: number;
+  dbscan_noise_points: number;
+  local_outlier_detected: number;
+  rules_engine_flagged_rows: number;
+  behavioural_anomalies: number;
+}
+
+export interface PatternThresholdProfile {
+  sensitivity: string;
+  high_threshold: number;
+  medium_threshold: number;
+  custom_threshold_applied?: boolean;
+}
+
+export interface PatternEngineExtras {
+  model_breakdown: PatternEngineModelBreakdown;
+  score_distribution: { band: string; count: number }[];
+  models_used: string[];
+  sensitivity: string;
+  flagged_pct: number;
+  threshold_profile?: PatternThresholdProfile;
+  /** UI line e.g. "Balanced threshold (40+)" */
+  analysis_label?: string;
+}
+
 export interface AnalyzeEntriesResult {
   entries: ScoredEntry[];
   baseline: ClientBaseline;
@@ -665,6 +737,8 @@ export interface AnalyzeEntriesResult {
     topRiskyUser: string;
     topRiskEntry: string;
   };
+  /** Present when analysis ran via backend `/api/r2r/pattern/analyse`. */
+  engineExtras?: PatternEngineExtras;
 }
 
 export async function analyzeEntries(
@@ -687,6 +761,7 @@ export async function analyzeEntries(
         topRiskyUser: 'N/A',
         topRiskEntry: 'N/A',
       },
+      engineExtras: undefined,
     };
   }
 
@@ -731,6 +806,191 @@ export async function analyzeEntries(
       topRiskyUser: topUser,
       topRiskEntry: topEntry,
     },
+    engineExtras: undefined,
+  };
+}
+
+function mapEngineRowToScoredEntry(row: Record<string, unknown>): ScoredEntry {
+  const id = String(row.entry_id ?? row.id ?? row.JE_ID ?? row.journal_id ?? '');
+  const amount = Math.abs(Number(row.amount ?? 0));
+  const vendor = String(row.vendor ?? '—');
+  const account = String(row.account ?? '—');
+  const userId = String(row.user ?? row.preparer ?? row.posted_by ?? '—');
+  let date = row.date;
+  if (date && typeof date === 'object' && date !== null && 'toString' in date) {
+    date = String(date);
+  }
+  const dateStr = date != null ? String(date) : '—';
+  const description = String(row.description ?? '');
+  const finalScore = Math.round(Number(row.risk_score ?? 0));
+  const rl = String(row.risk_level ?? 'LOW').toUpperCase();
+  const riskLevel: 'HIGH' | 'MEDIUM' | 'LOW' =
+    rl === 'HIGH' || rl === 'MEDIUM' || rl === 'LOW' ? rl : 'LOW';
+  const ruleFlags = Array.isArray(row.risk_reasons)
+    ? (row.risk_reasons as unknown[]).map((x) => String(x))
+    : [];
+  const plainEnglishReason =
+    row.plain_english_reason != null && String(row.plain_english_reason).trim() !== ''
+      ? String(row.plain_english_reason)
+      : undefined;
+
+  return {
+    entryId: id || `JE-${Math.random().toString(36).slice(2, 9)}`,
+    amount,
+    vendor,
+    account,
+    costCenter: 'Unknown',
+    userId,
+    date: dateStr,
+    description,
+    isWeekend: false,
+    isMonthEnd: false,
+    isLateNight: false,
+    isManual: false,
+    mlScore: Math.min(1, finalScore / 100),
+    statScore: Math.min(1, finalScore / 100),
+    rulesScore: Math.min(1, finalScore / 100),
+    novaScore: 0,
+    zAccount: 0,
+    zAccountMonth: 0,
+    zAccountVendor: 0,
+    zAccountCostCenter: 0,
+    finalScore,
+    riskLevel,
+    ruleFlags,
+    plainEnglishReason,
+  };
+}
+
+/** Server-side 4-layer pattern engine (sklearn). */
+const SENSITIVITY_DISPLAY: Record<PatternSensitivity, string> = {
+  conservative: 'Conservative',
+  balanced: 'Balanced',
+  strict: 'Strict',
+};
+
+export async function analyzePatternBackend(
+  rows: Record<string, unknown>[],
+  sensitivity: PatternSensitivity,
+  apiBase: string,
+  customThreshold: string = '40',
+  materialityAmount: string = '',
+  materialityPct: string = ''
+): Promise<AnalyzeEntriesResult> {
+  if (!rows?.length) {
+    const emptyBaseline = buildClientBaseline([]);
+    return {
+      entries: [],
+      baseline: emptyBaseline,
+      summary: {
+        total: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+        anomalyRate: '0',
+        novaCallsMade: 0,
+        topRiskyVendor: 'N/A',
+        topRiskyUser: 'N/A',
+        topRiskEntry: 'N/A',
+      },
+      engineExtras: undefined,
+    };
+  }
+
+  const base = (apiBase && String(apiBase).trim()) || '';
+  const url = `${base.replace(/\/$/, '')}/api/r2r/pattern/analyse`;
+  const form = new FormData();
+  form.append('rows_json', JSON.stringify(rows));
+  form.append('sensitivity', sensitivity);
+  if (customThreshold != null && String(customThreshold).trim() !== '') {
+    form.append('custom_threshold', String(customThreshold).trim());
+  }
+  const ma = String(materialityAmount ?? '').trim();
+  const mp = String(materialityPct ?? '').trim();
+  if (ma !== '') form.append('materiality_amount', ma);
+  if (mp !== '') form.append('materiality_pct', mp);
+
+  const analysisLabel = `${SENSITIVITY_DISPLAY[sensitivity] ?? sensitivity} threshold (${customThreshold}+)`;
+
+  const res = await fetch(url, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(err.detail || `Pattern analysis failed (${res.status})`);
+  }
+
+  const data = (await res.json()) as {
+    summary: {
+      total_entries: number;
+      high_risk: number;
+      medium_risk: number;
+      low_risk: number;
+      flagged_pct: number;
+      models_used: string[];
+    };
+    entries_scored: Record<string, unknown>[];
+    model_breakdown: PatternEngineModelBreakdown;
+    score_distribution: { band: string; count: number }[];
+    sensitivity?: string;
+    threshold_profile?: PatternThresholdProfile;
+  };
+
+  const scored = (data.entries_scored || []).map(mapEngineRowToScoredEntry);
+  scored.sort((a, b) => {
+    const levelOrder = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+    return levelOrder[a.riskLevel] - levelOrder[b.riskLevel] || b.finalScore - a.finalScore;
+  });
+
+  const baseline = buildClientBaseline(rows);
+  const high = data.summary?.high_risk ?? scored.filter((e) => e.riskLevel === 'HIGH').length;
+  const medium = data.summary?.medium_risk ?? scored.filter((e) => e.riskLevel === 'MEDIUM').length;
+  const low = data.summary?.low_risk ?? scored.filter((e) => e.riskLevel === 'LOW').length;
+  const anomalyRate = scored.length
+    ? (((high + medium) / scored.length) * 100).toFixed(1)
+    : '0';
+
+  const byVendor: Record<string, number> = {};
+  const byUser: Record<string, number> = {};
+  scored.forEach((e) => {
+    if (e.riskLevel === 'HIGH' || e.riskLevel === 'MEDIUM') {
+      byVendor[e.vendor] = (byVendor[e.vendor] || 0) + e.finalScore;
+      byUser[e.userId] = (byUser[e.userId] || 0) + e.finalScore;
+    }
+  });
+  const topVendor = Object.entries(byVendor).sort(([, a], [, b]) => b - a)[0]?.[0] ?? 'N/A';
+  const topUser = Object.entries(byUser).sort(([, a], [, b]) => b - a)[0]?.[0] ?? 'N/A';
+  const topEntry = scored[0]?.entryId ?? 'N/A';
+
+  const mb = data.model_breakdown ?? {
+    isolation_forest_detected: 0,
+    dbscan_noise_points: 0,
+    local_outlier_detected: 0,
+    rules_engine_flagged_rows: 0,
+    behavioural_anomalies: 0,
+  };
+
+  return {
+    entries: scored,
+    baseline,
+    summary: {
+      total: data.summary?.total_entries ?? scored.length,
+      high,
+      medium,
+      low,
+      anomalyRate,
+      novaCallsMade: 0,
+      topRiskyVendor: topVendor,
+      topRiskyUser: topUser,
+      topRiskEntry: topEntry,
+    },
+    engineExtras: {
+      model_breakdown: mb,
+      score_distribution: data.score_distribution || [],
+      models_used: data.summary?.models_used || [],
+      sensitivity: data.sensitivity || sensitivity,
+      flagged_pct: data.summary?.flagged_pct ?? parseFloat(anomalyRate),
+      threshold_profile: data.threshold_profile,
+      analysis_label: analysisLabel,
+    },
   };
 }
 
@@ -759,6 +1019,7 @@ export async function analyzeEntriesWithHistory(
         topRiskyUser: 'N/A',
         topRiskEntry: 'N/A',
       },
+      engineExtras: undefined,
     };
   }
 
@@ -810,6 +1071,7 @@ export async function analyzeEntriesWithHistory(
       topRiskyUser: topUser,
       topRiskEntry: topEntry,
     },
+    engineExtras: undefined,
   };
 }
 

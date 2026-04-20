@@ -3,13 +3,16 @@ IFRS Statement Generator API Routes
 Converts Trial Balance to IFRS-compliant financial statements
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends, Header
+from sqlalchemy.orm import Session
 from typing import List, Dict, Optional, Any
 import pandas as pd
 import io
 import json
 from datetime import datetime
 
+from app.core.database import get_db
+from app.models.ifrs_statement import MappingTemplate
 from app.services.ifrs_mapper import IFRSMapper
 
 router = APIRouter(prefix="/api/ifrs", tags=["ifrs-statements"])
@@ -205,24 +208,46 @@ async def save_mapping_template(
 
 
 @router.get("/mapping-templates")
-async def get_mapping_templates(industry: Optional[str] = Query(None)):
+async def get_mapping_templates(
+    industry: Optional[str] = Query(None),
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
+    db: Session = Depends(get_db),
+):
     """
-    Get available mapping templates
+    Built-in industry templates + tenant saved templates (Week 1 DB).
     """
-    # Get built-in templates
     templates = ifrs_mapper.get_industry_templates(industry)
-    
+    tid = (x_tenant_id or "default").strip() or "default"
+    saved = (
+        db.query(MappingTemplate)
+        .filter(MappingTemplate.tenant_id == tid)
+        .order_by(MappingTemplate.created_at.desc())
+        .all()
+    )
+    saved_payload = [
+        {
+            "id": t.id,
+            "template_name": t.template_name,
+            "industry": t.industry,
+            "is_default": t.is_default,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "entries_count": len(t.entries or []),
+        }
+        for t in saved
+    ]
     return {
         "success": True,
         "templates": templates,
-        "count": len(templates)
+        "count": len(templates),
+        "saved_templates": saved_payload,
+        "saved_count": len(saved_payload),
     }
 
 
 @router.post("/export-statements")
 async def export_statements(
     statements: Dict[str, Any],
-    format: str = Query(..., regex="^(pdf|excel|word|json)$"),
+    format: str = Query(..., pattern="^(pdf|excel|word|json)$"),
     include_notes: bool = True,
     include_comparatives: bool = True
 ):

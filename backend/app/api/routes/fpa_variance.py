@@ -13,7 +13,11 @@ import json
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-from app.services.nova_service import nova_service
+from app.services import llm_service
+from app.services.tb_variance_commentary import (
+    build_tb_variance_system_prompt,
+    build_variance_commentary_prompt,
+)
 
 router = APIRouter(prefix="/api/fpa/variance", tags=["FP&A Variance"])
 
@@ -357,9 +361,56 @@ class AINarrativeRequest(BaseModel):
     variance_analysis: Dict[str, Any]  # full object from calculate
 
 
+class TBLineCommentaryRequest(BaseModel):
+    """Single-line TB YoY variance — industry-aware commentary via Claude."""
+
+    account_name: str
+    current: float
+    prior: float
+    variance: float
+    variance_pct: Optional[float] = None
+    currency: str = "INR"
+    industry: str = "general"
+    company_name: str = ""
+
+
+class TBLineCommentaryResponse(BaseModel):
+    commentary: str
+
+
+@router.post("/tb-line-commentary", response_model=TBLineCommentaryResponse)
+async def tb_line_commentary(body: TBLineCommentaryRequest):
+    """Industry-aware trial balance variance commentary (TB Variance page)."""
+    if not llm_service.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured: set ANTHROPIC_API_KEY on the server.",
+        )
+    prompt = build_variance_commentary_prompt(
+        account_name=body.account_name,
+        current=body.current,
+        prior=body.prior,
+        variance=body.variance,
+        variance_pct=body.variance_pct,
+        currency=body.currency or "INR",
+        industry=body.industry or "general",
+        company_name=body.company_name or "",
+    )
+    try:
+        text = llm_service.invoke(
+            prompt=prompt,
+            system=build_tb_variance_system_prompt(),
+            max_tokens=500,
+            temperature=0.25,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Commentary generation failed: {e}") from e
+    return TBLineCommentaryResponse(commentary=(text or "").strip())
+
+
 @router.post("/ai-narrative", response_model=AINarrativeResponse)
 async def generate_ai_narrative(body: AINarrativeRequest):
-    """Call AWS Nova to produce executive summary, line commentary, and action items."""
+    """Call Claude to produce executive summary, line commentary, and action items."""
     va = body.variance_analysis
     line_items = va.get("line_items") or []
     dept_summary = va.get("department_summary") or []
@@ -410,9 +461,9 @@ Output in this exact structure (so we can parse):
 """
 
     try:
-        text = nova_service.invoke(prompt=prompt, max_tokens=2000, temperature=0.3)
+        text = llm_service.invoke(prompt=prompt, max_tokens=2000, temperature=0.3)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Nova AI failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Claude AI failed: {str(e)}")
 
     executive_summary = ""
     line_commentary: List[Dict[str, str]] = []

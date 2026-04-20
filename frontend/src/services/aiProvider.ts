@@ -1,5 +1,5 @@
 // ==================== AI PROVIDER SERVICE ====================
-// Default: backend LLM (Anthropic or Gemini per backend/.env). Optional direct Claude/OpenAI in browser.
+// Default: backend LLM (Anthropic Claude via ANTHROPIC_API_KEY in backend/.env). Optional direct Claude/OpenAI in browser.
 
 const AI_PROVIDER: "backend" | "claude" | "openai" = "backend";
 
@@ -17,7 +17,7 @@ export async function callAI(prompt: string, options?: {
     if (AI_PROVIDER === "backend") {
       if (!apiBase) {
         throw new Error(
-          "Set VITE_API_URL to your backend URL (e.g. http://localhost:8000). Configure ANTHROPIC_API_KEY or GOOGLE_API_KEY in backend/.env."
+          "Set VITE_API_URL to your backend URL (e.g. http://localhost:8000). Configure ANTHROPIC_API_KEY in backend/.env."
         );
       }
       const res = await fetch(`${apiBase}/api/ai/invoke`, {

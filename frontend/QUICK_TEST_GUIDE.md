@@ -150,12 +150,12 @@ cd frontend
 Get-Content .env
 ```
 
-Should show:
+Should show (no AWS keys in the browser):
 ```
-VITE_AWS_REGION=us-east-1
-VITE_AWS_ACCESS_KEY_ID=your-access-key-id
-VITE_AWS_SECRET_ACCESS_KEY=...
+VITE_API_URL=http://localhost:8000
 ```
+
+LLM runs in the **backend** with **`ANTHROPIC_API_KEY`** in `backend/.env` (not Bedrock).
 
 ### Check 3: Dev Server Restart
 Ensure the dev server restarted AFTER .env was created:
@@ -178,8 +178,8 @@ Should log:
 ```
 AI Connection Test: {
   success: true,
-  provider: "aws-nova",
-  message: "Connected to aws-nova. Response: OK"
+  provider: "backend",
+  message: "Connected to backend. Response: OK"
 }
 ```
 

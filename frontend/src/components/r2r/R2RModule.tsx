@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Upload, FileText, AlertTriangle, CheckCircle, TrendingUp, X, BarChart3, Shield, ArrowLeft, LayoutGrid } from 'lucide-react';
 import axios from 'axios';
+import { formatApiError } from '../../utils/apiError';
 import toast from 'react-hot-toast';
 
 interface ShapBreakdown {
@@ -43,6 +44,9 @@ interface ConfusionMatrix {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+const LS_R2R_SENSITIVITY = 'r2r_sensitivity';
+const LS_R2R_THRESHOLD = 'r2r_threshold';
+
 interface CompanyOption {
   id: string;
   name: string;
@@ -72,8 +76,19 @@ export const R2RModule: React.FC = () => {
   const [customThreshold, setCustomThreshold] = useState<number>(40);
 
   useEffect(() => {
-    const saved = localStorage.getItem('fraud_detection_threshold');
-    if (saved) setCustomThreshold(Number(saved));
+    const s = localStorage.getItem(LS_R2R_SENSITIVITY);
+    const t = localStorage.getItem(LS_R2R_THRESHOLD);
+    const legacy = localStorage.getItem('fraud_detection_threshold');
+    if (s === 'conservative' || s === 'balanced' || s === 'strict') {
+      setSensitivityLevel(s);
+    }
+    if (t != null && t !== '') {
+      const n = Number(t);
+      if (!Number.isNaN(n)) setCustomThreshold(n);
+    } else if (legacy) {
+      const n = Number(legacy);
+      if (!Number.isNaN(n)) setCustomThreshold(n);
+    }
   }, []);
 
   useEffect(() => {
@@ -83,10 +98,12 @@ export const R2RModule: React.FC = () => {
       .catch(() => setCompanies([]));
   }, []);
 
-  // Save threshold preference when it changes
+  // Persist for R2R Pattern page (/r2r-pattern) + legacy upload key
   useEffect(() => {
-    localStorage.setItem('fraud_detection_threshold', customThreshold.toString());
-  }, [customThreshold]);
+    localStorage.setItem(LS_R2R_SENSITIVITY, sensitivityLevel);
+    localStorage.setItem(LS_R2R_THRESHOLD, String(customThreshold));
+    localStorage.setItem('fraud_detection_threshold', String(customThreshold));
+  }, [sensitivityLevel, customThreshold]);
 
   // Sensitivity presets
   const SENSITIVITY_LEVELS = {
@@ -167,9 +184,7 @@ export const R2RModule: React.FC = () => {
       console.log('📤 Uploading file:', file.name, useStateful ? `(company: ${selectedCompany})` : '(stateless)');
       console.log('🎯 Detection threshold:', customThreshold);
 
-      const response = await axios.post(url, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const response = await axios.post(url, formData);
 
       console.log('✅ Upload response:', response.data);
 
@@ -210,7 +225,7 @@ export const R2RModule: React.FC = () => {
     } catch (error: any) {
       console.error('❌ Upload error:', error);
       console.error('❌ Error details:', error.response?.data);
-      toast.error(error.response?.data?.detail || error.message || 'Upload failed');
+      toast.error(formatApiError(error) || 'Upload failed');
     } finally {
       setLoading(false);
     }
@@ -255,6 +270,12 @@ export const R2RModule: React.FC = () => {
               className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-gray-800 rounded-lg transition text-sm font-medium"
             >
               🏦 Bank Recon
+            </Link>
+            <Link
+              to="/bookkeeping/upload"
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg transition text-sm font-medium"
+            >
+              Autopilot
             </Link>
             <Link
               to="/r2r-pattern"
@@ -348,13 +369,15 @@ export const R2RModule: React.FC = () => {
               max="90"
               step="5"
               value={customThreshold}
-              onChange={(e) => {
-                setCustomThreshold(Number(e.target.value));
-                // Reset preset selection when using custom value
+                onChange={(e) => {
+                const v = Number(e.target.value);
+                setCustomThreshold(v);
                 const matchingPreset = Object.entries(SENSITIVITY_LEVELS).find(
-                  ([_, level]) => level.threshold === Number(e.target.value)
+                  ([_, level]) => level.threshold === v
                 );
-                if (!matchingPreset) {
+                if (matchingPreset) {
+                  setSensitivityLevel(matchingPreset[0] as 'conservative' | 'balanced' | 'strict');
+                } else {
                   setSensitivityLevel('balanced');
                 }
               }}

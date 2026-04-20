@@ -1,0 +1,3 @@
+date,amount,description,reference,gl_account
+2025-12-01,100.00,Duplicate Office Coffee,DUP-REF,9999
+2025-12-03,100.00,Duplicate Office Coffee,DUP-REF2,9999

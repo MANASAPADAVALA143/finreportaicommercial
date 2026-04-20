@@ -876,7 +876,7 @@ export function VarianceAnalysisPage() {
                       <Sparkles className="w-5 h-5" />
                       Generate AI Variance Analysis
                     </button>
-                    <p className="text-xs mt-2" style={{ color: colors.muted }}>Powered by AWS Nova — takes 10–15 seconds</p>
+                    <p className="text-xs mt-2" style={{ color: colors.muted }}>Powered by AI (backend Claude) — takes 10–15 seconds</p>
                   </div>
                 )}
                 {aiLoading && (

@@ -444,7 +444,7 @@ const BuildVsBuy: React.FC<BuildVsBuyProps> = ({ onSaveToAudit }) => {
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900">🤖 AI Recommendation</h3>
-                  <p className="text-sm text-gray-600 mt-1">Powered by AWS Bedrock</p>
+                  <p className="text-sm text-gray-600 mt-1">Powered by AI (backend Claude)</p>
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold text-purple-600">{aiRecommendation.confidence}%</div>

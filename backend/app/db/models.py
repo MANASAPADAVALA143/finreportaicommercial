@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON, ForeignKey
+from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
 
@@ -86,3 +87,32 @@ class ScoringResult(Base):
     reviewed_by = Column(String, nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class IFRSLineItemLegacy(Base):
+    """Master reference table: canonical IFRS statement line definitions."""
+
+    __tablename__ = "ifrs_line_items_legacy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(512), nullable=False)
+    statement = Column(String(128), nullable=False)
+    section = Column(String(256), nullable=True)
+    sub_section = Column(String(256), nullable=True)
+    standard = Column(String(128), nullable=True)
+    is_calculated = Column(Boolean, default=False, nullable=False)
+
+    links = relationship("IFRSLinkLegacy", back_populates="ifrs_line_item")
+
+
+class IFRSLinkLegacy(Base):
+    """Maps a trial balance line to an IFRS line item (per statement type)."""
+
+    __tablename__ = "ifrs_links_legacy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trial_balance_line_id = Column(Integer, nullable=False, index=True)
+    ifrs_line_item_id = Column(Integer, ForeignKey("ifrs_line_items_legacy.id"), nullable=False, index=True)
+    statement_type = Column(String(64), nullable=False)
+
+    ifrs_line_item = relationship("IFRSLineItemLegacy", back_populates="links")

@@ -1,13 +1,9 @@
 import os
-import time
-import uuid
-import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict
 from app.core.security import get_current_user
 from app.api.schemas import NovaPrompt, NovaResponse
-from app.services.nova_service import nova_service
 from app.services import llm_service
 
 router = APIRouter(prefix="/ai", tags=["AI"])
@@ -24,9 +20,9 @@ class AIInvokeRequest(BaseModel):
 
 @router.post("/invoke")
 async def invoke_ai(body: AIInvokeRequest):
-    """LLM invoke (Anthropic Claude or Google Gemini). Returns { text: raw response }."""
+    """LLM invoke via Anthropic Claude."""
     try:
-        text = nova_service.invoke(
+        text = llm_service.invoke(
             prompt=body.prompt,
             model_id=body.model_id or None,
             max_tokens=body.max_tokens,
@@ -42,19 +38,21 @@ async def analyze_with_ai(
     prompt: NovaPrompt,
     current_user: dict = Depends(get_current_user),
 ):
-    """Financial Q&A via configured LLM."""
+    """Financial Q&A via Anthropic Claude."""
     try:
-        result = nova_service.generate_financial_analysis(
-            prompt=prompt.prompt,
-            context=prompt.context,
+        full_prompt = prompt.prompt
+        if prompt.context is not None:
+            full_prompt = f"{prompt.prompt}\n\nContext:\n{prompt.context}"
+        text = llm_service.invoke(
+            prompt=full_prompt,
             max_tokens=prompt.max_tokens,
             temperature=prompt.temperature,
         )
 
         return NovaResponse(
-            response=result["response"],
-            confidence=result["confidence"],
-            metadata=result["metadata"],
+            response=text,
+            confidence=0.82,
+            metadata={"provider": llm_service.provider_label()},
         )
 
     except Exception as e:
@@ -69,10 +67,15 @@ async def analyze_journal_entry(
     entry_data: dict,
     current_user: dict = Depends(get_current_user),
 ):
-    """Analyze a journal entry using the LLM + rules pipeline."""
+    """Analyze a journal entry using Anthropic Claude."""
     try:
-        result = nova_service.analyze_journal_entry(entry_data)
-        return result
+        text = llm_service.invoke(
+            prompt=f"Analyze this journal entry for anomalies: {entry_data}",
+            system="You are an expert accountant analyzing journal entries for fraud and anomalies.",
+            max_tokens=1500,
+            temperature=0.3,
+        )
+        return {"analysis": text}
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -86,10 +89,14 @@ async def generate_forecast(
     period: str = "next_quarter",
     current_user: dict = Depends(get_current_user),
 ):
-    """Generate financial forecast using the configured LLM."""
+    """Generate financial forecast using Anthropic Claude."""
     try:
-        result = nova_service.generate_forecast(historical_data, period)
-        return result
+        prompt = (
+            f"You are a financial analyst. Given this historical data, generate a concise forecast for {period}. "
+            f"Use bullet points and state key assumptions.\n\nData:\n{historical_data}"
+        )
+        text = llm_service.invoke(prompt=prompt, max_tokens=2000, temperature=0.35)
+        return {"forecast": text, "period": period, "provider": llm_service.provider_label()}
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -116,11 +123,13 @@ Provide:
 """
 
     try:
-        result = nova_service.generate_financial_analysis(
+        text = llm_service.invoke(
             prompt=prompt,
-            context=financial_data,
+            system="You are a financial analysis expert.",
+            max_tokens=1200,
+            temperature=0.3,
         )
-        return result
+        return {"response": text, "provider": llm_service.provider_label()}
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -128,67 +137,12 @@ Provide:
         )
 
 
-# --- Voice: transcript (or optional AWS Transcribe) -> LLM -> optional Amazon Polly TTS ---
+# --- Voice: transcript (or uploaded text) -> LLM ---
 
 VOICE_SYSTEM_PROMPT = (
     "You are a CFO financial assistant. Answer in 2-3 sentences max. "
     "Be direct and clear. Use plain language, no jargon."
 )
-
-
-def _transcribe_audio(audio_bytes: bytes, job_id: str, content_type: str) -> str:
-    """Transcribe audio using Amazon Transcribe. Requires S3 bucket."""
-    import boto3
-
-    bucket = os.getenv("TRANSCRIBE_S3_BUCKET")
-    if not bucket:
-        raise ValueError("TRANSCRIBE_S3_BUCKET not configured")
-
-    s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
-    key = f"transcribe-input/{job_id}.webm"
-    s3.put_object(Bucket=bucket, Key=key, Body=audio_bytes, ContentType=content_type or "audio/webm")
-    uri = f"s3://{bucket}/{key}"
-
-    transcribe = boto3.client("transcribe", region_name=os.getenv("AWS_REGION", "us-east-1"))
-    transcribe.start_transcription_job(
-        TranscriptionJobName=job_id,
-        Media={"MediaFileUri": uri},
-        MediaFormat="webm",
-        LanguageCode="en-US",
-    )
-    for _ in range(60):
-        job = transcribe.get_transcription_job(TranscriptionJobName=job_id)
-        status = job["TranscriptionJob"]["TranscriptionJobStatus"]
-        if status == "COMPLETED":
-            import urllib.request
-
-            out_uri = job["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-            with urllib.request.urlopen(out_uri) as r:
-                data = json.load(r)
-            return data["results"]["transcripts"][0]["transcript"].strip()
-        if status == "FAILED":
-            raise RuntimeError(job["TranscriptionJob"].get("FailureReason", "Transcription failed"))
-        time.sleep(0.5)
-
-    raise RuntimeError("Transcription timeout")
-
-
-def _text_to_speech(text: str) -> bytes:
-    """Convert text to speech using Amazon Polly (optional; requires AWS credentials)."""
-    import boto3
-
-    polly = boto3.client("polly", region_name=os.getenv("AWS_REGION", "us-east-1"))
-    resp = polly.synthesize_speech(
-        Text=text[:3000],
-        OutputFormat="mp3",
-        VoiceId="Joanna",
-        Engine="neural",
-    )
-    return resp["AudioStream"].read()
-
-
-def _aws_polly_available() -> bool:
-    return bool((os.getenv("AWS_ACCESS_KEY_ID") or "").strip() and (os.getenv("AWS_SECRET_ACCESS_KEY") or "").strip())
 
 
 @router.post("/voice")
@@ -197,43 +151,22 @@ async def voice_ai(
     transcript: str = Form(default=None),
 ):
     """
-    Voice assistant: transcript (or uploaded audio + Transcribe) -> LLM -> optional Polly MP3.
+    Voice assistant: requires transcript text, returns Claude response.
     """
-    import base64
-
     transcript_text = (transcript or "").strip()
     if not transcript_text and audio and audio.filename:
-        audio_bytes = await audio.read()
-        if not audio_bytes:
-            raise HTTPException(status_code=400, detail="No audio data received")
-        job_id = f"ai-voice-{uuid.uuid4().hex[:12]}"
-        content_type = audio.content_type or "audio/webm"
-        try:
-            transcript_text = _transcribe_audio(audio_bytes, job_id, content_type)
-        except Exception:
-            return {
-                "transcript": "",
-                "text_response": "Transcription unavailable. Set TRANSCRIBE_S3_BUCKET for audio upload, or use voice chips / transcript.",
-                "audio_base64": None,
-            }
+        raise HTTPException(status_code=400, detail="Audio transcription is not enabled. Send transcript text.")
 
     if not transcript_text:
         raise HTTPException(status_code=400, detail="Provide either audio file or transcript")
 
-    user_prompt = f"{VOICE_SYSTEM_PROMPT}\n\nUser said: {transcript_text}"
     try:
         text_response = llm_service.invoke(
-            prompt=user_prompt,
+            prompt=transcript_text,
+            system=VOICE_SYSTEM_PROMPT,
             max_tokens=512,
             temperature=0.5,
         )
     except Exception as e:
         text_response = f"Sorry, I couldn't process that. ({str(e)})"
-
-    audio_base64 = None
-    if _aws_polly_available():
-        try:
-            mp3_bytes = _text_to_speech(text_response)
-            audio_base64 = base64.b64encode(mp3_bytes).decode("utf-8")
-        except Exception:
-            pass    return {"transcript": transcript_text, "text_response": text_response, "audio_base64": audio_base64}
+    return {"transcript": transcript_text, "text_response": text_response, "audio_base64": None}

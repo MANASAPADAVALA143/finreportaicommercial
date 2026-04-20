@@ -400,7 +400,7 @@ const InvestmentDecision: React.FC<InvestmentDecisionProps> = ({ onSaveToAudit }
                     🤖 AI Recommendation (Amazon Nova)
                   </h3>
                   <p className="text-sm text-gray-600 mt-1">
-                    Powered by AWS Bedrock
+                    Powered by AI (backend Claude)
                   </p>
                 </div>
                 <div className="text-right">
