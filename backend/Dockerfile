@@ -1,5 +1,15 @@
 # Multi-stage build for production
+#
+# Railway / monorepo (context = repo root):
+#   docker build -f backend/Dockerfile .
+# Local from backend/ folder:
+#   docker build --build-arg SRC_PREFIX=. -f Dockerfile .
+#
+# SRC_PREFIX is the path segment before requirements.txt and app/ (default: backend).
+ARG SRC_PREFIX=backend
+
 FROM python:3.11-slim as builder
+ARG SRC_PREFIX=backend
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -18,12 +28,13 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
+COPY ${SRC_PREFIX}/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim
+ARG SRC_PREFIX=backend
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -42,7 +53,7 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 
 # Copy application code
-COPY ./app /app/app
+COPY ${SRC_PREFIX}/app /app/app
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

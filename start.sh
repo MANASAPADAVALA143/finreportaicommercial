@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# FinReport AI — local Docker Compose helper (your laptop with Docker Desktop).
+# Railway must NOT use this as the start command. Use Dockerfile + railway.json instead.
+
 # FinReport AI - Quick Start Script
 
 echo "🚀 Starting FinReport AI Commercial Platform..."
