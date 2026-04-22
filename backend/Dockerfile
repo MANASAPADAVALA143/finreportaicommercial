@@ -6,6 +6,7 @@ FROM python:3.11-slim AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update && apt-get install -y \
@@ -17,9 +18,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
-# Railway (Railpack) requires cache mounts to include id=…
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
+# Plain RUN: Railway Railpack rejects BuildKit pip cache mounts (id / cache-key rules).
+RUN pip install --upgrade pip && \
     pip install --prefer-binary -r requirements.txt
 
 FROM python:3.11-slim
