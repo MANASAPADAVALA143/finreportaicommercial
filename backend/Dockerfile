@@ -17,7 +17,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
+# Railway (Railpack) requires cache mounts to include id=…
+RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
     pip install --prefer-binary -r requirements.txt
 
