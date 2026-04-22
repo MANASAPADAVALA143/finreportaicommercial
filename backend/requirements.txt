@@ -1,7 +1,10 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
+# 0.109 pinned starlette 0.35.x, which conflicted with mcp (fastapi-mcp) and caused
+# extreme pip backtracking — enough to hit ~20m image build timeouts on some hosts.
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
 python-dotenv==1.0.0
-pydantic==2.10.6
+# mcp (fastapi-mcp) requires pydantic>=2.11 and python-multipart>=0.0.9
+pydantic==2.11.7
 pydantic-settings==2.5.2
 fastapi-mcp==0.4.0
 sqlalchemy==2.0.25
@@ -9,8 +12,9 @@ psycopg2-binary==2.9.9
 alembic==1.13.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-anthropic>=0.40.0
+python-multipart==0.0.20
+httpx==0.27.2
+anthropic==0.94.0
 pandas==2.2.0
 numpy>=1.26.0
 scikit-learn>=1.4.0
@@ -23,5 +27,5 @@ pillow>=10.0.0
 fpdf2==2.7.8
 openpyxl==3.1.2
 xlrd==2.0.1
-supabase==2.3.0
-postgrest==0.13.2
+# supabase 2.3.x pins httpx<0.25; anthropic>=0.40 needs httpx>=0.25 — upgrade supabase and drop explicit postgrest.
+supabase==2.10.0
