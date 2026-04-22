@@ -5,13 +5,13 @@ Attribute VB_Name = "FinReportAI_Analyze"
 '
 ' Setup:
 '   1. In Excel: Alt+F11 → File → Import File → select this .bas (or paste into a module).
-'   2. Edit FINREPORT_API_BASE below to your Railway URL (no trailing slash).
+'   2. Edit FINREPORT_API_BASE to your Railway URL: include https:// (or host only — see NormalizeApiBase).
 '   3. Insert a button → Assign macro → AnalyzeWithAI
 '   4. Save workbook as .xlsm (macro-enabled).
 '------------------------------------------------------------------------------
 Option Explicit
 
-' *** Set your deployed API root (https only in production) ***
+' *** Deployed API root (no trailing slash). Prefer full URL: https://….up.railway.app ***
 Public Const FINREPORT_API_BASE As String = "https://your-app.up.railway.app"
 ' Local testing: "http://127.0.0.1:8000"
 
@@ -97,7 +97,7 @@ Private Function PostExcelAnalyze( _
     errDetail = ""
 
     Dim url As String
-    url = RemoveTrailingSlash(apiBase) & "/excel/analyze?analysis_type=" & analysisType
+    url = RemoveTrailingSlash(NormalizeApiBase(apiBase)) & "/excel/analyze?analysis_type=" & analysisType
 
     Dim boundary As String
     boundary = "----FinReportAI_" & Replace(CreateObject("Scripting.FileSystemObject").GetTempName, ".", "")
@@ -218,4 +218,19 @@ Private Function RemoveTrailingSlash(ByVal s As String) As String
         t = Left$(t, Len(t) - 1)
     Loop
     RemoveTrailingSlash = t
+End Function
+
+' MSXML requires an absolute URL; prepend https:// if user pasted host only (e.g. xxx.up.railway.app).
+Private Function NormalizeApiBase(ByVal s As String) As String
+    Dim t As String
+    t = Trim$(s)
+    If Len(t) = 0 Then
+        NormalizeApiBase = t
+        Exit Function
+    End If
+    If LCase$(Left$(t, 7)) = "http://" Or LCase$(Left$(t, 8)) = "https://" Then
+        NormalizeApiBase = t
+    Else
+        NormalizeApiBase = "https://" & t
+    End If
 End Function
