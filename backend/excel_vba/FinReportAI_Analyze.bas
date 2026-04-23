@@ -113,7 +113,10 @@ Private Function PostExcelAnalyze( _
     If Len(FINREPORT_EXCEL_API_KEY) > 0 Then
         xhr.setRequestHeader "X-API-Key", FINREPORT_EXCEL_API_KEY
     End If
-    xhr.send body
+    ' MSXML often rejects Byte() passed directly to .send (80070057 "The parameter is incorrect").
+    Dim sendBody As Variant
+    sendBody = body
+    xhr.send sendBody
 
     httpStatus = xhr.Status
 
@@ -124,7 +127,10 @@ Private Function PostExcelAnalyze( _
     End If
 
     Dim ct As String
-    ct = LCase$(xhr.getResponseHeader("Content-Type"))
+    On Error Resume Next
+    ct = LCase$(CStr(xhr.getResponseHeader("Content-Type")))
+    On Error GoTo 0
+    If Len(ct) = 0 Then ct = ""
     If InStr(ct, "spreadsheetml") = 0 And InStr(ct, "octet-stream") = 0 Then
         errDetail = "Unexpected Content-Type: " & ct
         Exit Function
@@ -169,6 +175,9 @@ Private Function Utf8Bytes(ByVal s As String) As Byte()
 End Function
 
 Private Function ReadAllBytesFromFile(ByVal path As String) As Byte()
+    If Len(path) = 0 Or Dir(path) = "" Then
+        Err.Raise vbObjectError + 1, "FinReportAI", "Upload file not found: " & path
+    End If
     Dim stm As Object
     Set stm = CreateObject("ADODB.Stream")
     stm.Type = 1
