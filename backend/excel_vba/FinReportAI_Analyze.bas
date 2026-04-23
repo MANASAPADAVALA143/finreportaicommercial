@@ -1,25 +1,25 @@
 Attribute VB_Name = "FinReportAI_Analyze"
 '------------------------------------------------------------------------------
-' FinReportAI — Excel → POST /excel/analyze (multipart/form-data)
+' FinReportAI - Excel -> POST /excel/analyze (multipart/form-data)
 ' Pure VBA: MSXML2 + ADODB.Stream. No curl / PowerShell required.
 '
 ' Setup:
-'   1. In Excel: Alt+F11 → File → Import File → select this .bas (or paste into a module).
-'   2. Edit FINREPORT_API_BASE to your Railway URL: include https:// (or host only — see NormalizeApiBase).
-'   3. Insert a button → Assign macro → AnalyzeWithAI
+'   1. In Excel: Alt+F11 -> File -> Import File -> select this .bas (or paste into a module).
+'   2. Edit FINREPORT_API_BASE to your Railway URL: include https:// (or host only - see NormalizeApiBase).
+'   3. Insert a button -> Assign macro -> AnalyzeWithAI
 '   4. Save workbook as .xlsm (macro-enabled).
 '------------------------------------------------------------------------------
 Option Explicit
 
-' *** Deployed API root (no trailing slash). Prefer full URL: https://….up.railway.app ***
+' *** Deployed API root (no trailing slash). Prefer full URL: https://xxx.up.railway.app ***
 Public Const FINREPORT_API_BASE As String = "https://your-app.up.railway.app"
 ' Local testing: "http://127.0.0.1:8000"
 
-' Optional: send X-API-Key if you set CLIENT_API_KEY on the server for /mcp only — not used for /excel.
+' Optional: send X-API-Key if you set CLIENT_API_KEY on the server for /mcp only - not used for /excel.
 Public Const FINREPORT_EXCEL_API_KEY As String = ""
 
 '------------------------------------------------------------------------------
-' Entry point — assign this macro to your shape/button.
+' Entry point - assign this macro to your shape/button.
 '------------------------------------------------------------------------------
 Public Sub AnalyzeWithAI()
     Dim analysisType As String
@@ -42,7 +42,7 @@ Public Sub AnalyzeWithAI()
     ActiveWorkbook.SaveCopyAs tempUpload
     On Error GoTo ErrHandler
 
-    Application.StatusBar = "FinReportAI: uploading…"
+    Application.StatusBar = "FinReportAI: uploading..."
 
     Dim outPath As String
     outPath = Environ("TEMP") & "\FinReportAI_ai_result.xlsx"
@@ -119,7 +119,7 @@ Private Function PostExcelAnalyze( _
 
     If httpStatus <> 200 Then
         errDetail = xhr.responseText
-        If Len(errDetail) > 500 Then errDetail = Left$(errDetail, 500) & "…"
+        If Len(errDetail) > 500 Then errDetail = Left$(errDetail, 500) & "..."
         Exit Function
     End If
 
