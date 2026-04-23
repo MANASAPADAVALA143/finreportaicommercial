@@ -10,6 +10,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
 from app.api.routes import (
@@ -100,10 +101,13 @@ if settings.ENABLE_FASTAPI_MCP:
 
 @app.get("/")
 async def root():
+    # Local: browser at http://127.0.0.1:8000/ jumps to Swagger. On Railway, keep JSON (RAILWAY_ENVIRONMENT is set).
+    if settings.DEBUG and not os.environ.get("RAILWAY_ENVIRONMENT"):
+        return RedirectResponse(url="/docs", status_code=302)
     return {
         "app": settings.APP_NAME,
         "version": settings.VERSION,
-        "status": "running"
+        "status": "running",
     }
 
 @app.get("/health")
