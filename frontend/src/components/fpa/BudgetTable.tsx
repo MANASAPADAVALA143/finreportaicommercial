@@ -5,9 +5,18 @@ import { Edit2, Check, X } from 'lucide-react';
 interface BudgetTableProps {
   data: BudgetLineItem[];
   onDataChange: (updatedData: BudgetLineItem[]) => void;
+  currency?: string;
 }
 
-const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange }) => {
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: '$',
+  GBP: '£',
+  EUR: '€',
+  INR: '₹',
+  AED: 'د.إ',
+};
+
+const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency = 'USD' }) => {
   const [editingCell, setEditingCell] = useState<{ id: string; month: keyof MonthlyBudget } | null>(null);
   const [editValue, setEditValue] = useState<string>('');
 
@@ -15,10 +24,17 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange }) => {
   const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   const formatCurrency = (value: number): string => {
+    const symbol = CURRENCY_SYMBOL[String(currency).toUpperCase()] || '$';
+    if (String(currency).toUpperCase() !== 'INR') {
+      const abs = Math.abs(Number(value) || 0);
+      if (abs >= 1000000) return `${symbol}${(value / 1000000).toFixed(2)}M`;
+      if (abs >= 1000) return `${symbol}${(value / 1000).toFixed(1)}K`;
+      return `${symbol}${Math.round(value).toLocaleString()}`;
+    }
     const crore = value / 10000000;
     const lakh = value / 100000;
-    if (Math.abs(crore) >= 1) return `₹${crore.toFixed(2)}Cr`;
-    return `₹${lakh.toFixed(2)}L`;
+    if (Math.abs(crore) >= 1) return `${symbol}${crore.toFixed(2)}Cr`;
+    return `${symbol}${lakh.toFixed(2)}L`;
   };
 
   const calculateTotal = (monthly: MonthlyBudget): number => {

@@ -14,7 +14,6 @@ import {
   FileText,
   Sparkles,
   Save,
-  RefreshCw,
   Edit2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -27,6 +26,13 @@ import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
 
 const SELECTED_BUDGET_PERIOD = 'FY2025';
+const CURRENCY_SYMBOL: Record<string, string> = {
+  USD: '$',
+  GBP: '£',
+  EUR: '€',
+  INR: '₹',
+  AED: 'د.إ',
+};
 
 function sumMonthlyBudget(m?: MonthlyBudget): number {
   if (!m) return 0;
@@ -43,6 +49,16 @@ function inferDepartmentFromCategory(category: string, existing?: string): strin
   if (/operat|raw material|direct labor|cogs|cost of/i.test(c)) return 'Operations';
   if (/financ|admin|audit/i.test(c)) return 'Finance';
   return 'General';
+}
+
+function sumByKeywords(rows: BudgetLineItem[], keywords: RegExp): number {
+  return rows
+    .filter((r) => !r.isHeader)
+    .filter((r) => {
+      const label = `${r.category || ''} ${(r as BudgetLineItem & { lineItem?: string }).lineItem || ''}`.toLowerCase();
+      return keywords.test(label);
+    })
+    .reduce((s, r) => s + sumMonthlyBudget(r.monthly), 0);
 }
 
 function buildBudgetCfoLineItems(rows: BudgetLineItem[]) {
@@ -76,8 +92,9 @@ const BudgetManagement: React.FC = () => {
   useEffect(() => {
     if (dataCheck.available) {
       const budget = loadFPABudget();
+      const prior = loadFPAPriorYear();
       setBudgetDataFromStorage(budget);
-      setPriorYearData(loadFPAPriorYear()); // Optional
+      setPriorYearData(prior);
       
       // Convert budget data to line items
       if (budget) {
@@ -95,6 +112,7 @@ const BudgetManagement: React.FC = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [cfoSyncing, setCfoSyncing] = useState(false);
+  const displayCurrency = (localStorage.getItem('fpa_currency') || 'USD').toUpperCase();
 
   const syncBudgetToCommandCenter = useCallback(async () => {
     const line_items = buildBudgetCfoLineItems(budgetData);
@@ -115,35 +133,79 @@ const BudgetManagement: React.FC = () => {
   }, [budgetData, tenantId]);
 
   const formatCurrency = (value: number): string => {
-    const crore = value / 10000000;
-    return `₹${crore.toFixed(2)}Cr`;
+    const symbol = CURRENCY_SYMBOL[displayCurrency] || '$';
+    const abs = Math.abs(Number(value) || 0);
+    if (displayCurrency === 'INR') {
+      const crore = value / 10000000;
+      return `${symbol}${crore.toFixed(2)}Cr`;
+    }
+    if (abs >= 1000000) return `${symbol}${(value / 1000000).toFixed(2)}M`;
+    if (abs >= 1000) return `${symbol}${(value / 1000).toFixed(1)}K`;
+    return `${symbol}${Math.round(value).toLocaleString()}`;
   };
 
   // Compute summary cards from budgetData when we have line items; otherwise use mock
   const computedSummary = React.useMemo(() => {
     if (!budgetData || budgetData.length === 0) return null;
     const isRevenueRow = (item: BudgetLineItem) =>
-      !item.isHeader && /revenue|sales|income/i.test(item.category) && !/cost of sales|cos|cogs/i.test(item.category);
+      !item.isHeader &&
+      (
+        /revenue|sales|income/i.test(item.category) ||
+        /revenue|sales|income/i.test((item as BudgetLineItem & { lineItem?: string }).lineItem || '')
+      ) &&
+      !/cost of sales|cos|cogs/i.test(item.category);
     const isExpenseRow = (item: BudgetLineItem) =>
       !item.isHeader && (/expense|cost|cogs|payroll|marketing|admin|depreciation|operating/i.test(item.category));
     const sumMonthly = (item: BudgetLineItem) =>
       Object.values(item.monthly || {}).reduce((s, v) => s + (Number(v) || 0), 0);
     const totalRevenue = budgetData.filter(isRevenueRow).reduce((s, r) => s + sumMonthly(r), 0);
     const totalExpenses = budgetData.filter(isExpenseRow).reduce((s, r) => s + sumMonthly(r), 0);
-    const netProfit = totalRevenue - totalExpenses;
-    // EBITDA approx: net profit + depreciation (if we had it); else use same as net for display or derive from expense rows
-    const ebitda = netProfit; // simplified; could add back depreciation if we have a row
+    const fallbackRevenue = Number(budgetDataFromStorage?.totalRevenue || 0) || 0;
+    const resolvedRevenue = totalRevenue > 0 ? totalRevenue : fallbackRevenue;
+    const addBackTax =
+      Number(budgetDataFromStorage?.corporationTax || 0) +
+      Number(budgetDataFromStorage?.deferredTax || 0);
+    const addBackInterest =
+      Number(budgetDataFromStorage?.loanInterest || 0) +
+      Number(budgetDataFromStorage?.leaseInterest || 0) +
+      Number(budgetDataFromStorage?.interestExpense || 0);
+    const addBackDA =
+      Number(budgetDataFromStorage?.depreciationPpe || 0) +
+      Number(budgetDataFromStorage?.amortisation || budgetDataFromStorage?.amortization || 0) +
+      Number(budgetDataFromStorage?.depreciationRou || 0) +
+      Number(budgetDataFromStorage?.depreciation || 0);
+    const addBackFromRows =
+      sumByKeywords(budgetData, /(corporation tax|deferred tax)/i) +
+      sumByKeywords(budgetData, /(loan interest|lease interest|\binterest\b)/i) +
+      sumByKeywords(budgetData, /(depreciation|amorti[sz]ation)/i);
+    const resolvedNetProfit = resolvedRevenue - totalExpenses;
+    const resolvedEbitda = resolvedNetProfit + Math.max(addBackTax + addBackInterest + addBackDA, addBackFromRows);
+    const priorRevenue = Number(priorYearData?.totalRevenue || 0) || budgetSummary.priorYearRevenue;
+    const priorExpenses =
+      Number(priorYearData?.costOfGoodsSold || 0) +
+      Number(priorYearData?.totalOperatingExpenses || 0) ||
+      budgetSummary.priorYearExpenses;
+    const priorNetProfit = priorRevenue - priorExpenses;
+    const priorEbitda =
+      priorNetProfit +
+      Number(priorYearData?.corporationTax || 0) +
+      Number(priorYearData?.deferredTax || 0) +
+      Number(priorYearData?.loanInterest || priorYearData?.interestExpense || 0) +
+      Number(priorYearData?.leaseInterest || 0) +
+      Number(priorYearData?.depreciationPpe || priorYearData?.depreciation || 0) +
+      Number(priorYearData?.amortisation || priorYearData?.amortization || 0) +
+      Number(priorYearData?.depreciationRou || 0);
     return {
-      totalRevenue,
+      totalRevenue: resolvedRevenue,
       totalExpenses,
-      netProfit,
-      ebitda,
-      priorYearRevenue: budgetSummary.priorYearRevenue,
-      priorYearExpenses: budgetSummary.priorYearExpenses,
-      priorYearNetProfit: budgetSummary.priorYearNetProfit,
-      priorYearEbitda: budgetSummary.priorYearEbitda
+      netProfit: resolvedNetProfit,
+      ebitda: resolvedEbitda,
+      priorYearRevenue: priorRevenue,
+      priorYearExpenses: priorExpenses,
+      priorYearNetProfit: priorNetProfit,
+      priorYearEbitda: priorEbitda || priorNetProfit
     };
-  }, [budgetData]);
+  }, [budgetData, budgetDataFromStorage, priorYearData]);
 
   const displaySummary = computedSummary || budgetSummary;
 
@@ -407,6 +469,13 @@ Format as a structured commentary.
           </div>
         </div>
       )}
+      {dataCheck.available && budgetDataFromStorage && (
+        <div className="bg-green-50 border-b border-green-200 px-6 py-3 rounded-lg mb-4">
+          <div className="max-w-[1800px] mx-auto text-sm text-green-800">
+            ✅ Data loaded from FP&A Suite upload (Budget TB — {Number(budgetDataFromStorage.rowCount || budgetData.length || 0)} accounts)
+          </div>
+        </div>
+      )}
       
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">
@@ -629,10 +698,8 @@ Format as a structured commentary.
               onClick={() => {
                 setCfoSyncing(true);
                 void syncBudgetToCommandCenter()
-                  .then(() => alert('Command Center: budget agent queued (15% YoY vs prior-year baseline per dept).'))
-                  .catch((e: unknown) =>
-                    alert('CFO Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)))
-                  )
+                  .then(() => console.info('[CFO] fpa_budget synced silently'))
+                  .catch((e: unknown) => console.warn('[CFO] fpa_budget sync failed', e))
                   .finally(() => setCfoSyncing(false));
               }}
               className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
@@ -656,7 +723,10 @@ Format as a structured commentary.
               </span>
             </div>
           </div>
-          <BudgetTable data={budgetData} onDataChange={setBudgetData} />
+          <p className="text-xs text-gray-500 mb-3">
+            * Monthly figures are annual budget / 12 (equal spread). Click any cell to adjust individual months.
+          </p>
+          <BudgetTable data={budgetData} onDataChange={setBudgetData} currency={displayCurrency} />
         </div>
       </div>
 

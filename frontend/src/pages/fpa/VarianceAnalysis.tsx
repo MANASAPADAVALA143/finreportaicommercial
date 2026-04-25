@@ -1,7 +1,7 @@
 // FP&A Variance Analysis - Main Page
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw, Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { VarianceSummaryCards } from '../../components/fpa/VarianceSummaryCards';
 import { VarianceTable } from '../../components/fpa/VarianceTable';
@@ -13,6 +13,38 @@ import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
+const DEFAULT_OWNER_BY_DEPARTMENT: Record<string, string> = {
+  marketing: 'Head of Marketing',
+  operations: 'Operations Director',
+  finance: 'CFO',
+  technology: 'CTO',
+  sales: 'Sales Director',
+  hr: 'HR Director',
+  it: 'CTO',
+  'all depts': 'CFO',
+};
+
+const LS_CURRENCY_KEY = 'fpa_currency';
+const LS_CURRENCY_FALLBACK_KEY = 'app_currency';
+
+const buildFallbackTrend = (variancePct: number): number[] => {
+  const drift = variancePct / 100;
+  return Array.from({ length: 12 }, (_, i) => {
+    const t = (i + 1) / 12;
+    return Number((1 + drift * t).toFixed(4));
+  });
+};
+
+const resolveOwner = (department: string): string => {
+  const key = String(department || 'All Depts').trim().toLowerCase();
+  return DEFAULT_OWNER_BY_DEPARTMENT[key] || 'CFO';
+};
+
+const scoreMateriality = (variance: number, variancePct: number, totalBudget: number) => {
+  const pctFactor = Math.abs(variancePct) / 100;
+  const absFactor = totalBudget > 0 ? Math.abs(variance) / totalBudget : 0;
+  return pctFactor * 0.5 + absFactor * 0.5;
+};
 
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
@@ -29,17 +61,38 @@ export const VarianceAnalysis = () => {
   const [year, setYear] = useState(2025);
   const [compareType, setCompareType] = useState<CompareType>('budget');
   const [department, setDepartment] = useState<DepartmentType>('all');
-  const [currency, setCurrency] = useState<CurrencyType>('INR');
+  const [ownerFilter, setOwnerFilter] = useState('all');
+  const [currency, setCurrency] = useState<CurrencyType>(() => {
+    const stored = (localStorage.getItem(LS_CURRENCY_KEY) || localStorage.getItem(LS_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
+    if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(stored)) return stored as CurrencyType;
+    return 'USD';
+  });
 
   // UI State
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [cfoAgentSyncing, setCfoAgentSyncing] = useState(false);
+  const lastVarianceSyncKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(LS_CURRENCY_KEY, currency);
+  }, [currency]);
 
   // Only data uploaded on this page — no localStorage, no demo data (clean for video)
-  const currentVarianceData = uploadedDataOnly;
+  const currentVarianceData = useMemo(() => {
+    const scoped = uploadedDataOnly.filter((row) => {
+      if (row.isHeader) return true;
+      const deptOk = department === 'all' || String(row.department || '').toLowerCase() === String(department).toLowerCase();
+      const ownerOk = ownerFilter === 'all' || String(row.owner || '').toLowerCase() === ownerFilter.toLowerCase();
+      return deptOk && ownerOk;
+    });
+    const headers = scoped.filter((r) => r.isHeader);
+    const rows = scoped
+      .filter((r) => !r.isHeader)
+      .sort((a, b) => (b.materialityScore || 0) - (a.materialityScore || 0));
+    return [...headers, ...rows];
+  }, [uploadedDataOnly, department, ownerFilter]);
 
   // Recompute cards, table, and alerts when data or selected period (month/quarter/year) changes
   const kpiSummaries = useMemo(
@@ -84,33 +137,79 @@ export const VarianceAnalysis = () => {
         return val;
       };
 
+      const uploadCurrency = String(rows[0]?.Currency || rows[0]?.currency || '').toUpperCase();
+      if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(uploadCurrency)) {
+        setCurrency(uploadCurrency as CurrencyType);
+      }
+
       // Map uploaded data to VarianceRow format
       // Expected columns: Category, Actual, Budget, YTDActual, YTDBudget
-      const mappedData = rows.map((row, index) => {
+      const baseMappedData = rows.flatMap((row, index) => {
         let actual = parseNum(row['Actual'] ?? row['actual'] ?? 0);
         let budget = parseNum(row['Budget'] ?? row['budget'] ?? 0);
         let priorYear = parseNum(row['Prior Year'] ?? row['priorYear'] ?? 0);
+        const unitsActual = parseNum(row['Actual Units'] ?? row['actual_units'] ?? row['Units Actual'] ?? 0);
+        const unitsBudget = parseNum(row['Budget Units'] ?? row['budget_units'] ?? row['Units Budget'] ?? 0);
+        const actualPrice = parseNum(row['Actual Price'] ?? row['actual_price'] ?? 0);
+        const budgetPrice = parseNum(row['Budget Price'] ?? row['budget_price'] ?? 0);
         // Apply scale normalisation: budget and priorYear to same scale as actual
         budget = normalise(budget, actual);
         priorYear = normalise(priorYear, actual);
         let ytdActual = parseNum(row['YTD Actual'] ?? row['YTDActual'] ?? row['ytdActual'] ?? actual * 6);
         let ytdBudget = parseNum(row['YTD Budget'] ?? row['YTDBudget'] ?? row['ytdBudget'] ?? budget * 6);
         ytdBudget = normalise(ytdBudget, ytdActual);
+        const rawAccountType = String(
+          row['Account_Type'] ??
+          row['Account Type'] ??
+          row['account_type'] ??
+          row['accountType'] ??
+          ''
+        ).trim().toLowerCase();
+        const category = String(row['Category'] || row['category'] || `Item ${index + 1}`);
+        const categoryLower = category.toLowerCase();
+        const inferredType: "income" | "expense" | "other" =
+          rawAccountType.includes('income') || rawAccountType.includes('revenue')
+            ? 'income'
+            : rawAccountType.includes('expense') || rawAccountType.includes('cost')
+              ? 'expense'
+              : rawAccountType.includes('asset') || rawAccountType.includes('liability') || rawAccountType.includes('equity')
+                ? 'other'
+                : (/revenue|income|sales/.test(categoryLower) ? 'income' : /expense|cost|cogs|payroll|rent|marketing|admin|depreciation|interest/.test(categoryLower) ? 'expense' : 'other');
+
+        // Exclude balance-sheet and unknown non-P&L accounts from variance logic.
+        if (inferredType === 'other') return [];
+
         const variance = actual - budget;
         const variancePct = budget !== 0 ? (variance / budget) * 100 : 0;
         const ytdVariance = ytdActual - ytdBudget;
         const ytdVariancePct = ytdBudget !== 0 ? (ytdVariance / ytdBudget) * 100 : 0;
 
         // Determine if favorable based on category
-        const category = String(row['Category'] || row['category'] || `Item ${index + 1}`);
-        const isRevenue = category.toLowerCase().includes('revenue') || category.toLowerCase().includes('income');
-        const favorable = isRevenue ? variance > 0 : variance < 0;
+        const departmentName = String(row['Department'] || row['department'] || 'All Depts');
+        const favorable = inferredType === 'income' ? variance > 0 : variance < 0;
 
         // Calculate threshold
         const absVariancePct = Math.abs(variancePct);
         const threshold = absVariancePct > 10 ? 'critical' : absVariancePct > 5 ? 'warning' : 'ok';
 
-        return {
+        let volumeImpact = 0;
+        let priceImpact = 0;
+        let mixImpact = 0;
+        let decompNote = '';
+        if (unitsActual > 0 && unitsBudget > 0 && actualPrice > 0 && budgetPrice > 0) {
+          volumeImpact = (unitsActual - unitsBudget) * budgetPrice;
+          priceImpact = (actualPrice - budgetPrice) * unitsActual;
+          mixImpact = variance - volumeImpact - priceImpact;
+          decompNote = 'Unit/price-based decomposition';
+        } else {
+          const revGrowthPct = budget !== 0 ? ((actual - budget) / budget) : 0;
+          volumeImpact = revGrowthPct * budget;
+          priceImpact = variance - volumeImpact;
+          mixImpact = 0;
+          decompNote = 'Proxy decomposition (units not provided)';
+        }
+
+        return [{
           id: `uploaded-${index}`,
           category,
           isHeader: row['Is Header'] === 'TRUE' || row['isHeader'] === true || false,
@@ -128,7 +227,28 @@ export const VarianceAnalysis = () => {
           hasChildren: false,
           isExpanded: false,
           threshold: threshold as 'critical' | 'warning' | 'ok',
-          level: 0
+          level: 0,
+          department: departmentName,
+          owner: resolveOwner(departmentName),
+          trend: buildFallbackTrend(variancePct),
+          decomposition: {
+            volume: volumeImpact,
+            price: priceImpact,
+            mix: mixImpact,
+            note: decompNote,
+          },
+          accountType: inferredType,
+        }];
+      });
+
+      const totalBudget = baseMappedData.filter((r) => !r.isHeader).reduce((sum, r) => sum + r.budget, 0);
+      const mappedData = baseMappedData.map((r) => {
+        const score = scoreMateriality(r.variance, r.variancePct, totalBudget);
+        const materialityBand = score > 0.15 ? 'critical' : score >= 0.05 ? 'monitor' : 'low';
+        return {
+          ...r,
+          materialityScore: score,
+          materialityBand,
         };
       });
 
@@ -322,13 +442,95 @@ export const VarianceAnalysis = () => {
   };
 
   const periodLabel = getPeriodLabel(periodType, month, quarter, year);
+  const revenueContext = useMemo(() => {
+    const rows = currentVarianceData.filter((r) => !r.isHeader);
+    const revenueRows = rows.filter((r) => r.accountType === 'income' || /revenue|sales|income/i.test(r.category));
+    const cogsRows = rows.filter((r) => r.accountType === 'expense' && /cogs|cost of sales|cost of goods/i.test(r.category));
+    const revBudget = revenueRows.reduce((s, r) => s + r.budget, 0);
+    const revActual = revenueRows.reduce((s, r) => s + r.actual, 0);
+    const cogsBudget = cogsRows.reduce((s, r) => s + r.budget, 0);
+    const cogsActual = cogsRows.reduce((s, r) => s + r.actual, 0);
+    const gmBudget = revBudget > 0 ? ((revBudget - cogsBudget) / revBudget) * 100 : 0;
+    const gmActual = revActual > 0 ? ((revActual - cogsActual) / revActual) * 100 : 0;
+    const erosion = gmActual - gmBudget;
+    return {
+      revBudget,
+      revActual,
+      revVariance: revActual - revBudget,
+      revVariancePct: revBudget > 0 ? ((revActual - revBudget) / revBudget) * 100 : 0,
+      cogsVariance: cogsActual - cogsBudget,
+      gmBudget,
+      gmActual,
+      erosion,
+    };
+  }, [currentVarianceData]);
+
+  const ownerOptions = useMemo(() => {
+    const set = new Set(
+      uploadedDataOnly
+        .filter((r) => !r.isHeader)
+        .map((r) => String(r.owner || '').trim())
+        .filter(Boolean)
+    );
+    return ['all', ...Array.from(set)];
+  }, [uploadedDataOnly]);
+
+  const varianceClassification = useMemo(() => {
+    const rows = currentVarianceData.filter((r) => !r.isHeader);
+    const revenueRows = rows.filter((r) => r.accountType === 'income');
+    const expenseRows = rows.filter((r) => r.accountType === 'expense');
+    const revenueBudget = revenueRows.reduce((s, r) => s + r.budget, 0);
+    const revenueActual = revenueRows.reduce((s, r) => s + r.actual, 0);
+    const costBudget = expenseRows.reduce((s, r) => s + r.budget, 0);
+    const costActual = expenseRows.reduce((s, r) => s + r.actual, 0);
+    const netBudget = revenueBudget - costBudget;
+    const netActual = revenueActual - costActual;
+    const revenuePct = revenueBudget !== 0 ? ((revenueActual - revenueBudget) / revenueBudget) * 100 : 0;
+    const costPct = costBudget !== 0 ? ((costActual - costBudget) / costBudget) * 100 : 0;
+    const cogsBudget = expenseRows
+      .filter((r) => /cogs|cost of sales|cost of goods/i.test(r.category))
+      .reduce((s, r) => s + r.budget, 0);
+    const cogsActual = expenseRows
+      .filter((r) => /cogs|cost of sales|cost of goods/i.test(r.category))
+      .reduce((s, r) => s + r.actual, 0);
+    const budgetCogsPct = revenueBudget > 0 ? (cogsBudget / revenueBudget) * 100 : 0;
+    const actualCogsPct = revenueActual > 0 ? (cogsActual / revenueActual) * 100 : 0;
+    const status =
+      revenueActual >= revenueBudget && costActual <= costBudget
+        ? 'Outperforming Budget'
+        : revenueActual >= revenueBudget && costActual > costBudget
+          ? 'Growth with pressure'
+          : revenueActual < revenueBudget && costActual > costBudget
+            ? 'Underperforming'
+            : 'Contracting';
+    return {
+      revenueBudget, revenueActual, revenuePct,
+      costBudget, costActual, costPct,
+      netBudget, netActual,
+      budgetCogsPct, actualCogsPct,
+      status,
+    };
+  }, [currentVarianceData]);
+
+  const topCostOverruns = useMemo(
+    () =>
+      currentVarianceData
+        .filter((r) => !r.isHeader && r.accountType === 'expense' && r.actual > r.budget)
+        .sort((a, b) => Math.abs(b.variancePct) - Math.abs(a.variancePct))
+        .slice(0, 3),
+    [currentVarianceData]
+  );
+  const topFavorableVariances = useMemo(
+    () =>
+      currentVarianceData
+        .filter((r) => !r.isHeader && ((r.accountType === 'income' && r.actual > r.budget) || (r.accountType === 'expense' && r.actual < r.budget)))
+        .sort((a, b) => Math.abs(b.variancePct) - Math.abs(a.variancePct))
+        .slice(0, 3),
+    [currentVarianceData]
+  );
 
   const runAnalysisSyncCommandCenter = async () => {
-    if (!API_BASE || !currentVarianceData.length) {
-      alert('Set VITE_API_URL in frontend .env and upload variance data first.');
-      return;
-    }
-    setCfoAgentSyncing(true);
+    if (!API_BASE || !currentVarianceData.length) return;
     try {
       const deptLabel = department === 'all' ? 'All Depts' : String(department);
       const line_items = currentVarianceData
@@ -348,13 +550,23 @@ export const VarianceAnalysis = () => {
         },
         tenantId
       );
-      alert('Variance run queued for Command Center. Open /command-center to see validation and audit trail.');
+      console.info('[CFO] fpa_variance synced silently');
     } catch (e: unknown) {
-      alert('Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setCfoAgentSyncing(false);
+      console.warn('[CFO] fpa_variance sync failed', e);
     }
   };
+
+  useEffect(() => {
+    if (!API_BASE || !currentVarianceData.length) return;
+    const rows = currentVarianceData.filter((r) => !r.isHeader);
+    if (!rows.length) return;
+    const totalBudget = rows.reduce((s, r) => s + (Number(r.budget) || 0), 0);
+    const totalActual = rows.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+    const key = `${tenantId}:${rows.length}:${totalBudget.toFixed(2)}:${totalActual.toFixed(2)}`;
+    if (lastVarianceSyncKey.current === key) return;
+    lastVarianceSyncKey.current = key;
+    void runAnalysisSyncCommandCenter();
+  }, [currentVarianceData, tenantId, API_BASE, department]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50">
@@ -386,16 +598,6 @@ export const VarianceAnalysis = () => {
                 Upload Data
               </button>
 
-              <button
-                type="button"
-                onClick={() => void runAnalysisSyncCommandCenter()}
-                disabled={!currentVarianceData.length || cfoAgentSyncing || !API_BASE}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition flex items-center gap-2 font-medium disabled:opacity-50"
-                title="Server-side variance agent + audit trail for Command Center"
-              >
-                {cfoAgentSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                Run analysis → Command Center
-              </button>
 
               {/* Export Button */}
               <div className="relative">
@@ -521,6 +723,22 @@ export const VarianceAnalysis = () => {
               </select>
             </div>
 
+            {/* Owner Filter */}
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Owner:</label>
+              <select
+                value={ownerFilter}
+                onChange={(e) => setOwnerFilter(e.target.value)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {ownerOptions.map((o) => (
+                  <option key={o} value={o}>
+                    {o === 'all' ? 'All Owners' : o}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Currency */}
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700">Currency:</label>
@@ -529,10 +747,11 @@ export const VarianceAnalysis = () => {
                 onChange={(e) => setCurrency(e.target.value as CurrencyType)}
                 className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                <option value="INR">INR (₹)</option>
                 <option value="USD">USD ($)</option>
+                <option value="INR">INR (₹)</option>
                 <option value="EUR">EUR (€)</option>
                 <option value="GBP">GBP (£)</option>
+                <option value="AED">AED (د.إ)</option>
               </select>
             </div>
           </div>
@@ -556,8 +775,79 @@ export const VarianceAnalysis = () => {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Main Content Area (3 columns) */}
           <div className="lg:col-span-3 space-y-6">
+            {/* Revenue linkage context */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-base font-bold text-gray-900 mb-3">Revenue & Gross Margin Context</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
+                  <p className="text-xs text-blue-700 font-semibold">Revenue Actual vs Budget</p>
+                  <p className="text-sm text-gray-900 mt-1">
+                    {revenueContext.revActual.toLocaleString(undefined, { maximumFractionDigits: 0 })} vs {revenueContext.revBudget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </p>
+                  <p className={`text-sm font-semibold ${revenueContext.revVariance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    {revenueContext.revVariancePct >= 0 ? '▲' : '▼'} {Math.abs(revenueContext.revVariancePct).toFixed(1)}%
+                  </p>
+                </div>
+                <div className="rounded-lg bg-purple-50 border border-purple-100 p-3">
+                  <p className="text-xs text-purple-700 font-semibold">Gross Margin (Actual vs Budget)</p>
+                  <p className="text-sm text-gray-900 mt-1">{revenueContext.gmActual.toFixed(1)}% vs {revenueContext.gmBudget.toFixed(1)}%</p>
+                  <p className={`text-sm font-semibold ${revenueContext.erosion >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    {revenueContext.erosion >= 0 ? 'Improved' : 'Eroded'} {Math.abs(revenueContext.erosion).toFixed(1)} pts
+                  </p>
+                </div>
+                <div className="rounded-lg bg-amber-50 border border-amber-100 p-3">
+                  <p className="text-xs text-amber-700 font-semibold">Gross Margin Impact</p>
+                  <p className="text-sm text-gray-900 mt-1">
+                    {revenueContext.erosion < 0
+                      ? `Gross margin eroded by ${Math.abs(revenueContext.erosion).toFixed(1)} pts as COGS rose faster than revenue`
+                      : `Gross margin improved by ${Math.abs(revenueContext.erosion).toFixed(1)} pts`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* KPI Summary Cards */}
             <VarianceSummaryCards summaries={kpiSummaries} currency={currency} />
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="text-base font-bold text-gray-900 mb-3">Variance Summary</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="rounded-lg bg-green-50 border border-green-100 p-3">
+                  <p className="font-semibold text-green-800">Revenue Performance</p>
+                  <p>Actual {varianceClassification.revenueActual.toLocaleString()} vs Budget {varianceClassification.revenueBudget.toLocaleString()}</p>
+                  <p className="font-semibold text-green-700">{varianceClassification.revenuePct >= 0 ? '+' : ''}{varianceClassification.revenuePct.toFixed(1)}% (favorable when positive)</p>
+                </div>
+                <div className="rounded-lg bg-red-50 border border-red-100 p-3">
+                  <p className="font-semibold text-red-800">Cost Performance</p>
+                  <p>Actual {varianceClassification.costActual.toLocaleString()} vs Budget {varianceClassification.costBudget.toLocaleString()}</p>
+                  <p className="font-semibold text-red-700">{varianceClassification.costPct >= 0 ? '+' : ''}{varianceClassification.costPct.toFixed(1)}% (over budget when positive)</p>
+                </div>
+                <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
+                  <p className="font-semibold text-blue-800">Profit/Margin Impact</p>
+                  <p>Net Profit {varianceClassification.netActual.toLocaleString()} vs {varianceClassification.netBudget.toLocaleString()}</p>
+                  <p className="font-semibold text-blue-700">COGS% {varianceClassification.actualCogsPct.toFixed(1)}% vs {varianceClassification.budgetCogsPct.toFixed(1)}%</p>
+                </div>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-gray-800">Status: {varianceClassification.status}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div>
+                  <p className="text-sm font-semibold text-red-700 mb-2">Cost Overruns</p>
+                  <ul className="text-sm text-gray-700 space-y-1">
+                    {topCostOverruns.length ? topCostOverruns.map((r) => (
+                      <li key={`over-${r.id}`}>{r.category}: {r.variancePct.toFixed(1)}% over budget</li>
+                    )) : <li>No material overruns</li>}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-green-700 mb-2">Favorable Variances</p>
+                  <ul className="text-sm text-gray-700 space-y-1">
+                    {topFavorableVariances.length ? topFavorableVariances.map((r) => (
+                      <li key={`fav-${r.id}`}>{r.category}: {Math.abs(r.variancePct).toFixed(1)}% {r.accountType === 'income' ? 'above budget' : 'under budget'}</li>
+                    )) : <li>No favorable variances</li>}
+                  </ul>
+                </div>
+              </div>
+            </div>
 
             {/* Variance Table */}
             <VarianceTable data={currentVarianceData} currency={currency} />
@@ -566,7 +856,7 @@ export const VarianceAnalysis = () => {
             <AICommentary
               varianceData={currentVarianceData}
               period={periodLabel}
-              entityName="FinReport AI"
+              entityName={activeClient?.name || 'FinReport AI'}
               currency={currency}
             />
           </div>

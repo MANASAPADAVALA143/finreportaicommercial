@@ -1,35 +1,37 @@
 // Helper to load FP&A data from localStorage
 // Each module reads only what it needs
+function getFirstStored(keys: string[]): any | null {
+  for (const k of keys) {
+    const raw = localStorage.getItem(k);
+    if (!raw) continue;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // ignore malformed entries and continue
+    }
+  }
+  return null;
+}
 
-export const loadFPAActual = () => {
-  const stored = localStorage.getItem('finreport_fpa_actuals') || localStorage.getItem('fpa_actual');
-  return stored ? JSON.parse(stored) : null;
-};
+export const loadFPAActual = () =>
+  getFirstStored(['fpa_actual', 'fpa_actual_tb', 'finreport_fpa_actuals']);
 
-export const loadFPABudget = () => {
-  const stored = localStorage.getItem('finreport_fpa_budget') || localStorage.getItem('fpa_budget');
-  return stored ? JSON.parse(stored) : null;
-};
+export const loadFPABudget = () =>
+  getFirstStored(['fpa_budget', 'fpa_budget_tb', 'finreport_fpa_budget']);
 
 export const loadFPAPriorYear = () => {
   const stored = localStorage.getItem('fpa_prior_year');
   return stored ? JSON.parse(stored) : null;
 };
 
-export const loadFPAForecast = () => {
-  const stored = localStorage.getItem('fpa_forecast');
-  return stored ? JSON.parse(stored) : null;
-};
+export const loadFPAForecast = () =>
+  getFirstStored(['fpa_forecast', 'fpa_forecast_data']);
 
-export const loadFPADepartments = () => {
-  const stored = localStorage.getItem('fpa_departments');
-  return stored ? JSON.parse(stored) : null;
-};
+export const loadFPADepartments = () =>
+  getFirstStored(['fpa_departments']);
 
-export const loadFPAScenarios = () => {
-  const stored = localStorage.getItem('fpa_scenarios');
-  return stored ? JSON.parse(stored) : null;
-};
+export const loadFPAScenarios = () =>
+  getFirstStored(['fpa_scenarios']);
 
 // Calculate variance from actual and budget data
 export const calculateVariance = (actual: any, budget: any) => {
@@ -472,6 +474,27 @@ export const convertBudgetToLineItems = (budgetData: any) => {
   if (!budgetData) return [];
 
   const budget = budgetData;
+  const totalRevenue = Number(budget.totalRevenue || 0) || 0;
+  // Some client TBs provide only totalRevenue; split conservatively so Budget Management still works.
+  const hasRevenueBreakdown =
+    Number(budget.domesticRevenue || 0) > 0 ||
+    Number(budget.exportRevenue || 0) > 0 ||
+    Number(budget.serviceRevenue || 0) > 0;
+  const domesticRevenue = hasRevenueBreakdown
+    ? Number(budget.domesticRevenue || 0)
+    : totalRevenue > 0
+      ? totalRevenue * 0.7
+      : 0;
+  const exportRevenue = hasRevenueBreakdown
+    ? Number(budget.exportRevenue || 0)
+    : totalRevenue > 0
+      ? totalRevenue * 0.2
+      : 0;
+  const serviceRevenue = hasRevenueBreakdown
+    ? Number(budget.serviceRevenue || 0)
+    : totalRevenue > 0
+      ? totalRevenue * 0.1
+      : 0;
   
   // Helper to generate monthly breakdown from annual total
   const generateMonthly = (annual: number) => {
@@ -499,9 +522,9 @@ export const convertBudgetToLineItems = (budgetData: any) => {
       category: 'Revenue' as const,
       lineItem: 'Domestic Revenue',
       department: 'Sales',
-      monthly: generateMonthly(budget.domesticRevenue || 0),
-      fy2025Budget: budget.domesticRevenue || 0,
-      fy2024Actual: (budget.domesticRevenue || 0) * 0.92,
+      monthly: generateMonthly(domesticRevenue),
+      fy2025Budget: domesticRevenue,
+      fy2024Actual: domesticRevenue * 0.92,
       variance: 0,
       variancePct: 0,
       status: 'On Track' as const,
@@ -512,9 +535,9 @@ export const convertBudgetToLineItems = (budgetData: any) => {
       category: 'Revenue' as const,
       lineItem: 'Export Revenue',
       department: 'Sales',
-      monthly: generateMonthly(budget.exportRevenue || 0),
-      fy2025Budget: budget.exportRevenue || 0,
-      fy2024Actual: (budget.exportRevenue || 0) * 0.88,
+      monthly: generateMonthly(exportRevenue),
+      fy2025Budget: exportRevenue,
+      fy2024Actual: exportRevenue * 0.88,
       variance: 0,
       variancePct: 0,
       status: 'On Track' as const,
@@ -525,9 +548,9 @@ export const convertBudgetToLineItems = (budgetData: any) => {
       category: 'Revenue' as const,
       lineItem: 'Service Revenue',
       department: 'Sales',
-      monthly: generateMonthly(budget.serviceRevenue || 0),
-      fy2025Budget: budget.serviceRevenue || 0,
-      fy2024Actual: (budget.serviceRevenue || 0) * 0.85,
+      monthly: generateMonthly(serviceRevenue),
+      fy2025Budget: serviceRevenue,
+      fy2024Actual: serviceRevenue * 0.85,
       variance: 0,
       variancePct: 0,
       status: 'On Track' as const,
@@ -550,11 +573,11 @@ export const convertBudgetToLineItems = (budgetData: any) => {
     {
       id: 'expense-payroll',
       category: 'Operating Expenses' as const,
-      lineItem: 'Payroll & Benefits',
+      lineItem: 'Payroll & Benefits (HR)',
       department: 'HR',
-      monthly: generateMonthly(budget.payroll || 0),
-      fy2025Budget: budget.payroll || 0,
-      fy2024Actual: (budget.payroll || 0) * 0.96,
+      monthly: generateMonthly((budget.hrCosts || 0) > 0 ? (budget.hrCosts || 0) : (budget.payroll || 0)),
+      fy2025Budget: (budget.hrCosts || 0) > 0 ? (budget.hrCosts || 0) : (budget.payroll || 0),
+      fy2024Actual: (((budget.hrCosts || 0) > 0 ? (budget.hrCosts || 0) : (budget.payroll || 0))) * 0.96,
       variance: 0,
       variancePct: 0,
       status: 'On Track' as const,
@@ -563,11 +586,11 @@ export const convertBudgetToLineItems = (budgetData: any) => {
     {
       id: 'expense-admin',
       category: 'Operating Expenses' as const,
-      lineItem: 'Administrative Expenses',
+      lineItem: 'Administrative Expenses (Finance)',
       department: 'Finance',
-      monthly: generateMonthly(budget.adminExpenses || 0),
-      fy2025Budget: budget.adminExpenses || 0,
-      fy2024Actual: (budget.adminExpenses || 0) * 0.93,
+      monthly: generateMonthly((budget.financeCosts || 0) > 0 ? (budget.financeCosts || 0) : (budget.adminExpenses || 0)),
+      fy2025Budget: (budget.financeCosts || 0) > 0 ? (budget.financeCosts || 0) : (budget.adminExpenses || 0),
+      fy2024Actual: (((budget.financeCosts || 0) > 0 ? (budget.financeCosts || 0) : (budget.adminExpenses || 0))) * 0.93,
       variance: 0,
       variancePct: 0,
       status: 'On Track' as const,
@@ -627,7 +650,10 @@ export const convertBudgetToLineItems = (budgetData: any) => {
     }
   ];
 
-  return lineItems;
+  return lineItems.map((item) => ({
+    isHeader: false,
+    ...item,
+  }));
 };
 
 // Generate forecast data from actual, budget, and monthly revenue data
@@ -907,8 +933,9 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
 
 // Keys that loaders also check (e.g. UploadData uses finreport_*)
 const DATA_KEY_ALIASES: Record<string, string[]> = {
-  'fpa_actual': ['fpa_actual', 'finreport_fpa_actuals'],
-  'fpa_budget': ['fpa_budget', 'finreport_fpa_budget'],
+  'fpa_actual': ['fpa_actual', 'fpa_actual_tb', 'finreport_fpa_actuals'],
+  'fpa_budget': ['fpa_budget', 'fpa_budget_tb', 'finreport_fpa_budget'],
+  'fpa_forecast': ['fpa_forecast', 'fpa_forecast_data'],
 };
 
 function hasDataForKey(key: string): boolean {

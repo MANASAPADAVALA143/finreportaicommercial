@@ -23,6 +23,18 @@ export interface VarianceRow {
   threshold: "critical" | "warning" | "ok"; // >10% = critical, 5-10% = warning
   level?: number;             // Indentation level (0 = top, 1 = child, 2 = grandchild)
   parentId?: string;
+  department?: string;
+  owner?: string;
+  materialityScore?: number;
+  materialityBand?: "critical" | "monitor" | "low";
+  trend?: number[];
+  decomposition?: {
+    volume: number;
+    price: number;
+    mix: number;
+    note?: string;
+  };
+  accountType?: "income" | "expense" | "other";
 }
 
 // ==================== PERIOD SELECTION ====================
@@ -30,7 +42,7 @@ export interface VarianceRow {
 export type PeriodType = "monthly" | "quarterly" | "ytd" | "annual";
 export type CompareType = "budget" | "lastYear" | "lastQuarter" | "forecast";
 export type DepartmentType = "all" | "sales" | "operations" | "hr" | "it" | "marketing" | "finance";
-export type CurrencyType = "INR" | "USD" | "EUR" | "GBP";
+export type CurrencyType = "INR" | "USD" | "EUR" | "GBP" | "AED";
 
 export interface PeriodSelection {
   periodType: PeriodType;

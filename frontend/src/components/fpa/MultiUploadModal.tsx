@@ -166,6 +166,9 @@ export const MultiUploadModal: React.FC<MultiUploadModalProps> = ({ isOpen, onCl
         fileName: pendingFile.name,
         dataType: slot.key
       }));
+      if (slot.key === 'actual') localStorage.setItem('fpa_actual_tb', JSON.stringify(parsedData));
+      if (slot.key === 'budget') localStorage.setItem('fpa_budget_tb', JSON.stringify(parsedData));
+      if (slot.key === 'forecast') localStorage.setItem('fpa_forecast_data', JSON.stringify(parsedData));
 
       setUploadSlots(prev => prev.map(s => 
         s.key === slot.key 
@@ -209,6 +212,9 @@ export const MultiUploadModal: React.FC<MultiUploadModalProps> = ({ isOpen, onCl
         fileName: file.name,
         dataType: slot.key
       }));
+      if (slot.key === 'actual') localStorage.setItem('fpa_actual_tb', JSON.stringify(parsedData));
+      if (slot.key === 'budget') localStorage.setItem('fpa_budget_tb', JSON.stringify(parsedData));
+      if (slot.key === 'forecast') localStorage.setItem('fpa_forecast_data', JSON.stringify(parsedData));
 
       setUploadSlots(prev => prev.map(s => 
         s.key === slotKey 
@@ -232,6 +238,9 @@ export const MultiUploadModal: React.FC<MultiUploadModalProps> = ({ isOpen, onCl
 
   const handleClearData = (slot: UploadSlot) => {
     localStorage.removeItem(slot.storageKey);
+    if (slot.key === 'actual') localStorage.removeItem('fpa_actual_tb');
+    if (slot.key === 'budget') localStorage.removeItem('fpa_budget_tb');
+    if (slot.key === 'forecast') localStorage.removeItem('fpa_forecast_data');
     setUploadSlots(prev => prev.map(s => 
       s.key === slot.key 
         ? { ...s, uploaded: false, fileName: undefined }

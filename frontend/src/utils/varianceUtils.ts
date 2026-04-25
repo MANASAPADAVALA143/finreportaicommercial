@@ -156,11 +156,13 @@ export const getVarianceColorForCard = (pct: number, type: 'revenue' | 'expense'
 // Use category or type; exclude header rows and cost-of-sales from revenue
 const isRevenueRow = (r: VarianceRow): boolean =>
   !r.isHeader && (
+    r.accountType === 'income' ||
     (r.category?.toLowerCase().includes('revenue') || (r as any).type?.toLowerCase() === 'revenue') &&
     !/cost of sales|cos|cogs|cost of goods/i.test(r.category || '')
   );
 const isExpenseRow = (r: VarianceRow): boolean =>
   !r.isHeader && (
+    r.accountType === 'expense' ||
     r.category?.toLowerCase().includes('expense') ||
     r.category?.toLowerCase().includes('cost') ||
     (r as any).type?.toLowerCase() === 'expense' ||
@@ -319,9 +321,9 @@ export const extractVarianceAlerts = (data: VarianceRow[]): VarianceAlert[] => {
   });
 
   const isRevenueType = (r: VarianceRow) =>
-    /revenue|sales|income|profit/i.test(r.category || '') && !/cost of sales|cos|cogs/i.test(r.category || '');
+    r.accountType === 'income' || (/revenue|sales|income|profit/i.test(r.category || '') && !/cost of sales|cos|cogs/i.test(r.category || ''));
   const isExpenseType = (r: VarianceRow) =>
-    /expense|cost|depreciation|cogs|operating|admin|payroll|marketing|rent/i.test(r.category || '');
+    r.accountType === 'expense' || /expense|cost|depreciation|cogs|operating|admin|payroll|marketing|rent/i.test(r.category || '');
 
   const alerts: VarianceAlert[] = rows.map(row => {
     const variancePct = parseFloat(String(row.variancePct)) || 0;

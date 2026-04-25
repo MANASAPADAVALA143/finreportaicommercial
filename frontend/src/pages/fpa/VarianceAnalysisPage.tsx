@@ -2,7 +2,7 @@
 // URL: /dashboard/fpa/variance-analysis
 // Budget vs Actual — AI-powered variance intelligence (Level 1–3)
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -37,6 +37,7 @@ import { formatCurrency, formatCurrencyFull, formatPercentage } from '../../util
 import { callAI } from '../../services/aiProvider';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
+import { loadFPAActual, loadFPABudget, convertToVarianceData } from '../../utils/fpaDataLoader';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -89,35 +90,71 @@ export type VarianceLineItem = {
   department: string;
   budget: number;
   actual: number;
+  accountType?: 'income' | 'expense' | 'other';
   variance?: number;
   variance_pct?: number;
   status?: string;
+  favorable?: boolean;
   material?: boolean;
 };
 
-function getStatus(variance_pct: number): string {
+function inferAccountType(account: string, accountType?: string): 'income' | 'expense' | 'other' {
+  const explicit = String(accountType || '').toLowerCase();
+  if (explicit.includes('income') || explicit.includes('revenue')) return 'income';
+  if (explicit.includes('expense') || explicit.includes('cost')) return 'expense';
+  if (explicit.includes('asset') || explicit.includes('liability') || explicit.includes('equity')) return 'other';
+  const name = String(account || '').toLowerCase();
+  if (/revenue|income|sales/.test(name) && !/cogs|cost of sales|cost of goods/.test(name)) return 'income';
+  if (/expense|cost|cogs|depreciation|interest|payroll|rent|marketing|admin/.test(name)) return 'expense';
+  return 'other';
+}
+
+function getStatus(variance_pct: number, accountType: 'income' | 'expense' | 'other'): string {
   if (Math.abs(variance_pct) < 5) return 'On Track';
-  if (variance_pct > 10) return 'Over Budget';
-  if (variance_pct < -10) return 'Under Budget';
+  if (accountType === 'income') {
+    if (variance_pct > 10) return 'Above Target';
+    if (variance_pct < -10) return 'Below Target';
+  }
+  if (accountType === 'expense') {
+    if (variance_pct > 10) return 'Over Budget';
+    if (variance_pct < -10) return 'Under Budget';
+  }
   return 'Watch';
 }
 
 function computeVarianceAnalysis(items: VarianceLineItem[]) {
-  const line_items = items.map((i) => {
+  const line_items = items
+    .map((i) => {
+    const accountType = inferAccountType(i.account, i.accountType);
+    if (accountType === 'other') return null;
     const variance = i.actual - i.budget;
     const variance_pct = i.budget ? (variance / i.budget) * 100 : 0;
+    const favorable = accountType === 'income' ? variance > 0 : variance < 0;
     return {
       ...i,
+      accountType,
       variance,
       variance_pct,
-      status: getStatus(variance_pct),
+      favorable,
+      status: getStatus(variance_pct, accountType),
       material: Math.abs(variance_pct) > 10,
     };
-  });
-  const total_budget = line_items.reduce((s, i) => s + i.budget, 0);
-  const total_actual = line_items.reduce((s, i) => s + i.actual, 0);
+  })
+  .filter(Boolean) as VarianceLineItem[];
+  const revenue_items = line_items.filter((i) => i.accountType === 'income');
+  const expense_items = line_items.filter((i) => i.accountType === 'expense');
+  const revenue_budget = revenue_items.reduce((s, i) => s + i.budget, 0);
+  const revenue_actual = revenue_items.reduce((s, i) => s + i.actual, 0);
+  const revenue_variance = revenue_actual - revenue_budget;
+  const revenue_variance_pct = revenue_budget ? (revenue_variance / revenue_budget) * 100 : 0;
+  const cost_budget = expense_items.reduce((s, i) => s + i.budget, 0);
+  const cost_actual = expense_items.reduce((s, i) => s + i.actual, 0);
+  const cost_variance = cost_actual - cost_budget;
+  const cost_variance_pct = cost_budget ? (cost_variance / cost_budget) * 100 : 0;
+  const total_budget = revenue_budget - cost_budget;
+  const total_actual = revenue_actual - cost_actual;
   const total_variance = total_actual - total_budget;
-  const total_variance_pct = total_budget ? (total_variance / total_budget) * 100 : 0;
+  const total_variance_pct = total_budget ? (total_variance / Math.abs(total_budget)) * 100 : 0;
   const dept_agg: Record<string, { department: string; budget: number; actual: number; variance: number; variance_pct: number; status: string }> = {};
   line_items.forEach((i) => {
     if (!dept_agg[i.department]) {
@@ -135,12 +172,29 @@ function computeVarianceAnalysis(items: VarianceLineItem[]) {
   const department_summary = Object.values(dept_agg);
   return {
     line_items,
+    revenue_items,
+    expense_items,
     department_summary,
+    revenue_budget,
+    revenue_actual,
+    revenue_variance,
+    revenue_variance_pct,
+    cost_budget,
+    cost_actual,
+    cost_variance,
+    cost_variance_pct,
     total_budget,
     total_actual,
     total_variance,
     total_variance_pct,
-    overall_status: getStatus(total_variance_pct),
+    overall_status:
+      revenue_actual >= revenue_budget && cost_actual <= cost_budget
+        ? 'Outperforming Budget'
+        : revenue_actual >= revenue_budget && cost_actual > cost_budget
+          ? 'Growth with pressure'
+          : revenue_actual < revenue_budget && cost_actual > cost_budget
+            ? 'Underperforming'
+            : 'Contracting',
   };
 }
 
@@ -161,12 +215,35 @@ export function VarianceAnalysisPage() {
   } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState('');
-  const [cfoAgentSyncing, setCfoAgentSyncing] = useState(false);
+  const lastVarianceSyncKey = useRef<string | null>(null);
   const [tableSearch, setTableSearch] = useState('');
   const [tableDept, setTableDept] = useState('all');
   const [tableStatus, setTableStatus] = useState('all');
   const [tableDirection, setTableDirection] = useState<'all' | 'over' | 'under' | 'material'>('all');
   const [materialityPct, setMaterialityPct] = useState(0);
+
+  useEffect(() => {
+    // Auto-load data uploaded from FP&A Suite modal (fpa_actual + fpa_budget).
+    const actualData = loadFPAActual();
+    const budgetData = loadFPABudget();
+    if (!actualData || !budgetData) return;
+    if (rawItems.length > 0) return;
+
+    const rows = convertToVarianceData(actualData, budgetData)
+      .filter((r: any) => !r.isHeader)
+      .map((r: any) => ({
+        account: String(r.category ?? ''),
+        department: 'All Depts',
+        budget: Number(r.budget) || 0,
+        actual: Number(r.actual) || 0,
+      }))
+      .filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
+
+    if (!rows.length) return;
+    setRawItems(rows);
+    setLoadBanner(`Data loaded from FP&A Suite upload: ${rows.length} variance lines`);
+    window.setTimeout(() => setLoadBanner(null), 5000);
+  }, [rawItems.length]);
 
   const analysis = useMemo(() => (rawItems.length ? computeVarianceAnalysis(rawItems) : null), [rawItems]);
 
@@ -212,6 +289,10 @@ export function VarianceAnalysisPage() {
             department: deptCol ? String(r[deptCol] ?? '') : 'All Depts',
             budget: parseNum(r[budgetCol]),
             actual: parseNum(r[actualCol]),
+            accountType: inferAccountType(
+              String(r[accCol] ?? ''),
+              String(r['Account_Type'] ?? r['Account Type'] ?? r['account_type'] ?? r['accountType'] ?? '')
+            ),
           }));
         setRawItems(items);
         setLoadBanner(`Data loaded: ${items.length} line items across ${new Set(items.map((i) => i.department)).size} departments`);
@@ -273,7 +354,32 @@ export function VarianceAnalysisPage() {
         });
       } else {
         const material = analysis.line_items.filter((i) => (i.material ?? Math.abs(i.variance_pct ?? 0) > 10));
-        const prompt = `You are a CFO advisor. In one short paragraph, summarize: Total budget ₹${analysis.total_budget.toLocaleString('en-IN')}, actual ₹${analysis.total_actual.toLocaleString('en-IN')}, variance ${analysis.total_variance_pct.toFixed(1)}%. Top overspend: ${material.filter((i) => (i.variance ?? 0) > 0).slice(0, 3).map((i) => i.account).join(', ')}. Top savings: ${material.filter((i) => (i.variance ?? 0) < 0).slice(0, 3).map((i) => i.account).join(', ')}. Give 3 action items.`;
+        const topCostOverruns = material
+          .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
+          .slice(0, 3)
+          .map((i) => i.account)
+          .join(', ');
+        const topFavorable = material
+          .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
+          .slice(0, 3)
+          .map((i) => i.account)
+          .join(', ');
+        const prompt = `You are a CFO advisor.
+CRITICAL RULES:
+1) Revenue above budget is always favorable.
+2) Never call revenue an overspend.
+3) Cost overruns must include expense accounts only.
+4) Include sections: Revenue Performance, Cost Performance, Profit/Margin Impact.
+5) Include COGS% interpretation: lower actual COGS% vs budget COGS% means margin improvement.
+
+DATA:
+Revenue budget ${analysis.revenue_budget.toFixed(2)}, actual ${analysis.revenue_actual.toFixed(2)}, variance ${analysis.revenue_variance_pct.toFixed(1)}%.
+Cost budget ${analysis.cost_budget.toFixed(2)}, actual ${analysis.cost_actual.toFixed(2)}, variance ${analysis.cost_variance_pct.toFixed(1)}%.
+Net budget ${analysis.total_budget.toFixed(2)}, actual ${analysis.total_actual.toFixed(2)}, variance ${analysis.total_variance_pct.toFixed(1)}%.
+Top Cost Overruns: ${topCostOverruns || 'None'}
+Top Favorable Variances: ${topFavorable || 'None'}
+
+Write concise CFO commentary and 3 numeric action items.`;
         const text = await callAI(prompt, { maxTokens: 800 });
         setAiNarrative({
           executive_summary: text,
@@ -294,11 +400,7 @@ export function VarianceAnalysisPage() {
   };
 
   const runAnalysisSyncCommandCenter = async () => {
-    if (!API_BASE || !rawItems.length) {
-      alert('Set VITE_API_URL and load variance data first.');
-      return;
-    }
-    setCfoAgentSyncing(true);
+    if (!API_BASE || !rawItems.length) return;
     try {
       const line_items = rawItems.map((i) => ({
         account: i.account,
@@ -316,13 +418,21 @@ export function VarianceAnalysisPage() {
         },
         tenantId
       );
-      alert('Variance run queued for Command Center. Open Command Center to see validation and audit trail.');
+      console.info('[CFO] fpa_variance synced silently');
     } catch (e: unknown) {
-      alert('Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setCfoAgentSyncing(false);
+      console.warn('[CFO] fpa_variance sync failed', e);
     }
   };
+
+  useEffect(() => {
+    if (!rawItems.length || !API_BASE) return;
+    const totalBudget = rawItems.reduce((s, i) => s + (Number(i.budget) || 0), 0);
+    const totalActual = rawItems.reduce((s, i) => s + (Number(i.actual) || 0), 0);
+    const key = `${tenantId}:${rawItems.length}:${totalBudget.toFixed(2)}:${totalActual.toFixed(2)}`;
+    if (lastVarianceSyncKey.current === key) return;
+    lastVarianceSyncKey.current = key;
+    void runAnalysisSyncCommandCenter();
+  }, [rawItems, tenantId, API_BASE]);
 
   const downloadReport = async () => {
     if (!analysis) return;
@@ -386,32 +496,36 @@ export function VarianceAnalysisPage() {
     XLSX.writeFile(wb, 'Variance_Detail_Export.xlsx');
   };
 
-  // Waterfall data: Budget → overspends (red) / savings (green) → Actual
+  // Waterfall data: Net budget → cost overruns (red) / favorable variances (green) → Net actual
   const waterfallData = useMemo(() => {
     if (!analysis) return [];
     const items: { name: string; value: number; type: string; fill: string }[] = [];
-    items.push({ name: 'Total Budget', value: analysis.total_budget, type: 'start', fill: colors.budgetBar });
-    const overspends = analysis.line_items.filter((i) => (i.variance ?? 0) > 0).sort((a, b) => (b.variance ?? 0) - (a.variance ?? 0));
-    const savings = analysis.line_items.filter((i) => (i.variance ?? 0) < 0).sort((a, b) => (a.variance ?? 0) - (b.variance ?? 0));
-    overspends.slice(0, 8).forEach((i) => items.push({ name: i.account, value: i.variance ?? 0, type: 'overspend', fill: colors.unfavorable }));
-    savings.slice(0, 8).forEach((i) => items.push({ name: i.account, value: Math.abs(i.variance ?? 0), type: 'saving', fill: colors.favorable }));
-    items.push({ name: 'Total Actual', value: analysis.total_actual, type: 'end', fill: colors.actualBar });
+    items.push({ name: 'Net Budget', value: analysis.total_budget, type: 'start', fill: colors.budgetBar });
+    const costOverruns = analysis.line_items
+      .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
+      .sort((a, b) => (b.variance ?? 0) - (a.variance ?? 0));
+    const favorable = analysis.line_items
+      .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
+      .sort((a, b) => Math.abs(b.variance ?? 0) - Math.abs(a.variance ?? 0));
+    costOverruns.slice(0, 8).forEach((i) => items.push({ name: i.account, value: i.variance ?? 0, type: 'cost-overrun', fill: colors.unfavorable }));
+    favorable.slice(0, 8).forEach((i) => items.push({ name: i.account, value: Math.abs(i.variance ?? 0), type: 'favorable', fill: colors.favorable }));
+    items.push({ name: 'Net Actual', value: analysis.total_actual, type: 'end', fill: colors.actualBar });
     return items;
   }, [analysis]);
 
-  const topOverspends = useMemo(() => {
+  const topCostOverruns = useMemo(() => {
     if (!analysis) return [];
     return analysis.line_items
-      .filter((i) => (i.variance ?? 0) > 0)
+      .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
       .sort((a, b) => (b.variance ?? 0) - (a.variance ?? 0))
       .slice(0, 5);
   }, [analysis]);
 
-  const topSavings = useMemo(() => {
+  const topFavorableVariances = useMemo(() => {
     if (!analysis) return [];
     return analysis.line_items
-      .filter((i) => (i.variance ?? 0) < 0)
-      .sort((a, b) => (a.variance ?? 0) - (b.variance ?? 0))
+      .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
+      .sort((a, b) => Math.abs(b.variance ?? 0) - Math.abs(a.variance ?? 0))
       .slice(0, 5);
   }, [analysis]);
 
@@ -466,17 +580,6 @@ export function VarianceAnalysisPage() {
               >
                 <Bot className="w-4 h-4" />
                 AI Narrative
-              </button>
-              <button
-                type="button"
-                onClick={() => void runAnalysisSyncCommandCenter()}
-                disabled={!hasData || cfoAgentSyncing || !API_BASE}
-                className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition disabled:opacity-50"
-                style={{ background: 'linear-gradient(135deg,#6366F1,#4F46E5)', color: '#fff' }}
-                title="Runs server-side variance agent with validation + audit trail for Command Center"
-              >
-                {cfoAgentSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                Run analysis → Command Center
               </button>
             </div>
           </div>
@@ -586,44 +689,67 @@ export function VarianceAnalysisPage() {
                 {/* KPI cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   {[
-                    { label: 'Total Budgeted Amount', value: analysis.total_budget, icon: '📋', color: colors.text },
-                    { label: 'Total Actual Spend', value: analysis.total_actual, color: analysis.total_variance <= 0 ? colors.favorable : colors.unfavorable },
-                    { label: 'Total Variance (₹)', value: analysis.total_variance, badge: analysis.total_variance >= 0 ? 'Unfavorable' : 'Favorable', color: analysis.total_variance >= 0 ? colors.unfavorable : colors.favorable },
-                    { label: 'Overall Variance %', value: analysis.total_variance_pct, color: Math.abs(analysis.total_variance_pct) < 5 ? colors.favorable : Math.abs(analysis.total_variance_pct) < 10 ? colors.watch : colors.unfavorable },
+                    { label: 'Revenue Performance', value: analysis.revenue_variance_pct, badge: analysis.revenue_variance >= 0 ? 'Favorable' : 'Below Target', color: analysis.revenue_variance >= 0 ? colors.favorable : colors.unfavorable },
+                    { label: 'Cost Performance', value: analysis.cost_variance_pct, badge: analysis.cost_variance > 0 ? 'Over Budget' : 'Favorable', color: analysis.cost_variance > 0 ? colors.unfavorable : colors.favorable },
+                    { label: 'Net Profit Variance', value: analysis.total_variance, badge: analysis.total_variance >= 0 ? 'Favorable' : 'Unfavorable', color: analysis.total_variance >= 0 ? colors.favorable : colors.unfavorable },
+                    { label: 'Overall Status', value: 0, badge: analysis.overall_status, color: analysis.overall_status === 'Underperforming' ? colors.unfavorable : colors.favorable },
                   ].map((card, i) => (
                     <div key={i} className="rounded-xl p-5 border" style={{ background: colors.card, borderColor: colors.border }}>
                       <p className="text-xs font-medium mb-1" style={{ color: colors.muted }}>
                         {card.label}
                       </p>
                       <p className="text-2xl font-bold font-mono" style={{ color: card.color ?? colors.text }}>
-                        {i === 3 ? `${(card.value as number).toFixed(1)}%` : formatCurrencyFull(card.value as number, 'INR')}
+                        {i === 0 ? `${analysis.revenue_variance_pct.toFixed(1)}%`
+                          : i === 1 ? `${analysis.cost_variance_pct.toFixed(1)}%`
+                          : i === 2 ? formatCurrencyFull(card.value as number, 'INR')
+                          : analysis.overall_status}
                       </p>
                       {card.badge && (
-                        <span className="inline-block mt-2 px-2 py-0.5 rounded text-xs font-medium" style={{ background: (card.value as number) >= 0 ? colors.unfavorable + '33' : colors.favorable + '33', color: card.color }}>
+                        <span className="inline-block mt-2 px-2 py-0.5 rounded text-xs font-medium" style={{ background: card.color + '33', color: card.color }}>
                           {card.badge}
                         </span>
                       )}
                     </div>
                   ))}
                 </div>
+                <div className="rounded-xl p-5 border" style={{ background: colors.card, borderColor: colors.border }}>
+                  <h3 className="font-semibold mb-3" style={{ color: colors.text }}>Variance Summary</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div style={{ color: colors.text }}>
+                      <p className="font-semibold" style={{ color: colors.favorable }}>Revenue Performance</p>
+                      <p>Budget {formatCurrencyFull(analysis.revenue_budget, 'INR')} | Actual {formatCurrencyFull(analysis.revenue_actual, 'INR')}</p>
+                      <p>{formatCurrencyFull(analysis.revenue_variance, 'INR')} ({analysis.revenue_variance_pct.toFixed(1)}%)</p>
+                    </div>
+                    <div style={{ color: colors.text }}>
+                      <p className="font-semibold" style={{ color: colors.unfavorable }}>Cost Performance</p>
+                      <p>Budget {formatCurrencyFull(analysis.cost_budget, 'INR')} | Actual {formatCurrencyFull(analysis.cost_actual, 'INR')}</p>
+                      <p>{formatCurrencyFull(analysis.cost_variance, 'INR')} ({analysis.cost_variance_pct.toFixed(1)}%)</p>
+                    </div>
+                    <div style={{ color: colors.text }}>
+                      <p className="font-semibold" style={{ color: colors.budgetBar }}>Profit/Margin Impact</p>
+                      <p>Net Budget {formatCurrencyFull(analysis.total_budget, 'INR')} | Net Actual {formatCurrencyFull(analysis.total_actual, 'INR')}</p>
+                      <p>Status: {analysis.overall_status}</p>
+                    </div>
+                  </div>
+                </div>
                 {/* Top overspends / savings */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="rounded-xl p-5 border" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="font-semibold mb-4" style={{ color: colors.unfavorable }}>Top Overspends</h3>
+                    <h3 className="font-semibold mb-4" style={{ color: colors.unfavorable }}>Cost Overruns</h3>
                     <ul className="space-y-2 text-sm">
-                      {topOverspends.map((i, idx) => (
+                      {topCostOverruns.map((i, idx) => (
                         <li key={idx} style={{ color: colors.text }}>
-                          {idx + 1}. {i.account} — {formatCurrencyFull(i.variance ?? 0, 'INR')} over ({(i.variance_pct ?? 0).toFixed(0)}% unfavorable)
+                          {idx + 1}. {i.account} — {formatCurrencyFull(i.variance ?? 0, 'INR')} over ({(i.variance_pct ?? 0).toFixed(0)}%)
                         </li>
                       ))}
                     </ul>
                   </div>
                   <div className="rounded-xl p-5 border" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="font-semibold mb-4" style={{ color: colors.favorable }}>Top Savings</h3>
+                    <h3 className="font-semibold mb-4" style={{ color: colors.favorable }}>Favorable Variances</h3>
                     <ul className="space-y-2 text-sm">
-                      {topSavings.map((i, idx) => (
+                      {topFavorableVariances.map((i, idx) => (
                         <li key={idx} style={{ color: colors.text }}>
-                          {idx + 1}. {i.account} — {formatCurrencyFull(Math.abs(i.variance ?? 0), 'INR')} saved ({(i.variance_pct ?? 0).toFixed(0)}% favorable)
+                          {idx + 1}. {i.account} — {formatCurrencyFull(Math.abs(i.variance ?? 0), 'INR')} ({Math.abs(i.variance_pct ?? 0).toFixed(0)}%)
                         </li>
                       ))}
                     </ul>
@@ -742,6 +868,7 @@ export function VarianceAnalysisPage() {
                       <tr style={{ background: colors.bg }}>
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>#</th>
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Account</th>
+                        <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Account Type</th>
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Department</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Budget (₹)</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Actual (₹)</th>
@@ -755,13 +882,16 @@ export function VarianceAnalysisPage() {
                         <tr key={i} className="border-t" style={{ borderColor: colors.border }}>
                           <td className="py-2 px-4" style={{ color: colors.muted }}>{i + 1}</td>
                           <td className="py-2 px-4 font-medium" style={{ color: colors.text }}>{r.account}</td>
+                          <td className="py-2 px-4" style={{ color: colors.muted }}>{String(r.accountType || 'other').toUpperCase()}</td>
                           <td className="py-2 px-4" style={{ color: colors.muted }}>{r.department}</td>
                           <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.budget, 'INR')}</td>
                           <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.actual, 'INR')}</td>
-                          <td className="py-2 px-4 text-right font-mono" style={{ color: (r.variance ?? 0) >= 0 ? colors.unfavorable : colors.favorable }}>{formatCurrencyFull(r.variance ?? 0, 'INR')}</td>
-                          <td className="py-2 px-4 text-right font-mono" style={{ color: (r.variance_pct ?? 0) >= 0 ? colors.unfavorable : colors.favorable }}>{(r.variance_pct ?? 0).toFixed(1)}%</td>
+                          <td className="py-2 px-4 text-right font-mono" style={{ color: r.favorable ? colors.favorable : colors.unfavorable }}>{formatCurrencyFull(r.variance ?? 0, 'INR')}</td>
+                          <td className="py-2 px-4 text-right font-mono" style={{ color: r.favorable ? colors.favorable : colors.unfavorable }}>{(r.variance_pct ?? 0).toFixed(1)}%</td>
                           <td className="py-2 px-4 text-center">
-                            <span className="px-2 py-0.5 rounded text-xs" style={{ background: colors.border, color: colors.text }}>{r.status}</span>
+                            <span className="px-2 py-0.5 rounded text-xs" style={{ background: r.favorable ? colors.favorable + '33' : colors.unfavorable + '33', color: colors.text }}>
+                              {r.status}
+                            </span>
                           </td>
                         </tr>
                       ))}
@@ -844,12 +974,12 @@ export function VarianceAnalysisPage() {
                 {/* Pies: Overspends / Savings by category */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="rounded-xl border p-6" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.unfavorable }}>Overspends by Category</h3>
+                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.unfavorable }}>Cost Overruns by Category</h3>
                     <ResponsiveContainer width="100%" height={260}>
                       <RechartsPie>
                         <Pie
                           data={analysis.line_items
-                            .filter((i) => (i.variance ?? 0) > 0)
+                            .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
                             .sort((a, b) => (b.variance ?? 0) - (a.variance ?? 0))
                             .slice(0, 6)
                             .map((i) => ({ name: i.account, value: i.variance ?? 0 }))}
@@ -863,7 +993,7 @@ export function VarianceAnalysisPage() {
                           label={({ name, value }) => `${name}: ${formatCurrency(value, 'INR')}`}
                         >
                           {analysis.line_items
-                            .filter((i) => (i.variance ?? 0) > 0)
+                            .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
                             .slice(0, 6)
                             .map((_, i) => (
                               <Cell key={i} fill={colors.unfavorable} />
@@ -874,13 +1004,13 @@ export function VarianceAnalysisPage() {
                     </ResponsiveContainer>
                   </div>
                   <div className="rounded-xl border p-6" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.favorable }}>Savings by Category</h3>
+                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.favorable }}>Favorable Variances by Category</h3>
                     <ResponsiveContainer width="100%" height={260}>
                       <RechartsPie>
                         <Pie
                           data={analysis.line_items
-                            .filter((i) => (i.variance ?? 0) < 0)
-                            .sort((a, b) => (a.variance ?? 0) - (b.variance ?? 0))
+                            .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
+                            .sort((a, b) => Math.abs(b.variance ?? 0) - Math.abs(a.variance ?? 0))
                             .slice(0, 6)
                             .map((i) => ({ name: i.account, value: Math.abs(i.variance ?? 0) }))}
                           dataKey="value"
@@ -893,7 +1023,7 @@ export function VarianceAnalysisPage() {
                           label={({ name, value }) => `${name}: ${formatCurrency(value, 'INR')}`}
                         >
                           {analysis.line_items
-                            .filter((i) => (i.variance ?? 0) < 0)
+                            .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
                             .slice(0, 6)
                             .map((_, i) => (
                               <Cell key={i} fill={colors.favorable} />

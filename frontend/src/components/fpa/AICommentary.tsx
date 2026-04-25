@@ -23,10 +23,34 @@ export const AICommentary = ({ varianceData, period, entityName, currency = "INR
     setIsGenerating(true);
     
     try {
+      const classifyType = (r: VarianceRow): 'income' | 'expense' | 'other' => {
+        if (r.accountType) return r.accountType;
+        const c = String(r.category || '').toLowerCase();
+        if (/revenue|income|sales/.test(c) && !/cogs|cost of sales|cost of goods/.test(c)) return 'income';
+        if (/expense|cost|cogs|depreciation|interest|payroll|rent|admin|marketing/.test(c)) return 'expense';
+        return 'other';
+      };
+      const pAndLRows = varianceData.filter((r) => !r.isHeader && classifyType(r) !== 'other');
+
       // Find critical variances
       const criticalVariances = varianceData
         .filter(r => r.threshold === "critical" && !r.isHeader)
         .map(r => `${r.category}: ${formatPercentage(r.variancePct)} ${r.favorable ? 'favorable' : 'unfavorable'}`);
+
+      const costOverruns = pAndLRows
+        .filter((r) => classifyType(r) === 'expense' && r.actual > r.budget)
+        .sort((a, b) => Math.abs(b.variancePct) - Math.abs(a.variancePct))
+        .slice(0, 3)
+        .map((r) => `${r.category}: ${formatPercentage(r.variancePct)} over budget`);
+
+      const favorableVariances = pAndLRows
+        .filter((r) =>
+          (classifyType(r) === 'income' && r.actual > r.budget) ||
+          (classifyType(r) === 'expense' && r.actual < r.budget)
+        )
+        .sort((a, b) => Math.abs(b.variancePct) - Math.abs(a.variancePct))
+        .slice(0, 3)
+        .map((r) => `${r.category}: ${formatPercentage(r.variancePct)} ${classifyType(r) === 'income' ? 'above budget' : 'under budget'}`);
 
       // Get key metrics
       const revenue = varianceData.find(r => r.id === "revenue");
@@ -35,7 +59,7 @@ export const AICommentary = ({ varianceData, period, entityName, currency = "INR
       const exportSales = varianceData.find(r => r.id === "export-sales");
       const costOfSales = varianceData.find(r => r.id === "cost-of-sales");
 
-      const prompt = `You are a CFO-level financial analyst writing a professional variance commentary for the board pack.
+      const prompt = `You are a senior FP&A analyst writing variance commentary for a board pack.
 
 COMPANY: ${entityName}
 PERIOD: ${period}
@@ -47,25 +71,64 @@ ${criticalVariances.join("\n")}
 DETAILED METRICS:
 - Revenue: Actual ${revenue ? formatCurrency(revenue.actual, currency) : 'N/A'} vs Budget ${revenue ? formatCurrency(revenue.budget, currency) : 'N/A'} (${revenue ? formatPercentage(revenue.variancePct) : 'N/A'} ${revenue?.favorable ? 'favorable' : 'unfavorable'})
 - Net Profit: Actual ${netProfit ? formatCurrency(netProfit.actual, currency) : 'N/A'} vs Budget ${netProfit ? formatCurrency(netProfit.budget, currency) : 'N/A'} (${netProfit ? formatPercentage(netProfit.variancePct) : 'N/A'} ${netProfit?.favorable ? 'favorable' : 'unfavorable'})
-- Admin Expenses: ${adminExpenses ? formatPercentage(adminExpenses.variancePct) : 'N/A'} over budget (critical)
+- Admin Expenses: ${adminExpenses ? formatPercentage(adminExpenses.variancePct) : 'N/A'} over budget
 - Export Sales: ${exportSales ? formatPercentage(exportSales.variancePct) : 'N/A'} below target
 - Cost of Sales: ${costOfSales ? formatPercentage(costOfSales.variancePct) : 'N/A'} over budget
 
-Write a professional CFO-level variance commentary with these sections:
+STRICT RULES:
+- Revenue exceeding budget is ALWAYS favorable.
+- NEVER call revenue increase an overspend.
+- NEVER list revenue inside cost overruns.
+- Always present these sections:
+  a) Revenue Performance (vs budget)
+  b) Cost Performance (vs budget)
+  c) Profit/Margin Impact
+- Overall logic:
+  * revenue up + costs controlled => Outperforming
+  * revenue up + costs up faster => Growth with pressure
+  * revenue down + costs up => Underperforming
+  * revenue down + costs down => Contracting
+- COGS interpretation must use ratio:
+  Budget COGS% = Budget COGS / Budget Revenue
+  Actual COGS% = Actual COGS / Actual Revenue
+  If Actual COGS% < Budget COGS% => margin improved
+  If Actual COGS% > Budget COGS% => margin eroded
+- Use ONLY numbers given above.
+- NEVER use generic phrases like "implement spending freeze", "renegotiate contracts", or "improve cost controls".
+- NEVER use words:
+  "overspend" for revenue
+  "unfavorable" for revenue exceeding budget
+  "spending freeze"
+  "renegotiate contracts"
+- ALWAYS cite specific values and percentages.
 
-1. EXECUTIVE SUMMARY (2-3 sentences summarizing overall performance)
+COST OVERRUNS (expense only):
+${costOverruns.length ? costOverruns.join("\n") : 'None'}
 
-2. REVENUE ANALYSIS (2-3 sentences explaining the revenue variance and its drivers)
+FAVORABLE VARIANCES:
+${favorableVariances.length ? favorableVariances.join("\n") : 'None'}
 
-3. COST & EXPENSE ANALYSIS (2-3 sentences on cost overruns and expense management)
+Write commentary in this exact structure:
 
-4. KEY RISKS (3 specific bullet points identifying critical risks)
+1. HEADLINE (one sentence, with numbers)
 
-5. MANAGEMENT ACTIONS (3 specific bullet points on corrective actions being taken)
+2. TOP 3 DRIVERS (with amounts)
 
-6. OUTLOOK (1-2 sentences on forward-looking expectations)
+3. REVENUE PERFORMANCE
 
-Use professional CFO language. Be specific with numbers and percentages. Format with clear section headers. Do not use markdown formatting - use plain text with section headers in ALL CAPS followed by a colon.`;
+4. COST PERFORMANCE
+
+5. PROFIT/MARGIN IMPACT
+
+6. COST OVERRUNS (expense only)
+
+7. FAVORABLE VARIANCES
+
+8. 3 SPECIFIC ACTIONS (each action includes a numeric target)
+
+Formatting:
+- Plain text only (no markdown)
+- Section headers in ALL CAPS ending with colon`;
 
       const result = await callAI(prompt);
       setCommentary(result);
