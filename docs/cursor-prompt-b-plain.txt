@@ -1,0 +1,302 @@
+## CONTEXT — READ FIRST
+Project: FinReportAI Commercial — Excel add-in layer
+Backend: FastAPI already running on Railway (same server as web app)
+Existing working pattern: POST /excel/analyze → VBA module modReconciliation
+  - VBA reads Excel range → JSON → HTTP POST to Railway → parse JSON response → write to cells
+  - This pattern works. All 7 new modules follow EXACTLY the same VBA pattern.
+
+Claude API: Already configured in FastAPI. Use claude-opus-4-5.
+Deliverables needed:
+  1. 7 new FastAPI router files (one per module) in routers/ folder
+  2. 7 VBA .bas module files (one per module) — exportable, paste into Excel VBA editor
+  3. 1 Excel template .xlsx with pre-built sheets + buttons for each module
+  4. 1 shared VBA helper module (modHTTP) — HTTP + JSON functions, reused by all modules
+
+─────────────────────────────────────────
+STEP 1: SHARED VBA HTTP HELPER (modHTTP.bas)
+─────────────────────────────────────────
+
+Create modHTTP.bas with these reusable functions:
+
+Function PostToAPI(endpoint As String, jsonBody As String) As String
+  - Uses MSXML2.XMLHTTP60 (works on all Excel versions, no reference needed)
+  - BASE_URL = "https://your-railway-app.railway.app" (configurable constant)
+  - Sets Content-Type: application/json
+  - Returns response body as string
+  - On error: returns JSON error string {"error": "..."} so calling code can handle gracefully
+
+Function ReadRange(ws As Worksheet, startRow As Integer, cols As Integer) As String
+  - Reads a table range into JSON array string
+  - Handles: strings (quoted), numbers (unquoted), empty cells (null)
+  - Returns: "[{...},{...}]" format
+
+Function WriteResults(ws As Worksheet, jsonResponse As String, startCell As String)
+  - Parses flat JSON response using InStr-based parser (no external JSON lib needed)
+  - Writes key-value pairs to cells starting at startCell
+  - Bold formatting for header rows, color coding for positive/negative values
+
+Sub OpenHTMLInBrowser(htmlContent As String)
+  - Saves htmlContent to %TEMP%\finreportai_output.html
+  - Opens in default browser using Shell command
+  - Works on Windows Excel any version
+
+Sub ShowCommentary(commentary As String, title As String)
+  - Opens a styled UserForm (frmCommentary) showing the Claude AI narrative
+  - Scrollable text box, copy button, close button
+
+─────────────────────────────────────────
+MODULE B1: PVM Analysis (modPVM.bas + /excel/pvm)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("PVM Analysis" sheet):
+Row 1: Headers — [Product] [Actual Units] [Actual Price] [Budget Units] [Budget Price]
+Rows 2-20: Data entry area (yellow background)
+Row 22: Company Totals row (auto-sum formulas)
+Rows 24-26: Single-metric inputs: Total Actual Revenue, Total Budget Revenue, Prior Year Revenue
+Row 28: [Button] "▶ Run PVM Analysis"  ← assign to modPVM.RunPVMAnalysis
+Rows 30-40: RESULTS area (written by VBA after API call)
+  Row 30: "RESULTS — PVM ANALYSIS" header
+  Row 31: Price Effect: [value] [%]
+  Row 32: Volume Effect: [value] [%]  
+  Row 33: Mix Effect: [value] [%]
+  Row 34: Total Variance: [value] [%]
+  Row 36: "AI COMMENTARY" header
+  Rows 37-45: Commentary text (merged cells, word wrap)
+
+VBA SUB (modPVM.bas):
+Sub RunPVMAnalysis()
+  Dim ws As Worksheet: Set ws = Sheets("PVM Analysis")
+  
+  ' 1. READ DATA from sheet
+  Dim jsonData As String
+  jsonData = "{""actual_revenue"": " & ws.Range("B24") & ","
+  jsonData = jsonData & """budget_revenue"": " & ws.Range("B25") & ","
+  jsonData = jsonData & """prior_year"": " & ws.Range("B26") & ","
+  jsonData = jsonData & """products"": " & ReadRange(ws, 2, 5) & "}"
+  
+  ' 2. CALL API
+  Application.StatusBar = "FinReportAI: Running PVM Analysis..."
+  Dim response As String
+  response = PostToAPI("/excel/pvm", jsonData)
+  
+  ' 3. WRITE RESULTS
+  ' Parse and write price_effect, volume_effect, mix_effect to rows 31-34
+  ws.Range("B31") = ExtractValue(response, "price_effect")
+  ws.Range("B32") = ExtractValue(response, "volume_effect")
+  ws.Range("B33") = ExtractValue(response, "mix_effect")
+  ws.Range("B34") = ExtractValue(response, "total_variance")
+  
+  ' 4. WRITE COMMENTARY
+  ws.Range("B37") = ExtractValue(response, "commentary")
+  ws.Range("B37").WrapText = True
+  
+  ' 5. OPEN HTML DASHBOARD
+  Dim openDash As Integer
+  openDash = MsgBox("PVM analysis complete! Open interactive dashboard?", vbYesNo, "FinReportAI")
+  If openDash = vbYes Then
+    OpenHTMLInBrowser ExtractValue(response, "html_waterfall_dashboard")
+  End If
+  
+  Application.StatusBar = False
+  MsgBox "PVM Analysis complete!", vbInformation, "FinReportAI"
+End Sub
+
+FASTAPI ENDPOINT (routers/excel_pvm.py):
+@router.post("/excel/pvm")
+async def excel_pvm(data: PVMRequest):
+    price_eff, vol_eff, mix_eff = calculate_pvm(data.products, data.actual_revenue, data.budget_revenue)
+    commentary = await claude_commentary({
+        "price_effect": price_eff, "volume_effect": vol_eff, "mix_effect": mix_eff,
+        "context": "PVM waterfall analysis for CFO board presentation"
+    })
+    html = generate_waterfall_html(price_eff, vol_eff, mix_eff, data.actual_revenue, data.budget_revenue)
+    return {"price_effect": price_eff, "volume_effect": vol_eff, "mix_effect": mix_eff,
+            "total_variance": price_eff + vol_eff + mix_eff, "commentary": commentary,
+            "html_waterfall_dashboard": html}
+
+─────────────────────────────────────────
+MODULE B2: 3-Statement Model (modThreeStatement.bas + /excel/three-statement)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("3-Statement Setup" sheet):
+Section A (rows 1-15): Company Assumptions
+  - Company Name, Industry, Projection Years (dropdown: 3/5/10)
+  - Revenue Base Year £, Revenue Growth Rate %, 
+  - Gross Margin %, EBITDA Margin %, Net Margin %
+  - Starting Cash £, Total Debt £, Annual CapEx %
+  - DSO Days, DPO Days, DIO Days
+
+Section B (rows 17-22): Scenario Overrides
+  - Bull Case Growth %, Bear Case Growth %
+  
+Row 24: [Button] "▶ Build 3-Statement Model"
+
+VBA ACTION:
+- Reads all assumption cells → builds JSON → POSTs to /excel/three-statement
+- API returns base64 .xlsx file with 3 pre-formatted sheets (P&L, BS, Cash Flow)
+- VBA saves the base64 to temp .xlsx file → opens it as new workbook
+- User now has the full model in a new Excel file they can edit
+
+FASTAPI ENDPOINT (routers/excel_three_statement.py):
+- Build P&L, Balance Sheet, Cash Flow using pandas (5-year projections)
+- Ensure BS balances every year (retained earnings plug)
+- Create .xlsx with openpyxl: 3 sheets + charts + formatting
+- Claude 4.7 reviews model, writes executive summary tab
+- Return base64-encoded .xlsx + text summary
+
+─────────────────────────────────────────
+MODULE B3: Monte Carlo (modMonteCarlo.bas + /excel/monte-carlo)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("Monte Carlo" sheet):
+Assumptions table: Variable | Min | Most Likely | Max
+  Row 5: Revenue Growth Rate | -20% | 5% | 30%
+  Row 6: Gross Margin % | 30% | 50% | 70%
+  Row 7: Fixed Costs £ | [value] | [value] | [value]
+  Row 8: Variable Cost % | 15% | 25% | 35%
+  Row 9: Starting Cash £ | [value] | [value] | [value]
+
+Row 11: Simulations: [dropdown 1000/5000/10000]
+Row 12: [Button] "▶ Run Monte Carlo Simulation"
+
+RESULTS (rows 14-30):
+  Row 14: "SIMULATION RESULTS"
+  Row 15: P10 Cash (12 months): £[value]  — "Pessimistic scenario"
+  Row 16: P50 Cash (12 months): £[value]  — "Base scenario"
+  Row 17: P90 Cash (12 months): £[value]  — "Optimistic scenario"
+  Row 19: Cash Runway Probability table (cols: Month 3, 6, 9, 12)
+  Row 24: "AI RISK COMMENTARY"
+  Row 25-35: Commentary text
+
+VBA: Read assumptions → POST → write P10/P50/P90 → write probabilities → open HTML histogram
+
+─────────────────────────────────────────
+MODULE B4: ARR Dashboard (modARR.bas + /excel/arr)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("ARR Data" sheet):
+Monthly data table (rows 2-14, cols A-H):
+  Month | Beginning ARR | New ARR | Expansion | Contraction | Churn | Ending ARR | MRR
+Row 16: Headcount total, Row 17: Total Sales+Mktg Costs
+Row 19: [Button] "▶ Generate ARR Dashboard"
+
+VBA: Reads 12-month table → POST → API calculates NRR/GRR/Rule of 40/CAC → 
+  Writes summary KPIs to rows 21-30 → Opens full HTML SaaS dashboard in browser
+
+FASTAPI: Calculate all SaaS metrics, generate self-contained HTML dashboard with
+  ARR waterfall chart, NRR cohort heatmap, trend lines, benchmark badges.
+
+─────────────────────────────────────────
+MODULE B5: Headcount Planning (modHeadcount.bas + /excel/headcount)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("Headcount" sheet):
+Department table (rows 3-15):
+  Department | Current HC | Budget HC | Avg Salary £ | Open Roles | Notes
+Row 17: Total Revenue £, Row 18: Revenue Target £
+Row 20: [Button] "▶ Analyse Headcount"
+
+RESULTS (rows 22-40):
+  HC Variance by dept | Total Salary Burn | Revenue per Employee
+  Overstaffed/Understaffed flags | Hiring priority ranking
+  Claude commentary (3 paragraphs)
+
+─────────────────────────────────────────
+MODULE B6: Board Pack PDF (modBoardPack.bas + /excel/board-pack)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("Board Pack Setup" sheet):
+  Company name, Period (dropdown: month/quarter), CFO name
+  Key message 1, Key message 2, Key message 3 (text inputs)
+  Section checkboxes: [✓] P&L Summary [✓] Cash Flow [✓] Variance [✓] Forecast [✓] Risks
+  Data source: "Pull from other sheets in this workbook" (auto-reads other sheets)
+  Row 20: [Button] "▶ Generate Board Pack PDF"
+
+VBA:
+  - Reads setup fields + auto-reads data from other FinReportAI sheets in the workbook
+  - POSTs all data to /excel/board-pack
+  - Receives PDF as base64 → saves to Desktop as "BoardPack_[Period]_[Date].pdf" → opens
+  - Also saves HTML preview → opens in browser
+
+─────────────────────────────────────────
+MODULE B7: Sensitivity Analysis (modSensitivity.bas + /excel/sensitivity)
+─────────────────────────────────────────
+
+EXCEL SHEET LAYOUT ("Sensitivity" sheet):
+Base assumptions (rows 2-8):
+  Revenue £, COGS %, OpEx %, Tax Rate %
+Variable 1 config (rows 10-13): Variable name (dropdown), Low %, Base %, High %, Steps
+Variable 2 config (rows 15-18): Same structure
+Row 20: [Button] "▶ Run Sensitivity Analysis"
+
+RESULTS (rows 22+):
+  NxN matrix written directly to Excel cells (variable 1 = rows, variable 2 = cols)
+  Conditional formatting applied by VBA: red (loss) → yellow → green (profit)
+  Break-even row highlighted in bold border
+  Tornado chart data written below matrix
+  Claude commentary below
+
+VBA applies conditional formatting programmatically using ColorScale on the result range.
+
+─────────────────────────────────────────
+## EXCEL WORKBOOK TEMPLATE
+─────────────────────────────────────────
+
+Create: FinReportAI_FPA_Suite.xlsm
+
+Sheets (in order):
+  1. 🏠 HOME          — Welcome sheet with module buttons grid
+  2. 📊 PVM Analysis
+  3. 📋 3-Statement Setup
+  4. 🎲 Monte Carlo
+  5. 💰 ARR Data
+  6. 👥 Headcount
+  7. 📄 Board Pack Setup
+  8. 🔥 Sensitivity
+  9. ⚙️ CONFIG          — BASE_URL cell (user sets their Railway URL here)
+
+HOME sheet design:
+  Large header: "FinReportAI FP&A Suite"
+  7 large buttons in a 2x4 grid, each opens the relevant sheet
+  Status bar: "Connected to: [BASE_URL]" — reads from CONFIG sheet
+
+CONFIG sheet:
+  Cell B2: BASE_URL = "https://your-app.railway.app"  (user edits this once)
+  All VBA modules read BASE_URL from CONFIG!B2 — so changing one cell updates all modules
+
+─────────────────────────────────────────
+## VBA SHARED REQUIREMENTS
+─────────────────────────────────────────
+
+1. NO external VBA libraries or references required (MSXML2 is built-in)
+2. Simple JSON parser using InStr/Mid — no JSON library needed
+   Function ExtractValue(json As String, key As String) As String
+     → finds "key": "value" or "key": number patterns
+     → handles nested objects by finding key then extracting to next comma/brace
+3. All subs: Show Application.StatusBar message while API call runs
+4. All subs: Clear previous results before writing new ones  
+5. Error handling: If API call fails, show MsgBox with helpful message
+6. API timeout: Set MSXML2 timeout to 30 seconds (Monte Carlo may take longer)
+7. Auth: Add X-API-Key header using value from CONFIG!B3 (optional auth key)
+
+## FASTAPI SHARED REQUIREMENTS
+
+1. All /excel/* endpoints are SEPARATE from /fpa/* web app endpoints
+   - /excel/pvm   = lightweight, returns flat JSON (VBA-friendly)
+   - /fpa/pvm     = rich response with React-formatted data (web app)
+   - They can share the same calculation functions internally
+
+2. VBA-friendly JSON responses:
+   - Flat structure preferred (avoid deeply nested objects)
+   - Numbers as numbers (not strings)
+   - HTML content: single escaped string value
+
+3. CORS: Already configured for web app — ensure Railway URL is also whitelisted
+
+4. Pydantic models for all /excel/* request bodies
+   - Strict validation with clear error messages (VBA shows these to user)
+
+5. Add to main.py:
+   from routers import excel_pvm, excel_three_statement, excel_monte_carlo
+   from routers import excel_arr, excel_headcount, excel_board_pack, excel_sensitivity
+   app.include_router(excel_pvm.router)  # etc for all 7

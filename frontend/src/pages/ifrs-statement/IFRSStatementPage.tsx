@@ -97,9 +97,17 @@ export default function IFRSStatementPage() {
             <h1 className="text-2xl font-bold text-slate-900">IFRS Statement — Week 3</h1>
             <p className="text-sm text-slate-600">Statements + disclosure notes + compliance checks</p>
           </div>
-          <Link to="/dashboard" className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-            Back to Dashboard
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/ifrs/agentic"
+              className="rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white ring-1 ring-violet-500 hover:bg-violet-500"
+            >
+              AI IFRS Generator <span className="opacity-90 text-[10px] font-bold">AGENTIC</span>
+            </Link>
+            <Link to="/dashboard" className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+              Back to Dashboard
+            </Link>
+          </div>
         </div>
 
         <div className="mb-6 rounded-xl border bg-white p-4">

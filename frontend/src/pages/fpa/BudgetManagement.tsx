@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -23,9 +23,50 @@ import { budgetVersions, departmentBudgets, budgetSummary } from '../../data/bud
 import { BudgetLineItem, BudgetStatus, BudgetApproach, MonthlyBudget } from '../../types/budget';
 import { callAI } from '../../services/aiProvider';
 import { loadFPABudget, loadFPAPriorYear, checkDataAvailability, getMissingDataMessage, convertBudgetToLineItems } from '../../utils/fpaDataLoader';
+import { postCfoAgentRun } from '../../services/cfoAgents';
+import { useClient } from '../../context/ClientContext';
+
+const SELECTED_BUDGET_PERIOD = 'FY2025';
+
+function sumMonthlyBudget(m?: MonthlyBudget): number {
+  if (!m) return 0;
+  return Object.values(m).reduce((s, v) => s + (Number(v) || 0), 0);
+}
+
+function inferDepartmentFromCategory(category: string, existing?: string): string {
+  if (existing && String(existing).trim()) return String(existing);
+  const c = category.toLowerCase();
+  if (/marketing|advert/i.test(c)) return 'Marketing';
+  if (/hr|payroll|benefit|people/i.test(c)) return 'HR';
+  if (/\bit\b|technology|software/i.test(c)) return 'IT';
+  if (/sales|revenue|domestic|export|service/i.test(c)) return 'Sales';
+  if (/operat|raw material|direct labor|cogs|cost of/i.test(c)) return 'Operations';
+  if (/financ|admin|audit/i.test(c)) return 'Finance';
+  return 'General';
+}
+
+function buildBudgetCfoLineItems(rows: BudgetLineItem[]) {
+  return rows
+    .filter((r) => !r.isHeader)
+    .map((r) => {
+      const anyRow = r as BudgetLineItem & { fy2024Actual?: number; lineItem?: string };
+      const prior = Number(anyRow.priorYearActual ?? anyRow.fy2024Actual ?? 0) || 0;
+      const dept = inferDepartmentFromCategory(r.category, r.department);
+      const account = String(anyRow.lineItem || r.category || 'Line');
+      return {
+        account,
+        department: dept,
+        budget: prior,
+        actual: sumMonthlyBudget(r.monthly),
+      };
+    })
+    .filter((x) => x.budget > 0 || x.actual > 0);
+}
 
 const BudgetManagement: React.FC = () => {
   const navigate = useNavigate();
+  const { activeClient } = useClient();
+  const tenantId = activeClient?.companyId || 'default';
   
   // Check data availability
   const dataCheck = checkDataAvailability(['fpa_budget']);
@@ -53,6 +94,25 @@ const BudgetManagement: React.FC = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [cfoSyncing, setCfoSyncing] = useState(false);
+
+  const syncBudgetToCommandCenter = useCallback(async () => {
+    const line_items = buildBudgetCfoLineItems(budgetData);
+    if (line_items.length === 0) {
+      console.warn('[CFO] fpa_budget: no line items to sync');
+      return;
+    }
+    await postCfoAgentRun(
+      'fpa_budget',
+      {
+        line_items,
+        overspend_threshold_pct: 15,
+        period: SELECTED_BUDGET_PERIOD,
+        company_id: tenantId,
+      },
+      tenantId
+    );
+  }, [budgetData, tenantId]);
 
   const formatCurrency = (value: number): string => {
     const crore = value / 10000000;
@@ -114,6 +174,11 @@ const BudgetManagement: React.FC = () => {
     }
     setCurrentStatus(newStatus);
     alert(`✅ Budget status updated to: ${newStatus}`);
+    if (newStatus === 'Approved') {
+      void syncBudgetToCommandCenter().catch((e) =>
+        console.warn('[CFO] fpa_budget sync failed', e)
+      );
+    }
   };
 
   const downloadTemplate = () => {
@@ -558,9 +623,22 @@ Format as a structured commentary.
                 ))}
               </div>
             </div>
-            <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+            <button
+              type="button"
+              disabled={cfoSyncing || budgetData.length === 0}
+              onClick={() => {
+                setCfoSyncing(true);
+                void syncBudgetToCommandCenter()
+                  .then(() => alert('Command Center: budget agent queued (15% YoY vs prior-year baseline per dept).'))
+                  .catch((e: unknown) =>
+                    alert('CFO Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)))
+                  )
+                  .finally(() => setCfoSyncing(false));
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+            >
               <Save size={16} />
-              Save as New Version
+              {cfoSyncing ? 'Syncing…' : 'Save as New Version'}
             </button>
           </div>
         </div>

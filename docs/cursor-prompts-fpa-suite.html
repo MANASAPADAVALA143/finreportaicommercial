@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cursor Prompts — FP&A Suite Build</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;700&display=swap');
+
+  :root {
+    --bg: #f7f6f2;
+    --dark: #0f0f0f;
+    --card: #ffffff;
+    --accent: #1a1a2e;
+    --green: #0d6e4f;
+    --green-bg: #e8f5f0;
+    --blue: #1e3a8a;
+    --blue-bg: #eff6ff;
+    --red: #991b1b;
+    --red-bg: #fef2f2;
+    --orange: #92400e;
+    --orange-bg: #fffbeb;
+    --border: #e5e2da;
+    --muted: #6b7280;
+    --code-bg: #1a1a2e;
+    --code-text: #a8d8a8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--dark);
+    line-height: 1.65;
+    padding: 48px 20px;
+  }
+
+  .container { max-width: 1000px; margin: 0 auto; }
+
+  /* HEADER */
+  .header {
+    border-bottom: 2px solid var(--dark);
+    padding-bottom: 32px;
+    margin-bottom: 52px;
+  }
+  .header .eyebrow {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  .header h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 3rem;
+    line-height: 1.1;
+    margin-bottom: 16px;
+  }
+  .header p { font-size: 1rem; color: var(--muted); max-width: 640px; }
+
+  .pill-row { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+  .pill {
+    padding: 4px 14px;
+    border-radius: 100px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .pill-dark { background: var(--dark); color: white; }
+  .pill-green { background: var(--green-bg); color: var(--green); border: 1px solid #a7f3d0; }
+  .pill-blue { background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
+
+  /* PROMPT BLOCK */
+  .prompt-section {
+    margin-bottom: 64px;
+  }
+
+  .prompt-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .prompt-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: 4rem;
+    line-height: 1;
+    color: var(--border);
+    flex-shrink: 0;
+    margin-top: -8px;
+  }
+  .prompt-meta h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.8rem;
+    margin-bottom: 6px;
+  }
+  .prompt-meta p { font-size: 0.875rem; color: var(--muted); }
+
+  .what-it-builds {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .build-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 0.8rem;
+  }
+  .build-item .bi-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .build-item .bi-val { font-weight: 700; font-size: 0.82rem; }
+
+  .copy-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--green);
+    font-weight: 500;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .copy-label::before { content: '▶'; }
+
+  .code-block {
+    background: var(--code-bg);
+    border-radius: 10px;
+    padding: 28px 32px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.85;
+    color: #e2e8f0;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    position: relative;
+  }
+  .code-block .cm { color: #64748b; }
+  .code-block .ck { color: #93c5fd; }
+  .code-block .cs { color: #86efac; }
+  .code-block .ch { color: #fde68a; font-weight: 700; }
+  .code-block .cn { color: #f9a8d4; }
+
+  /* DIVIDER */
+  .divider {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 52px 0;
+  }
+
+  /* QUICK REF */
+  .ref-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  @media(max-width:600px){.ref-grid{grid-template-columns:1fr;}}
+
+  .ref-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+  .ref-card h4 {
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ref-card ul { list-style: none; }
+  .ref-card ul li {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--bg);
+  }
+  .ref-card ul li:last-child { border-bottom: none; }
+  .ref-card ul li span { color: var(--dark); font-weight: 500; }
+
+  .note-box {
+    background: var(--orange-bg);
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-size: 0.82rem;
+    color: var(--orange);
+    margin-bottom: 20px;
+  }
+  .note-box strong { display: block; margin-bottom: 4px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="eyebrow">FinReportAI Commercial · April 2026</div>
+    <h1>Two Cursor Prompts.<br>Complete FP&A Suite.</h1>
+    <p>Prompt A builds the missing modules inside your React web app. Prompt B builds the same logic as an Excel-native VBA + FastAPI tool. Both use Claude 4.7 as the LLM layer.</p>
+    <div class="pill-row">
+      <span class="pill pill-dark">Prompt A — React Web App</span>
+      <span class="pill pill-green">Prompt B — VBA + FastAPI Excel</span>
+      <span class="pill pill-blue">Claude 4.7 LLM Layer</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- PROMPT A — REACT WEB APP                -->
+  <!-- ═══════════════════════════════════════ -->
+
+  <div class="prompt-section">
+    <div class="prompt-header">
+      <div class="prompt-num">A</div>
+      <div class="prompt-meta">
+        <h2>React Web App — 7 Missing FP&A Modules</h2>
+        <p>Add to your existing FinReportAI frontend (localhost:3001, React + TypeScript + Tailwind). Each module is a new route under /fpa/* with full ML backend + Claude 4.7 commentary.</p>
+      </div>
+    </div>
+
+    <div class="what-it-builds">
+      <div class="build-item"><div class="bi-label">Module 1</div><div class="bi-val">PVM Analysis</div></div>
+      <div class="build-item"><div class="bi-label">Module 2</div><div class="bi-val">3-Statement Model</div></div>
+      <div class="build-item"><div class="bi-label">Module 3</div><div class="bi-val">Monte Carlo Sim</div></div>
+      <div class="build-item"><div class="bi-label">Module 4</div><div class="bi-val">ARR / SaaS Dashboard</div></div>
+      <div class="build-item"><div class="bi-label">Module 5</div><div class="bi-val">Headcount Planning</div></div>
+      <div class="build-item"><div class="bi-label">Module 6</div><div class="bi-val">Board Pack PDF</div></div>
+      <div class="build-item"><div class="bi-label">Module 7</div><div class="bi-val">Sensitivity Analysis</div></div>
+    </div>
+
+    <div class="copy-label">CURSOR PROMPT A — Paste into Cursor Chat</div>
+    <div class="code-block">
+<span class="ch">## CONTEXT — READ FIRST</span>
+Project: FinReportAI Commercial
+Frontend: React + TypeScript + Tailwind CSS, running on localhost:3001
+Backend: FastAPI (Python) on Railway — existing endpoints already live:
+  - POST /excel/analyze         (Reconciliation, VBA-connected)
+  - POST /fpa/variance-analysis (Variance, SHAP-powered)
+  - POST /fpa/forecast          (LSTM + ARIMA + Prophet)
+  - POST /fpa/budget            (Budget management)
+  - POST /fpa/scenarios         (Scenario planning)
+  - POST /r2r/journal-entry     (Anomaly detection, AWS Nova)
+  - POST /ifrs/generate         (IFRS statements, RAG + Claude)
+
+AI Layer: AWS Bedrock Amazon Nova Lite (primary), Claude API (narrative + HTML)
+Pattern: aiProvider.ts already built — reuse existing claude_commentary() and nova_analyze() patterns
+DO NOT recreate anything already built — add only what is missing.
+
+<span class="ch">## TASK: BUILD 7 MISSING FP&A MODULES</span>
+
+Create each as a new React page + corresponding FastAPI endpoint.
+Follow the exact same component structure as existing FP&A modules.
+Each module needs: CSV/manual data upload → ML calculation → Claude 4.7 commentary → interactive chart → export button.
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 1: PVM Analysis  →  Route: /fpa/pvm</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/PVMAnalysis.tsx):
+- Input form: Actual Revenue, Budget Revenue, Prior Year Revenue
+- Table input: by Product (name, actual units, actual price, budget units, budget price)
+- Table input: by Region (same structure)
+- "Run PVM Analysis" button → POST /fpa/pvm-analysis
+- Output section:
+  → 3 KPI cards: Price Effect (£/$ value + %), Volume Effect, Mix Effect
+  → Waterfall bar chart (recharts): Budget → Price → Volume → Mix → Actual
+  → AI Commentary box (Claude 4.7 narrative, 3 paragraphs)
+  → Download: Excel + PDF buttons
+
+BACKEND (routers/fpa_pvm.py):
+- Standard PVM formula:
+  Price Effect  = Σ (Actual Price - Budget Price) × Actual Volume
+  Volume Effect = Σ (Actual Volume - Budget Volume) × Budget Price  
+  Mix Effect    = Total Variance - Price Effect - Volume Effect
+- Call Claude API with structured PVM results for CFO-ready narrative
+- Return: {price_effect, volume_effect, mix_effect, total_variance, by_product[], by_region[], commentary, waterfall_data[]}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 2: 3-Statement Model  →  Route: /fpa/three-statement</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/ThreeStatement.tsx):
+- Company assumptions form:
+  Company name, Industry, Projection years (3/5/10)
+  Revenue: Base year, growth rate %, growth driver (units/price/both)
+  Margins: Gross margin %, EBITDA margin %, Net margin %
+  Balance Sheet: Starting cash, debt, capex as % of revenue
+  Working capital: DSO days, DPO days, DIO days
+- Scenario tabs: Base / Bull / Bear (each with own growth assumptions)
+- "Build Model" button → POST /fpa/three-statement
+- Output: 3 tabs — P&L | Balance Sheet | Cash Flow
+  Each tab shows year-by-year table (editable cells for override)
+  Summary KPI row at bottom of each statement
+- Download: Excel workbook button (downloads .xlsx with all 3 sheets)
+- AI Commentary: Key assumptions review + red flags
+
+BACKEND (routers/fpa_three_statement.py):
+- Build full 3-statement model mathematically (numpy/pandas)
+- P&L: Revenue → Gross Profit → EBITDA → EBIT → Net Income
+- Balance Sheet: Assets (Cash, AR, Inventory, Fixed Assets) | Liabilities + Equity
+  Ensure balance sheet balances: Assets = Liabilities + Equity every year
+- Cash Flow: Operating (net income + D&A ± working capital) | Investing (capex) | Financing (debt)
+  Ending cash = Beginning cash + net cash flow
+- Use openpyxl to generate formatted .xlsx with 3 sheets + charts, return as base64
+- Claude 4.7: Review model for consistency, flag issues, write executive summary
+- Return: {pl_data[], bs_data[], cf_data[], excel_base64, commentary, flags[]}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 3: Monte Carlo Simulation  →  Route: /fpa/monte-carlo</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/MonteCarlo.tsx):
+- Assumption sliders (with min/max/most-likely for each):
+  Revenue growth rate, Gross margin %, Fixed costs £, Variable cost %, Starting cash £
+  Number of simulations: 1,000 / 5,000 / 10,000 (radio)
+- "Run Simulation" button → POST /fpa/monte-carlo (show loading spinner, takes 2-3s)
+- Output:
+  → 3 KPI cards: P10 Cash (worst), P50 Cash (median), P90 Cash (best) at 12 months
+  → Histogram chart: distribution of 12-month ending cash positions
+  → Line chart: P10/P50/P90 cash trajectory over 12 months
+  → Probability table: % chance cash goes negative by month 3/6/9/12
+  → Cash runway card: "You have X% probability of 18+ months runway"
+  → Claude 4.7 commentary: Risk assessment + scenario interpretation
+
+BACKEND (routers/fpa_monte_carlo.py):
+- Use numpy for vectorized Monte Carlo (triangular distribution for each variable)
+- Run n simulations, each projecting 12-month cash flow
+- Calculate percentile bands: p10, p25, p50, p75, p90
+- Calculate probability of cash < 0 at each month
+- Return: {p10[], p50[], p90[], histogram_data[], runway_probability{}, commentary}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 4: SaaS ARR Dashboard  →  Route: /fpa/arr-dashboard</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/ARRDashboard.tsx):
+- Upload: Monthly MRR/ARR data CSV OR manual entry form
+- Input fields: New ARR, Churned ARR, Expansion ARR, Contraction ARR, Total headcount, Total costs
+- Period selector: trailing 12 months view
+- Output KPI cards (top row, 6 cards):
+  → ARR (total), MRR, Net Revenue Retention %, Gross Revenue Retention %
+  → Rule of 40 Score (Revenue Growth % + FCF Margin %), CAC Payback months
+- Charts (3 panels):
+  → ARR Waterfall: Beginning ARR + New + Expansion - Contraction - Churn = Ending ARR
+  → NRR Cohort table: monthly cohort view showing expansion/churn per cohort
+  → ARR growth trend: 12-month trailing ARR with annotations
+- Benchmark badges: "Your NRR: 118% — Benchmark: >110% ✅"
+- Claude 4.7 commentary: Investor-ready ARR narrative
+
+BACKEND (routers/fpa_arr.py):
+- Calculate: ARR waterfall components, NRR = (Beginning ARR + Expansion - Churn) / Beginning ARR
+- Rule of 40 = Revenue Growth YoY% + FCF Margin%
+- CAC = Total Sales+Marketing Cost / New Customers Acquired
+- LTV = ACV / Gross Churn Rate
+- Cohort retention matrix
+- Return all metrics + Claude commentary + benchmark comparisons
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 5: Headcount Planning  →  Route: /fpa/headcount</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/HeadcountPlanning.tsx):
+- Department table input: Dept name, Current HC, Budget HC, Avg salary, Open roles
+- Company metrics: Total Revenue, Revenue target
+- Hiring plan tab: Month-by-month hiring schedule (who joins when)
+- Output:
+  → KPI cards: Total HC, HC variance vs budget, Revenue per employee, Salary as % of Revenue
+  → Bar chart: HC by department (current vs budget)
+  → Hiring plan timeline: Gantt-style chart showing planned joins
+  → Burn rate card: Monthly salary burn + projected year-end total
+  → Claude commentary: Headcount efficiency analysis + hiring recommendation
+
+BACKEND (routers/fpa_headcount.py):
+- Calculate variance by dept, total salary cost, projected year-end cost
+- Revenue per employee = Total Revenue / Total HC
+- Headcount efficiency score vs industry benchmarks
+- Claude narrative: flag over/understaffed departments
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 6: Board Pack Generator  →  Route: /reports/board-pack</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/reports/BoardPack.tsx):
+- Pull data from existing modules (variance, forecast, KPI dashboard) automatically
+- Company details form: Period, CFO name, Key messages (3 bullet inputs)
+- Section toggles: Which sections to include (P&L summary, Cash, KPIs, Variance, Forecast, Risks)
+- "Generate Board Pack" button → POST /reports/board-pack
+- Preview: Live HTML preview of the board pack in right panel
+- Download: PDF button (uses existing PDF export pattern) + PowerPoint button
+
+BACKEND (routers/reports_board_pack.py):
+- Aggregate data from all FP&A modules already stored in PostgreSQL
+- Claude 4.7 generates: Executive summary, CFO commentary, Risk section
+- Use existing PDF generation (reportlab or weasyprint — check existing codebase)
+- Structure: Cover → Executive Summary → P&L Actuals → Variance Analysis → Cash Flow → Forecast → Appendix
+- Return: {pdf_base64, html_preview, executive_summary}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE 7: Sensitivity Analysis  →  Route: /fpa/sensitivity</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+FRONTEND (src/pages/fpa/SensitivityAnalysis.tsx):
+- Base assumptions: Revenue, COGS %, Opex %, Starting year
+- Variable selection: Pick 2 variables to stress-test (from dropdown list)
+- Range config: Low / Base / High for each variable (e.g. Revenue Growth: -10% / 0% / +10%)
+- Steps: Number of steps in range (5 / 9 / 13)
+- Output:
+  → Heat map table: 2D sensitivity matrix (variable 1 on rows, variable 2 on cols)
+    Cells colored: green (profit) → yellow → red (loss), with £ values
+  → Tornado chart: Which variable has most impact on Net Profit
+  → Break-even line: highlighted row/col where profit = 0
+  → Claude commentary: Key sensitivities + risk interpretation
+
+BACKEND (routers/fpa_sensitivity.py):
+- Build NxM sensitivity matrix using pandas + numpy vectorized calculations
+- Tornado chart: calculate individual impact of each variable (hold others at base)
+- Return: {matrix[][], tornado_data[], breakeven_points[], commentary}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="ch">## NAVIGATION + ROUTING</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+Update src/App.tsx to add routes:
+  /fpa/pvm              → PVMAnalysis
+  /fpa/three-statement  → ThreeStatement
+  /fpa/monte-carlo      → MonteCarlo
+  /fpa/arr-dashboard    → ARRDashboard
+  /fpa/headcount        → HeadcountPlanning
+  /reports/board-pack   → BoardPack
+  /fpa/sensitivity      → SensitivityAnalysis
+
+Update sidebar (src/components/Sidebar.tsx):
+Add new "FP&A Suite" group with all 7 items + icons.
+Mark each with a "NEW" badge.
+
+<span class="ch">## SHARED REQUIREMENTS FOR ALL MODULES</span>
+
+1. CSV upload component: Reuse existing CSVUploader component pattern
+2. Chart library: Recharts (already installed) — DO NOT add new chart libraries
+3. Claude 4.7 call: Use existing aiProvider.ts pattern, model: "claude-opus-4-5"
+   System prompt for all: "You are a senior FP&A analyst and CFO advisor. 
+   Write in clear, executive-ready English. Be specific with numbers. 
+   Flag risks prominently. Keep commentary to 3 focused paragraphs."
+4. Loading states: Use existing LoadingSpinner component
+5. Error handling: Use existing ErrorBanner component  
+6. Export: Reuse existing exportToExcel() and exportToPDF() utility functions
+7. TypeScript: Strict types for all props and API responses
+8. Tailwind: Match existing dark/light theme variables
+
+<span class="ch">## BACKEND SHARED REQUIREMENTS</span>
+
+1. Add all routers to main.py: app.include_router(fpa_pvm.router, prefix="/fpa")
+2. Claude API helper (reuse existing pattern):
+   async def claude_commentary(data: dict, context: str) -> str:
+       → call claude-opus-4-5, finance system prompt, return string
+3. Each endpoint must have: Pydantic request model, try/except, logging
+4. Add synthetic test data generator for each endpoint (for demo mode)
+5. PostgreSQL: Store results in fpa_analysis_results table with timestamp + user_id
+6. All new requirements: add to requirements.txt (scipy for Monte Carlo, etc.)
+</div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- PROMPT B — VBA + FASTAPI EXCEL          -->
+  <!-- ═══════════════════════════════════════ -->
+
+  <div class="prompt-section">
+    <div class="prompt-header">
+      <div class="prompt-num">B</div>
+      <div class="prompt-meta">
+        <h2>VBA + FastAPI — Same 7 Modules Inside Excel</h2>
+        <p>Client stays in their own Excel. One button per module. VBA sends data to your Railway FastAPI, Claude 4.7 responds. Works on Excel 2016, 2019, 2021, M365 — no add-in required.</p>
+      </div>
+    </div>
+
+    <div class="note-box">
+      <strong>⚡ Reuse confirmation</strong>
+      Your existing /excel/analyze endpoint + VBA HTTP call pattern is already proven (confirmed in April 2026 interview prep doc). Prompt B adds 7 new endpoints following the identical pattern. Zero new VBA infrastructure needed.
+    </div>
+
+    <div class="ref-grid">
+      <div class="ref-card">
+        <h4>📡 New FastAPI Endpoints</h4>
+        <ul>
+          <li><span>POST /excel/pvm</span> — PVM Analysis</li>
+          <li><span>POST /excel/three-statement</span> — 3-Statement Model</li>
+          <li><span>POST /excel/monte-carlo</span> — Monte Carlo</li>
+          <li><span>POST /excel/arr</span> — ARR Dashboard</li>
+          <li><span>POST /excel/headcount</span> — Headcount Plan</li>
+          <li><span>POST /excel/board-pack</span> — Board Pack PDF</li>
+          <li><span>POST /excel/sensitivity</span> — Sensitivity</li>
+        </ul>
+      </div>
+      <div class="ref-card">
+        <h4>📋 VBA Modules Generated</h4>
+        <ul>
+          <li><span>modPVM</span> — Sub RunPVMAnalysis()</li>
+          <li><span>modThreeStatement</span> — Sub BuildThreeStatement()</li>
+          <li><span>modMonteCarlo</span> — Sub RunMonteCarlo()</li>
+          <li><span>modARR</span> — Sub RunARRDashboard()</li>
+          <li><span>modHeadcount</span> — Sub RunHeadcountPlan()</li>
+          <li><span>modBoardPack</span> — Sub GenerateBoardPack()</li>
+          <li><span>modSensitivity</span> — Sub RunSensitivity()</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="copy-label">CURSOR PROMPT B — Paste into Cursor Chat</div>
+    <div class="code-block">
+<span class="ch">## CONTEXT — READ FIRST</span>
+Project: FinReportAI Commercial — Excel add-in layer
+Backend: FastAPI already running on Railway (same server as web app)
+Existing working pattern: POST /excel/analyze → VBA module modReconciliation
+  - VBA reads Excel range → JSON → HTTP POST to Railway → parse JSON response → write to cells
+  - This pattern works. All 7 new modules follow EXACTLY the same VBA pattern.
+
+Claude API: Already configured in FastAPI. Use claude-opus-4-5.
+Deliverables needed:
+  1. 7 new FastAPI router files (one per module) in routers/ folder
+  2. 7 VBA .bas module files (one per module) — exportable, paste into Excel VBA editor
+  3. 1 Excel template .xlsx with pre-built sheets + buttons for each module
+  4. 1 shared VBA helper module (modHTTP) — HTTP + JSON functions, reused by all modules
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">STEP 1: SHARED VBA HTTP HELPER (modHTTP.bas)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+Create modHTTP.bas with these reusable functions:
+
+Function PostToAPI(endpoint As String, jsonBody As String) As String
+  - Uses MSXML2.XMLHTTP60 (works on all Excel versions, no reference needed)
+  - BASE_URL = "https://your-railway-app.railway.app" (configurable constant)
+  - Sets Content-Type: application/json
+  - Returns response body as string
+  - On error: returns JSON error string {"error": "..."} so calling code can handle gracefully
+
+Function ReadRange(ws As Worksheet, startRow As Integer, cols As Integer) As String
+  - Reads a table range into JSON array string
+  - Handles: strings (quoted), numbers (unquoted), empty cells (null)
+  - Returns: "[{...},{...}]" format
+
+Function WriteResults(ws As Worksheet, jsonResponse As String, startCell As String)
+  - Parses flat JSON response using InStr-based parser (no external JSON lib needed)
+  - Writes key-value pairs to cells starting at startCell
+  - Bold formatting for header rows, color coding for positive/negative values
+
+Sub OpenHTMLInBrowser(htmlContent As String)
+  - Saves htmlContent to %TEMP%\finreportai_output.html
+  - Opens in default browser using Shell command
+  - Works on Windows Excel any version
+
+Sub ShowCommentary(commentary As String, title As String)
+  - Opens a styled UserForm (frmCommentary) showing the Claude AI narrative
+  - Scrollable text box, copy button, close button
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B1: PVM Analysis (modPVM.bas + /excel/pvm)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("PVM Analysis" sheet):
+Row 1: Headers — [Product] [Actual Units] [Actual Price] [Budget Units] [Budget Price]
+Rows 2-20: Data entry area (yellow background)
+Row 22: Company Totals row (auto-sum formulas)
+Rows 24-26: Single-metric inputs: Total Actual Revenue, Total Budget Revenue, Prior Year Revenue
+Row 28: [Button] "▶ Run PVM Analysis"  ← assign to modPVM.RunPVMAnalysis
+Rows 30-40: RESULTS area (written by VBA after API call)
+  Row 30: "RESULTS — PVM ANALYSIS" header
+  Row 31: Price Effect: [value] [%]
+  Row 32: Volume Effect: [value] [%]  
+  Row 33: Mix Effect: [value] [%]
+  Row 34: Total Variance: [value] [%]
+  Row 36: "AI COMMENTARY" header
+  Rows 37-45: Commentary text (merged cells, word wrap)
+
+VBA SUB (modPVM.bas):
+Sub RunPVMAnalysis()
+  Dim ws As Worksheet: Set ws = Sheets("PVM Analysis")
+  
+  ' 1. READ DATA from sheet
+  Dim jsonData As String
+  jsonData = "{""actual_revenue"": " & ws.Range("B24") & ","
+  jsonData = jsonData & """budget_revenue"": " & ws.Range("B25") & ","
+  jsonData = jsonData & """prior_year"": " & ws.Range("B26") & ","
+  jsonData = jsonData & """products"": " & ReadRange(ws, 2, 5) & "}"
+  
+  ' 2. CALL API
+  Application.StatusBar = "FinReportAI: Running PVM Analysis..."
+  Dim response As String
+  response = PostToAPI("/excel/pvm", jsonData)
+  
+  ' 3. WRITE RESULTS
+  ' Parse and write price_effect, volume_effect, mix_effect to rows 31-34
+  ws.Range("B31") = ExtractValue(response, "price_effect")
+  ws.Range("B32") = ExtractValue(response, "volume_effect")
+  ws.Range("B33") = ExtractValue(response, "mix_effect")
+  ws.Range("B34") = ExtractValue(response, "total_variance")
+  
+  ' 4. WRITE COMMENTARY
+  ws.Range("B37") = ExtractValue(response, "commentary")
+  ws.Range("B37").WrapText = True
+  
+  ' 5. OPEN HTML DASHBOARD
+  Dim openDash As Integer
+  openDash = MsgBox("PVM analysis complete! Open interactive dashboard?", vbYesNo, "FinReportAI")
+  If openDash = vbYes Then
+    OpenHTMLInBrowser ExtractValue(response, "html_waterfall_dashboard")
+  End If
+  
+  Application.StatusBar = False
+  MsgBox "PVM Analysis complete!", vbInformation, "FinReportAI"
+End Sub
+
+FASTAPI ENDPOINT (routers/excel_pvm.py):
+@router.post("/excel/pvm")
+async def excel_pvm(data: PVMRequest):
+    price_eff, vol_eff, mix_eff = calculate_pvm(data.products, data.actual_revenue, data.budget_revenue)
+    commentary = await claude_commentary({
+        "price_effect": price_eff, "volume_effect": vol_eff, "mix_effect": mix_eff,
+        "context": "PVM waterfall analysis for CFO board presentation"
+    })
+    html = generate_waterfall_html(price_eff, vol_eff, mix_eff, data.actual_revenue, data.budget_revenue)
+    return {"price_effect": price_eff, "volume_effect": vol_eff, "mix_effect": mix_eff,
+            "total_variance": price_eff + vol_eff + mix_eff, "commentary": commentary,
+            "html_waterfall_dashboard": html}
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B2: 3-Statement Model (modThreeStatement.bas + /excel/three-statement)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("3-Statement Setup" sheet):
+Section A (rows 1-15): Company Assumptions
+  - Company Name, Industry, Projection Years (dropdown: 3/5/10)
+  - Revenue Base Year £, Revenue Growth Rate %, 
+  - Gross Margin %, EBITDA Margin %, Net Margin %
+  - Starting Cash £, Total Debt £, Annual CapEx %
+  - DSO Days, DPO Days, DIO Days
+
+Section B (rows 17-22): Scenario Overrides
+  - Bull Case Growth %, Bear Case Growth %
+  
+Row 24: [Button] "▶ Build 3-Statement Model"
+
+VBA ACTION:
+- Reads all assumption cells → builds JSON → POSTs to /excel/three-statement
+- API returns base64 .xlsx file with 3 pre-formatted sheets (P&L, BS, Cash Flow)
+- VBA saves the base64 to temp .xlsx file → opens it as new workbook
+- User now has the full model in a new Excel file they can edit
+
+FASTAPI ENDPOINT (routers/excel_three_statement.py):
+- Build P&L, Balance Sheet, Cash Flow using pandas (5-year projections)
+- Ensure BS balances every year (retained earnings plug)
+- Create .xlsx with openpyxl: 3 sheets + charts + formatting
+- Claude 4.7 reviews model, writes executive summary tab
+- Return base64-encoded .xlsx + text summary
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B3: Monte Carlo (modMonteCarlo.bas + /excel/monte-carlo)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("Monte Carlo" sheet):
+Assumptions table: Variable | Min | Most Likely | Max
+  Row 5: Revenue Growth Rate | -20% | 5% | 30%
+  Row 6: Gross Margin % | 30% | 50% | 70%
+  Row 7: Fixed Costs £ | [value] | [value] | [value]
+  Row 8: Variable Cost % | 15% | 25% | 35%
+  Row 9: Starting Cash £ | [value] | [value] | [value]
+
+Row 11: Simulations: [dropdown 1000/5000/10000]
+Row 12: [Button] "▶ Run Monte Carlo Simulation"
+
+RESULTS (rows 14-30):
+  Row 14: "SIMULATION RESULTS"
+  Row 15: P10 Cash (12 months): £[value]  — "Pessimistic scenario"
+  Row 16: P50 Cash (12 months): £[value]  — "Base scenario"
+  Row 17: P90 Cash (12 months): £[value]  — "Optimistic scenario"
+  Row 19: Cash Runway Probability table (cols: Month 3, 6, 9, 12)
+  Row 24: "AI RISK COMMENTARY"
+  Row 25-35: Commentary text
+
+VBA: Read assumptions → POST → write P10/P50/P90 → write probabilities → open HTML histogram
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B4: ARR Dashboard (modARR.bas + /excel/arr)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("ARR Data" sheet):
+Monthly data table (rows 2-14, cols A-H):
+  Month | Beginning ARR | New ARR | Expansion | Contraction | Churn | Ending ARR | MRR
+Row 16: Headcount total, Row 17: Total Sales+Mktg Costs
+Row 19: [Button] "▶ Generate ARR Dashboard"
+
+VBA: Reads 12-month table → POST → API calculates NRR/GRR/Rule of 40/CAC → 
+  Writes summary KPIs to rows 21-30 → Opens full HTML SaaS dashboard in browser
+
+FASTAPI: Calculate all SaaS metrics, generate self-contained HTML dashboard with
+  ARR waterfall chart, NRR cohort heatmap, trend lines, benchmark badges.
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B5: Headcount Planning (modHeadcount.bas + /excel/headcount)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("Headcount" sheet):
+Department table (rows 3-15):
+  Department | Current HC | Budget HC | Avg Salary £ | Open Roles | Notes
+Row 17: Total Revenue £, Row 18: Revenue Target £
+Row 20: [Button] "▶ Analyse Headcount"
+
+RESULTS (rows 22-40):
+  HC Variance by dept | Total Salary Burn | Revenue per Employee
+  Overstaffed/Understaffed flags | Hiring priority ranking
+  Claude commentary (3 paragraphs)
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B6: Board Pack PDF (modBoardPack.bas + /excel/board-pack)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("Board Pack Setup" sheet):
+  Company name, Period (dropdown: month/quarter), CFO name
+  Key message 1, Key message 2, Key message 3 (text inputs)
+  Section checkboxes: [✓] P&L Summary [✓] Cash Flow [✓] Variance [✓] Forecast [✓] Risks
+  Data source: "Pull from other sheets in this workbook" (auto-reads other sheets)
+  Row 20: [Button] "▶ Generate Board Pack PDF"
+
+VBA:
+  - Reads setup fields + auto-reads data from other FinReportAI sheets in the workbook
+  - POSTs all data to /excel/board-pack
+  - Receives PDF as base64 → saves to Desktop as "BoardPack_[Period]_[Date].pdf" → opens
+  - Also saves HTML preview → opens in browser
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="cs">MODULE B7: Sensitivity Analysis (modSensitivity.bas + /excel/sensitivity)</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+EXCEL SHEET LAYOUT ("Sensitivity" sheet):
+Base assumptions (rows 2-8):
+  Revenue £, COGS %, OpEx %, Tax Rate %
+Variable 1 config (rows 10-13): Variable name (dropdown), Low %, Base %, High %, Steps
+Variable 2 config (rows 15-18): Same structure
+Row 20: [Button] "▶ Run Sensitivity Analysis"
+
+RESULTS (rows 22+):
+  NxN matrix written directly to Excel cells (variable 1 = rows, variable 2 = cols)
+  Conditional formatting applied by VBA: red (loss) → yellow → green (profit)
+  Break-even row highlighted in bold border
+  Tornado chart data written below matrix
+  Claude commentary below
+
+VBA applies conditional formatting programmatically using ColorScale on the result range.
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="ch">## EXCEL WORKBOOK TEMPLATE</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+Create: FinReportAI_FPA_Suite.xlsm
+
+Sheets (in order):
+  1. 🏠 HOME          — Welcome sheet with module buttons grid
+  2. 📊 PVM Analysis
+  3. 📋 3-Statement Setup
+  4. 🎲 Monte Carlo
+  5. 💰 ARR Data
+  6. 👥 Headcount
+  7. 📄 Board Pack Setup
+  8. 🔥 Sensitivity
+  9. ⚙️ CONFIG          — BASE_URL cell (user sets their Railway URL here)
+
+HOME sheet design:
+  Large header: "FinReportAI FP&A Suite"
+  7 large buttons in a 2x4 grid, each opens the relevant sheet
+  Status bar: "Connected to: [BASE_URL]" — reads from CONFIG sheet
+
+CONFIG sheet:
+  Cell B2: BASE_URL = "https://your-app.railway.app"  (user edits this once)
+  All VBA modules read BASE_URL from CONFIG!B2 — so changing one cell updates all modules
+
+<span class="ch">─────────────────────────────────────────</span>
+<span class="ch">## VBA SHARED REQUIREMENTS</span>
+<span class="ch">─────────────────────────────────────────</span>
+
+1. NO external VBA libraries or references required (MSXML2 is built-in)
+2. Simple JSON parser using InStr/Mid — no JSON library needed
+   Function ExtractValue(json As String, key As String) As String
+     → finds "key": "value" or "key": number patterns
+     → handles nested objects by finding key then extracting to next comma/brace
+3. All subs: Show Application.StatusBar message while API call runs
+4. All subs: Clear previous results before writing new ones  
+5. Error handling: If API call fails, show MsgBox with helpful message
+6. API timeout: Set MSXML2 timeout to 30 seconds (Monte Carlo may take longer)
+7. Auth: Add X-API-Key header using value from CONFIG!B3 (optional auth key)
+
+<span class="ch">## FASTAPI SHARED REQUIREMENTS</span>
+
+1. All /excel/* endpoints are SEPARATE from /fpa/* web app endpoints
+   - /excel/pvm   = lightweight, returns flat JSON (VBA-friendly)
+   - /fpa/pvm     = rich response with React-formatted data (web app)
+   - They can share the same calculation functions internally
+
+2. VBA-friendly JSON responses:
+   - Flat structure preferred (avoid deeply nested objects)
+   - Numbers as numbers (not strings)
+   - HTML content: single escaped string value
+
+3. CORS: Already configured for web app — ensure Railway URL is also whitelisted
+
+4. Pydantic models for all /excel/* request bodies
+   - Strict validation with clear error messages (VBA shows these to user)
+
+5. Add to main.py:
+   from routers import excel_pvm, excel_three_statement, excel_monte_carlo
+   from routers import excel_arr, excel_headcount, excel_board_pack, excel_sensitivity
+   app.include_router(excel_pvm.router)  # etc for all 7
+</div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- QUICK REFERENCE -->
+  <div style="margin-bottom:40px;">
+    <h3 style="font-family:'DM Serif Display',serif;font-size:1.4rem;margin-bottom:20px;">Quick Reference — What Goes Where</h3>
+    <div class="ref-grid">
+      <div class="ref-card">
+        <h4>🌐 Prompt A — React Web App</h4>
+        <ul>
+          <li>Use when: Client uses FinReportAI web app at finreportai.com</li>
+          <li>Best for: New clients onboarding to your SaaS</li>
+          <li>Data entry: Upload CSV or manual form in browser</li>
+          <li>Output: Interactive charts + PDF export in browser</li>
+          <li>Auth: Your existing login system</li>
+        </ul>
+      </div>
+      <div class="ref-card">
+        <h4>📊 Prompt B — VBA + FastAPI Excel</h4>
+        <ul>
+          <li>Use when: Client refuses to leave Excel (most CFOs)</li>
+          <li>Best for: Enterprise clients, accountants, controllers</li>
+          <li>Data entry: Directly in their Excel cells</li>
+          <li>Output: Results written back to Excel + browser dashboard</li>
+          <li>Auth: API key in CONFIG sheet</li>
+        </ul>
+      </div>
+      <div class="ref-card">
+        <h4>⚡ Build Order (do this in Cursor)</h4>
+        <ul>
+          <li><span>1st</span> Run Prompt A (web app)</li>
+          <li><span>2nd</span> Run Prompt B (VBA layer)</li>
+          <li><span>3rd</span> Test both against same Railway backend</li>
+          <li><span>4th</span> Same /fpa/* endpoints serve both clients</li>
+        </ul>
+      </div>
+      <div class="ref-card">
+        <h4>🤖 Claude 4.7 Layer (both prompts)</h4>
+        <ul>
+          <li>Model: claude-opus-4-5 (use in both)</li>
+          <li>Role: CFO-ready narrative commentary</li>
+          <li>Role: Generate self-contained HTML dashboards</li>
+          <li>Role: Review 3-statement model for errors</li>
+          <li>Role: Write board pack executive summary</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    FinReportAI Commercial · FP&A Cursor Prompts · April 2026 · Prompt A = React Web App · Prompt B = VBA + FastAPI Excel
+  </footer>
+
+</div>
+</body>
+</html>

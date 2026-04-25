@@ -2,18 +2,19 @@
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
-import { 
-  BarChart3, 
-  TrendingUp, 
-  Target, 
-  Layers, 
-  Activity, 
+import {
+  BarChart3,
+  TrendingUp,
+  Target,
+  Layers,
+  Activity,
   FileText,
   ArrowLeft,
   CheckCircle,
   Clock,
   Upload,
-  Brain
+  Brain,
+  Grid3x3,
 } from 'lucide-react';
 import { MultiUploadModal } from '../../components/fpa/MultiUploadModal';
 
@@ -100,7 +101,91 @@ export const FPASuite = () => {
       bgColor: 'bg-amber-50',
       iconColor: 'text-amber-600',
       badge: 'NEW ⭐'
-    }
+    },
+    {
+      id: 'pvm',
+      title: 'PVM Analysis',
+      description: 'Price · Volume · Mix bridge with AI commentary',
+      icon: BarChart3,
+      route: '/fpa/pvm',
+      available: true,
+      color: 'from-sky-500 to-cyan-600',
+      bgColor: 'bg-sky-50',
+      iconColor: 'text-sky-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'three-statement',
+      title: '3-Statement Model',
+      description: 'P&L, balance sheet, and cash flow projections',
+      icon: Layers,
+      route: '/fpa/three-statement',
+      available: true,
+      color: 'from-indigo-500 to-violet-600',
+      bgColor: 'bg-indigo-50',
+      iconColor: 'text-indigo-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'monte-carlo',
+      title: 'Monte Carlo',
+      description: 'Cash path simulation with percentile bands',
+      icon: Activity,
+      route: '/fpa/monte-carlo',
+      available: true,
+      color: 'from-rose-500 to-orange-600',
+      bgColor: 'bg-rose-50',
+      iconColor: 'text-rose-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'arr',
+      title: 'ARR Dashboard',
+      description: 'SaaS metrics: NRR, Rule of 40, CAC payback',
+      icon: TrendingUp,
+      route: '/fpa/arr-dashboard',
+      available: true,
+      color: 'from-emerald-500 to-teal-600',
+      bgColor: 'bg-emerald-50',
+      iconColor: 'text-emerald-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'headcount',
+      title: 'Headcount Planning',
+      description: 'HC vs budget, burn, and hiring plan view',
+      icon: Target,
+      route: '/fpa/headcount',
+      available: true,
+      color: 'from-fuchsia-500 to-pink-600',
+      bgColor: 'bg-fuchsia-50',
+      iconColor: 'text-fuchsia-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'board-pack',
+      title: 'Board Pack',
+      description: 'Executive HTML preview and PDF export',
+      icon: FileText,
+      route: '/reports/board-pack',
+      available: true,
+      color: 'from-slate-600 to-slate-800',
+      bgColor: 'bg-slate-50',
+      iconColor: 'text-slate-700',
+      badge: 'NEW',
+    },
+    {
+      id: 'sensitivity',
+      title: 'Sensitivity Analysis',
+      description: '2D stress grid and tornado drivers',
+      icon: Grid3x3,
+      route: '/fpa/sensitivity',
+      available: true,
+      color: 'from-yellow-500 to-amber-600',
+      bgColor: 'bg-yellow-50',
+      iconColor: 'text-yellow-800',
+      badge: 'NEW',
+    },
   ];
 
   const handleModuleClick = (module: typeof modules[0]) => {
@@ -131,12 +216,21 @@ export const FPASuite = () => {
               <div>
                 <h1 className="text-3xl font-bold text-gray-900">FP&A Suite</h1>
                 <p className="text-gray-600 mt-1">Financial Planning & Analysis Tools</p>
-                <Link
-                  to="/excel-suite"
-                  className="inline-block mt-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
-                >
-                  Excel AI Suite →
-                </Link>
+                <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                  <Link
+                    to="/excel-suite"
+                    className="font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+                  >
+                    Excel AI Suite →
+                  </Link>
+                  <Link
+                    to="/command-center"
+                    className="font-semibold text-violet-700 hover:text-violet-800 hover:underline inline-flex items-center gap-1"
+                  >
+                    AGENTIC Command Center
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-violet-200 text-violet-900">NEW</span>
+                  </Link>
+                </div>
               </div>
             </div>
             
@@ -163,13 +257,13 @@ export const FPASuite = () => {
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-green-600" />
               <span className="text-gray-700">
-                <span className="font-semibold">7</span> modules active
+                <span className="font-semibold">{modules.length}</span> modules
               </span>
             </div>
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4 text-gray-400" />
               <span className="text-gray-700">
-                <span className="font-semibold">FP&A Suite Complete!</span> 🎉
+                <span className="font-semibold">FP&amp;A Suite</span> — core + extended tools
               </span>
             </div>
           </div>

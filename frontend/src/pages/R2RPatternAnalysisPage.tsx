@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../services/patternAnalysis";
 import { listClients, createClient, saveUpload, getClientHistory, type R2RClient } from "../services/r2rHistoryService";
 import { postR2RFeedback, getFeedbackHistory, type R2RFeedback } from "../services/r2rLearning.service";
+import { postCfoAgentRun } from "../services/cfoAgents";
 import LearningDashboardTab from "../components/r2r/LearningDashboardTab";
 
 // ─── Design Tokens (matches CFO Decision Intelligence) ───────────────────────
@@ -1440,6 +1441,7 @@ export default function R2RPatternAnalysisPage() {
   const [materialityAmountStr, setMaterialityAmountStr] = useState("");
   const [materialityPctStr, setMaterialityPctStr] = useState("");
   const [learningRefresh, setLearningRefresh] = useState(0);
+  const lastJeCfoSyncKey = useRef<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(LS_R2R_SENSITIVITY, sensitivity);
@@ -1508,6 +1510,35 @@ export default function R2RPatternAnalysisPage() {
     run();
     return () => { cancelled = true; };
   }, [rawRows, selectedClientId, sensitivity, customThresholdStr, materialityAmountStr, materialityPctStr]);
+
+  useEffect(() => {
+    if (!patternResult?.entries?.length || rawRows.length < 10) return;
+    const th = customThresholdStr || "40";
+    const syncKey = `${rawRows.length}:${patternResult.entries.length}:${sensitivity}:${th}:${materialityAmountStr}:${materialityPctStr}:${selectedClientId || ""}`;
+    if (lastJeCfoSyncKey.current === syncKey) return;
+    lastJeCfoSyncKey.current = syncKey;
+    const tid = selectedClientId || "default";
+    void postCfoAgentRun(
+      "je_anomaly",
+      {
+        rows: rawRows,
+        sensitivity,
+        materiality_amount: parseFloat(String(materialityAmountStr).replace(/,/g, "")) || 0,
+        materiality_pct: parseFloat(String(materialityPctStr).replace(/,/g, "")) || 0,
+        period: "r2r_upload",
+        company_id: tid,
+      },
+      tid
+    ).catch((err) => console.warn("[CFO] je_anomaly agent:", err));
+  }, [
+    patternResult,
+    rawRows,
+    sensitivity,
+    customThresholdStr,
+    materialityAmountStr,
+    materialityPctStr,
+    selectedClientId,
+  ]);
 
   const jeEntriesFromUpload = useMemo(() => {
     if (!patternResult?.entries?.length) return [];

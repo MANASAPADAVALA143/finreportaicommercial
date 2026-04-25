@@ -1,0 +1,227 @@
+## CONTEXT — READ FIRST
+Project: FinReportAI Commercial
+Frontend: React + TypeScript + Tailwind CSS, running on localhost:3001
+Backend: FastAPI (Python) on Railway — existing endpoints already live:
+  - POST /excel/analyze         (Reconciliation, VBA-connected)
+  - POST /fpa/variance-analysis (Variance, SHAP-powered)
+  - POST /fpa/forecast          (LSTM + ARIMA + Prophet)
+  - POST /fpa/budget            (Budget management)
+  - POST /fpa/scenarios         (Scenario planning)
+  - POST /r2r/journal-entry     (Anomaly detection, AWS Nova)
+  - POST /ifrs/generate         (IFRS statements, RAG + Claude)
+
+AI Layer: AWS Bedrock Amazon Nova Lite (primary), Claude API (narrative + HTML)
+Pattern: aiProvider.ts already built — reuse existing claude_commentary() and nova_analyze() patterns
+DO NOT recreate anything already built — add only what is missing.
+
+## TASK: BUILD 7 MISSING FP&A MODULES
+
+Create each as a new React page + corresponding FastAPI endpoint.
+Follow the exact same component structure as existing FP&A modules.
+Each module needs: CSV/manual data upload → ML calculation → Claude 4.7 commentary → interactive chart → export button.
+
+─────────────────────────────────────────
+MODULE 1: PVM Analysis  →  Route: /fpa/pvm
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/PVMAnalysis.tsx):
+- Input form: Actual Revenue, Budget Revenue, Prior Year Revenue
+- Table input: by Product (name, actual units, actual price, budget units, budget price)
+- Table input: by Region (same structure)
+- "Run PVM Analysis" button → POST /fpa/pvm-analysis
+- Output section:
+  → 3 KPI cards: Price Effect (£/$ value + %), Volume Effect, Mix Effect
+  → Waterfall bar chart (recharts): Budget → Price → Volume → Mix → Actual
+  → AI Commentary box (Claude 4.7 narrative, 3 paragraphs)
+  → Download: Excel + PDF buttons
+
+BACKEND (routers/fpa_pvm.py):
+- Standard PVM formula:
+  Price Effect  = Σ (Actual Price - Budget Price) × Actual Volume
+  Volume Effect = Σ (Actual Volume - Budget Volume) × Budget Price  
+  Mix Effect    = Total Variance - Price Effect - Volume Effect
+- Call Claude API with structured PVM results for CFO-ready narrative
+- Return: {price_effect, volume_effect, mix_effect, total_variance, by_product[], by_region[], commentary, waterfall_data[]}
+
+─────────────────────────────────────────
+MODULE 2: 3-Statement Model  →  Route: /fpa/three-statement
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/ThreeStatement.tsx):
+- Company assumptions form:
+  Company name, Industry, Projection years (3/5/10)
+  Revenue: Base year, growth rate %, growth driver (units/price/both)
+  Margins: Gross margin %, EBITDA margin %, Net margin %
+  Balance Sheet: Starting cash, debt, capex as % of revenue
+  Working capital: DSO days, DPO days, DIO days
+- Scenario tabs: Base / Bull / Bear (each with own growth assumptions)
+- "Build Model" button → POST /fpa/three-statement
+- Output: 3 tabs — P&L | Balance Sheet | Cash Flow
+  Each tab shows year-by-year table (editable cells for override)
+  Summary KPI row at bottom of each statement
+- Download: Excel workbook button (downloads .xlsx with all 3 sheets)
+- AI Commentary: Key assumptions review + red flags
+
+BACKEND (routers/fpa_three_statement.py):
+- Build full 3-statement model mathematically (numpy/pandas)
+- P&L: Revenue → Gross Profit → EBITDA → EBIT → Net Income
+- Balance Sheet: Assets (Cash, AR, Inventory, Fixed Assets) | Liabilities + Equity
+  Ensure balance sheet balances: Assets = Liabilities + Equity every year
+- Cash Flow: Operating (net income + D&A ± working capital) | Investing (capex) | Financing (debt)
+  Ending cash = Beginning cash + net cash flow
+- Use openpyxl to generate formatted .xlsx with 3 sheets + charts, return as base64
+- Claude 4.7: Review model for consistency, flag issues, write executive summary
+- Return: {pl_data[], bs_data[], cf_data[], excel_base64, commentary, flags[]}
+
+─────────────────────────────────────────
+MODULE 3: Monte Carlo Simulation  →  Route: /fpa/monte-carlo
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/MonteCarlo.tsx):
+- Assumption sliders (with min/max/most-likely for each):
+  Revenue growth rate, Gross margin %, Fixed costs £, Variable cost %, Starting cash £
+  Number of simulations: 1,000 / 5,000 / 10,000 (radio)
+- "Run Simulation" button → POST /fpa/monte-carlo (show loading spinner, takes 2-3s)
+- Output:
+  → 3 KPI cards: P10 Cash (worst), P50 Cash (median), P90 Cash (best) at 12 months
+  → Histogram chart: distribution of 12-month ending cash positions
+  → Line chart: P10/P50/P90 cash trajectory over 12 months
+  → Probability table: % chance cash goes negative by month 3/6/9/12
+  → Cash runway card: "You have X% probability of 18+ months runway"
+  → Claude 4.7 commentary: Risk assessment + scenario interpretation
+
+BACKEND (routers/fpa_monte_carlo.py):
+- Use numpy for vectorized Monte Carlo (triangular distribution for each variable)
+- Run n simulations, each projecting 12-month cash flow
+- Calculate percentile bands: p10, p25, p50, p75, p90
+- Calculate probability of cash < 0 at each month
+- Return: {p10[], p50[], p90[], histogram_data[], runway_probability{}, commentary}
+
+─────────────────────────────────────────
+MODULE 4: SaaS ARR Dashboard  →  Route: /fpa/arr-dashboard
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/ARRDashboard.tsx):
+- Upload: Monthly MRR/ARR data CSV OR manual entry form
+- Input fields: New ARR, Churned ARR, Expansion ARR, Contraction ARR, Total headcount, Total costs
+- Period selector: trailing 12 months view
+- Output KPI cards (top row, 6 cards):
+  → ARR (total), MRR, Net Revenue Retention %, Gross Revenue Retention %
+  → Rule of 40 Score (Revenue Growth % + FCF Margin %), CAC Payback months
+- Charts (3 panels):
+  → ARR Waterfall: Beginning ARR + New + Expansion - Contraction - Churn = Ending ARR
+  → NRR Cohort table: monthly cohort view showing expansion/churn per cohort
+  → ARR growth trend: 12-month trailing ARR with annotations
+- Benchmark badges: "Your NRR: 118% — Benchmark: >110% ✅"
+- Claude 4.7 commentary: Investor-ready ARR narrative
+
+BACKEND (routers/fpa_arr.py):
+- Calculate: ARR waterfall components, NRR = (Beginning ARR + Expansion - Churn) / Beginning ARR
+- Rule of 40 = Revenue Growth YoY% + FCF Margin%
+- CAC = Total Sales+Marketing Cost / New Customers Acquired
+- LTV = ACV / Gross Churn Rate
+- Cohort retention matrix
+- Return all metrics + Claude commentary + benchmark comparisons
+
+─────────────────────────────────────────
+MODULE 5: Headcount Planning  →  Route: /fpa/headcount
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/HeadcountPlanning.tsx):
+- Department table input: Dept name, Current HC, Budget HC, Avg salary, Open roles
+- Company metrics: Total Revenue, Revenue target
+- Hiring plan tab: Month-by-month hiring schedule (who joins when)
+- Output:
+  → KPI cards: Total HC, HC variance vs budget, Revenue per employee, Salary as % of Revenue
+  → Bar chart: HC by department (current vs budget)
+  → Hiring plan timeline: Gantt-style chart showing planned joins
+  → Burn rate card: Monthly salary burn + projected year-end total
+  → Claude commentary: Headcount efficiency analysis + hiring recommendation
+
+BACKEND (routers/fpa_headcount.py):
+- Calculate variance by dept, total salary cost, projected year-end cost
+- Revenue per employee = Total Revenue / Total HC
+- Headcount efficiency score vs industry benchmarks
+- Claude narrative: flag over/understaffed departments
+
+─────────────────────────────────────────
+MODULE 6: Board Pack Generator  →  Route: /reports/board-pack
+─────────────────────────────────────────
+
+FRONTEND (src/pages/reports/BoardPack.tsx):
+- Pull data from existing modules (variance, forecast, KPI dashboard) automatically
+- Company details form: Period, CFO name, Key messages (3 bullet inputs)
+- Section toggles: Which sections to include (P&L summary, Cash, KPIs, Variance, Forecast, Risks)
+- "Generate Board Pack" button → POST /reports/board-pack
+- Preview: Live HTML preview of the board pack in right panel
+- Download: PDF button (uses existing PDF export pattern) + PowerPoint button
+
+BACKEND (routers/reports_board_pack.py):
+- Aggregate data from all FP&A modules already stored in PostgreSQL
+- Claude 4.7 generates: Executive summary, CFO commentary, Risk section
+- Use existing PDF generation (reportlab or weasyprint — check existing codebase)
+- Structure: Cover → Executive Summary → P&L Actuals → Variance Analysis → Cash Flow → Forecast → Appendix
+- Return: {pdf_base64, html_preview, executive_summary}
+
+─────────────────────────────────────────
+MODULE 7: Sensitivity Analysis  →  Route: /fpa/sensitivity
+─────────────────────────────────────────
+
+FRONTEND (src/pages/fpa/SensitivityAnalysis.tsx):
+- Base assumptions: Revenue, COGS %, Opex %, Starting year
+- Variable selection: Pick 2 variables to stress-test (from dropdown list)
+- Range config: Low / Base / High for each variable (e.g. Revenue Growth: -10% / 0% / +10%)
+- Steps: Number of steps in range (5 / 9 / 13)
+- Output:
+  → Heat map table: 2D sensitivity matrix (variable 1 on rows, variable 2 on cols)
+    Cells colored: green (profit) → yellow → red (loss), with £ values
+  → Tornado chart: Which variable has most impact on Net Profit
+  → Break-even line: highlighted row/col where profit = 0
+  → Claude commentary: Key sensitivities + risk interpretation
+
+BACKEND (routers/fpa_sensitivity.py):
+- Build NxM sensitivity matrix using pandas + numpy vectorized calculations
+- Tornado chart: calculate individual impact of each variable (hold others at base)
+- Return: {matrix[][], tornado_data[], breakeven_points[], commentary}
+
+─────────────────────────────────────────
+## NAVIGATION + ROUTING
+─────────────────────────────────────────
+
+Update src/App.tsx to add routes:
+  /fpa/pvm              → PVMAnalysis
+  /fpa/three-statement  → ThreeStatement
+  /fpa/monte-carlo      → MonteCarlo
+  /fpa/arr-dashboard    → ARRDashboard
+  /fpa/headcount        → HeadcountPlanning
+  /reports/board-pack   → BoardPack
+  /fpa/sensitivity      → SensitivityAnalysis
+
+Update sidebar (src/components/Sidebar.tsx):
+Add new "FP&A Suite" group with all 7 items + icons.
+Mark each with a "NEW" badge.
+
+## SHARED REQUIREMENTS FOR ALL MODULES
+
+1. CSV upload component: Reuse existing CSVUploader component pattern
+2. Chart library: Recharts (already installed) — DO NOT add new chart libraries
+3. Claude 4.7 call: Use existing aiProvider.ts pattern, model: "claude-opus-4-5"
+   System prompt for all: "You are a senior FP&A analyst and CFO advisor. 
+   Write in clear, executive-ready English. Be specific with numbers. 
+   Flag risks prominently. Keep commentary to 3 focused paragraphs."
+4. Loading states: Use existing LoadingSpinner component
+5. Error handling: Use existing ErrorBanner component  
+6. Export: Reuse existing exportToExcel() and exportToPDF() utility functions
+7. TypeScript: Strict types for all props and API responses
+8. Tailwind: Match existing dark/light theme variables
+
+## BACKEND SHARED REQUIREMENTS
+
+1. Add all routers to main.py: app.include_router(fpa_pvm.router, prefix="/fpa")
+2. Claude API helper (reuse existing pattern):
+   async def claude_commentary(data: dict, context: str) -> str:
+       → call claude-opus-4-5, finance system prompt, return string
+3. Each endpoint must have: Pydantic request model, try/except, logging
+4. Add synthetic test data generator for each endpoint (for demo mode)
+5. PostgreSQL: Store results in fpa_analysis_results table with timestamp + user_id
+6. All new requirements: add to requirements.txt (scipy for Monte Carlo, etc.)

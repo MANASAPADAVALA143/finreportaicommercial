@@ -1,7 +1,7 @@
 // FP&A Variance Analysis - Main Page
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw, Loader2, Sparkles } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { VarianceSummaryCards } from '../../components/fpa/VarianceSummaryCards';
 import { VarianceTable } from '../../components/fpa/VarianceTable';
@@ -9,9 +9,15 @@ import { AICommentary } from '../../components/fpa/AICommentary';
 import { AlertsPanel } from '../../components/fpa/AlertsPanel';
 import { calculateKPISummaries, extractVarianceAlerts, getPeriodLabel } from '../../utils/varianceUtils';
 import type { PeriodType, CompareType, DepartmentType, CurrencyType } from '../../types/fpa';
+import { postCfoAgentRun } from '../../services/cfoAgents';
+import { useClient } from '../../context/ClientContext';
+
+const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
+  const { activeClient } = useClient();
+  const tenantId = activeClient?.companyId || 'default';
 
   // No auto-load from localStorage — only data from this page's "Upload Data" is shown (clean for video)
   const [uploadedDataOnly, setUploadedDataOnly] = useState<any[]>([]);
@@ -30,6 +36,7 @@ export const VarianceAnalysis = () => {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [cfoAgentSyncing, setCfoAgentSyncing] = useState(false);
 
   // Only data uploaded on this page — no localStorage, no demo data (clean for video)
   const currentVarianceData = uploadedDataOnly;
@@ -316,6 +323,39 @@ export const VarianceAnalysis = () => {
 
   const periodLabel = getPeriodLabel(periodType, month, quarter, year);
 
+  const runAnalysisSyncCommandCenter = async () => {
+    if (!API_BASE || !currentVarianceData.length) {
+      alert('Set VITE_API_URL in frontend .env and upload variance data first.');
+      return;
+    }
+    setCfoAgentSyncing(true);
+    try {
+      const deptLabel = department === 'all' ? 'All Depts' : String(department);
+      const line_items = currentVarianceData
+        .filter((row) => !row.isHeader)
+        .map((row) => ({
+          account: row.category,
+          department: deptLabel,
+          budget: row.budget,
+          actual: row.actual,
+        }));
+      await postCfoAgentRun(
+        'fpa_variance',
+        {
+          line_items,
+          period: periodLabel,
+          company_id: tenantId,
+        },
+        tenantId
+      );
+      alert('Variance run queued for Command Center. Open /command-center to see validation and audit trail.');
+    } catch (e: unknown) {
+      alert('Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCfoAgentSyncing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50">
       {/* Header */}
@@ -344,6 +384,17 @@ export const VarianceAnalysis = () => {
               >
                 <Upload className="w-4 h-4" />
                 Upload Data
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void runAnalysisSyncCommandCenter()}
+                disabled={!currentVarianceData.length || cfoAgentSyncing || !API_BASE}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition flex items-center gap-2 font-medium disabled:opacity-50"
+                title="Server-side variance agent + audit trail for Command Center"
+              >
+                {cfoAgentSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                Run analysis → Command Center
               </button>
 
               {/* Export Button */}

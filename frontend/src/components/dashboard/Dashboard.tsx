@@ -24,6 +24,14 @@ export const Dashboard: React.FC = () => {
 
   const modules = [
     {
+      icon: <Brain className="w-16 h-16 text-violet-400" />,
+      title: 'AGENTIC Command Center',
+      description: 'CFO morning briefing, agent runs, validation audit trail, NEXUS-C chat',
+      link: '/command-center',
+      bgColor: 'bg-violet-500/10',
+      badge: 'AGENTIC',
+    },
+    {
       icon: <LayoutGrid className="w-16 h-16 text-indigo-400" />,
       title: 'R2R Service 1',
       description: 'Close Tracker · TB Variance Analysis · Bank Reconciliation',
@@ -66,6 +74,14 @@ export const Dashboard: React.FC = () => {
       link: '/ifrs-statement',
       bgColor: 'bg-orange-500/10',
       badge: 'New'
+    },
+    {
+      icon: <Brain className="w-16 h-16 text-violet-400" />,
+      title: 'AI IFRS Generator',
+      description: 'AGENTIC: NEXUS pipeline — map, build, audit, fix, notes, narrative, pack (XLSX/DOCX/PDF)',
+      link: '/ifrs/agentic',
+      bgColor: 'bg-violet-500/10',
+      badge: 'AGENTIC'
     },
     {
       icon: <LayoutGrid className="w-16 h-16 text-cyan-400" />,

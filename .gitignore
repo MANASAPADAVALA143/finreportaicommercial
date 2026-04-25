@@ -87,6 +87,7 @@ Thumbs.db
 # Python virtual environment
 backend/venv/
 backend/env/
+backend/.venv-pip-test/
 
 # Board pack PDFs (generated)
 backend/board_packs/*.pdf

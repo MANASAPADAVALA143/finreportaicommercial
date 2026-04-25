@@ -25,6 +25,7 @@ import {
 } from 'recharts';
 import toast from 'react-hot-toast';
 import { useClient } from '../context/ClientContext';
+import { postCfoAgentRun } from '../services/cfoAgents';
 
 const API_URL =
   (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) ||
@@ -106,6 +107,7 @@ export function BankReconciliationPage() {
     return (
       <WorkspaceDetailSection
         workspaceId={wsNumericId}
+        tenantId={tenantId}
         tenantQs={tenantQs}
         currency={activeClient?.currency || 'USD'}
         onBack={() => navigate('/bank-recon')}
@@ -387,11 +389,13 @@ function WorkspaceDashboardSection({
 
 function WorkspaceDetailSection({
   workspaceId,
+  tenantId,
   tenantQs,
   currency,
   onBack,
 }: {
   workspaceId: number;
+  tenantId: string;
   tenantQs: string;
   currency: string;
   onBack: () => void;
@@ -463,6 +467,19 @@ function WorkspaceDetailSection({
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       toast.success(`Imported ${j.lines_imported} lines`);
+      void postCfoAgentRun(
+        'recon',
+        {
+          workspace_id: workspaceId,
+          side,
+          lines_imported: j.lines_imported,
+          period: detail?.workspace?.period_start
+            ? `${detail.workspace.period_start}–${detail.workspace.period_end}`
+            : null,
+          company_id: tenantId,
+        },
+        tenantId
+      ).catch(() => {});
       loadAll();
     } catch (e) {
       toast.error('Upload failed');

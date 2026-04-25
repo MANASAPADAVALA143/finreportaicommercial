@@ -20,8 +20,16 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # CORS
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3004", "http://localhost:3006", "http://localhost:5173"]
+    # CORS — explicit origins; localhost any port also matched via allow_origin_regex in main.py
+    BACKEND_CORS_ORIGINS: list = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://localhost:3004",
+        "http://localhost:3006",
+        "http://localhost:5173",
+        "https://finreportai.railway.app",
+    ]
 
     # Expose FastAPI routes as MCP tools at /mcp (requires `fastapi-mcp` package)
     ENABLE_FASTAPI_MCP: bool = True
@@ -35,5 +43,13 @@ class Settings(BaseSettings):
     VAPI_PHONE_NUMBER_ID: str = ""
     # Optional: n8n webhook URL to alert when VAPI call creation fails (e.g. email Manasa)
     INBOUND_LEAD_VAPI_FAILURE_WEBHOOK: str = ""
+
+    # CFO Command Center — optional morning briefing (APScheduler)
+    ENABLE_CFO_SCHEDULER: bool = False
+    CFO_BRIEFING_HOUR_LOCAL: int = 7
+    CFO_BRIEFING_MINUTE: int = 0
+    CFO_SCHEDULER_TZ: str = "UTC"
+    CFO_BRIEFING_TENANT_IDS: str = "default"
+
 
 settings = Settings()

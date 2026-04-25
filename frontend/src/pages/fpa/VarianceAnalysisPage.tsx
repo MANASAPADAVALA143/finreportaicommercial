@@ -35,6 +35,8 @@ import {
 } from 'recharts';
 import { formatCurrency, formatCurrencyFull, formatPercentage } from '../../utils/varianceUtils';
 import { callAI } from '../../services/aiProvider';
+import { postCfoAgentRun } from '../../services/cfoAgents';
+import { useClient } from '../../context/ClientContext';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -144,6 +146,8 @@ function computeVarianceAnalysis(items: VarianceLineItem[]) {
 
 export function VarianceAnalysisPage() {
   const navigate = useNavigate();
+  const { activeClient } = useClient();
+  const tenantId = activeClient?.companyId || 'default';
   const [rawItems, setRawItems] = useState<VarianceLineItem[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'table' | 'charts' | 'ai'>('overview');
   const [uploadModal, setUploadModal] = useState(false);
@@ -157,6 +161,7 @@ export function VarianceAnalysisPage() {
   } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState('');
+  const [cfoAgentSyncing, setCfoAgentSyncing] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [tableDept, setTableDept] = useState('all');
   const [tableStatus, setTableStatus] = useState('all');
@@ -285,6 +290,37 @@ export function VarianceAnalysisPage() {
     } finally {
       setAiLoading(false);
       setAiStep('');
+    }
+  };
+
+  const runAnalysisSyncCommandCenter = async () => {
+    if (!API_BASE || !rawItems.length) {
+      alert('Set VITE_API_URL and load variance data first.');
+      return;
+    }
+    setCfoAgentSyncing(true);
+    try {
+      const line_items = rawItems.map((i) => ({
+        account: i.account,
+        department: i.department,
+        budget: i.budget,
+        actual: i.actual,
+      }));
+      const period = new Date().toISOString().slice(0, 7);
+      await postCfoAgentRun(
+        'fpa_variance',
+        {
+          line_items,
+          period,
+          company_id: tenantId,
+        },
+        tenantId
+      );
+      alert('Variance run queued for Command Center. Open Command Center to see validation and audit trail.');
+    } catch (e: unknown) {
+      alert('Command Center sync failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCfoAgentSyncing(false);
     }
   };
 
@@ -430,6 +466,17 @@ export function VarianceAnalysisPage() {
               >
                 <Bot className="w-4 h-4" />
                 AI Narrative
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAnalysisSyncCommandCenter()}
+                disabled={!hasData || cfoAgentSyncing || !API_BASE}
+                className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg,#6366F1,#4F46E5)', color: '#fff' }}
+                title="Runs server-side variance agent with validation + audit trail for Command Center"
+              >
+                {cfoAgentSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                Run analysis → Command Center
               </button>
             </div>
           </div>

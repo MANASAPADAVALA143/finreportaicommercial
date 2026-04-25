@@ -77,6 +77,14 @@ _ALIASES: dict[str, list[str]] = {
         "classification",
         "ifrs_category",
     ],
+    "fiscal_year": [
+        "year",
+        "fiscal_year",
+        "fy",
+        "financial_year",
+        "reporting_year",
+        "period_year",
+    ],
 }
 
 # Normalised tokens that look like column titles, not GL codes

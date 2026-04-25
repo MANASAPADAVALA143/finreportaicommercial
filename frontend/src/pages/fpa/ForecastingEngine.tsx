@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -41,9 +41,13 @@ import {
 } from 'recharts';
 import { callAI } from '../../services/aiProvider';
 import * as XLSX from 'xlsx';
+import { postCfoAgentRun } from '../../services/cfoAgents';
+import { useClient } from '../../context/ClientContext';
 
 const ForecastingEngine: React.FC = () => {
   const navigate = useNavigate();
+  const { activeClient } = useClient();
+  const tenantId = activeClient?.companyId || 'default';
   
   // Check data availability
   const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);
@@ -73,6 +77,7 @@ const ForecastingEngine: React.FC = () => {
   const [method, setMethod] = useState('AI-Assisted');
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string | null>(null);
+  const lastForecastCfoKey = useRef<string | null>(null);
 
   // Apply scenario multipliers to data
   const multiplier = scenarioMultipliers[scenario];
@@ -189,6 +194,39 @@ Provide brief insights (max 150 words):
   if (netMargin > 50) {
     console.warn('Net margin unrealistic:', netMargin.toFixed(1) + '% — check expense data scaling (e.g. Lakhs vs Crores)');
   }
+
+  const pushForecastToCommandCenter = useCallback(async () => {
+    const totalRev = adjustedRevenueData.reduce((sum, row) => sum + (Number(row.forecast) || 0), 0);
+    if (totalRev <= 0) return;
+    const refBudget = adjustedRevenueData.reduce((sum, row) => sum + (Number(row.budget) || 0), 0);
+    const ytd = adjustedRevenueData
+      .filter((row) => row.isActual)
+      .reduce((sum, row) => sum + (Number(row.actual) || Number(row.forecast) || 0), 0);
+    await postCfoAgentRun(
+      'fpa_forecast',
+      {
+        revenue_forecast: totalRev,
+        forecast_fy_total: totalRev,
+        reference_budget: refBudget,
+        forecast_data: adjustedRevenueData,
+        model_used: `${method}/${scenario}`,
+        period: forecastPeriod,
+        ytd_actual: ytd,
+        months_elapsed: 10,
+        months_remaining_in_fy: 2,
+        company_id: tenantId,
+      },
+      tenantId
+    );
+  }, [adjustedRevenueData, method, scenario, forecastPeriod, tenantId]);
+
+  useEffect(() => {
+    if (totalRevenueForecast <= 0) return;
+    const key = `${forecastPeriod}:${scenario}:${totalRevenueForecast.toFixed(0)}:${netProfitForecast.toFixed(0)}`;
+    if (lastForecastCfoKey.current === key) return;
+    lastForecastCfoKey.current = key;
+    void pushForecastToCommandCenter().catch((e) => console.warn('[CFO] fpa_forecast', e));
+  }, [forecastPeriod, scenario, totalRevenueForecast, netProfitForecast, pushForecastToCommandCenter]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6">

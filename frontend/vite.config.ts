@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => ({
       : mode === 'github-pages'
         ? '/finreportaicommercial/'
         : '/',
+  // Static Office Add-in is served from `public/addin/` → http://localhost:3006/addin/taskpane.html
   server: {
     port: 3006,
     /** If 3006 is in use, try the next free port (local dev). */

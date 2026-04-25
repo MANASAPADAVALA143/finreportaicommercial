@@ -83,6 +83,7 @@ const IFRSStatementGenerator = safeLazy(() =>
   import('./pages/IFRSStatementGenerator').then((m) => ({ default: m.IFRSStatementGenerator }))
 );
 const IFRSStatementPage = safeLazy(() => import('./pages/ifrs-statement/IFRSStatementPage'));
+const AgenticGenerator = safeLazy(() => import('./pages/ifrs/AgenticGenerator'));
 const TallyIntegrationPage = safeLazy(() => import('./pages/erp/TallyIntegrationPage'));
 const FPASuite = safeLazy(() =>
   import('./pages/fpa/FPASuite').then((m) => ({ default: m.FPASuite }))
@@ -106,6 +107,13 @@ const ScenarioEngine = safeLazy(() =>
   import('./pages/fpa/ScenarioEngine').then((m) => ({ default: m.ScenarioEngine }))
 );
 const ManagementReporting = safeLazy(() => import('./pages/fpa/ManagementReporting'));
+const PVMAnalysis = safeLazy(() => import('./pages/fpa/PVMAnalysis'));
+const ThreeStatement = safeLazy(() => import('./pages/fpa/ThreeStatement'));
+const MonteCarlo = safeLazy(() => import('./pages/fpa/MonteCarlo'));
+const ARRDashboard = safeLazy(() => import('./pages/fpa/ARRDashboard'));
+const HeadcountPlanning = safeLazy(() => import('./pages/fpa/HeadcountPlanning'));
+const SensitivityAnalysis = safeLazy(() => import('./pages/fpa/SensitivityAnalysis'));
+const BoardPack = safeLazy(() => import('./pages/reports/BoardPack'));
 const CFOServices = safeLazy(() => import('./pages/cfo/CFOServices.tsx'));
 const CFODecisionIntelligence = safeLazy(() => import('./pages/CFODecisionIntelligence'));
 const BookkeepingLayout = safeLazy(() =>
@@ -142,6 +150,8 @@ const BookkeepingMonthlyPage = safeLazy(() =>
   }))
 );
 const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
+const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
+const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
 
 /** Matches Vite `base` (root vs GitHub Pages subpath). */
 const normalizedBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '') || '/';
@@ -184,9 +194,12 @@ function App() {
               <Route path="/login" element={<Navigate to="/dashboard" replace />} />
               <Route path="/register" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/command-center" element={<CommandCenter />} />
+              <Route path="/agent-status" element={<AgentStatus />} />
               <Route path="/cfo-dashboard" element={<CFODashboard />} />
               <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
               <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
+              <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
               <Route path="/board-pack" element={<IFRSStatementPage />} />
               <Route path="/erp/tally" element={<TallyIntegrationPage />} />
               <Route path="/r2r" element={<R2RModule />} />
@@ -209,6 +222,13 @@ function App() {
               <Route path="/fpa/scenario" element={<ScenarioEngine />} />
               <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
               <Route path="/fpa/reports" element={<ManagementReporting />} />
+              <Route path="/fpa/pvm" element={<PVMAnalysis />} />
+              <Route path="/fpa/three-statement" element={<ThreeStatement />} />
+              <Route path="/fpa/monte-carlo" element={<MonteCarlo />} />
+              <Route path="/fpa/arr-dashboard" element={<ARRDashboard />} />
+              <Route path="/fpa/headcount" element={<HeadcountPlanning />} />
+              <Route path="/fpa/sensitivity" element={<SensitivityAnalysis />} />
+              <Route path="/reports/board-pack" element={<BoardPack />} />
               <Route path="/cfo" element={<CFOServices />} />
               <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
               <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />

@@ -8,10 +8,13 @@ const apiBase = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API
 export async function callAI(prompt: string, options?: {
   maxTokens?: number;
   temperature?: number;
+  /** Passed to backend as model_id (e.g. claude-opus-4-5 when your key supports it). */
+  modelId?: string;
 }): Promise<string> {
 
   const maxTokens = options?.maxTokens || 2000;
   const temperature = options?.temperature || 0.3;
+  const modelId = options?.modelId ?? "";
 
   try {
     if (AI_PROVIDER === "backend") {
@@ -25,7 +28,7 @@ export async function callAI(prompt: string, options?: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          model_id: "",
+          model_id: modelId,
           max_tokens: maxTokens,
           temperature,
         }),

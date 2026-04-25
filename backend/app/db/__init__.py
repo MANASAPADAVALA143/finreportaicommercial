@@ -11,6 +11,10 @@ def init_db():
     import app.models.bookkeeping  # noqa: F401 - bookkeeping autopilot
     import app.models.connector_client  # noqa: F401 - Tally connector API keys
     import app.models.r2r_learning  # noqa: F401 - R2R client learning loop
+    import app.models.fpa_suite  # noqa: F401 - FP&A extended suite snapshots
+    import app.models.ifrs_agentic  # noqa: F401 - multi-agent IFRS orchestration
+    import app.models.financial_statement_vault  # noqa: F401 - IAS 1 comparative vault
+    import app.models.cfo_command_center  # noqa: F401 - CFO Command Center agent runs / briefings
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:

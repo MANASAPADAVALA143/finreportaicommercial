@@ -626,10 +626,20 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
     }
 
 
-def build_tb_data_from_db(trial_balance_id: int, db: Session) -> dict[str, Any]:
+def build_tb_data_from_db(
+    trial_balance_id: int,
+    db: Session,
+    *,
+    prior_trial_balance_id: int | None = None,
+    manual_prior: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Build tb_data for disclosure_generator / compliance_checker from TB lines
     and latest GL mappings per line.
+
+    Optional ``prior_trial_balance_id`` merges prior-year metrics with a ``prior_`` prefix
+    for IAS 1 comparative disclosure prompts (additive; does not change statement DB rows).
+    ``manual_prior`` supplies Option C key totals when no prior TB exists.
     """
     tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
     if not tb:
@@ -696,7 +706,7 @@ def build_tb_data_from_db(trial_balance_id: int, db: Session) -> dict[str, Any]:
     ncl = fp_section_sum("Non-current Liabilities")
     eq = fp_section_sum("Equity")
 
-    return {
+    out: dict[str, Any] = {
         "company_name": tb.company_name,
         "period_end": str(tb.period_end) if tb.period_end else "",
         "period_start": str(tb.period_start) if tb.period_start else "",
@@ -782,3 +792,32 @@ def build_tb_data_from_db(trial_balance_id: int, db: Session) -> dict[str, Any]:
         "approval_date": str(tb.period_end) if tb.period_end else "[DATE]",
         "avg_interest_rate": 5.5,
     }
+
+    if prior_trial_balance_id and prior_trial_balance_id != trial_balance_id:
+        try:
+            prior_d = build_tb_data_from_db(
+                prior_trial_balance_id,
+                db,
+                prior_trial_balance_id=None,
+                manual_prior=None,
+            )
+            for k, v in prior_d.items():
+                if k in ("trial_balance_id", "statements", "generated_at"):
+                    continue
+                nk = k if str(k).startswith("prior_") else f"prior_{k}"
+                out[nk] = v
+            out["prior_period_end"] = prior_d.get("period_end")
+            out["has_comparative"] = True
+        except Exception:
+            pass
+
+    if manual_prior:
+        for k, v in manual_prior.items():
+            key = k if str(k).startswith("prior_") else f"prior_{k}"
+            if isinstance(v, (int, float)):
+                out[key] = float(v)
+            else:
+                out[key] = v
+        out["has_comparative"] = True
+
+    return out

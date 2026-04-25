@@ -7,8 +7,10 @@
     "node": ">=18.0.0"
   },
   "scripts": {
+    "sync:addin": "node scripts/sync-addin.js",
+    "dev:addin": "npm run sync:addin && npm run dev",
     "dev": "vite",
-    "dev:help": "node -e \"console.log(['Backend (separate terminal): cd ../backend  then  python -m uvicorn app.main:app --reload --port 8000','Frontend: npm run dev  (http://localhost:3006)','frontend/.env: VITE_API_URL=http://localhost:8000','backend/.env: ANTHROPIC_API_KEY=sk-ant-...'].join('\\n'))\"",
+    "dev:help": "node -e \"console.log(['Backend (separate terminal): cd ../backend  then  python -m uvicorn app.main:app --reload --port 8000','Frontend: npm run dev  (http://localhost:3006)','Office add-in: npm run dev:addin  (copies excel-addin → public/addin then Vite)','frontend/.env: VITE_API_URL=http://localhost:8000','backend/.env: ANTHROPIC_API_KEY=sk-ant-...'].join('\\n'))\"",
     "build": "vite build",
     "build:deploy": "vite build --mode github-pages",
     "preview": "vite preview",

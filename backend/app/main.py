@@ -19,8 +19,16 @@ from app.api.routes import (
     cfo_dashboard,
     ifrs_statements,
     ifrs_week1,
+    ifrs_agentic,
     nova,
     fpa_variance,
+    fpa_pvm,
+    fpa_three_statement,
+    fpa_monte_carlo,
+    fpa_arr,
+    fpa_headcount,
+    fpa_sensitivity,
+    reports_board_pack,
     r2r_history,
     stateful_journal,
     bank_recon,
@@ -32,6 +40,8 @@ from app.api.routes import (
     excel_suite,
     excel_addon_routes,
     voice_inbound,
+    chat,
+    cfo_agents,
 )
 from app.db import init_db
 
@@ -43,15 +53,18 @@ app = FastAPI(
     version=settings.VERSION
 )
 
-# CORS — list from env + in DEBUG allow any localhost port (avoids 3006 missing from .env)
+# CORS — explicit list + regex for localhost ports and Excel / Microsoft 365 web clients
 _cors_kwargs: dict = {
-    "allow_origins": settings.BACKEND_CORS_ORIGINS,
+    "allow_origins": list(settings.BACKEND_CORS_ORIGINS),
     "allow_credentials": True,
     "allow_methods": ["*"],
     "allow_headers": ["*"],
 }
-if settings.DEBUG:
-    _cors_kwargs["allow_origin_regex"] = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+# Excel Online / Office add-ins use subdomains of officeapps.live.com, office.com, microsoft.com
+_cors_kwargs["allow_origin_regex"] = (
+    r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    r"|https://([\w\-]+\.)*(officeapps\.live\.com|office\.com|microsoft\.com)"
+)
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
@@ -72,8 +85,19 @@ app.include_router(upload_routes.router)
 app.include_router(cfo_dashboard.router)
 app.include_router(ifrs_statements.router)
 app.include_router(ifrs_week1.router, prefix="/api/ifrs")
+app.include_router(ifrs_agentic.router)
 app.include_router(nova.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
+app.include_router(cfo_agents.agents_router)
+app.include_router(cfo_agents.briefing_router)
 app.include_router(fpa_variance.router)
+app.include_router(fpa_pvm.router, prefix="/api/fpa")
+app.include_router(fpa_three_statement.router, prefix="/api/fpa")
+app.include_router(fpa_monte_carlo.router, prefix="/api/fpa")
+app.include_router(fpa_arr.router, prefix="/api/fpa")
+app.include_router(fpa_headcount.router, prefix="/api/fpa")
+app.include_router(fpa_sensitivity.router, prefix="/api/fpa")
+app.include_router(reports_board_pack.router)
 app.include_router(r2r_history.router)
 app.include_router(stateful_journal.router)
 app.include_router(bank_recon.router)

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FinReportAI</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="taskpane.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>FinReportAI</h1>
+        <div id="api-url-display"></div>
+      </div>
+      <div class="status">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Claude · Connected</span>
+      </div>
+    </header>
+    <main>
+      <section class="chat-panel">
+        <div class="chat-head">FinReportAI Assistant</div>
+        <div id="chat-messages" aria-live="polite"></div>
+        <div id="thinking" class="thinking hidden">Thinking…</div>
+        <div class="chat-input-row">
+          <input id="chat-input" type="text" placeholder="Type your question…" autocomplete="off" />
+          <button class="btn btn-primary" id="btn-send" type="button">Send</button>
+          <button class="btn btn-ghost" id="btn-clear" type="button">Clear</button>
+        </div>
+      </section>
+
+      <section>
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 8px">FP&amp;A modules</div>
+        <div class="modules">
+          <button class="module" type="button" data-module="pvm">PVM Analysis</button>
+          <button class="module" type="button" data-module="variance">Variance</button>
+          <button class="module" type="button" data-module="montecarlo">Monte Carlo</button>
+          <button class="module" type="button" data-module="arr">ARR Dashboard</button>
+          <button class="module" type="button" data-module="headcount">Headcount</button>
+          <button class="module" type="button" data-module="sensitivity">Sensitivity</button>
+          <button class="module board" type="button" data-module="boardpack">Board Pack PDF</button>
+        </div>
+      </section>
+
+      <div id="status-bar"></div>
+
+      <details class="settings">
+        <summary>Settings</summary>
+        <div class="settings-body">
+          <label>
+            API base URL (empty = same host + Vite proxy to backend)
+            <input id="cfg-api-base" type="text" placeholder="https://finreportai.railway.app" />
+          </label>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button class="btn btn-primary" id="btn-save-cfg" type="button">Save</button>
+            <button class="btn btn-ghost" id="btn-test" type="button">Test connection</button>
+          </div>
+        </div>
+      </details>
+    </main>
+    <script src="taskpane.js"></script>
+  </body>
+</html>
