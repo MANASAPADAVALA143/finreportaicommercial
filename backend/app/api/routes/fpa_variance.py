@@ -70,6 +70,46 @@ class AINarrativeResponse(BaseModel):
     action_items: List[str]
 
 
+_FPA_CCY_SYMBOL: Dict[str, str] = {
+    "INR": "₹",
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "AED": "AED ",
+}
+
+
+def _fp_format_currency(amount: float, currency: str = "USD", fmt: str = "GLOBAL") -> str:
+    """Match frontend varianceUtils.formatCurrency for LLM prompts (compact M/K or Cr/L)."""
+    cy = (currency or "USD").upper().strip()
+    loc = (fmt or "GLOBAL").upper().strip()
+    if loc not in ("IN", "GLOBAL"):
+        loc = "GLOBAL"
+    sym = _FPA_CCY_SYMBOL.get(cy, f"{cy} ")
+    abs_a = abs(float(amount))
+    neg = float(amount) < 0
+    prefix = "-" if neg else ""
+
+    if loc == "IN" and cy == "INR":
+        if abs_a >= 10_000_000:
+            return f"{prefix}{sym}{abs_a / 10_000_000:.2f}Cr"
+        if abs_a >= 100_000:
+            return f"{prefix}{sym}{abs_a / 100_000:.2f}L"
+        return f"{prefix}{sym}{abs_a:,.0f}"
+
+    if loc == "IN":
+        return f"{prefix}{sym}{abs_a:,.0f}"
+
+    if abs_a >= 1_000_000:
+        m = abs_a / 1_000_000
+        decimals = 1 if m >= 100 else 2
+        return f"{prefix}{sym}{m:.{decimals}f}M"
+    if abs_a >= 100_000:
+        k = abs_a / 1000
+        return f"{prefix}{sym}{k:.1f}K"
+    return f"{prefix}{sym}{abs_a:,.0f}"
+
+
 def _parse_num(val: Any) -> float:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return 0.0
@@ -297,6 +337,33 @@ async def calculate_variance(body: CalculateRequest):
             "actual": _parse_num(i.get("actual", 0)),
         })
     result = _calculate(normalized)
+    try:
+        from app.agents.intelligence import generate_insight
+        from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
+        from app.core.database import SessionLocal
+
+        _db = SessionLocal()
+        try:
+            _history = await read_agent_memory("fpa_variance", _db)
+            _insight = await generate_insight(
+                "fpa_variance",
+                {
+                    "variance_result": result,
+                    "source_route": "/fpa/variance",
+                    "deep_link": "/fpa/variance",
+                },
+                _history,
+            )
+            _insight["source_route"] = "/fpa/variance"
+            _insight["deep_link"] = "/fpa/variance"
+            _insight["module_label"] = "FP&A Variance"
+            _input = body.model_dump() if hasattr(body, "model_dump") else (body.dict() if hasattr(body, "dict") else {})
+            await store_agent_run("fpa_variance", _input, result, _insight, _db)
+            await update_agent_memory("fpa_variance", result, _db)
+        finally:
+            _db.close()
+    except Exception as _e:
+        print(f"[agent_run] fpa_variance: {_e}")
     return CalculateResponse(**result)
 
 
@@ -359,6 +426,9 @@ async def get_variance_template():
 
 class AINarrativeRequest(BaseModel):
     variance_analysis: Dict[str, Any]  # full object from calculate
+    narrative_mode: str = "cfo"
+    currency: str = "USD"
+    currency_format: str = "GLOBAL"  # IN | GLOBAL — same as FP&A Settings
 
 
 class TBLineCommentaryRequest(BaseModel):
@@ -418,20 +488,112 @@ async def generate_ai_narrative(body: AINarrativeRequest):
     total_actual = va.get("total_actual", 0)
     total_variance = va.get("total_variance", 0)
     total_variance_pct = va.get("total_variance_pct", 0)
+    narrative_mode = str(getattr(body, "narrative_mode", "cfo") or "cfo").lower().strip()
+    if narrative_mode not in {"cfo", "board", "investor"}:
+        narrative_mode = "cfo"
+    currency = str(getattr(body, "currency", None) or "USD").upper().strip()
+    if currency not in _FPA_CCY_SYMBOL:
+        currency = "USD"
+    currency_fmt = str(getattr(body, "currency_format", None) or "GLOBAL").upper().strip()
+    if currency_fmt not in ("IN", "GLOBAL"):
+        currency_fmt = "GLOBAL"
+    fc = lambda a: _fp_format_currency(float(a), currency, currency_fmt)
+
+    def _name(item: Dict[str, Any]) -> str:
+        return str(item.get("account", "")).lower()
+
+    def _is_revenue(item: Dict[str, Any]) -> bool:
+        n = _name(item)
+        return bool(re.search(r"revenue|sales|income", n)) and not bool(
+            re.search(r"cogs|cost of sales|cost of goods", n)
+        )
+
+    def _is_expense(item: Dict[str, Any]) -> bool:
+        n = _name(item)
+        return bool(
+            re.search(
+                r"expense|cost|cogs|payroll|rent|marketing|admin|interest|depreciation|amort",
+                n,
+            )
+        )
+
+    def _is_marketing(item: Dict[str, Any]) -> bool:
+        return bool(re.search(r"marketing|advertis", _name(item)))
+
+    def _is_cogs(item: Dict[str, Any]) -> bool:
+        return bool(re.search(r"cogs|cost of sales|cost of goods", _name(item)))
+
+    revenue_rows = [i for i in line_items if _is_revenue(i)]
+    expense_rows = [i for i in line_items if _is_expense(i)]
+    marketing_rows = [i for i in line_items if _is_marketing(i)]
+    cogs_rows = [i for i in line_items if _is_cogs(i)]
+
+    revenue_budget = sum(float(i.get("budget", 0) or 0) for i in revenue_rows)
+    revenue_actual = sum(float(i.get("actual", 0) or 0) for i in revenue_rows)
+    cost_budget = sum(float(i.get("budget", 0) or 0) for i in expense_rows)
+    cost_actual = sum(float(i.get("actual", 0) or 0) for i in expense_rows)
+    net_profit_budget = revenue_budget - cost_budget
+    net_profit_actual = revenue_actual - cost_actual
+    net_profit_variance = net_profit_actual - net_profit_budget
+    revenue_growth_pct = ((revenue_actual - revenue_budget) / revenue_budget * 100) if revenue_budget else 0
+    cost_growth_pct = ((cost_actual - cost_budget) / cost_budget * 100) if cost_budget else 0
+    net_profit_growth_pct = ((net_profit_variance / abs(net_profit_budget)) * 100) if net_profit_budget else 0
+
+    marketing_budget = sum(float(i.get("budget", 0) or 0) for i in marketing_rows)
+    marketing_actual = sum(float(i.get("actual", 0) or 0) for i in marketing_rows)
+    marketing_growth_pct = ((marketing_actual - marketing_budget) / marketing_budget * 100) if marketing_budget else 0
+    budget_cogs = sum(float(i.get("budget", 0) or 0) for i in cogs_rows)
+    actual_cogs = sum(float(i.get("actual", 0) or 0) for i in cogs_rows)
+    budget_cogs_pct = (budget_cogs / revenue_budget * 100) if revenue_budget else 0
+    actual_cogs_pct = (actual_cogs / revenue_actual * 100) if revenue_actual else 0
+    cogs_growth_pct = (
+        ((actual_cogs - budget_cogs) / budget_cogs * 100) if budget_cogs else 0.0
+    )
+
+    status_label = (
+        "High Growth with Margin Expansion"
+        if revenue_growth_pct > cost_growth_pct and net_profit_actual > net_profit_budget
+        else "Growth with Margin Pressure"
+        if revenue_growth_pct > 0 and cost_growth_pct > revenue_growth_pct
+        else "Underperforming"
+        if revenue_growth_pct < 0 and cost_growth_pct > 0
+        else "Mixed performance"
+    )
 
     material = [i for i in line_items if i.get("material") or abs(i.get("variance_pct", 0)) > 10]
     material_text = "\n".join(
-        f"- {i.get('account', '')} ({i.get('department', '')}): Budget {i.get('budget', 0):,.0f}, Actual {i.get('actual', 0):,.0f}, Variance {i.get('variance', 0):,.0f} ({i.get('variance_pct', 0):.1f}%)"
+        f"- {i.get('account', '')} ({i.get('department', '')}): Budget {fc(i.get('budget', 0))}, "
+        f"Actual {fc(i.get('actual', 0))}, Variance {fc(i.get('variance', 0))} ({i.get('variance_pct', 0):.1f}%)"
         for i in material[:15]
     )
     dept_text = "\n".join(
-        f"- {d.get('department', '')}: Budget {d.get('budget', 0):,.0f}, Actual {d.get('actual', 0):,.0f}, Variance {d.get('variance_pct', 0):.1f}%"
+        f"- {d.get('department', '')}: Budget {fc(d.get('budget', 0))}, Actual {fc(d.get('actual', 0))}, "
+        f"Variance {d.get('variance_pct', 0):.1f}%"
         for d in dept_summary
     )
 
-    prompt = f"""You are a CFO advisor. Analyse these budget variances and provide:
+    mode_instructions = (
+        "NARRATIVE MODE: CFO Summary. Keep detailed commentary with precise numbers and specific operational actions."
+        if narrative_mode == "cfo"
+        else "NARRATIVE MODE: Board Presentation. Keep commentary concise and visual-first. Max 3 bullets in insights."
+        if narrative_mode == "board"
+        else "NARRATIVE MODE: Investor Update. Emphasize growth story with TAM context, while explicitly covering key risks."
+    )
 
-1) EXECUTIVE SUMMARY: One paragraph (3-5 sentences) for the board. State: "Overall the company spent ₹X against a budget of ₹Y, resulting in a ₹Z unfavorable/favorable variance (X%)." Name the primary drivers (top 2-3). Say what needs immediate attention and one positive note on savings. Be specific with numbers. Use Indian number style (e.g. ₹1,20,00,000).
+    prompt = f"""You are a CFO advisor. Analyse these budget variances and provide:
+{mode_instructions}
+Currency for all amounts in your answer: {currency} ({currency_fmt} compact style as in DATA — do not mix lakh/crore wording with M/K).
+
+1) EXECUTIVE SUMMARY: One paragraph (3-5 sentences) for the board.
+   Start with this exact logic (use these formatted figures):
+   "Net profit increased to {fc(net_profit_actual)} from a budget of {fc(net_profit_budget)}, resulting in a favorable variance of {fc(net_profit_variance)} ({net_profit_growth_pct:.1f}%)."
+   IMPORTANT: Net profit is NEVER "spent".
+   Add this line in summary: "The rapid revenue growth may increase working capital requirements, requiring close monitoring of cash flow and liquidity."
+   If marketing grew slower than revenue, use this tone exactly:
+   "Marketing costs increased by {marketing_growth_pct:.1f}% and should be evaluated to ensure continued ROI efficiency as the business scales."
+   Do NOT use aggressive wording like "requires immediate attention" for marketing in this case.
+   Include COGS insight when relevant, using this style with real percentages from DATA:
+   "A key highlight is that COGS increased by only {cogs_growth_pct:.1f}% relative to {revenue_growth_pct:.1f}% revenue growth, indicating strong operating leverage."
 
 2) LINE BY LINE COMMENTARY: For each material variance listed below, give:
    - WHY: One sentence on likely cause.
@@ -441,9 +603,16 @@ Format each as: "Account Name — WHY: ... RECOMMENDATION: ..."
 3) ACTION ITEMS: Exactly 3-5 numbered action items. Mix: URGENT (investigate overspend), MONITOR (watch trend), OPTIMISE (reallocate savings). Format: "1. 🔴 URGENT: ..." or "2. 🟡 MONITOR: ..." or "3. 🟢 OPTIMISE: ..."
 
 DATA:
-Total Budget: ₹{total_budget:,.0f}
-Total Actual: ₹{total_actual:,.0f}
-Total Variance: ₹{total_variance:,.0f} ({total_variance_pct:+.1f}%)
+Total Budget: {fc(total_budget)}
+Total Actual: {fc(total_actual)}
+Total Variance: {fc(total_variance)} ({total_variance_pct:+.1f}%)
+Revenue: {fc(revenue_actual)} vs budget {fc(revenue_budget)} ({revenue_growth_pct:+.1f}%)
+Costs: {fc(cost_actual)} vs budget {fc(cost_budget)} ({cost_growth_pct:+.1f}%)
+Net Profit: {fc(net_profit_actual)} vs budget {fc(net_profit_budget)} ({net_profit_growth_pct:+.1f}%)
+Marketing: {fc(marketing_actual)} vs budget {fc(marketing_budget)} ({marketing_growth_pct:+.1f}%)
+Budget COGS%: {budget_cogs_pct:.1f}% | Actual COGS%: {actual_cogs_pct:.1f}%
+COGS YoY vs budget %: {cogs_growth_pct:.1f}% | Revenue growth %: {revenue_growth_pct:.1f}%
+Overall status anchor: {status_label}
 
 Material line items:
 {material_text}

@@ -1,15 +1,16 @@
 // FP&A Variance Analysis - Variance Alerts Panel Component
 import { AlertTriangle, CheckCircle, AlertCircle } from 'lucide-react';
-import type { VarianceAlert } from '../../types/fpa';
+import type { VarianceAlert, CurrencyFormatLocale } from '../../types/fpa';
 import { formatCurrency, formatPercentage } from '../../utils/varianceUtils';
 
 interface Props {
   alerts: VarianceAlert[];
   currency?: string;
+  currencyFormat?: CurrencyFormatLocale;
   onAlertClick?: (alert: VarianceAlert) => void;
 }
 
-export const AlertsPanel = ({ alerts, currency = "INR", onAlertClick }: Props) => {
+export const AlertsPanel = ({ alerts, currency = "INR", currencyFormat, onAlertClick }: Props) => {
   // Group alerts by threshold
   const criticalAlerts = alerts.filter(a => a.threshold === "critical");
   const warningAlerts = alerts.filter(a => a.threshold === "warning");
@@ -53,7 +54,7 @@ export const AlertsPanel = ({ alerts, currency = "INR", onAlertClick }: Props) =
               </span>
             </div>
             <p className="text-xs text-gray-600 mb-1">
-              {formatCurrency(Math.abs(alert.variance), currency)} {alert.favorable ? 'under' : 'over'} budget
+              {formatCurrency(Math.abs(alert.variance), currency, currencyFormat)} {alert.favorable ? 'under' : 'over'} budget
             </p>
             {alert.message && (
               <p className="text-xs text-gray-500 italic">

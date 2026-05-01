@@ -44,6 +44,9 @@ export type CompareType = "budget" | "lastYear" | "lastQuarter" | "forecast";
 export type DepartmentType = "all" | "sales" | "operations" | "hr" | "it" | "marketing" | "finance";
 export type CurrencyType = "INR" | "USD" | "EUR" | "GBP" | "AED";
 
+/** Indian lakh/crore grouping vs international M / compact K */
+export type CurrencyFormatLocale = "IN" | "GLOBAL";
+
 export interface PeriodSelection {
   periodType: PeriodType;
   month?: number;             // 1-12

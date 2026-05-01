@@ -1,12 +1,10 @@
 // FP&A Variance Analysis - Main P&L Variance Table Component
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
-import type { VarianceRow } from '../../types/fpa';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import type { VarianceRow, CurrencyFormatLocale } from '../../types/fpa';
 import { 
   formatCurrency, 
-  formatCurrencyFull, 
   formatPercentage, 
-  getVarianceColor, 
   getVarianceIcon,
   getVarianceArrow,
   getVisibleRows,
@@ -16,10 +14,11 @@ import {
 interface Props {
   data: VarianceRow[];
   currency?: string;
+  currencyFormat?: CurrencyFormatLocale;
   onRowClick?: (row: VarianceRow) => void;
 }
 
-export const VarianceTable = ({ data: initialData, currency = "INR", onRowClick }: Props) => {
+export const VarianceTable = ({ data: initialData, currency = "INR", currencyFormat, onRowClick }: Props) => {
   const [data, setData] = useState(initialData);
 
   useEffect(() => {
@@ -62,6 +61,7 @@ export const VarianceTable = ({ data: initialData, currency = "INR", onRowClick 
                 key={row.id}
                 row={row}
                 currency={currency}
+                currencyFormat={currencyFormat}
                 onToggle={handleToggleExpand}
                 onClick={onRowClick}
                 isEven={index % 2 === 0}
@@ -77,12 +77,13 @@ export const VarianceTable = ({ data: initialData, currency = "INR", onRowClick 
 interface TableRowProps {
   row: VarianceRow;
   currency: string;
+  currencyFormat?: CurrencyFormatLocale;
   onToggle: (rowId: string) => void;
   onClick?: (row: VarianceRow) => void;
   isEven: boolean;
 }
 
-const TableRow = ({ row, currency, onToggle, onClick, isEven }: TableRowProps) => {
+const TableRow = ({ row, currency, currencyFormat, onToggle, onClick, isEven }: TableRowProps) => {
   const indentLevel = row.level || 0;
   const paddingLeft = 24 + (indentLevel * 24); // 24px base + 24px per level
 
@@ -175,17 +176,17 @@ const TableRow = ({ row, currency, onToggle, onClick, isEven }: TableRowProps) =
 
         {/* Actual (Oct) */}
         <td className={`px-4 py-3 text-right ${row.isHeader ? 'font-bold' : ''}`}>
-          {formatCurrency(row.actual, currency)}
+          {formatCurrency(row.actual, currency, currencyFormat)}
         </td>
 
         {/* Budget (Oct) */}
         <td className={`px-4 py-3 text-right text-gray-600 ${row.isHeader ? 'font-semibold' : ''}`}>
-          {formatCurrency(row.budget, currency)}
+          {formatCurrency(row.budget, currency, currencyFormat)}
         </td>
 
         {/* Variance */}
         <td className={`px-4 py-3 text-right ${getVarianceStyle(row.favorable, row.threshold)}`}>
-          {formatCurrency(row.variance, currency)}
+          {formatCurrency(row.variance, currency, currencyFormat)}
         </td>
 
         {/* Variance % */}
@@ -239,12 +240,12 @@ const TableRow = ({ row, currency, onToggle, onClick, isEven }: TableRowProps) =
 
         {/* YTD Actual */}
         <td className={`px-4 py-3 text-right ${row.isHeader ? 'font-bold' : ''}`}>
-          {formatCurrency(row.ytdActual, currency)}
+          {formatCurrency(row.ytdActual, currency, currencyFormat)}
         </td>
 
         {/* YTD Budget */}
         <td className={`px-4 py-3 text-right text-gray-600 ${row.isHeader ? 'font-semibold' : ''}`}>
-          {formatCurrency(row.ytdBudget, currency)}
+          {formatCurrency(row.ytdBudget, currency, currencyFormat)}
         </td>
 
         {/* YTD Variance % */}
@@ -305,13 +306,13 @@ const TableRow = ({ row, currency, onToggle, onClick, isEven }: TableRowProps) =
           <td colSpan={15} className="px-8 py-3 text-sm text-indigo-900">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
-                <span className="font-semibold">Volume impact:</span> {formatCurrency(row.decomposition.volume, currency)}
+                <span className="font-semibold">Volume impact:</span> {formatCurrency(row.decomposition.volume, currency, currencyFormat)}
               </div>
               <div>
-                <span className="font-semibold">Price/Cost impact:</span> {formatCurrency(row.decomposition.price, currency)}
+                <span className="font-semibold">Price/Cost impact:</span> {formatCurrency(row.decomposition.price, currency, currencyFormat)}
               </div>
               <div>
-                <span className="font-semibold">Mix/Efficiency:</span> {formatCurrency(row.decomposition.mix, currency)}
+                <span className="font-semibold">Mix/Efficiency:</span> {formatCurrency(row.decomposition.mix, currency, currencyFormat)}
               </div>
             </div>
             {row.decomposition.note ? (

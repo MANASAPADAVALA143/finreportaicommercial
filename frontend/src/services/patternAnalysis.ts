@@ -869,13 +869,19 @@ const SENSITIVITY_DISPLAY: Record<PatternSensitivity, string> = {
   strict: 'Strict',
 };
 
+export type AnalyzePatternBackendOptions = {
+  /** When aborted (tab switch / Strict Mode re-run), fetch rejects with AbortError */
+  signal?: AbortSignal;
+};
+
 export async function analyzePatternBackend(
   rows: Record<string, unknown>[],
   sensitivity: PatternSensitivity,
   apiBase: string,
   customThreshold: string = '40',
   materialityAmount: string = '',
-  materialityPct: string = ''
+  materialityPct: string = '',
+  opts?: AnalyzePatternBackendOptions
 ): Promise<AnalyzeEntriesResult> {
   if (!rows?.length) {
     const emptyBaseline = buildClientBaseline([]);
@@ -897,22 +903,73 @@ export async function analyzePatternBackend(
     };
   }
 
-  const base = (apiBase && String(apiBase).trim()) || '';
-  const url = `${base.replace(/\/$/, '')}/api/r2r/pattern/analyse`;
-  const form = new FormData();
-  form.append('rows_json', JSON.stringify(rows));
-  form.append('sensitivity', sensitivity);
-  if (customThreshold != null && String(customThreshold).trim() !== '') {
-    form.append('custom_threshold', String(customThreshold).trim());
+  let base = (apiBase && String(apiBase).trim()) || '';
+  // Browser on localhost: use same-origin `/api/...` so Vite's dev proxy forwards to FastAPI (avoids CORS / wrong host).
+  if (typeof window !== 'undefined') {
+    const h = window.location.hostname;
+    if (
+      (h === 'localhost' || h === '127.0.0.1') &&
+      (base === '' || /localhost:8000|127\.0\.0\.1:8000/.test(base))
+    ) {
+      base = '';
+    }
   }
+  const url = `${base.replace(/\/$/, '')}/api/r2r/pattern/analyse`;
   const ma = String(materialityAmount ?? '').trim();
   const mp = String(materialityPct ?? '').trim();
-  if (ma !== '') form.append('materiality_amount', ma);
-  if (mp !== '') form.append('materiality_pct', mp);
+  const thTrim =
+    customThreshold != null && String(customThreshold).trim() !== ''
+      ? String(customThreshold).trim()
+      : undefined;
+  const jsonBody: Record<string, unknown> = {
+    rows,
+    sensitivity,
+    ...(thTrim ? { custom_threshold: thTrim } : {}),
+    ...(ma !== '' ? { materiality_amount: ma } : {}),
+    ...(mp !== '' ? { materiality_pct: mp } : {}),
+  };
 
   const analysisLabel = `${SENSITIVITY_DISPLAY[sensitivity] ?? sensitivity} threshold (${customThreshold}+)`;
 
-  const res = await fetch(url, { method: 'POST', body: form });
+  const controller = new AbortController();
+  const timeoutMs = 120_000;
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const external = opts?.signal;
+  if (external) {
+    if (external.aborted) {
+      clearTimeout(timeoutId);
+      controller.abort();
+    } else {
+      external.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(jsonBody),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError') {
+      if (timedOut) {
+        throw new Error(
+          `Pattern engine timed out after ${timeoutMs / 1000}s. Ensure the API is running (Vite proxies /api to port 8000) or try a smaller file.`
+        );
+      }
+      throw err;
+    }
+    throw err as Error;
+  }
+  clearTimeout(timeoutId);
+
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { detail?: string };
     throw new Error(err.detail || `Pattern analysis failed (${res.status})`);

@@ -2,12 +2,44 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import pandas as pd
+import numpy as np
 import io
 from app.services.journal_ai_service import journal_ai_service
 from app.core.database import get_db
 from app.core.security import get_current_user
 
 router = APIRouter(prefix="/api/journal-entries", tags=["journal-entries"])
+
+
+def _normalize_journal_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip + lowercase headers so Excel/CSV variants map reliably."""
+    out = df.copy()
+    out.columns = [str(c).strip().lower().replace(" ", "_") for c in out.columns]
+    return out
+
+
+def _derive_debit_credit_from_amount(df: pd.DataFrame) -> None:
+    """
+    Many exports use a single signed `amount` (Dr +, Cr -) or unsigned line amounts.
+    Mutates df in place when debit/credit are missing.
+    """
+    has_debit = "debit" in df.columns
+    has_credit = "credit" in df.columns
+    if has_debit and has_credit:
+        df["debit"] = pd.to_numeric(df["debit"], errors="coerce").fillna(0.0)
+        df["credit"] = pd.to_numeric(df["credit"], errors="coerce").fillna(0.0)
+        return
+    amt_col = None
+    for c in ("amount", "value", "amt", "line_amount", "posting_amount", "net_amount"):
+        if c in df.columns:
+            amt_col = c
+            break
+    if amt_col is None:
+        return
+    amt = pd.to_numeric(df[amt_col], errors="coerce").fillna(0.0)
+    # Signed convention: positive = debit, negative = credit
+    df["debit"] = np.where(amt > 0, amt, 0.0)
+    df["credit"] = np.where(amt < 0, -amt, 0.0)
 
 
 @router.get("/ai-status")
@@ -38,7 +70,9 @@ async def upload_journal_entries(
     Upload and analyze journal entries from CSV or Excel file with configurable threshold.
     
     Supported formats: .csv, .xlsx, .xls
-    Required columns: id, date, account, description, debit, credit, preparer, approver
+    Required (after normalisation): id, date, account, description, debit, credit.
+    Aliases accepted: journal_id→id; posting_date→date; amount→debit/credit (signed: +debit, −credit);
+    user_id / entity→preparer when preparer absent; memo/narration/source→description when needed.
     
     Args:
         file: CSV or Excel file containing journal entries
@@ -76,7 +110,9 @@ async def upload_journal_entries(
         else:
             # Read Excel (.xlsx or .xls)
             df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
-        
+
+        df = _normalize_journal_headers(df)
+
         # CRITICAL FIX: Remove ALL currency symbols from ALL string columns
         for col in df.columns:
             if df[col].dtype == 'object':  # String columns
@@ -86,56 +122,79 @@ async def upload_journal_entries(
                 df[col] = df[col].str.replace('£', '', regex=False)
                 df[col] = df[col].str.replace('¥', '', regex=False)
                 df[col] = df[col].str.strip()
-        
-        # Normalize column names - handle common variations
+
+        # Canonical names (headers already lower_snake_case)
         column_mapping = {
-            # ID variations
-            'ID': 'id',
-            'Id': 'id',
-            'JE_ID': 'id',
-            'je_id': 'id',
-            'entry_id': 'id',
-            'EntryID': 'id',
-            # Date variations
-            'Date': 'date',
-            'Posting_Date': 'date',
-            'posting_date': 'date',
-            'PostingDate': 'date',
-            'transaction_date': 'date',
-            # Account variations
-            'Account': 'account',
-            'account_code': 'account',
-            'AccountCode': 'account',
-            # Description variations
-            'Description': 'description',
-            'Desc': 'description',
-            'desc': 'description',
-            'Type': 'description',
-            'type': 'description',
-            # Debit variations
-            'Debit': 'debit',
-            'debit_amount': 'debit',
-            'DebitAmount': 'debit',
-            # Credit variations
-            'Credit': 'credit',
-            'credit_amount': 'credit',
-            'CreditAmount': 'credit',
-            # Preparer variations
-            'Preparer': 'preparer',
-            'Posted_By': 'preparer',
-            'posted_by': 'preparer',
-            'PostedBy': 'preparer',
-            'prepared_by': 'preparer',
-            'PreparedBy': 'preparer',
-            'Vendor/Customer': 'preparer',
-            # Approver variations
-            'Approver': 'approver',
-            'approved_by': 'approver',
-            'ApprovedBy': 'approver',
+            "journal_id": "id",
+            "je_id": "id",
+            "entry_id": "id",
+            "doc_id": "id",
+            "voucher_no": "id",
+            "voucher_id": "id",
+            "txn_id": "id",
+            "posting_date": "date",
+            "transaction_date": "date",
+            "txn_date": "date",
+            "postingdate": "date",
+            "account_code": "account",
+            "gl_account": "account",
+            "gl_code": "account",
+            "acct": "account",
+            "account_name": "account",
+            "memo": "description",
+            "narration": "description",
+            "detail": "description",
+            "desc": "description",
+            "line_description": "description",
+            "debit_amount": "debit",
+            "dr": "debit",
+            "credit_amount": "credit",
+            "cr": "credit",
+            "posted_by": "preparer",
+            "prepared_by": "preparer",
+            "vendor/customer": "preparer",
+            "approved_by": "approver",
         }
-        
-        # Apply column name normalization
+
         df.rename(columns=column_mapping, inplace=True)
+
+        _derive_debit_credit_from_amount(df)
+
+        if "description" not in df.columns:
+            for alt in ("memo", "narration", "detail", "source", "line_text"):
+                if alt in df.columns:
+                    df["description"] = df[alt].astype(str).fillna("")
+                    break
+            else:
+                df["description"] = ""
+        else:
+            df["description"] = df["description"].astype(str).fillna("")
+
+        if "entity" in df.columns:
+            ent = df["entity"].astype(str).fillna("")
+            base = df["description"].astype(str)
+            df["description"] = np.where(
+                ent.str.len() > 0,
+                (base + " | entity: " + ent).str.strip(),
+                base,
+            )
+
+        if "preparer" not in df.columns:
+            if "user_id" in df.columns:
+                df["preparer"] = df["user_id"].astype(str).fillna("")
+            elif "entity" in df.columns:
+                df["preparer"] = df["entity"].astype(str).fillna("")
+            else:
+                df["preparer"] = ""
+        if "approver" not in df.columns:
+            df["approver"] = ""
+
+        if "id" not in df.columns:
+            df["id"] = [f"row-{i + 1}" for i in range(len(df))]
+        else:
+            fill = pd.Series([f"row-{i + 1}" for i in range(len(df))], index=df.index, dtype=object)
+            ids = df["id"].astype(str).str.strip().replace({"nan": "", "none": "", "<na>": ""})
+            df["id"] = ids.where(ids.str.len() > 0, fill)
         
         # Validate required columns
         required_columns = ['id', 'date', 'account', 'description', 'debit', 'credit']

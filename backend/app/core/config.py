@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         "http://localhost:3002",
         "http://localhost:3004",
         "http://localhost:3006",
+        "http://localhost:3007",
         "http://localhost:5173",
         "https://finreportai.railway.app",
     ]

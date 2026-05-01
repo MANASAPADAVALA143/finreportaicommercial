@@ -1,61 +1,96 @@
 // ==================== FP&A VARIANCE ANALYSIS — UTILITY FUNCTIONS ====================
 
-import type { VarianceRow, KPISummary, VarianceAlert } from '../types/fpa';
+import type { VarianceRow, KPISummary, VarianceAlert, CurrencyFormatLocale } from '../types/fpa';
 
 // ==================== CURRENCY FORMATTING ====================
 
-export const formatCurrency = (amount: number, currency = "INR"): string => {
+export const LS_CURRENCY_FORMAT_KEY = 'fpa_currency_format';
+/** Same key as FP&A variance page — keep in sync for Settings → Currency */
+export const LS_FPA_CURRENCY_KEY = 'fpa_currency';
+export const LS_APP_CURRENCY_FALLBACK_KEY = 'app_currency';
+
+export function getCurrencyFormatLocale(): CurrencyFormatLocale {
+  if (typeof localStorage === 'undefined') return 'GLOBAL';
+  const v = String(localStorage.getItem(LS_CURRENCY_FORMAT_KEY) || 'GLOBAL').toUpperCase();
+  return v === 'IN' ? 'IN' : 'GLOBAL';
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  INR: '₹',
+  USD: '$',
+  EUR: '€',
+  GBP: '£',
+  AED: 'AED ',
+};
+
+function currencySymbol(currency: string): string {
+  return CURRENCY_SYMBOLS[currency] || `${currency} `;
+}
+
+/** Symbol for table headers and labels (not compact). */
+export function getCurrencyDisplaySymbol(currency: string): string {
+  return currencySymbol(String(currency || 'USD').toUpperCase()).trimEnd();
+}
+
+/**
+ * Compact currency for KPIs, tables, charts, AI data lines.
+ * GLOBAL: >= 1M → $58.29M; >= 100K → $582.9K; below → full number (en-US grouping).
+ * IN + INR: Cr / L / en-IN full below 1L.
+ * IN + other: full amount with Indian digit grouping (en-IN).
+ */
+export const formatCurrency = (
+  amount: number,
+  currency = 'INR',
+  locale?: CurrencyFormatLocale
+): string => {
+  const loc = locale ?? getCurrencyFormatLocale();
   const absAmount = Math.abs(amount);
   const isNegative = amount < 0;
   const prefix = isNegative ? '-' : '';
-  
-  let formatted = '';
-  
-  if (currency === "INR") {
-    // Indian numbering system: Crore (Cr) and Lakh (L)
-    if (absAmount >= 10000000) {
-      formatted = `₹${(absAmount / 10000000).toFixed(1)}Cr`;
-    } else if (absAmount >= 100000) {
-      formatted = `₹${(absAmount / 100000).toFixed(1)}L`;
+  const sym = currencySymbol(currency);
+
+  if (loc === 'IN' && currency === 'INR') {
+    let formatted = '';
+    if (absAmount >= 10_000_000) {
+      formatted = `${sym}${(absAmount / 10_000_000).toFixed(2)}Cr`;
+    } else if (absAmount >= 100_000) {
+      formatted = `${sym}${(absAmount / 100_000).toFixed(2)}L`;
     } else {
-      formatted = `₹${absAmount.toLocaleString('en-IN')}`;
+      formatted = `${sym}${absAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
     }
-  } else {
-    // Western numbering: Million (M) and Thousand (K)
-    const symbols: Record<string, string> = {
-      USD: '$',
-      EUR: '€',
-      GBP: '£'
-    };
-    const symbol = symbols[currency] || currency;
-    
-    if (absAmount >= 1000000) {
-      formatted = `${symbol}${(absAmount / 1000000).toFixed(1)}M`;
-    } else if (absAmount >= 1000) {
-      formatted = `${symbol}${(absAmount / 1000).toFixed(1)}K`;
-    } else {
-      formatted = `${symbol}${absAmount.toLocaleString()}`;
-    }
+    return prefix + formatted;
   }
-  
-  return prefix + formatted;
+
+  if (loc === 'IN') {
+    const formatted = absAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    return `${prefix}${sym}${formatted}`;
+  }
+
+  // GLOBAL — M / K (100K+) / full
+  if (absAmount >= 1_000_000) {
+    const m = absAmount / 1_000_000;
+    const decimals = m >= 100 ? 1 : 2;
+    return `${prefix}${sym}${m.toFixed(decimals)}M`;
+  }
+  if (absAmount >= 100_000) {
+    const k = absAmount / 1000;
+    return `${prefix}${sym}${k.toFixed(1)}K`;
+  }
+  const formatted = absAmount.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return `${prefix}${sym}${formatted}`;
 };
 
-export const formatCurrencyFull = (amount: number, currency = "INR"): string => {
-  const symbols: Record<string, string> = {
-    INR: '₹',
-    USD: '$',
-    EUR: '€',
-    GBP: '£'
-  };
-  
-  const symbol = symbols[currency] || currency;
+export const formatCurrencyFull = (
+  amount: number,
+  currency = 'INR',
+  locale?: CurrencyFormatLocale
+): string => {
+  const loc = locale ?? getCurrencyFormatLocale();
+  const sym = currencySymbol(currency);
   const absAmount = Math.abs(amount);
-  const formatted = currency === "INR" 
-    ? absAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 })
-    : absAmount.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  
-  return `${amount < 0 ? '-' : ''}${symbol}${formatted}`;
+  const numLocale = loc === 'IN' ? 'en-IN' : 'en-US';
+  const formatted = absAmount.toLocaleString(numLocale, { maximumFractionDigits: 0 });
+  return `${amount < 0 ? '-' : ''}${sym}${formatted}`;
 };
 
 // ==================== PERCENTAGE FORMATTING ====================
@@ -68,7 +103,7 @@ export const formatPercentage = (value: number, decimals = 1): string => {
 
 // ==================== VARIANCE CLASSIFICATION ====================
 
-export const getThreshold = (variancePct: number, isExpense = false): "critical" | "warning" | "ok" => {
+export const getThreshold = (variancePct: number, _isExpense = false): "critical" | "warning" | "ok" => {
   const abs = Math.abs(variancePct);
   if (abs > 10) return "critical";
   if (abs > 5) return "warning";

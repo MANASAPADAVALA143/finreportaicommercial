@@ -1,9 +1,10 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
 import { LandingPage } from './components/landing/LandingPage';
+import Sidebar from './components/layout/Sidebar';
 
 function chunkLoadErrorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
@@ -64,6 +65,7 @@ const R2RModule = safeLazy(() =>
   import('./components/r2r/R2RModule').then((m) => ({ default: m.R2RModule }))
 );
 const R2RPatternAnalysisPage = safeLazy(() => import('./pages/R2RPatternAnalysisPage'));
+const RevRecReconciliationPage = safeLazy(() => import('./pages/r2r/RevRecReconciliationPage'));
 const TBVariancePage = safeLazy(() =>
   import('./pages/TBVariancePage').then((m) => ({ default: m.TBVariancePage }))
 );
@@ -176,6 +178,17 @@ function RouteFallback() {
   );
 }
 
+function R2rShell() {
+  return (
+    <div className="flex min-h-screen w-full">
+      <Sidebar />
+      <div className="flex-1 min-w-0">
+        <Outlet />
+      </div>
+    </div>
+  );
+}
+
 function App() {
   return (
     <AgentActivityProvider>
@@ -202,8 +215,14 @@ function App() {
               <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
               <Route path="/board-pack" element={<IFRSStatementPage />} />
               <Route path="/erp/tally" element={<TallyIntegrationPage />} />
-              <Route path="/r2r" element={<R2RModule />} />
-              <Route path="/r2r-pattern" element={<R2RPatternAnalysisPage />} />
+              <Route element={<R2rShell />}>
+                <Route path="/r2r" element={<R2RModule />} />
+                <Route path="/r2r-pattern" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r/pattern" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r/learning" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r/history" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r/rev-rec" element={<RevRecReconciliationPage />} />
+              </Route>
               <Route path="/tb-variance" element={<TBVariancePage />} />
               <Route path="/bank-recon" element={<BankReconciliationPage />} />
               <Route path="/bank-recon/analytics" element={<BankReconciliationPage />} />

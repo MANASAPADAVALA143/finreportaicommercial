@@ -1,20 +1,21 @@
 // FP&A Variance Analysis - Summary KPI Cards Component
 import { motion } from 'framer-motion';
-import { TrendingUp, TrendingDown, DollarSign, Target } from 'lucide-react';
-import type { KPISummary } from '../../types/fpa';
-import { formatCurrency, getVarianceArrow, getCardGradient, formatPercentage, getVarianceLabel, getVarianceColorForCard } from '../../utils/varianceUtils';
+import { TrendingUp, DollarSign, Target } from 'lucide-react';
+import type { KPISummary, CurrencyFormatLocale } from '../../types/fpa';
+import { formatCurrency, getVarianceArrow, formatPercentage, getVarianceLabel, getVarianceColorForCard } from '../../utils/varianceUtils';
 import { useState, useEffect } from 'react';
 
 interface Props {
   summaries: KPISummary[];
   currency?: string;
+  currencyFormat?: CurrencyFormatLocale;
 }
 
-export const VarianceSummaryCards = ({ summaries, currency = "INR" }: Props) => {
+export const VarianceSummaryCards = ({ summaries, currency = "INR", currencyFormat }: Props) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
       {summaries.map((summary, index) => (
-        <KPICard key={summary.id} summary={summary} currency={currency} index={index} />
+        <KPICard key={summary.id} summary={summary} currency={currency} currencyFormat={currencyFormat} index={index} />
       ))}
     </div>
   );
@@ -23,10 +24,11 @@ export const VarianceSummaryCards = ({ summaries, currency = "INR" }: Props) => 
 interface KPICardProps {
   summary: KPISummary;
   currency: string;
+  currencyFormat?: CurrencyFormatLocale;
   index: number;
 }
 
-const KPICard = ({ summary, currency, index }: KPICardProps) => {
+const KPICard = ({ summary, currency, currencyFormat, index }: KPICardProps) => {
   const [count, setCount] = useState(0);
   const isFavorable = summary.favorable;
   const threshold = summary.threshold;
@@ -102,12 +104,12 @@ const KPICard = ({ summary, currency, index }: KPICardProps) => {
 
       {/* Actual Amount */}
       <div className={`text-3xl font-bold ${getTextColor()} mb-2`}>
-        {formatCurrency(count, currency)}
+        {formatCurrency(count, currency, currencyFormat)}
       </div>
 
       {/* Budget Amount */}
       <div className="text-sm text-gray-500 mb-3">
-        Budget: {formatCurrency(summary.budget, currency)}
+        Budget: {formatCurrency(summary.budget, currency, currencyFormat)}
       </div>
 
       {/* Variance */}

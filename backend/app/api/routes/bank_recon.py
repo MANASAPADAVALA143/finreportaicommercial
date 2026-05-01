@@ -529,6 +529,41 @@ async def _matching_worker(job_id: str, workspace_id: int):
         result = await recon_engine.run_full_matching_engine(workspace_id, db)
         MATCH_JOBS[job_id]["status"] = "completed"
         MATCH_JOBS[job_id]["result"] = result
+        try:
+            from app.agents.intelligence import generate_insight
+            from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
+
+            _recon_data = result if isinstance(result, dict) else (
+                result.model_dump() if hasattr(result, "model_dump") else result.dict()
+            )
+            _db = SessionLocal()
+            try:
+                _history = await read_agent_memory("bank_recon", _db)
+                _insight = await generate_insight(
+                    "bank_recon",
+                    {
+                        "recon_result": _recon_data,
+                        "workspace_id": str(workspace_id),
+                        "source_route": "/recon",
+                        "deep_link": f"/recon/workspace/{workspace_id}",
+                    },
+                    _history,
+                )
+                _insight["source_route"] = "/recon"
+                _insight["deep_link"] = f"/recon/workspace/{workspace_id}"
+                _insight["module_label"] = "Bank Reconciliation"
+                await store_agent_run(
+                    "bank_recon",
+                    {"workspace_id": str(workspace_id)},
+                    _recon_data,
+                    _insight,
+                    _db,
+                )
+                await update_agent_memory("bank_recon", _recon_data, _db)
+            finally:
+                _db.close()
+        except Exception as _e:
+            print(f"[agent_run] bank_recon: {_e}")
         db2 = SessionLocal()
         try:
             w = db2.query(ReconWorkspace).filter_by(id=workspace_id).first()
@@ -567,7 +602,8 @@ async def run_matching(
     job_id = str(uuid.uuid4())
     MATCH_JOBS[job_id] = {"status": "started", "workspace_id": workspace_id}
     background_tasks.add_task(_matching_worker, job_id, workspace_id)
-    return {"job_id": job_id, "status": "started"}
+    result = {"job_id": job_id, "status": "started"}
+    return result
 
 
 @router.get("/workspace/{workspace_id}/match-results")

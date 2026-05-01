@@ -19,6 +19,7 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.7",
     "@supabase/supabase-js": "^2.39.3",
     "axios": "^1.6.5",
     "clsx": "^2.1.0",

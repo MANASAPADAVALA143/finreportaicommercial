@@ -440,21 +440,46 @@ class R2RPatternEngine:
                     for ix in df.index[hit]:
                         add_flag(ix, "High month-end concentration")
 
+        # Near-duplicate: same account + same amount, another posting within 3 days.
+        # IMPORTANT: avoid O(n²) full-frame scans + iterrows (was freezing multi-minute on ~500+ rows).
         if "date" in df.columns and "account" in df.columns:
-            df_sorted = df.sort_values("date")
-            for ix, row in df_sorted.iterrows():
-                same = df_sorted[
-                    (df_sorted["account"] == row.get("account", ""))
-                    & (df_sorted["amount"] == row["amount"])
-                    & (df_sorted.index != ix)
-                ]
-                if len(same) == 0:
-                    continue
-                if "date" in same.columns and pd.notna(row.get("date")):
-                    date_diff = (same["date"] - row["date"]).abs().dt.days
-                    if date_diff.le(3).any():
-                        rules_score.loc[ix] += 25
-                        add_flag(ix, "Potential duplicate")
+            df_dup = df[["account", "amount", "date"]].copy()
+            df_dup = df_dup[df_dup["date"].notna()]
+            if len(df_dup) >= 2:
+                grp_sizes = df_dup.groupby(["account", "amount"], sort=False).size()
+                multi_keys = grp_sizes[grp_sizes > 1].index
+                dup_groups = df_dup.groupby(["account", "amount"], sort=False)
+                for key in multi_keys:
+                    grp = dup_groups.get_group(key).sort_values("date")
+                    idxs = grp.index.to_numpy()
+                    ts = grp["date"].tolist()
+                    m = len(idxs)
+                    if m < 2:
+                        continue
+                    if m > 200:
+                        tmin = grp["date"].min()
+                        tmax = grp["date"].max()
+                        if pd.notna(tmin) and pd.notna(tmax) and (tmax - tmin).days <= 3:
+                            rules_score.loc[idxs] = rules_score.loc[idxs] + 25
+                            for ix in idxs:
+                                add_flag(ix, "Potential duplicate")
+                        continue
+                    for i in range(m):
+                        t_i = pd.Timestamp(ts[i]) if pd.notna(ts[i]) else pd.NaT
+                        if pd.isna(t_i):
+                            continue
+                        hit = False
+                        for j in range(m):
+                            if i == j or pd.isna(ts[j]):
+                                continue
+                            t_j = pd.Timestamp(ts[j])
+                            if abs((t_j - t_i).days) <= 3:
+                                hit = True
+                                break
+                        if hit:
+                            ix = idxs[i]
+                            rules_score.loc[ix] += 25
+                            add_flag(ix, "Potential duplicate")
 
         suspicious = [
             "correction",
@@ -532,11 +557,14 @@ class R2RPatternEngine:
         X_scaled = scaler.fit_transform(X)
 
         contamination = 0.15 if n >= 50 else 0.20
+        # Fewer trees = much faster on typical uploads (hundreds–few thousands of rows) with negligible quality loss.
+        n_trees = 200 if n >= 5000 else (120 if n >= 2000 else 80)
+        # n_jobs=1 avoids rare hangs / oversubscription on Windows + BLAS when many sklearn jobs run.
         iso = IsolationForest(
-            n_estimators=200,
+            n_estimators=n_trees,
             contamination=contamination,
             random_state=42,
-            n_jobs=-1,
+            n_jobs=1,
         )
         iso.fit(X_scaled)
         iso_pred = iso.predict(X_scaled)
@@ -559,9 +587,11 @@ class R2RPatternEngine:
         result["dbscan_score"] = (db_labels == -1).astype(float)
         result["dbscan_cluster"] = db_labels
 
-        if n >= 20:
+        # LOF is O(n^2) in n; cap neighbors and skip very large uploads so the API returns reliably.
+        if n >= 20 and n <= 4000:
+            nn = min(15, max(5, min(20, n // 8)))
             lof = LocalOutlierFactor(
-                n_neighbors=min(20, max(2, n // 5)),
+                n_neighbors=nn,
                 contamination=0.15,
             )
             lof_pred = lof.fit_predict(X_scaled)
@@ -772,19 +802,24 @@ class R2RPatternEngine:
 
         trend: list[dict[str, Any]] = []
         if "date" in df.columns:
-            dfc = df.copy()
-            dfc["_ds"] = dfc["date"].dt.strftime("%Y-%m-%d")
-            daily = (
-                dfc.groupby("_ds")
-                .agg(
-                    total=("risk_score", "count"),
-                    high=("risk_level", lambda x: int((x == "HIGH").sum())),
-                    avg_score=("risk_score", "mean"),
+            try:
+                dfc = df.copy()
+                dts = pd.to_datetime(dfc["date"], errors="coerce")
+                dfc["_ds"] = dts.dt.strftime("%Y-%m-%d")
+                daily = (
+                    dfc.dropna(subset=["_ds"])
+                    .groupby("_ds")
+                    .agg(
+                        total=("risk_score", "count"),
+                        high=("risk_level", lambda x: int((x == "HIGH").sum())),
+                        avg_score=("risk_score", "mean"),
+                    )
+                    .reset_index()
+                    .rename(columns={"_ds": "date_str"})
                 )
-                .reset_index()
-                .rename(columns={"_ds": "date_str"})
-            )
-            trend = daily.to_dict("records")
+                trend = daily.to_dict("records")
+            except Exception:
+                trend = []
 
         score_bins = pd.cut(
             df["risk_score"],

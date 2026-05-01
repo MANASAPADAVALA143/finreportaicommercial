@@ -156,7 +156,7 @@ async def generate_ifrs_statements(
             prior_period=prior_period
         )
         
-        return {
+        result = {
             "success": True,
             "statements": statements,
             "metadata": {
@@ -166,7 +166,47 @@ async def generate_ifrs_statements(
                 "generatedAt": datetime.now().isoformat()
             }
         }
+        try:
+            from app.agents.intelligence import generate_insight
+            from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
+            from app.core.database import SessionLocal
+
+            _ifrs_data = result if isinstance(result, dict) else (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+            _db = SessionLocal()
+            try:
+                _history = await read_agent_memory("ifrs_statements", _db)
+                _insight = await generate_insight(
+                    "ifrs_statements",
+                    {
+                        "ifrs_result": _ifrs_data,
+                        "source_route": "/ifrs",
+                        "deep_link": "/ifrs/statements",
+                    },
+                    _history,
+                )
+                _insight["source_route"] = "/ifrs"
+                _insight["deep_link"] = "/ifrs/statements"
+                _insight["module_label"] = "IFRS Statements"
+                await store_agent_run(
+                    "ifrs_statements",
+                    {
+                        "entity_name": entity_name,
+                        "period_end": period_end,
+                        "currency": currency,
+                        "line_items": len(trial_balance),
+                    },
+                    _ifrs_data,
+                    _insight,
+                    _db,
+                )
+                await update_agent_memory("ifrs_statements", _ifrs_data, _db)
+            finally:
+                _db.close()
+        except Exception as _e:
+            print(f"[agent_run] ifrs_statements: {_e}")
         
+        return result
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Statement generation failed: {str(e)}")
 

@@ -7,8 +7,16 @@ import { VarianceSummaryCards } from '../../components/fpa/VarianceSummaryCards'
 import { VarianceTable } from '../../components/fpa/VarianceTable';
 import { AICommentary } from '../../components/fpa/AICommentary';
 import { AlertsPanel } from '../../components/fpa/AlertsPanel';
-import { calculateKPISummaries, extractVarianceAlerts, getPeriodLabel } from '../../utils/varianceUtils';
-import type { PeriodType, CompareType, DepartmentType, CurrencyType } from '../../types/fpa';
+import {
+  calculateKPISummaries,
+  extractVarianceAlerts,
+  getPeriodLabel,
+  formatCurrency,
+  LS_FPA_CURRENCY_KEY,
+  LS_APP_CURRENCY_FALLBACK_KEY,
+  LS_CURRENCY_FORMAT_KEY,
+} from '../../utils/varianceUtils';
+import type { PeriodType, CompareType, DepartmentType, CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
 
@@ -23,9 +31,6 @@ const DEFAULT_OWNER_BY_DEPARTMENT: Record<string, string> = {
   it: 'CTO',
   'all depts': 'CFO',
 };
-
-const LS_CURRENCY_KEY = 'fpa_currency';
-const LS_CURRENCY_FALLBACK_KEY = 'app_currency';
 
 const buildFallbackTrend = (variancePct: number): number[] => {
   const drift = variancePct / 100;
@@ -58,14 +63,18 @@ export const VarianceAnalysis = () => {
   const [periodType, setPeriodType] = useState<PeriodType>('monthly');
   const [month, setMonth] = useState(10); // October
   const [quarter, setQuarter] = useState(3);
-  const [year, setYear] = useState(2025);
+  const [year] = useState(2025);
   const [compareType, setCompareType] = useState<CompareType>('budget');
   const [department, setDepartment] = useState<DepartmentType>('all');
   const [ownerFilter, setOwnerFilter] = useState('all');
   const [currency, setCurrency] = useState<CurrencyType>(() => {
-    const stored = (localStorage.getItem(LS_CURRENCY_KEY) || localStorage.getItem(LS_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
+    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
     if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(stored)) return stored as CurrencyType;
     return 'USD';
+  });
+  const [currencyFormat, setCurrencyFormat] = useState<CurrencyFormatLocale>(() => {
+    const stored = String(localStorage.getItem(LS_CURRENCY_FORMAT_KEY) || 'GLOBAL').toUpperCase();
+    return stored === 'IN' ? 'IN' : 'GLOBAL';
   });
 
   // UI State
@@ -76,8 +85,12 @@ export const VarianceAnalysis = () => {
   const lastVarianceSyncKey = useRef<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem(LS_CURRENCY_KEY, currency);
+    localStorage.setItem(LS_FPA_CURRENCY_KEY, currency);
   }, [currency]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_CURRENCY_FORMAT_KEY, currencyFormat);
+  }, [currencyFormat]);
 
   // Only data uploaded on this page — no localStorage, no demo data (clean for video)
   const currentVarianceData = useMemo(() => {
@@ -496,10 +509,10 @@ export const VarianceAnalysis = () => {
     const budgetCogsPct = revenueBudget > 0 ? (cogsBudget / revenueBudget) * 100 : 0;
     const actualCogsPct = revenueActual > 0 ? (cogsActual / revenueActual) * 100 : 0;
     const status =
-      revenueActual >= revenueBudget && costActual <= costBudget
-        ? 'Outperforming Budget'
+      revenuePct > costPct && netActual > netBudget
+        ? 'High Growth with Margin Expansion'
         : revenueActual >= revenueBudget && costActual > costBudget
-          ? 'Growth with pressure'
+          ? 'Growth with Margin Pressure'
           : revenueActual < revenueBudget && costActual > costBudget
             ? 'Underperforming'
             : 'Contracting';
@@ -754,6 +767,17 @@ export const VarianceAnalysis = () => {
                 <option value="AED">AED (د.إ)</option>
               </select>
             </div>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Currency Format:</label>
+              <select
+                value={currencyFormat}
+                onChange={(e) => setCurrencyFormat(e.target.value as CurrencyFormatLocale)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="GLOBAL">GLOBAL ($/£ + M/K)</option>
+                <option value="IN">IN (₹ + L/Cr)</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -782,7 +806,7 @@ export const VarianceAnalysis = () => {
                 <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
                   <p className="text-xs text-blue-700 font-semibold">Revenue Actual vs Budget</p>
                   <p className="text-sm text-gray-900 mt-1">
-                    {revenueContext.revActual.toLocaleString(undefined, { maximumFractionDigits: 0 })} vs {revenueContext.revBudget.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {formatCurrency(revenueContext.revActual, currency, currencyFormat)} vs {formatCurrency(revenueContext.revBudget, currency, currencyFormat)}
                   </p>
                   <p className={`text-sm font-semibold ${revenueContext.revVariance >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                     {revenueContext.revVariancePct >= 0 ? '▲' : '▼'} {Math.abs(revenueContext.revVariancePct).toFixed(1)}%
@@ -807,31 +831,31 @@ export const VarianceAnalysis = () => {
             </div>
 
             {/* KPI Summary Cards */}
-            <VarianceSummaryCards summaries={kpiSummaries} currency={currency} />
+            <VarianceSummaryCards summaries={kpiSummaries} currency={currency} currencyFormat={currencyFormat} />
 
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h3 className="text-base font-bold text-gray-900 mb-3">Variance Summary</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <div className="rounded-lg bg-green-50 border border-green-100 p-3">
                   <p className="font-semibold text-green-800">Revenue Performance</p>
-                  <p>Actual {varianceClassification.revenueActual.toLocaleString()} vs Budget {varianceClassification.revenueBudget.toLocaleString()}</p>
+                  <p>Actual {formatCurrency(varianceClassification.revenueActual, currency, currencyFormat)} vs Budget {formatCurrency(varianceClassification.revenueBudget, currency, currencyFormat)}</p>
                   <p className="font-semibold text-green-700">{varianceClassification.revenuePct >= 0 ? '+' : ''}{varianceClassification.revenuePct.toFixed(1)}% (favorable when positive)</p>
                 </div>
                 <div className="rounded-lg bg-red-50 border border-red-100 p-3">
                   <p className="font-semibold text-red-800">Cost Performance</p>
-                  <p>Actual {varianceClassification.costActual.toLocaleString()} vs Budget {varianceClassification.costBudget.toLocaleString()}</p>
+                  <p>Actual {formatCurrency(varianceClassification.costActual, currency, currencyFormat)} vs Budget {formatCurrency(varianceClassification.costBudget, currency, currencyFormat)}</p>
                   <p className="font-semibold text-red-700">{varianceClassification.costPct >= 0 ? '+' : ''}{varianceClassification.costPct.toFixed(1)}% (over budget when positive)</p>
                 </div>
                 <div className="rounded-lg bg-blue-50 border border-blue-100 p-3">
                   <p className="font-semibold text-blue-800">Profit/Margin Impact</p>
-                  <p>Net Profit {varianceClassification.netActual.toLocaleString()} vs {varianceClassification.netBudget.toLocaleString()}</p>
+                  <p>Net Profit {formatCurrency(varianceClassification.netActual, currency, currencyFormat)} vs {formatCurrency(varianceClassification.netBudget, currency, currencyFormat)}</p>
                   <p className="font-semibold text-blue-700">COGS% {varianceClassification.actualCogsPct.toFixed(1)}% vs {varianceClassification.budgetCogsPct.toFixed(1)}%</p>
                 </div>
               </div>
               <p className="mt-3 text-sm font-semibold text-gray-800">Status: {varianceClassification.status}</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                 <div>
-                  <p className="text-sm font-semibold text-red-700 mb-2">Cost Overruns</p>
+                  <p className="text-sm font-semibold text-red-700 mb-2">Expense Variance Drivers</p>
                   <ul className="text-sm text-gray-700 space-y-1">
                     {topCostOverruns.length ? topCostOverruns.map((r) => (
                       <li key={`over-${r.id}`}>{r.category}: {r.variancePct.toFixed(1)}% over budget</li>
@@ -850,7 +874,7 @@ export const VarianceAnalysis = () => {
             </div>
 
             {/* Variance Table */}
-            <VarianceTable data={currentVarianceData} currency={currency} />
+            <VarianceTable data={currentVarianceData} currency={currency} currencyFormat={currencyFormat} />
 
             {/* AI Commentary */}
             <AICommentary
@@ -858,13 +882,14 @@ export const VarianceAnalysis = () => {
               period={periodLabel}
               entityName={activeClient?.name || 'FinReport AI'}
               currency={currency}
+              currencyFormat={currencyFormat}
             />
           </div>
 
           {/* Sidebar (1 column) */}
           <div className="lg:col-span-1">
             <div className="sticky top-24">
-              <AlertsPanel alerts={alerts} currency={currency} />
+              <AlertsPanel alerts={alerts} currency={currency} currencyFormat={currencyFormat} />
             </div>
           </div>
         </div>

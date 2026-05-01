@@ -46,6 +46,14 @@ export const Dashboard: React.FC = () => {
       bgColor: 'bg-indigo-500/10'
     },
     {
+      icon: <FileSpreadsheet className="w-16 h-16 text-blue-400" />,
+      title: 'Rev Rec Reconciliation',
+      description: 'IFRS 15 month-end — deferred revenue roll-forward, three-way match, anomalies, RPO, commission, AI commentary, period close',
+      link: '/r2r/rev-rec',
+      bgColor: 'bg-blue-500/10',
+      badge: 'IFRS 15',
+    },
+    {
       icon: <BarChart3 className="w-16 h-16 text-green-400" />,
       title: 'FP&A Suite',
       description: 'Comprehensive planning, budgeting, and forecasting',

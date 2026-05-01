@@ -93,7 +93,10 @@ Write a concise CFO-level summary with key risks and recommended actions.`;
       <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-12 text-center">
         <BarChart3 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
         <p className="text-gray-600 text-lg">Upload a journal entries file above to run pattern analysis</p>
-        <p className="text-sm text-gray-500 mt-2">Supports CSV and Excel (JE_ID, Date, Account, debit, credit, Vendor/Customer, etc.)</p>
+        <p className="text-sm text-gray-500 mt-2">
+          Supports CSV and Excel: id or journal_id; date; account; description (or memo/source); debit and credit columns, or a
+          single signed <strong>amount</strong> (positive = debit, negative = credit).
+        </p>
       </div>
     );
   }

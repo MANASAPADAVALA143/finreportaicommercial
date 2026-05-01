@@ -1,369 +1,390 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { RefreshCw, X } from 'lucide-react';
-import { AgentStatusGrid, type AgentRow } from './AgentStatus';
-import { useClient } from '../context/ClientContext';
-import { dismissCfoAlert, fetchCompletedAgents, type CompletedAgentItem } from '../services/cfoAgents';
+import '@fontsource/ibm-plex-mono';
+import { useEffect, useState } from 'react';
 
-const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || 'http://localhost:8000';
+const AITHENTIC = {
+  bg: '#060A12',
+  surface: '#0B1120',
+  panel: '#0F1829',
+  border: '#1A2640',
+  teal: '#00D4B8',
+  red: '#FF4444',
+  yellow: '#FFB800',
+  green: '#00D4B8',
+  textPrimary: '#E2EAF4',
+  textDim: '#4A6080',
+  font: "'IBM Plex Mono', monospace",
+};
 
-type Alert = {
-  id: number;
-  severity: string;
+type Insight = {
+  what_happened?: string;
+  why_it_happened?: string[];
+  what_to_do?: string;
+  source_route?: string;
+  deep_link?: string;
+  module_label?: string;
+};
+
+type AlertItem = {
   agent: string;
-  title: string;
-  body: string | null;
-  created_at: string | null;
+  insight?: Insight;
+  time?: string;
+};
+
+type BriefResponse = {
+  date: string;
+  total_agents_run: number;
+  alerts: {
+    red: AlertItem[];
+    yellow: AlertItem[];
+    green: AlertItem[];
+  };
 };
 
 export default function CommandCenter() {
-  const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
-  const hdrs = useMemo(() => ({ 'X-Tenant-ID': tenantId }), [tenantId]);
-
-  const [agents, setAgents] = useState<AgentRow[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [completed, setCompleted] = useState<CompletedAgentItem[]>([]);
-  const [briefing, setBriefing] = useState<Record<string, unknown> | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [chatQ, setChatQ] = useState('');
-  const [chatA, setChatA] = useState<string | null>(null);
-  const [chatBusy, setChatBusy] = useState(false);
-  const [auditJson, setAuditJson] = useState<string | null>(null);
-
-  const greeting = useMemo(() => {
-    const h = new Date().getHours();
-    const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const sal = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-    return `${sal} · ${t}`;
-  }, []);
-
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const [st, al, br, co] = await Promise.all([
-        fetch(`${API_BASE}/api/agents/status`, { headers: hdrs }),
-        fetch(`${API_BASE}/api/agents/alerts`, { headers: hdrs }),
-        fetch(`${API_BASE}/api/briefing/today`, { headers: hdrs }),
-        fetchCompletedAgents(24, tenantId),
-      ]);
-      if (!st.ok) throw new Error(await st.text());
-      if (!al.ok) throw new Error(await al.text());
-      if (!br.ok) throw new Error(await br.text());
-      const sj = await st.json();
-      const aj = await al.json();
-      const bj = await br.json();
-      setAgents(sj.agents || []);
-      setAlerts(aj.alerts || []);
-      setCompleted(co.completed || []);
-      setBriefing(bj.content && typeof bj.content === 'object' ? (bj.content as Record<string, unknown>) : null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [hdrs, tenantId]);
+  const [brief, setBrief] = useState<BriefResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [boardPackProgress, setBoardPackProgress] = useState<string[]>([]);
+  const [boardPackReady, setBoardPackReady] = useState(false);
+  const [boardPackPath, setBoardPackPath] = useState('');
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchLatestBrief();
+    const interval = window.setInterval(() => {
+      void fetchLatestBrief();
+    }, 300000);
+    return () => window.clearInterval(interval);
+  }, []);
 
-  const onTrigger = async (name: string) => {
-    setBusy(name);
-    setErr(null);
+  const fetchLatestBrief = async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/agents/run/${encodeURIComponent(name)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hdrs },
-        body: JSON.stringify({ context: {} }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setLoading(true);
+      const res = await fetch('/api/agents/latest-brief');
+      const data = (await res.json()) as BriefResponse;
+      setBrief(data);
+    } catch (error) {
+      console.error(error);
     } finally {
-      setBusy(null);
+      setLoading(false);
     }
   };
 
-  const genBriefing = async () => {
-    setBusy('briefing');
-    setErr(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/briefing/generate`, {
-        method: 'POST',
-        headers: { ...hdrs },
-      });
-      if (!r.ok) throw new Error(await r.text());
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
+  const generateBoardPack = async () => {
+    setBoardPackProgress([]);
+    setBoardPackReady(false);
+
+    const response = await fetch('/api/board-pack/generate', { method: 'POST' });
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const lines = decoder.decode(value).split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+        if (data.step === 'complete') {
+          setBoardPackReady(true);
+          setBoardPackPath(data.pdf_path || '');
+        } else if (data.step) {
+          setBoardPackProgress((prev) => [...prev, data.step]);
+        }
+      }
     }
   };
 
-  const askNexus = async () => {
-    const q = chatQ.trim();
-    if (!q) return;
-    setChatBusy(true);
-    setChatA(null);
-    setErr(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/briefing/ask`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hdrs },
-        body: JSON.stringify({ question: q }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      const j = await r.json();
-      setChatA(typeof j.answer === 'string' ? j.answer : JSON.stringify(j));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setChatBusy(false);
-    }
-  };
-
-  const onDismissAlert = async (id: number) => {
-    try {
-      await dismissCfoAlert(id, tenantId);
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const openAuditTrail = async (runId: string) => {
-    setErr(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/agents/runs/${encodeURIComponent(runId)}`, { headers: hdrs });
-      if (!r.ok) throw new Error(await r.text());
-      const j = await r.json();
-      setAuditJson(JSON.stringify(j, null, 2));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const urgentAlerts = alerts.filter((a) => a.severity === 'urgent');
-  const warnAlerts = alerts.filter((a) => a.severity !== 'urgent');
-  const nexus = briefing && typeof briefing === 'object' ? (briefing as { nexus_json?: Record<string, unknown> }).nexus_json : null;
+  const AlertCard = ({ alert, color }: { alert: AlertItem; color: string }) => (
+    <div
+      style={{
+        background: AITHENTIC.panel,
+        border: `1px solid ${color}33`,
+        borderLeft: `3px solid ${color}`,
+        borderRadius: 4,
+        padding: '16px 20px',
+        marginBottom: 12,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: AITHENTIC.font,
+          fontSize: 10,
+          letterSpacing: '0.1em',
+          color,
+          marginBottom: 8,
+          textTransform: 'uppercase',
+        }}
+      >
+        {alert.agent.replace(/_/g, ' ')}
+      </div>
+      <div
+        style={{
+          fontFamily: AITHENTIC.font,
+          fontSize: 13,
+          color: AITHENTIC.textPrimary,
+          marginBottom: 8,
+          lineHeight: 1.6,
+        }}
+      >
+        {alert.insight?.what_happened}
+      </div>
+      {alert.insight?.why_it_happened && (
+        <div style={{ fontSize: 11, color: AITHENTIC.textDim, marginBottom: 8 }}>
+          {alert.insight.why_it_happened.map((w, i) => (
+            <div key={i}>→ {w}</div>
+          ))}
+        </div>
+      )}
+      <div
+        style={{
+          fontFamily: AITHENTIC.font,
+          fontSize: 11,
+          color,
+          padding: '6px 10px',
+          background: `${color}11`,
+          borderRadius: 2,
+          display: 'inline-block',
+        }}
+      >
+        {alert.insight?.what_to_do}
+      </div>
+      {alert.insight?.deep_link && (
+        <a
+          href={alert.insight.deep_link}
+          style={{
+            display: 'inline-block',
+            marginTop: 10,
+            fontSize: 10,
+            color: AITHENTIC.teal,
+            textDecoration: 'none',
+            letterSpacing: '0.1em',
+            borderBottom: `1px solid ${AITHENTIC.teal}33`,
+          }}
+        >
+          → VIEW IN {(alert.insight.module_label || alert.agent).toUpperCase().replace(/_/g, ' ')}
+        </a>
+      )}
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
-      {auditJson && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog">
-          <div className="max-w-3xl w-full max-h-[85vh] rounded-xl border border-slate-600 bg-slate-900 shadow-xl flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-600 px-4 py-2">
-              <span className="text-sm font-semibold text-white">Audit trail (run)</span>
-              <button type="button" onClick={() => setAuditJson(null)} className="p-1 rounded hover:bg-slate-800 text-slate-300">
-                <X className="w-5 h-5" />
-              </button>
+    <div
+      style={{
+        background: AITHENTIC.bg,
+        minHeight: '100vh',
+        fontFamily: AITHENTIC.font,
+        color: AITHENTIC.textPrimary,
+        padding: '24px 32px',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 32,
+          borderBottom: `1px solid ${AITHENTIC.border}`,
+          paddingBottom: 20,
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 10,
+              letterSpacing: '0.2em',
+              color: AITHENTIC.teal,
+              textTransform: 'uppercase',
+              marginBottom: 6,
+            }}
+          >
+            NEXUS-C · AGENTIC COMMAND CENTER
+          </div>
+          <div style={{ fontSize: 22 }}>CFO Intelligence Dashboard</div>
+          <div style={{ fontSize: 11, color: AITHENTIC.textDim, marginTop: 4 }}>
+            {brief
+              ? `Last updated: ${new Date(brief.date).toLocaleTimeString()} · ${brief.total_agents_run} agents ran`
+              : 'Loading...'}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 12 }}>
+          <button
+            onClick={() => void generateBoardPack()}
+            style={{
+              background: AITHENTIC.teal,
+              color: AITHENTIC.bg,
+              border: 'none',
+              borderRadius: 3,
+              padding: '10px 20px',
+              fontFamily: AITHENTIC.font,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer',
+              letterSpacing: '0.05em',
+            }}
+          >
+            ⬡ GENERATE BOARD PACK
+          </button>
+          <button
+            onClick={() => void fetchLatestBrief()}
+            style={{
+              background: 'transparent',
+              color: AITHENTIC.teal,
+              border: `1px solid ${AITHENTIC.teal}`,
+              borderRadius: 3,
+              padding: '10px 16px',
+              fontFamily: AITHENTIC.font,
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            ↻ REFRESH
+          </button>
+        </div>
+      </div>
+
+      {boardPackProgress.length > 0 && (
+        <div
+          style={{
+            background: AITHENTIC.panel,
+            border: `1px solid ${AITHENTIC.border}`,
+            borderRadius: 4,
+            padding: 20,
+            marginBottom: 24,
+          }}
+        >
+          <div style={{ fontSize: 10, color: AITHENTIC.teal, letterSpacing: '0.1em', marginBottom: 12 }}>
+            BOARD PACK GENERATION
+          </div>
+          {boardPackProgress.map((step, i) => (
+            <div key={i} style={{ fontSize: 12, color: AITHENTIC.textDim, padding: '4px 0' }}>
+              ✓ {step}
             </div>
-            <pre className="text-xs overflow-auto p-4 text-emerald-100/90 flex-1">{auditJson}</pre>
+          ))}
+          {boardPackReady && (
+            <a
+              href={`/api/board-pack/download-file/${encodeURIComponent(
+                boardPackPath.split(/[\\/]/).pop() ?? ''
+              )}`}
+              style={{
+                display: 'inline-block',
+                marginTop: 12,
+                background: AITHENTIC.teal,
+                color: AITHENTIC.bg,
+                padding: '8px 16px',
+                borderRadius: 2,
+                fontSize: 12,
+                fontWeight: 700,
+                textDecoration: 'none',
+              }}
+            >
+              ↓ DOWNLOAD BOARD PACK PDF
+            </a>
+          )}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: AITHENTIC.textDim, fontSize: 12, padding: 40, textAlign: 'center' }}>
+          NEXUS-C loading intelligence...
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20, marginBottom: 32 }}>
+          <div
+            style={{
+              background: AITHENTIC.surface,
+              border: `1px solid ${AITHENTIC.border}`,
+              borderTop: `2px solid ${AITHENTIC.red}`,
+              borderRadius: 4,
+              padding: 20,
+            }}
+          >
+            <div style={{ fontSize: 10, letterSpacing: '0.15em', color: AITHENTIC.red, marginBottom: 16 }}>
+              URGENT ACTION REQUIRED
+            </div>
+            {brief?.alerts?.red?.length ? (
+              brief.alerts.red.map((a, i) => <AlertCard key={i} alert={a} color={AITHENTIC.red} />)
+            ) : (
+              <div style={{ color: AITHENTIC.textDim, fontSize: 12, padding: '20px 0' }}>No urgent issues detected</div>
+            )}
+          </div>
+
+          <div
+            style={{
+              background: AITHENTIC.surface,
+              border: `1px solid ${AITHENTIC.border}`,
+              borderTop: `2px solid ${AITHENTIC.yellow}`,
+              borderRadius: 4,
+              padding: 20,
+            }}
+          >
+            <div style={{ fontSize: 10, letterSpacing: '0.15em', color: AITHENTIC.yellow, marginBottom: 16 }}>
+              MONITOR CLOSELY
+            </div>
+            {brief?.alerts?.yellow?.length ? (
+              brief.alerts.yellow.map((a, i) => <AlertCard key={i} alert={a} color={AITHENTIC.yellow} />)
+            ) : (
+              <div style={{ color: AITHENTIC.textDim, fontSize: 12, padding: '20px 0' }}>No items to monitor</div>
+            )}
+          </div>
+
+          <div
+            style={{
+              background: AITHENTIC.surface,
+              border: `1px solid ${AITHENTIC.border}`,
+              borderTop: `2px solid ${AITHENTIC.green}`,
+              borderRadius: 4,
+              padding: 20,
+            }}
+          >
+            <div style={{ fontSize: 10, letterSpacing: '0.15em', color: AITHENTIC.green, marginBottom: 16 }}>
+              ON TRACK
+            </div>
+            {brief?.alerts?.green?.length ? (
+              brief.alerts.green.map((a, i) => <AlertCard key={i} alert={a} color={AITHENTIC.green} />)
+            ) : (
+              <div style={{ color: AITHENTIC.textDim, fontSize: 12, padding: '20px 0' }}>All metrics on track</div>
+            )}
           </div>
         </div>
       )}
 
-      <div className="border-b border-slate-700 bg-slate-900/60">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-slate-400 text-sm">FinReportAI · AGENTIC · tenant: {tenantId}</p>
-            <h1 className="text-2xl font-bold text-white">{greeting}</h1>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800 text-sm"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={() => void genBriefing()}
-              disabled={busy === 'briefing'}
-              className="px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-500 disabled:opacity-50"
-            >
-              {busy === 'briefing' ? 'Building…' : 'Generate briefing'}
-            </button>
-            <Link to="/dashboard" className="px-3 py-2 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-slate-800">
-              Dashboard
-            </Link>
-            <Link to="/agent-status" className="px-3 py-2 rounded-lg border border-slate-600 text-sm text-slate-200 hover:bg-slate-800">
-              Agents only
-            </Link>
-          </div>
+      <div style={{ background: AITHENTIC.surface, border: `1px solid ${AITHENTIC.border}`, borderRadius: 4, padding: 20 }}>
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.15em',
+            color: AITHENTIC.textDim,
+            marginBottom: 16,
+            textTransform: 'uppercase',
+          }}
+        >
+          Agent Workforce — Autonomous Mode
         </div>
+        {[
+          { name: 'Variance Agent', schedule: 'Daily 6AM' },
+          { name: 'Forecast Agent', schedule: 'Monday 7AM' },
+          { name: 'Recon Agent', schedule: 'Daily 6AM' },
+          { name: 'JE Anomaly Agent', schedule: 'Daily 6AM' },
+          { name: 'Board Pack Agent', schedule: 'Day 1 Monthly' },
+          { name: 'CFO Advisor', schedule: 'On Demand' },
+        ].map((agent, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '10px 0',
+              borderBottom: i < 5 ? `1px solid ${AITHENTIC.border}` : 'none',
+            }}
+          >
+            <span style={{ fontSize: 12 }}>{agent.name}</span>
+            <span style={{ fontSize: 10, color: AITHENTIC.textDim }}>{agent.schedule}</span>
+          </div>
+        ))}
       </div>
-
-      <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
-        {err && (
-          <div className="rounded-lg border border-red-800 bg-red-950/40 text-red-200 text-sm p-3">{err}</div>
-        )}
-
-        <section>
-          <h2 className="text-lg font-semibold text-red-300 mb-3">Urgent</h2>
-          <div className="rounded-xl border border-red-900/60 bg-red-950/20 p-4 space-y-2 min-h-[4rem]">
-            {urgentAlerts.length === 0 ? (
-              <p className="text-slate-500 text-sm">No urgent items. JE high-risk flags appear here.</p>
-            ) : (
-              urgentAlerts.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-red-900/30 pb-2 last:border-0"
-                >
-                  <div>
-                    <p className="text-sm font-medium text-red-100">{a.title}</p>
-                    <p className="text-xs text-slate-400">{a.agent}</p>
-                  </div>
-                  <div className="flex flex-wrap gap-2 shrink-0">
-                    <Link to="/r2r-pattern" className="text-xs text-red-200 underline">
-                      Open R2R →
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => void onDismissAlert(a.id)}
-                      className="text-xs px-2 py-1 rounded border border-red-800 text-red-100 hover:bg-red-950/50"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="text-lg font-semibold text-amber-200 mb-3">Attention</h2>
-          <div className="rounded-xl border border-amber-900/40 bg-amber-950/10 p-4 space-y-2">
-            {warnAlerts.length === 0 ? (
-              <p className="text-slate-500 text-sm">No warnings. Variance / budget / recon alerts land here.</p>
-            ) : (
-              warnAlerts.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 text-sm text-amber-50 border-b border-amber-900/20 pb-2 last:border-0"
-                >
-                  <div>
-                    <span className="text-slate-400 text-xs mr-2">{a.agent}</span>
-                    {a.title}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void onDismissAlert(a.id)}
-                    className="text-xs px-2 py-1 rounded border border-amber-800 text-amber-100 hover:bg-amber-950/40 shrink-0 self-start"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="text-lg font-semibold text-emerald-300 mb-3">Completed (last 24h)</h2>
-          <p className="text-xs text-slate-500 mb-3">
-            Successful agent runs with validation. Variance and R2R flows push here automatically when you use those pages.
-          </p>
-          <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/10 p-4 space-y-4">
-            {completed.length === 0 ? (
-              <p className="text-slate-500 text-sm">No completed runs yet in this window.</p>
-            ) : (
-              completed.map((c) => (
-                <CompletedAgentCard key={`${c.run_id}-${c.completed_at}`} item={c} onViewAudit={() => void openAuditTrail(c.run_id)} />
-              ))
-            )}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="text-lg font-semibold text-emerald-200/90 mb-3">Briefing</h2>
-          <div className="rounded-xl border border-emerald-900/40 bg-emerald-950/10 p-4 text-sm text-slate-200 space-y-3">
-            {nexus && typeof nexus === 'object' ? (
-              <pre className="text-xs overflow-auto max-h-64 text-emerald-100/90 whitespace-pre-wrap">
-                {JSON.stringify(nexus, null, 2)}
-              </pre>
-            ) : (
-              <p className="text-slate-500">
-                No AI briefing JSON yet. Click <strong>Generate briefing</strong> (requires ANTHROPIC_API_KEY on the
-                server). Raw snapshots are still stored in history.
-              </p>
-            )}
-          </div>
-        </section>
-
-        <section>
-          <h2 className="text-lg font-semibold text-white mb-3">Agent grid</h2>
-          <p className="text-xs text-slate-500 mb-3">
-            Manual run (empty context). Prefer running from FP&amp;A variance, R2R Pattern, or Bank Recon so real data
-            flows in automatically.
-          </p>
-          <AgentStatusGrid agents={agents} onTrigger={onTrigger} busy={busy} />
-        </section>
-
-        <section className="border-t border-slate-700 pt-6">
-          <h2 className="text-lg font-semibold text-indigo-200 mb-2">Ask NEXUS-C</h2>
-          <p className="text-xs text-slate-500 mb-2">Uses recent agent summaries and open alerts (server needs ANTHROPIC_API_KEY).</p>
-          <div className="flex flex-col gap-2">
-            <textarea
-              value={chatQ}
-              onChange={(e) => setChatQ(e.target.value)}
-              rows={3}
-              placeholder='e.g. "Why is marketing over budget?"'
-              className="w-full rounded-lg bg-slate-950 border border-slate-600 text-slate-100 p-3 text-sm"
-            />
-            <button
-              type="button"
-              disabled={chatBusy || !chatQ.trim()}
-              onClick={() => void askNexus()}
-              className="self-start px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm disabled:opacity-50"
-            >
-              {chatBusy ? 'Thinking…' : 'Send'}
-            </button>
-            {chatA && (
-              <div className="rounded-lg border border-slate-600 bg-slate-900/80 p-3 text-sm text-slate-200 whitespace-pre-wrap">
-                {chatA}
-              </div>
-            )}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function CompletedAgentCard({ item, onViewAudit }: { item: CompletedAgentItem; onViewAudit: () => void }) {
-  const t = item.completed_at ? new Date(item.completed_at).toLocaleString() : '—';
-  const cp = item.checks_passed ?? 0;
-  const ct = item.checks_total ?? 12;
-  const ok = item.all_checks_passed && cp === ct;
-  const rows = item.row_count ?? 0;
-  return (
-    <div className="rounded-lg border border-slate-600 bg-slate-900/50 p-4 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium text-white capitalize">{item.agent.replace(/_/g, ' ')}</span>
-        <span className="text-xs text-slate-400 font-mono truncate max-w-[200px]" title={item.run_id}>
-          {item.run_id}
-        </span>
-      </div>
-      <p className={`text-sm ${ok ? 'text-emerald-300' : 'text-amber-200'}`}>
-        {ok ? '✅ Validated' : '⚠️ Review'} — {cp}/{ct} checks passed
-      </p>
-      <p className="text-xs text-slate-400">
-        Completed: {t}
-        {rows > 0 ? ` · Data: ${rows.toLocaleString()} row${rows === 1 ? '' : 's'} processed` : ''}
-      </p>
-      <button
-        type="button"
-        onClick={onViewAudit}
-        className="text-xs text-indigo-300 hover:text-indigo-200 underline"
-      >
-        View audit trail
-      </button>
     </div>
   );
 }

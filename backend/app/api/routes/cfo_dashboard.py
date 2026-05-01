@@ -500,7 +500,7 @@ async def generate_forecast(
             "confidence": random.uniform(0.75, 0.95)
         })
     
-    return {
+    result = {
         "success": True,
         "forecast_type": type,
         "period": period,
@@ -509,6 +509,40 @@ async def generate_forecast(
         "trend": "increasing" if type == "revenue" else "stable",
         "generated_at": datetime.now().isoformat()
     }
+    try:
+        from app.agents.intelligence import generate_insight
+        from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
+        from app.core.database import SessionLocal
+
+        _forecast_data = result if isinstance(result, dict) else (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+        _db = SessionLocal()
+        try:
+            _history = await read_agent_memory("fpa_forecast", _db)
+            _insight = await generate_insight(
+                "fpa_forecast",
+                {
+                    "forecast_result": _forecast_data,
+                    "source_route": "/fpa/forecast",
+                    "deep_link": "/fpa/forecast",
+                },
+                _history,
+            )
+            _insight["source_route"] = "/fpa/forecast"
+            _insight["deep_link"] = "/fpa/forecast"
+            _insight["module_label"] = "CFO Forecast"
+            await store_agent_run(
+                "fpa_forecast",
+                {"period": period, "type": type},
+                _forecast_data,
+                _insight,
+                _db,
+            )
+            await update_agent_memory("fpa_forecast", _forecast_data, _db)
+        finally:
+            _db.close()
+    except Exception as _e:
+        print(f"[agent_run] fpa_forecast: {_e}")
+    return result
 
 @router.get("/metrics")
 async def get_key_metrics():

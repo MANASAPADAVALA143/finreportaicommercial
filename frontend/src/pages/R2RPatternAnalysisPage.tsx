@@ -1464,6 +1464,7 @@ export default function R2RPatternAnalysisPage() {
       return;
     }
     let cancelled = false;
+    const ac = new AbortController();
     setAnalysisLoading(true);
     setUploadError(null);
     const run = async () => {
@@ -1493,12 +1494,16 @@ export default function R2RPatternAnalysisPage() {
           API_BASE,
           th,
           materialityAmountStr,
-          materialityPctStr
+          materialityPctStr,
+          { signal: ac.signal }
         );
         if (!cancelled) setPatternResult(res);
       } catch (e) {
+        if (cancelled) return;
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        if (e instanceof Error && e.name === "AbortError") return;
+        console.error(e);
         if (!cancelled) {
-          console.error(e);
           setPatternResult(null);
           setAnalysisBannerLabel(null);
           setUploadError(e instanceof Error ? e.message : "Pattern analysis failed. Is the API running on port 8000?");
@@ -1507,8 +1512,11 @@ export default function R2RPatternAnalysisPage() {
         if (!cancelled) setAnalysisLoading(false);
       }
     };
-    run();
-    return () => { cancelled = true; };
+    void run();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
   }, [rawRows, selectedClientId, sensitivity, customThresholdStr, materialityAmountStr, materialityPctStr]);
 
   useEffect(() => {

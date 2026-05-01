@@ -18,6 +18,7 @@ import {
   Loader2,
   Copy,
   Mail,
+  ChevronDown,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -33,7 +34,15 @@ import {
   PieChart as RechartsPie,
   Pie,
 } from 'recharts';
-import { formatCurrency, formatCurrencyFull, formatPercentage } from '../../utils/varianceUtils';
+import {
+  formatCurrency,
+  formatCurrencyFull,
+  getCurrencyDisplaySymbol,
+  LS_FPA_CURRENCY_KEY,
+  LS_APP_CURRENCY_FALLBACK_KEY,
+  LS_CURRENCY_FORMAT_KEY,
+} from '../../utils/varianceUtils';
+import type { CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { callAI } from '../../services/aiProvider';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
@@ -167,7 +176,7 @@ function computeVarianceAnalysis(items: VarianceLineItem[]) {
     const v = dept_agg[d];
     v.variance = v.actual - v.budget;
     v.variance_pct = v.budget ? (v.variance / v.budget) * 100 : 0;
-    v.status = getStatus(v.variance_pct);
+    v.status = getStatus(v.variance_pct, 'expense');
   });
   const department_summary = Object.values(dept_agg);
   return {
@@ -188,10 +197,10 @@ function computeVarianceAnalysis(items: VarianceLineItem[]) {
     total_variance,
     total_variance_pct,
     overall_status:
-      revenue_actual >= revenue_budget && cost_actual <= cost_budget
-        ? 'Outperforming Budget'
+      revenue_variance_pct > cost_variance_pct && total_actual > total_budget
+        ? 'High Growth with Margin Expansion'
         : revenue_actual >= revenue_budget && cost_actual > cost_budget
-          ? 'Growth with pressure'
+          ? 'Growth with Margin Pressure'
           : revenue_actual < revenue_budget && cost_actual > cost_budget
             ? 'Underperforming'
             : 'Contracting',
@@ -221,6 +230,25 @@ export function VarianceAnalysisPage() {
   const [tableStatus, setTableStatus] = useState('all');
   const [tableDirection, setTableDirection] = useState<'all' | 'over' | 'under' | 'material'>('all');
   const [materialityPct, setMaterialityPct] = useState(0);
+  const [aiMode, setAiMode] = useState<'cfo' | 'board' | 'investor'>('cfo');
+  const [showAiModeMenu, setShowAiModeMenu] = useState(false);
+  const [currency, setCurrency] = useState<CurrencyType>(() => {
+    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
+    if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(stored)) return stored as CurrencyType;
+    return 'USD';
+  });
+  const [currencyFormat, setCurrencyFormat] = useState<CurrencyFormatLocale>(() => {
+    const stored = String(localStorage.getItem(LS_CURRENCY_FORMAT_KEY) || 'GLOBAL').toUpperCase();
+    return stored === 'IN' ? 'IN' : 'GLOBAL';
+  });
+
+  useEffect(() => {
+    localStorage.setItem(LS_FPA_CURRENCY_KEY, currency);
+  }, [currency]);
+
+  useEffect(() => {
+    localStorage.setItem(LS_CURRENCY_FORMAT_KEY, currencyFormat);
+  }, [currencyFormat]);
 
   useEffect(() => {
     // Auto-load data uploaded from FP&A Suite modal (fpa_actual + fpa_budget).
@@ -328,8 +356,9 @@ export function VarianceAnalysisPage() {
     }
   };
 
-  const generateAINarrative = async () => {
+  const generateAINarrative = async (modeOverride?: 'cfo' | 'board' | 'investor') => {
     if (!analysis) return;
+    const selectedMode = modeOverride || aiMode;
     setAiLoading(true);
     setAiStep('Data validated');
     await new Promise((r) => setTimeout(r, 300));
@@ -343,7 +372,12 @@ export function VarianceAnalysisPage() {
         const res = await fetch(`${API_BASE}/api/fpa/variance/ai-narrative`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ variance_analysis: analysis }),
+          body: JSON.stringify({
+          variance_analysis: analysis,
+          narrative_mode: selectedMode,
+          currency,
+          currency_format: currencyFormat,
+        }),
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
@@ -371,12 +405,13 @@ CRITICAL RULES:
 3) Cost overruns must include expense accounts only.
 4) Include sections: Revenue Performance, Cost Performance, Profit/Margin Impact.
 5) Include COGS% interpretation: lower actual COGS% vs budget COGS% means margin improvement.
+6) Narrative mode: ${selectedMode === 'board' ? 'Board Presentation (max 3 bullets, visual-first).' : selectedMode === 'investor' ? 'Investor Update (growth story + TAM context + explicit risks).' : 'CFO Summary (detailed numbers and specific actions).'}
 
-DATA:
-Revenue budget ${analysis.revenue_budget.toFixed(2)}, actual ${analysis.revenue_actual.toFixed(2)}, variance ${analysis.revenue_variance_pct.toFixed(1)}%.
-Cost budget ${analysis.cost_budget.toFixed(2)}, actual ${analysis.cost_actual.toFixed(2)}, variance ${analysis.cost_variance_pct.toFixed(1)}%.
-Net budget ${analysis.total_budget.toFixed(2)}, actual ${analysis.total_actual.toFixed(2)}, variance ${analysis.total_variance_pct.toFixed(1)}%.
-Top Cost Overruns: ${topCostOverruns || 'None'}
+DATA (amounts in ${currency} compact format):
+Revenue budget ${formatCurrency(analysis.revenue_budget, currency, currencyFormat)}, actual ${formatCurrency(analysis.revenue_actual, currency, currencyFormat)}, variance ${analysis.revenue_variance_pct.toFixed(1)}%.
+Cost budget ${formatCurrency(analysis.cost_budget, currency, currencyFormat)}, actual ${formatCurrency(analysis.cost_actual, currency, currencyFormat)}, variance ${analysis.cost_variance_pct.toFixed(1)}%.
+Net budget ${formatCurrency(analysis.total_budget, currency, currencyFormat)}, actual ${formatCurrency(analysis.total_actual, currency, currencyFormat)}, variance ${analysis.total_variance_pct.toFixed(1)}%.
+Top Expense Variances (Above Budget): ${topCostOverruns || 'None'}
 Top Favorable Variances: ${topFavorable || 'None'}
 
 Write concise CFO commentary and 3 numeric action items.`;
@@ -479,7 +514,16 @@ Write concise CFO commentary and 3 numeric action items.`;
   const exportTableExcel = () => {
     if (!analysis) return;
     const ws = XLSX.utils.aoa_to_sheet([
-      ['#', 'Account', 'Department', 'Budget (₹)', 'Actual (₹)', 'Variance (₹)', 'Variance %', 'Status'],
+      [
+        '#',
+        'Account',
+        'Department',
+        `Budget (${getCurrencyDisplaySymbol(currency)})`,
+        `Actual (${getCurrencyDisplaySymbol(currency)})`,
+        `Variance (${getCurrencyDisplaySymbol(currency)})`,
+        'Variance %',
+        'Status',
+      ],
       ...filteredTableRows.map((r, i) => [
         i + 1,
         r.account,
@@ -530,6 +574,7 @@ Write concise CFO commentary and 3 numeric action items.`;
   }, [analysis]);
 
   const hasData = rawItems.length > 0;
+  const curSym = getCurrencyDisplaySymbol(currency);
 
   return (
     <div className="min-h-screen" style={{ background: colors.bg }}>
@@ -554,7 +599,36 @@ Write concise CFO commentary and 3 numeric action items.`;
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 mr-1">
+                <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide" style={{ color: colors.muted }}>
+                  Currency
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value as CurrencyType)}
+                    className="text-xs rounded-lg border px-2 py-1.5 font-medium normal-case"
+                    style={{ background: colors.bg, borderColor: colors.border, color: colors.text }}
+                  >
+                    <option value="USD">USD</option>
+                    <option value="GBP">GBP</option>
+                    <option value="EUR">EUR</option>
+                    <option value="AED">AED</option>
+                    <option value="INR">INR</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wide" style={{ color: colors.muted }}>
+                  Format
+                  <select
+                    value={currencyFormat}
+                    onChange={(e) => setCurrencyFormat(e.target.value as CurrencyFormatLocale)}
+                    className="text-xs rounded-lg border px-2 py-1.5 font-medium normal-case"
+                    style={{ background: colors.bg, borderColor: colors.border, color: colors.text }}
+                  >
+                    <option value="GLOBAL">Global (M / K)</option>
+                    <option value="IN">India (L / Cr)</option>
+                  </select>
+                </label>
+              </div>
               <button
                 onClick={() => setUploadModal(true)}
                 className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition"
@@ -572,15 +646,44 @@ Write concise CFO commentary and 3 numeric action items.`;
                 <Download className="w-4 h-4" />
                 Download Report
               </button>
-              <button
-                onClick={() => { setActiveTab('ai'); if (!aiNarrative && analysis) generateAINarrative(); }}
-                disabled={!hasData}
-                className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition disabled:opacity-50"
-                style={{ background: 'linear-gradient(135deg,#F59E0B,#EA580C)', color: '#fff' }}
-              >
-                <Bot className="w-4 h-4" />
-                AI Narrative
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowAiModeMenu((s) => !s)}
+                  disabled={!hasData}
+                  className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition disabled:opacity-50 max-w-[280px]"
+                  style={{ background: 'linear-gradient(135deg,#F59E0B,#EA580C)', color: '#fff' }}
+                >
+                  <Bot className="w-4 h-4 shrink-0" />
+                  <span className="truncate">
+                    AI Narrative ·{' '}
+                    {aiMode === 'board' ? 'Board' : aiMode === 'investor' ? 'Investor' : 'CFO'}
+                  </span>
+                  <ChevronDown className="w-4 h-4 shrink-0" />
+                </button>
+                {showAiModeMenu && hasData && (
+                  <div className="absolute right-0 mt-2 w-52 rounded-lg shadow-lg border bg-white z-20" style={{ borderColor: colors.border }}>
+                    {[
+                      { id: 'cfo', label: 'CFO Summary' },
+                      { id: 'board', label: 'Board Presentation' },
+                      { id: 'investor', label: 'Investor Update' },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          setAiMode(m.id as 'cfo' | 'board' | 'investor');
+                          setShowAiModeMenu(false);
+                          setActiveTab('ai');
+                          if (analysis) generateAINarrative(m.id as 'cfo' | 'board' | 'investor');
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                        style={{ color: aiMode === m.id ? colors.actualBar : '#111827', fontWeight: aiMode === m.id ? 700 : 500 }}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           {/* Breadcrumb */}
@@ -701,7 +804,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                       <p className="text-2xl font-bold font-mono" style={{ color: card.color ?? colors.text }}>
                         {i === 0 ? `${analysis.revenue_variance_pct.toFixed(1)}%`
                           : i === 1 ? `${analysis.cost_variance_pct.toFixed(1)}%`
-                          : i === 2 ? formatCurrencyFull(card.value as number, 'INR')
+                          : i === 2 ? formatCurrencyFull(card.value as number, currency, currencyFormat)
                           : analysis.overall_status}
                       </p>
                       {card.badge && (
@@ -717,17 +820,17 @@ Write concise CFO commentary and 3 numeric action items.`;
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                     <div style={{ color: colors.text }}>
                       <p className="font-semibold" style={{ color: colors.favorable }}>Revenue Performance</p>
-                      <p>Budget {formatCurrencyFull(analysis.revenue_budget, 'INR')} | Actual {formatCurrencyFull(analysis.revenue_actual, 'INR')}</p>
-                      <p>{formatCurrencyFull(analysis.revenue_variance, 'INR')} ({analysis.revenue_variance_pct.toFixed(1)}%)</p>
+                      <p>Budget {formatCurrencyFull(analysis.revenue_budget, currency, currencyFormat)} | Actual {formatCurrencyFull(analysis.revenue_actual, currency, currencyFormat)}</p>
+                      <p>{formatCurrencyFull(analysis.revenue_variance, currency, currencyFormat)} ({analysis.revenue_variance_pct.toFixed(1)}%)</p>
                     </div>
                     <div style={{ color: colors.text }}>
                       <p className="font-semibold" style={{ color: colors.unfavorable }}>Cost Performance</p>
-                      <p>Budget {formatCurrencyFull(analysis.cost_budget, 'INR')} | Actual {formatCurrencyFull(analysis.cost_actual, 'INR')}</p>
-                      <p>{formatCurrencyFull(analysis.cost_variance, 'INR')} ({analysis.cost_variance_pct.toFixed(1)}%)</p>
+                      <p>Budget {formatCurrencyFull(analysis.cost_budget, currency, currencyFormat)} | Actual {formatCurrencyFull(analysis.cost_actual, currency, currencyFormat)}</p>
+                      <p>{formatCurrencyFull(analysis.cost_variance, currency, currencyFormat)} ({analysis.cost_variance_pct.toFixed(1)}%)</p>
                     </div>
                     <div style={{ color: colors.text }}>
                       <p className="font-semibold" style={{ color: colors.budgetBar }}>Profit/Margin Impact</p>
-                      <p>Net Budget {formatCurrencyFull(analysis.total_budget, 'INR')} | Net Actual {formatCurrencyFull(analysis.total_actual, 'INR')}</p>
+                      <p>Net Budget {formatCurrencyFull(analysis.total_budget, currency, currencyFormat)} | Net Actual {formatCurrencyFull(analysis.total_actual, currency, currencyFormat)}</p>
                       <p>Status: {analysis.overall_status}</p>
                     </div>
                   </div>
@@ -735,11 +838,11 @@ Write concise CFO commentary and 3 numeric action items.`;
                 {/* Top overspends / savings */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="rounded-xl p-5 border" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="font-semibold mb-4" style={{ color: colors.unfavorable }}>Cost Overruns</h3>
+                    <h3 className="font-semibold mb-4" style={{ color: colors.unfavorable }}>Expense Variances (Above Budget)</h3>
                     <ul className="space-y-2 text-sm">
                       {topCostOverruns.map((i, idx) => (
                         <li key={idx} style={{ color: colors.text }}>
-                          {idx + 1}. {i.account} — {formatCurrencyFull(i.variance ?? 0, 'INR')} over ({(i.variance_pct ?? 0).toFixed(0)}%)
+                          {idx + 1}. {i.account} — {formatCurrencyFull(i.variance ?? 0, currency, currencyFormat)} over ({(i.variance_pct ?? 0).toFixed(0)}%)
                         </li>
                       ))}
                     </ul>
@@ -749,7 +852,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                     <ul className="space-y-2 text-sm">
                       {topFavorableVariances.map((i, idx) => (
                         <li key={idx} style={{ color: colors.text }}>
-                          {idx + 1}. {i.account} — {formatCurrencyFull(Math.abs(i.variance ?? 0), 'INR')} ({Math.abs(i.variance_pct ?? 0).toFixed(0)}%)
+                          {idx + 1}. {i.account} — {formatCurrencyFull(Math.abs(i.variance ?? 0), currency, currencyFormat)} ({Math.abs(i.variance_pct ?? 0).toFixed(0)}%)
                         </li>
                       ))}
                     </ul>
@@ -763,7 +866,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Department</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Budget</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Actual</th>
-                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance ₹</th>
+                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance ({curSym})</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance %</th>
                         <th className="text-center py-3 px-4" style={{ color: colors.muted }}>Status</th>
                       </tr>
@@ -772,9 +875,9 @@ Write concise CFO commentary and 3 numeric action items.`;
                       {analysis.department_summary.map((d, i) => (
                         <tr key={i} className="border-t" style={{ borderColor: colors.border }}>
                           <td className="py-3 px-4 font-medium" style={{ color: colors.text }}>{d.department}</td>
-                          <td className="py-3 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(d.budget, 'INR')}</td>
-                          <td className="py-3 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(d.actual, 'INR')}</td>
-                          <td className="py-3 px-4 text-right font-mono" style={{ color: d.variance >= 0 ? colors.unfavorable : colors.favorable }}>{formatCurrencyFull(d.variance, 'INR')}</td>
+                          <td className="py-3 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(d.budget, currency, currencyFormat)}</td>
+                          <td className="py-3 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(d.actual, currency, currencyFormat)}</td>
+                          <td className="py-3 px-4 text-right font-mono" style={{ color: d.variance >= 0 ? colors.unfavorable : colors.favorable }}>{formatCurrencyFull(d.variance, currency, currencyFormat)}</td>
                           <td className="py-3 px-4 text-right font-mono" style={{ color: d.variance_pct >= 0 ? colors.unfavorable : colors.favorable }}>{d.variance_pct.toFixed(1)}%</td>
                           <td className="py-3 px-4 text-center">
                             <span
@@ -870,9 +973,9 @@ Write concise CFO commentary and 3 numeric action items.`;
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Account</th>
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Account Type</th>
                         <th className="text-left py-3 px-4" style={{ color: colors.muted }}>Department</th>
-                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Budget (₹)</th>
-                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Actual (₹)</th>
-                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance (₹)</th>
+                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Budget ({curSym})</th>
+                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Actual ({curSym})</th>
+                        <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance ({curSym})</th>
                         <th className="text-right py-3 px-4" style={{ color: colors.muted }}>Variance %</th>
                         <th className="text-center py-3 px-4" style={{ color: colors.muted }}>Status</th>
                       </tr>
@@ -884,9 +987,9 @@ Write concise CFO commentary and 3 numeric action items.`;
                           <td className="py-2 px-4 font-medium" style={{ color: colors.text }}>{r.account}</td>
                           <td className="py-2 px-4" style={{ color: colors.muted }}>{String(r.accountType || 'other').toUpperCase()}</td>
                           <td className="py-2 px-4" style={{ color: colors.muted }}>{r.department}</td>
-                          <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.budget, 'INR')}</td>
-                          <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.actual, 'INR')}</td>
-                          <td className="py-2 px-4 text-right font-mono" style={{ color: r.favorable ? colors.favorable : colors.unfavorable }}>{formatCurrencyFull(r.variance ?? 0, 'INR')}</td>
+                          <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.budget, currency, currencyFormat)}</td>
+                          <td className="py-2 px-4 text-right font-mono" style={{ color: colors.text }}>{formatCurrencyFull(r.actual, currency, currencyFormat)}</td>
+                          <td className="py-2 px-4 text-right font-mono" style={{ color: r.favorable ? colors.favorable : colors.unfavorable }}>{formatCurrencyFull(r.variance ?? 0, currency, currencyFormat)}</td>
                           <td className="py-2 px-4 text-right font-mono" style={{ color: r.favorable ? colors.favorable : colors.unfavorable }}>{(r.variance_pct ?? 0).toFixed(1)}%</td>
                           <td className="py-2 px-4 text-center">
                             <span className="px-2 py-0.5 rounded text-xs" style={{ background: r.favorable ? colors.favorable + '33' : colors.unfavorable + '33', color: colors.text }}>
@@ -913,9 +1016,9 @@ Write concise CFO commentary and 3 numeric action items.`;
                     <BarChart data={waterfallData} margin={{ top: 20, right: 20, left: 20, bottom: 80 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={colors.border} />
                       <XAxis dataKey="name" angle={-35} textAnchor="end" height={80} tick={{ fill: colors.muted, fontSize: 11 }} />
-                      <YAxis tickFormatter={(v) => formatCurrency(v, 'INR')} tick={{ fill: colors.muted }} />
+                      <YAxis tickFormatter={(v) => formatCurrency(v, currency, currencyFormat)} tick={{ fill: colors.muted }} />
                       <Tooltip
-                        formatter={(v: number) => [formatCurrencyFull(v, 'INR'), '']}
+                        formatter={(v: number) => [formatCurrencyFull(v, currency, currencyFormat), '']}
                         contentStyle={{ background: colors.card, border: `1px solid ${colors.border}`, borderRadius: 8 }}
                         labelStyle={{ color: colors.text }}
                       />
@@ -939,9 +1042,9 @@ Write concise CFO commentary and 3 numeric action items.`;
                       margin={{ left: 100, right: 20 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke={colors.border} />
-                      <XAxis type="number" tickFormatter={(v) => formatCurrency(v, 'INR')} tick={{ fill: colors.muted }} />
+                      <XAxis type="number" tickFormatter={(v) => formatCurrency(v, currency, currencyFormat)} tick={{ fill: colors.muted }} />
                       <YAxis type="category" dataKey="department" width={95} tick={{ fill: colors.muted, fontSize: 11 }} />
-                      <Tooltip formatter={(v: number) => [formatCurrencyFull(v, 'INR'), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
+                      <Tooltip formatter={(v: number) => [formatCurrencyFull(v, currency, currencyFormat), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
                       <Legend />
                       <Bar dataKey="budget" name="Budget" fill={colors.budgetBar} radius={[0, 4, 4, 0]} />
                       <Bar dataKey="actual" name="Actual" fill={colors.actualBar} radius={[0, 4, 4, 0]} />
@@ -974,7 +1077,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                 {/* Pies: Overspends / Savings by category */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="rounded-xl border p-6" style={{ background: colors.card, borderColor: colors.border }}>
-                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.unfavorable }}>Cost Overruns by Category</h3>
+                    <h3 className="text-lg font-bold mb-4" style={{ color: colors.unfavorable }}>Expense Variances by Category</h3>
                     <ResponsiveContainer width="100%" height={260}>
                       <RechartsPie>
                         <Pie
@@ -990,7 +1093,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                           innerRadius={50}
                           outerRadius={80}
                           paddingAngle={2}
-                          label={({ name, value }) => `${name}: ${formatCurrency(value, 'INR')}`}
+                          label={({ name, value }) => `${name}: ${formatCurrency(value, currency, currencyFormat)}`}
                         >
                           {analysis.line_items
                             .filter((i) => i.accountType === 'expense' && (i.variance ?? 0) > 0)
@@ -999,7 +1102,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                               <Cell key={i} fill={colors.unfavorable} />
                             ))}
                         </Pie>
-                        <Tooltip formatter={(v: number) => [formatCurrencyFull(v, 'INR'), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
+                        <Tooltip formatter={(v: number) => [formatCurrencyFull(v, currency, currencyFormat), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
                       </RechartsPie>
                     </ResponsiveContainer>
                   </div>
@@ -1020,7 +1123,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                           innerRadius={50}
                           outerRadius={80}
                           paddingAngle={2}
-                          label={({ name, value }) => `${name}: ${formatCurrency(value, 'INR')}`}
+                          label={({ name, value }) => `${name}: ${formatCurrency(value, currency, currencyFormat)}`}
                         >
                           {analysis.line_items
                             .filter((i) => (i.accountType === 'income' && (i.variance ?? 0) > 0) || (i.accountType === 'expense' && (i.variance ?? 0) < 0))
@@ -1029,7 +1132,7 @@ Write concise CFO commentary and 3 numeric action items.`;
                               <Cell key={i} fill={colors.favorable} />
                             ))}
                         </Pie>
-                        <Tooltip formatter={(v: number) => [formatCurrencyFull(v, 'INR'), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
+                        <Tooltip formatter={(v: number) => [formatCurrencyFull(v, currency, currencyFormat), '']} contentStyle={{ background: colors.card, border: `1px solid ${colors.border}` }} />
                       </RechartsPie>
                     </ResponsiveContainer>
                   </div>
@@ -1046,7 +1149,8 @@ Write concise CFO commentary and 3 numeric action items.`;
                       Generate CFO-ready narrative and line-by-line commentary powered by AI.
                     </p>
                     <button
-                      onClick={generateAINarrative}
+                      type="button"
+                      onClick={() => void generateAINarrative()}
                       className="px-6 py-3 rounded-lg font-medium flex items-center gap-2 mx-auto"
                       style={{ background: 'linear-gradient(135deg,#F59E0B,#EA580C)', color: '#fff' }}
                     >

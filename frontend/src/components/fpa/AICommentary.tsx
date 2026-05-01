@@ -1,7 +1,7 @@
 // FP&A Variance Analysis - AI Commentary Component (AWS Nova Powered)
 import { useState } from 'react';
-import { Sparkles, Copy, RefreshCw, Download, Edit2, Check, X } from 'lucide-react';
-import type { VarianceRow } from '../../types/fpa';
+import { Sparkles, Copy, RefreshCw, Download, Edit2, Check, X, ChevronDown } from 'lucide-react';
+import type { VarianceRow, CurrencyFormatLocale } from '../../types/fpa';
 import { callAI } from '../../services/aiProvider';
 import { formatCurrency, formatPercentage } from '../../utils/varianceUtils';
 
@@ -10,14 +10,139 @@ interface Props {
   period: string;
   entityName: string;
   currency?: string;
+  currencyFormat?: CurrencyFormatLocale;
 }
 
-export const AICommentary = ({ varianceData, period, entityName, currency = "INR" }: Props) => {
+type NarrativeMode = 'cfo' | 'board' | 'investor';
+
+const SYSTEM_PROMPT = `
+You are a senior CFO advisor generating 
+variance analysis commentary.
+
+ABSOLUTE RULES — NEVER BREAK THESE:
+
+1. NET PROFIT IS NEVER "SPENT"
+   Always write: "Net profit increased to X 
+   from budget of Y — favorable variance of Z"
+   NEVER write profit as a spending statement
+
+2. PROFIT VARIANCE DIRECTION
+   actual_profit > budget_profit = FAVORABLE
+   actual_profit < budget_profit = UNFAVORABLE
+   NEVER call profit increase "unfavorable"
+
+3. STATUS CLASSIFICATION (use these exact phrases)
+   revenue_growth% > cost_growth% AND profit > budget:
+   → "High Growth with Margin Expansion"
+   
+   revenue_growth% > 0 AND cost_growth% > revenue_growth%:
+   → "Growth with Margin Pressure"
+   
+   revenue_growth% < 0:
+   → "Underperforming"
+
+4. COSTS VS REVENUE LOGIC
+   If costs grew LESS than revenue:
+   → "Costs well-controlled relative to growth"
+   → "Strong operating leverage"
+   NEVER say "costs outpacing revenue" when 
+   costs grew LESS than revenue
+
+5. MARKETING EFFICIENCY
+   If revenue_growth > marketing_growth:
+   → "Marketing efficiency strong — 
+      revenue scaled faster than spend"
+   NEVER say "marketing underperformed"
+
+6. COGS INTERPRETATION
+   Always calculate:
+   budget_cogs_pct = budget_cogs/budget_revenue
+   actual_cogs_pct = actual_cogs/actual_revenue
+   Write: "Gross margin moved from X% to Y%"
+   Add: "Subject to pricing/mix validation"
+   When COGS grew slower than revenue, prefer this style (substitute real % from DATA INPUTS):
+   "A key highlight is that COGS increased by only X% relative to Y% revenue growth, indicating strong operating leverage."
+
+7. CURRENCY IN PROSE
+   Echo monetary amounts using the SAME compact style as DATA INPUTS (e.g. $58.29M or ₹5.82Cr).
+   Never mix Indian lakh/crore wording with international M/K in the same narrative.
+
+8. BANNED WORDS — NEVER USE:
+   - "spent" for profit
+   - "unfavorable" for profit increase
+   - "outpacing" when costs < revenue growth
+   - "growth with pressure" when margins expanded
+   - "economies of scale" without data
+   - "spending freeze"
+   - "renegotiate contracts"
+
+OUTPUT STRUCTURE — ALWAYS USE THIS:
+
+Executive Summary:
+[Company] delivered [status] for [period].
+
+Revenue: [actual] vs budget [budget] — [+X%] FAVORABLE/UNFAVORABLE
+Costs: [actual] vs budget [budget] — [+X%] OVER/UNDER BUDGET  
+Net Profit: [actual] vs budget [budget] — [+X%] FAVORABLE/UNFAVORABLE
+Gross Margin: moved from [budget%] to [actual%]
+
+Key Insights:
+- [specific numbered insight with £/$ amounts]
+- [specific numbered insight]
+- [specific numbered insight]
+
+Key Risks:
+- [specific risk with numbers]
+- [specific risk with numbers]
+
+Overall Status: [High Growth with Margin Expansion /
+                 Growth with Margin Pressure /
+                 Underperforming]
+`;
+
+const MODE_INSTRUCTIONS: Record<NarrativeMode, string> = {
+  cfo: `
+NARRATIVE MODE: CFO Summary
+- Keep detailed commentary with specific financial numbers.
+- Highlight concrete drivers and operating actions by line item.
+- Include precise budget vs actual references in each section.`,
+  board: `
+NARRATIVE MODE: Board Presentation
+- At most 3 bullet points total for the entire Key Insights section (no extra bullets elsewhere).
+- Visual-first: each bullet starts with the headline number or %, then one short clause.
+- Skip granular line-item lists; focus on strategic signal and decisions.`,
+  investor: `
+NARRATIVE MODE: Investor Update
+- Growth story first; cite runway and efficiency only from DATA (no invented TAM figures).
+- Pair major upside with a specific risk and how management addresses it.
+- Tone: confident, concise, appropriate for public-company-style updates.`,
+};
+
+const validateNarrative = (text: string): boolean => {
+  const lower = String(text || '').toLowerCase();
+  const bannedPatterns: RegExp[] = [
+    /company\s+spent/,
+    /costs outpacing/,
+    /growth with pressure/,
+    /net profit[\s\S]{0,80}unfavorable variance|unfavorable variance[\s\S]{0,80}net profit/,
+  ];
+  return !bannedPatterns.some((rx) => rx.test(lower));
+};
+
+export const AICommentary = ({ varianceData, period, entityName, currency = "INR", currencyFormat }: Props) => {
   const [commentary, setCommentary] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editedCommentary, setEditedCommentary] = useState('');
   const [copied, setCopied] = useState(false);
+  const [mode, setMode] = useState<NarrativeMode>('cfo');
+  const [showModeMenu, setShowModeMenu] = useState(false);
+
+  const modeLabel: Record<NarrativeMode, string> = {
+    cfo: 'CFO Summary',
+    board: 'Board Presentation',
+    investor: 'Investor Update',
+  };
 
   const generateCommentary = async () => {
     setIsGenerating(true);
@@ -31,6 +156,37 @@ export const AICommentary = ({ varianceData, period, entityName, currency = "INR
         return 'other';
       };
       const pAndLRows = varianceData.filter((r) => !r.isHeader && classifyType(r) !== 'other');
+
+      const revenueRows = pAndLRows.filter((r) => classifyType(r) === 'income');
+      const expenseRows = pAndLRows.filter((r) => classifyType(r) === 'expense');
+      const marketingRows = expenseRows.filter((r) => /marketing|advertising/i.test(String(r.category || '')));
+      const cogsRows = expenseRows.filter((r) => /cogs|cost of sales|cost of goods/i.test(String(r.category || '')));
+
+      const revenueActual = revenueRows.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+      const revenueBudget = revenueRows.reduce((s, r) => s + (Number(r.budget) || 0), 0);
+      const costActual = expenseRows.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+      const costBudget = expenseRows.reduce((s, r) => s + (Number(r.budget) || 0), 0);
+      const netProfitActual = revenueActual - costActual;
+      const netProfitBudget = revenueBudget - costBudget;
+      const revenueVariancePct = revenueBudget !== 0 ? ((revenueActual - revenueBudget) / revenueBudget) * 100 : 0;
+      const costVariancePct = costBudget !== 0 ? ((costActual - costBudget) / costBudget) * 100 : 0;
+      const netProfitVariancePct = netProfitBudget !== 0 ? ((netProfitActual - netProfitBudget) / Math.abs(netProfitBudget)) * 100 : 0;
+      const marketingActual = marketingRows.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+      const marketingBudget = marketingRows.reduce((s, r) => s + (Number(r.budget) || 0), 0);
+      const marketingGrowthPct = marketingBudget !== 0 ? ((marketingActual - marketingBudget) / marketingBudget) * 100 : 0;
+      const budgetCogs = cogsRows.reduce((s, r) => s + (Number(r.budget) || 0), 0);
+      const actualCogs = cogsRows.reduce((s, r) => s + (Number(r.actual) || 0), 0);
+      const budgetCogsPct = revenueBudget !== 0 ? (budgetCogs / revenueBudget) * 100 : 0;
+      const actualCogsPct = revenueActual !== 0 ? (actualCogs / revenueActual) * 100 : 0;
+      const marginChangePct = budgetCogsPct - actualCogsPct;
+      const statusClassification =
+        revenueVariancePct > costVariancePct && netProfitActual > netProfitBudget
+          ? 'High Growth with Margin Expansion'
+          : revenueVariancePct > 0 && costVariancePct > revenueVariancePct
+            ? 'Growth with Margin Pressure'
+            : revenueVariancePct < 0 && costVariancePct > 0
+              ? 'Underperforming'
+              : 'Mixed performance';
 
       // Find critical variances
       const criticalVariances = varianceData
@@ -52,85 +208,58 @@ export const AICommentary = ({ varianceData, period, entityName, currency = "INR
         .slice(0, 3)
         .map((r) => `${r.category}: ${formatPercentage(r.variancePct)} ${classifyType(r) === 'income' ? 'above budget' : 'under budget'}`);
 
-      // Get key metrics
-      const revenue = varianceData.find(r => r.id === "revenue");
-      const netProfit = varianceData.find(r => r.id === "net-profit");
+      // Get key metrics (kept for account-level commentary)
       const adminExpenses = varianceData.find(r => r.id === "admin-expenses");
       const exportSales = varianceData.find(r => r.id === "export-sales");
       const costOfSales = varianceData.find(r => r.id === "cost-of-sales");
 
-      const prompt = `You are a senior FP&A analyst writing variance commentary for a board pack.
+      const prompt = `${SYSTEM_PROMPT}
+${MODE_INSTRUCTIONS[mode]}
 
-COMPANY: ${entityName}
-PERIOD: ${period}
-CURRENCY: ${currency}
+DATA INPUTS:
+Company: ${entityName}
+Period: ${period}
+Currency: ${currency}
+Revenue actual: ${formatCurrency(revenueActual, currency, currencyFormat)}
+Revenue budget: ${formatCurrency(revenueBudget, currency, currencyFormat)}
+Revenue growth %: ${revenueVariancePct.toFixed(1)}%
+Cost actual: ${formatCurrency(costActual, currency, currencyFormat)}
+Cost budget: ${formatCurrency(costBudget, currency, currencyFormat)}
+Cost growth %: ${costVariancePct.toFixed(1)}%
+Net profit actual: ${formatCurrency(netProfitActual, currency, currencyFormat)}
+Net profit budget: ${formatCurrency(netProfitBudget, currency, currencyFormat)}
+Net profit variance %: ${netProfitVariancePct.toFixed(1)}%
+Marketing growth %: ${marketingGrowthPct.toFixed(1)}%
+Budget COGS %: ${budgetCogsPct.toFixed(1)}%
+Actual COGS %: ${actualCogsPct.toFixed(1)}%
+Margin change % (budget - actual COGS%): ${marginChangePct.toFixed(1)}%
+Status classification anchor: ${statusClassification}
 
-KEY VARIANCES:
-${criticalVariances.join("\n")}
+Critical variances:
+${criticalVariances.join("\n") || 'None'}
 
-DETAILED METRICS:
-- Revenue: Actual ${revenue ? formatCurrency(revenue.actual, currency) : 'N/A'} vs Budget ${revenue ? formatCurrency(revenue.budget, currency) : 'N/A'} (${revenue ? formatPercentage(revenue.variancePct) : 'N/A'} ${revenue?.favorable ? 'favorable' : 'unfavorable'})
-- Net Profit: Actual ${netProfit ? formatCurrency(netProfit.actual, currency) : 'N/A'} vs Budget ${netProfit ? formatCurrency(netProfit.budget, currency) : 'N/A'} (${netProfit ? formatPercentage(netProfit.variancePct) : 'N/A'} ${netProfit?.favorable ? 'favorable' : 'unfavorable'})
-- Admin Expenses: ${adminExpenses ? formatPercentage(adminExpenses.variancePct) : 'N/A'} over budget
-- Export Sales: ${exportSales ? formatPercentage(exportSales.variancePct) : 'N/A'} below target
-- Cost of Sales: ${costOfSales ? formatPercentage(costOfSales.variancePct) : 'N/A'} over budget
+Cost overruns (expense only):
+${costOverruns.join("\n") || 'None'}
 
-STRICT RULES:
-- Revenue exceeding budget is ALWAYS favorable.
-- NEVER call revenue increase an overspend.
-- NEVER list revenue inside cost overruns.
-- Always present these sections:
-  a) Revenue Performance (vs budget)
-  b) Cost Performance (vs budget)
-  c) Profit/Margin Impact
-- Overall logic:
-  * revenue up + costs controlled => Outperforming
-  * revenue up + costs up faster => Growth with pressure
-  * revenue down + costs up => Underperforming
-  * revenue down + costs down => Contracting
-- COGS interpretation must use ratio:
-  Budget COGS% = Budget COGS / Budget Revenue
-  Actual COGS% = Actual COGS / Actual Revenue
-  If Actual COGS% < Budget COGS% => margin improved
-  If Actual COGS% > Budget COGS% => margin eroded
-- Use ONLY numbers given above.
-- NEVER use generic phrases like "implement spending freeze", "renegotiate contracts", or "improve cost controls".
-- NEVER use words:
-  "overspend" for revenue
-  "unfavorable" for revenue exceeding budget
-  "spending freeze"
-  "renegotiate contracts"
-- ALWAYS cite specific values and percentages.
+Favorable variances:
+${favorableVariances.join("\n") || 'None'}
 
-COST OVERRUNS (expense only):
-${costOverruns.length ? costOverruns.join("\n") : 'None'}
+Additional metrics:
+Admin Expenses variance: ${adminExpenses ? formatPercentage(adminExpenses.variancePct) : 'N/A'}
+Export Sales variance: ${exportSales ? formatPercentage(exportSales.variancePct) : 'N/A'}
+Cost of Sales variance: ${costOfSales ? formatPercentage(costOfSales.variancePct) : 'N/A'}
 
-FAVORABLE VARIANCES:
-${favorableVariances.length ? favorableVariances.join("\n") : 'None'}
+Generate the final narrative now.`;
 
-Write commentary in this exact structure:
-
-1. HEADLINE (one sentence, with numbers)
-
-2. TOP 3 DRIVERS (with amounts)
-
-3. REVENUE PERFORMANCE
-
-4. COST PERFORMANCE
-
-5. PROFIT/MARGIN IMPACT
-
-6. COST OVERRUNS (expense only)
-
-7. FAVORABLE VARIANCES
-
-8. 3 SPECIFIC ACTIONS (each action includes a numeric target)
-
-Formatting:
-- Plain text only (no markdown)
-- Section headers in ALL CAPS ending with colon`;
-
-      const result = await callAI(prompt);
+      let result = '';
+      const maxAttempts = 3; // initial + 2 retries
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const retryNudge = attempt > 1
+          ? `\n\nRETRY ${attempt - 1}: Previous output violated banned-phrase validation. Rewrite strictly and remove banned language. Keep ${modeLabel[mode]} style.`
+          : '';
+        result = await callAI(prompt + retryNudge);
+        if (validateNarrative(result)) break;
+      }
       setCommentary(result);
       setEditedCommentary(result);
     } catch (error: any) {
@@ -185,6 +314,31 @@ Formatting:
         {/* Action Buttons */}
         {commentary && !isEditing && (
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                onClick={() => setShowModeMenu((s) => !s)}
+                className="px-3 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg transition flex items-center gap-2 text-sm font-medium"
+              >
+                <span className="truncate max-w-[200px]">AI Narrative · {modeLabel[mode]}</span>
+                <ChevronDown className="w-4 h-4 shrink-0" />
+              </button>
+              {showModeMenu && (
+                <div className="absolute right-0 mt-2 w-48 rounded-lg border border-gray-200 bg-white shadow-lg z-20">
+                  {(['cfo', 'board', 'investor'] as NarrativeMode[]).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => {
+                        setMode(m);
+                        setShowModeMenu(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${mode === m ? 'font-semibold text-purple-700' : 'text-gray-700'}`}
+                    >
+                      {modeLabel[m]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={handleCopy}
               className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center gap-2 text-sm font-medium"
@@ -225,13 +379,39 @@ Formatting:
             <Sparkles className="w-16 h-16 text-purple-300 mx-auto" />
           </div>
           <p className="text-gray-600 mb-6">Generate AI-powered variance commentary for your board pack</p>
+          <div className="inline-block relative mb-4">
+            <button
+              onClick={() => setShowModeMenu((s) => !s)}
+              className="px-4 py-2 border border-purple-300 text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition flex items-center gap-2 text-sm font-semibold"
+            >
+              <span className="truncate max-w-[220px]">AI Narrative · {modeLabel[mode]}</span>
+              <ChevronDown className="w-4 h-4 shrink-0" />
+            </button>
+            {showModeMenu && (
+              <div className="absolute left-0 mt-2 w-48 rounded-lg border border-gray-200 bg-white shadow-lg z-20">
+                {(['cfo', 'board', 'investor'] as NarrativeMode[]).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      setMode(m);
+                      setShowModeMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${mode === m ? 'font-semibold text-purple-700' : 'text-gray-700'}`}
+                  >
+                    {modeLabel[m]}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 mb-4">Selected mode: {modeLabel[mode]}</p>
           <button
             onClick={generateCommentary}
             disabled={isGenerating}
             className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-lg font-semibold transition flex items-center gap-2 mx-auto disabled:opacity-50"
           >
             <Sparkles className={`w-5 h-5 ${isGenerating ? 'animate-pulse' : ''}`} />
-            {isGenerating ? 'Generating Commentary...' : 'Generate AI Commentary'}
+            {isGenerating ? 'Generating Commentary...' : `Generate ${modeLabel[mode]}`}
           </button>
         </div>
       ) : isEditing ? (
