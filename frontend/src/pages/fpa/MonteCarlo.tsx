@@ -14,7 +14,7 @@ import { Play } from 'lucide-react';
 import { FpaPageShell } from '../../components/fpa/FpaPageShell';
 import { LoadingSpinner } from '../../components/fpa/LoadingSpinner';
 import { ErrorBanner } from '../../components/fpa/ErrorBanner';
-import { CFO_ANALYSIS_MODEL, postFpaJson } from '../../lib/fpaApi';
+import { CFO_ANALYSIS_MODEL, postFpaJson } from '../../services/fpaApi';
 import { callAI } from '../../services/aiProvider';
 
 type MCRes = {

@@ -3,7 +3,7 @@ import { Download, Play } from 'lucide-react';
 import { FpaPageShell } from '../../components/fpa/FpaPageShell';
 import { LoadingSpinner } from '../../components/fpa/LoadingSpinner';
 import { ErrorBanner } from '../../components/fpa/ErrorBanner';
-import { postFpaJson } from '../../lib/fpaApi';
+import { postFpaJson } from '../../services/fpaApi';
 
 type Row = Record<string, number>;
 
