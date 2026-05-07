@@ -1,0 +1,5 @@
+control_id,control_name,test_performed,result,exceptions_found
+ITGC-01,User access review,Sample + inquiry,Effective,None
+AP-03,Three-way match before pay,Observation,Deficiency,3 invoices paid without PO match
+FIN-12,Period-end close checklist,Inspection,Effective,None
+RV-02,Revenue cutoff test,Substantive testing,Deficiency,2 shipments booked in wrong period

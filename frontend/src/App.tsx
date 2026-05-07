@@ -65,6 +65,7 @@ const R2RModule = safeLazy(() =>
   import('./components/r2r/R2RModule').then((m) => ({ default: m.R2RModule }))
 );
 const R2RPatternAnalysisPage = safeLazy(() => import('./pages/R2RPatternAnalysisPage'));
+const JournalPageWithHistoricalTabs = safeLazy(() => import('./pages/journal'));
 const RevRecReconciliationPage = safeLazy(() => import('./pages/r2r/RevRecReconciliationPage'));
 const TBVariancePage = safeLazy(() =>
   import('./pages/TBVariancePage').then((m) => ({ default: m.TBVariancePage }))
@@ -154,6 +155,7 @@ const BookkeepingMonthlyPage = safeLazy(() =>
 const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
 const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
 const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
+const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntelligencePage'));
 
 /** Matches Vite `base` (root vs GitHub Pages subpath). */
 const normalizedBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '') || '/';
@@ -209,6 +211,7 @@ function App() {
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/command-center" element={<CommandCenter />} />
               <Route path="/agent-status" element={<AgentStatus />} />
+              <Route path="/audit" element={<AuditIntelligencePage />} />
               <Route path="/cfo-dashboard" element={<CFODashboard />} />
               <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
               <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
@@ -217,10 +220,10 @@ function App() {
               <Route path="/erp/tally" element={<TallyIntegrationPage />} />
               <Route element={<R2rShell />}>
                 <Route path="/r2r" element={<R2RModule />} />
-                <Route path="/r2r-pattern" element={<R2RPatternAnalysisPage />} />
-                <Route path="/r2r/pattern" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
+                <Route path="/r2r/pattern" element={<JournalPageWithHistoricalTabs />} />
                 <Route path="/r2r/learning" element={<R2RPatternAnalysisPage />} />
-                <Route path="/r2r/history" element={<R2RPatternAnalysisPage />} />
+                <Route path="/r2r/history" element={<JournalPageWithHistoricalTabs />} />
                 <Route path="/r2r/rev-rec" element={<RevRecReconciliationPage />} />
               </Route>
               <Route path="/tb-variance" element={<TBVariancePage />} />

@@ -10,8 +10,11 @@ import pandas as pd
 import io
 import re
 import json
+import anthropic
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.chart import BarChart, Reference
+from openpyxl.utils import get_column_letter
 
 from app.services import llm_service
 from app.services.tb_variance_commentary import (
@@ -68,6 +71,15 @@ class AINarrativeResponse(BaseModel):
     executive_summary: str
     line_commentary: List[Dict[str, str]]  # [{ account, why, recommendation }]
     action_items: List[str]
+
+
+class CommentaryRequest(BaseModel):
+    variance_data: List[Dict[str, Any]]
+    commentary_type: str = "cfo"  # executive | cfo | board | risk
+
+
+class ExportExcelRequest(BaseModel):
+    variance_data: List[Dict[str, Any]]
 
 
 _FPA_CCY_SYMBOL: Dict[str, str] = {
@@ -226,6 +238,79 @@ def _status(variance_pct: float) -> str:
     if variance_pct < -10:
         return "Under Budget"
     return "Watch"
+
+
+def _normalize_variance_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in rows or []:
+        if bool(r.get("isHeader")):
+            continue
+        account = str(r.get("account") or r.get("category") or "").strip()
+        if not account:
+            continue
+        budget = _parse_num(r.get("budget", 0))
+        actual = _parse_num(r.get("actual", 0))
+        variance = _parse_num(r.get("variance", actual - budget))
+        variance_pct = _parse_num(r.get("variance_pct", r.get("variancePct", 0)))
+        if variance_pct == 0 and budget != 0:
+            variance_pct = (variance / budget) * 100
+        out.append(
+            {
+                "account": account,
+                "budget": budget,
+                "actual": actual,
+                "variance": variance,
+                "variance_pct": variance_pct,
+                "department": str(r.get("department") or "All Depts"),
+            }
+        )
+    return out
+
+
+def _build_commentary_prompt(commentary_type: str, variance_data: List[Dict[str, Any]]) -> str:
+    variance_text = "\n".join(
+        [
+            f"{row['account']}: Budget {row['budget']}, Actual {row['actual']}, "
+            f"Variance {row['variance']} ({row.get('variance_pct', 0):.1f}%)"
+            for row in variance_data
+        ]
+    )
+    prompts = {
+        "executive": """
+Write a 5-bullet executive summary of these FP&A results.
+Lead with headline number. Include one risk, one positive.
+Under 150 words. Plain English. No jargon.
+""",
+        "cfo": """
+You are a CFO analyst. Write management commentary for these budget vs actual variances.
+- Name top 3 revenue drivers (favourable variances)
+- Name top 2 cost risks (adverse variances)
+- Flag any items > 10% adverse variance
+- Suggest one corrective action per risk found
+Under 250 words. Confident, direct tone. No fluff.
+""",
+        "board": """
+Turn these monthly FP&A results into a board narrative.
+Structure:
+1. Performance vs budget headline (1 sentence)
+2. Key drivers — what went well (2-3 bullets)
+3. Key risks — what needs attention (2-3 bullets)
+4. Forward outlook (1 paragraph)
+Board tone — strategic, not operational.
+Under 300 words.
+""",
+        "risk": """
+Review this variance data as a risk analyst.
+Flag:
+- Any variance > 15% adverse (Critical risk)
+- Any variance 5-15% adverse (Watch item)
+- Any unusual patterns (e.g. consistent adverse trend)
+- Any items that could embarrass in a board meeting
+Format as structured risk register with Risk | Severity | Recommended Action columns.
+""",
+    }
+    selected = prompts.get((commentary_type or "cfo").lower(), prompts["cfo"])
+    return f"{selected}\n\nVARIANCE DATA:\n{variance_text}"
 
 
 def _calculate(line_items: List[Dict]) -> Dict:
@@ -781,4 +866,177 @@ async def download_report(body: DownloadReportRequest):
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=Variance_Analysis_Report.xlsx"},
+    )
+
+
+@router.post("/commentary")
+async def generate_fpa_commentary(body: CommentaryRequest):
+    """Generate streaming FP&A commentary from variance table rows."""
+    variance_data = _normalize_variance_rows(body.variance_data)
+    if not variance_data:
+        raise HTTPException(status_code=400, detail="variance_data must include at least one row.")
+    if not llm_service.is_configured():
+        raise HTTPException(status_code=503, detail="LLM not configured: set ANTHROPIC_API_KEY on the server.")
+    prompt = _build_commentary_prompt(body.commentary_type, variance_data)
+    client = anthropic.Anthropic()
+    system_text = (
+        "You are a senior FP&A analyst at a Big 4 firm. Write sharp, insight-driven financial commentary. "
+        "Never write generic statements. Always reference specific numbers from the data provided."
+    )
+
+    def stream_commentary():
+        with client.messages.stream(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            temperature=0.2,
+            system=system_text,
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for text in stream.text_stream:
+                safe = str(text or "").replace("\n", " ")
+                if safe:
+                    yield f"data: {safe}\n\n"
+            yield "event: done\ndata: [DONE]\n\n"
+
+    return StreamingResponse(stream_commentary(), media_type="text/event-stream")
+
+
+@router.post("/export-excel")
+async def export_fpa_excel(body: ExportExcelRequest):
+    """Generate AI-enriched Excel (variance + commentary + risk register)."""
+    variance_data = _normalize_variance_rows(body.variance_data)
+    if not variance_data:
+        raise HTTPException(status_code=400, detail="variance_data must include at least one row.")
+    if not llm_service.is_configured():
+        raise HTTPException(status_code=503, detail="LLM not configured: set ANTHROPIC_API_KEY on the server.")
+
+    commentary: Dict[str, str] = {}
+    for ctype in ["executive", "cfo", "board", "risk"]:
+        try:
+            commentary[ctype] = llm_service.invoke(
+                prompt=_build_commentary_prompt(ctype, variance_data),
+                max_tokens=800,
+                temperature=0.2,
+                system=(
+                    "You are a senior FP&A analyst. Write sharp, specific commentary referencing actual numbers."
+                ),
+                model_id="claude-sonnet-4-20250514",
+            )
+        except Exception as exc:  # noqa: BLE001
+            commentary[ctype] = f"AI generation failed for {ctype}: {exc}"
+
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "Variance Analysis"
+
+    DARK_BG = "0A0F1E"
+    GOLD = "F5A623"
+    GREEN_FILL = "1A4731"
+    RED_FILL = "4A1919"
+    AMBER_FILL = "4A3A19"
+    NEUTRAL_FILL = "1A1F2E"
+    WHITE = "FFFFFF"
+
+    headers = ["Account", "Budget", "Actual", "Variance (£)", "Variance (%)", "Status"]
+    for col, header in enumerate(headers, 1):
+        cell = ws1.cell(row=1, column=col, value=header)
+        cell.fill = PatternFill("solid", fgColor=DARK_BG)
+        cell.font = Font(bold=True, color=GOLD, size=11)
+        cell.alignment = Alignment(horizontal="center")
+
+    for row_idx, item in enumerate(variance_data, 2):
+        variance_pct = float(item.get("variance_pct", 0))
+        if variance_pct >= 5:
+            status = "Favourable"
+            row_fill = PatternFill("solid", fgColor=GREEN_FILL)
+        elif variance_pct <= -10:
+            status = "Critical"
+            row_fill = PatternFill("solid", fgColor=RED_FILL)
+        elif variance_pct < 0:
+            status = "Watch"
+            row_fill = PatternFill("solid", fgColor=AMBER_FILL)
+        else:
+            status = "On Track"
+            row_fill = PatternFill("solid", fgColor=NEUTRAL_FILL)
+
+        values = [
+            item.get("account", ""),
+            float(item.get("budget", 0)),
+            float(item.get("actual", 0)),
+            float(item.get("variance", 0)),
+            float(item.get("variance_pct", 0)),
+            status,
+        ]
+        for col, val in enumerate(values, 1):
+            cell = ws1.cell(row=row_idx, column=col, value=val)
+            cell.fill = row_fill
+            cell.font = Font(color=WHITE, size=10)
+            cell.alignment = Alignment(horizontal="center")
+            if col == 5:
+                cell.number_format = "0.0%"
+                cell.value = float(item.get("variance_pct", 0)) / 100.0
+
+    for i, w in enumerate([30, 15, 15, 15, 15, 18], 1):
+        ws1.column_dimensions[get_column_letter(i)].width = w
+
+    chart = BarChart()
+    chart.type = "col"
+    chart.title = "Budget vs Actual"
+    chart.y_axis.title = "Amount"
+    chart.x_axis.title = "Account"
+    max_row = len(variance_data) + 1
+    data_ref = Reference(ws1, min_col=2, max_col=3, min_row=1, max_row=max_row)
+    cats_ref = Reference(ws1, min_col=1, min_row=2, max_row=max_row)
+    chart.add_data(data_ref, titles_from_data=True)
+    chart.set_categories(cats_ref)
+    ws1.add_chart(chart, "H2")
+
+    ws2 = wb.create_sheet("AI Commentary")
+    ws2.sheet_view.showGridLines = False
+    sections = [
+        ("EXECUTIVE SUMMARY", commentary.get("executive", "")),
+        ("CFO COMMENTARY", commentary.get("cfo", "")),
+        ("BOARD NARRATIVE", commentary.get("board", "")),
+        ("RISK FLAGS", commentary.get("risk", "")),
+    ]
+    current_row = 1
+    for title, text in sections:
+        head = ws2.cell(row=current_row, column=1, value=title)
+        head.fill = PatternFill("solid", fgColor=DARK_BG)
+        head.font = Font(bold=True, color=GOLD, size=13)
+        ws2.row_dimensions[current_row].height = 30
+        current_row += 1
+        body_cell = ws2.cell(row=current_row, column=1, value=text)
+        body_cell.alignment = Alignment(wrap_text=True, vertical="top")
+        body_cell.font = Font(color="CCCCCC", size=10)
+        body_cell.fill = PatternFill("solid", fgColor="141B2D")
+        lines = max(len(str(text)) // 90, 6)
+        ws2.row_dimensions[current_row].height = lines * 14
+        current_row += 2
+    ws2.column_dimensions["A"].width = 110
+
+    ws3 = wb.create_sheet("Risk Register")
+    ws3.sheet_view.showGridLines = False
+    risk_headers = ["Risk Item", "Severity", "Recommended Action"]
+    for col, h in enumerate(risk_headers, 1):
+        cell = ws3.cell(row=1, column=col, value=h)
+        cell.fill = PatternFill("solid", fgColor=DARK_BG)
+        cell.font = Font(bold=True, color=GOLD, size=11)
+        cell.alignment = Alignment(horizontal="center")
+
+    risk_text = commentary.get("risk", "")
+    ws3.cell(row=2, column=1, value=risk_text).alignment = Alignment(wrap_text=True, vertical="top")
+    ws3.cell(row=2, column=1).font = Font(color="CCCCCC", size=10)
+    ws3.cell(row=2, column=1).fill = PatternFill("solid", fgColor="141B2D")
+    ws3.row_dimensions[2].height = 220
+    for i, w in enumerate([40, 20, 50], 1):
+        ws3.column_dimensions[get_column_letter(i)].width = w
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=fpa_report_ai.xlsx"},
     )

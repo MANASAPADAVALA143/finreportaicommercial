@@ -19,6 +19,7 @@ import {
 import type { PeriodType, CompareType, DepartmentType, CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
+import { exportVarianceExcelWithAI } from '../../utils/fpa/excelExport';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 const DEFAULT_OWNER_BY_DEPARTMENT: Record<string, string> = {
@@ -79,6 +80,7 @@ export const VarianceAnalysis = () => {
 
   // UI State
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportingAiExcel, setExportingAiExcel] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -312,6 +314,19 @@ export const VarianceAnalysis = () => {
       alert(`Exporting to ${format.toUpperCase()}... (Coming soon)`);
     }
     setShowExportMenu(false);
+  };
+
+  const handleExportExcelWithAI = async () => {
+    if (!currentVarianceData.length) return;
+    setShowExportMenu(false);
+    setExportingAiExcel(true);
+    try {
+      await exportVarianceExcelWithAI(currentVarianceData);
+    } catch (error: any) {
+      alert('❌ Failed to export AI Excel: ' + (error?.message || error));
+    } finally {
+      setExportingAiExcel(false);
+    }
   };
 
   const exportToExcel = () => {
@@ -616,15 +631,22 @@ export const VarianceAnalysis = () => {
               <div className="relative">
                 <button
                   onClick={() => setShowExportMenu(!showExportMenu)}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center gap-2 font-medium"
+                  disabled={exportingAiExcel}
+                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition flex items-center gap-2 font-medium disabled:opacity-50"
                 >
-                  <Download className="w-4 h-4" />
-                  Export
+                  {exportingAiExcel ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  {exportingAiExcel ? 'Generating AI Report...' : 'Export'}
                   <ChevronDown className="w-4 h-4" />
                 </button>
 
               {showExportMenu && (
                 <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                  <button
+                    onClick={() => void handleExportExcelWithAI()}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-50 transition text-sm text-amber-700 font-semibold"
+                  >
+                    Export Excel + AI
+                  </button>
                   <button
                     onClick={() => handleExport('pdf')}
                     className="w-full px-4 py-2 text-left hover:bg-gray-50 transition text-sm text-gray-700"

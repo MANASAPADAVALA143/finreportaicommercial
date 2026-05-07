@@ -141,8 +141,14 @@ const StatCard = ({ label, value, sub, color = C.blue, bg, border }: { label: st
 // ─── JE Master Summary (always shown above tabs) ─────────────────────────────
 type JEEntryRow = {
   id: string;
+  /** Friendly entity/vendor label (mapped from company codes when applicable). */
   vendor: string;
+  /** Raw entity code (e.g. SG01) shown as secondary monospace line when mapped. */
+  vendorCode?: string;
+  /** Friendly GL / account label. */
   account: string;
+  /** Raw account code from file when a longer label is shown above. */
+  accountCode?: string;
   postedBy: string;
   date: string;
   tags: string[];
@@ -224,6 +230,47 @@ function parseAmountStr(s: string): number {
 }
 
 const FISCAL_MONTH_ORDER = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+
+/** Company / legal entity codes common in multi-entity GL extracts (replaces missing vendor). */
+const ENTITY_DISPLAY_MAP: Record<string, string> = {
+  SG01: "Singapore Entity",
+  US01: "US Entity",
+  IN01: "India Entity",
+  UK01: "UK Entity",
+};
+
+/** Short GL class labels → human-readable line for the grid. */
+const GL_ACCOUNT_DISPLAY_MAP: Record<string, string> = {
+  COGS: "Cost of Goods Sold (COGS)",
+  Expense: "General Expense",
+  FixedAsset: "Fixed Assets",
+  Suspense: "Suspense Account",
+  Revenue: "Revenue",
+  Payable: "Accounts Payable",
+  Receivable: "Accounts Receivable",
+};
+
+function resolveEntityVendorDisplay(raw: string): { primary: string; code?: string } {
+  const code = raw.trim();
+  if (!code || code === "—") return { primary: "—" };
+  const up = code.toUpperCase();
+  const friendly = ENTITY_DISPLAY_MAP[code] ?? ENTITY_DISPLAY_MAP[up] ?? code;
+  if (friendly !== code) return { primary: friendly, code };
+  return { primary: code };
+}
+
+function resolveAccountDisplay(raw: string): { primary: string; code?: string } {
+  const s = raw.trim();
+  if (!s || s === "—") return { primary: "—" };
+  const compact = s.replace(/\s+/g, "");
+  const friendly =
+    GL_ACCOUNT_DISPLAY_MAP[s] ??
+    GL_ACCOUNT_DISPLAY_MAP[compact] ??
+    GL_ACCOUNT_DISPLAY_MAP[s.charAt(0).toUpperCase() + s.slice(1)] ??
+    s;
+  if (friendly !== s) return { primary: friendly, code: s };
+  return { primary: s };
+}
 
 function computeTrendByMonth(entries: JEEntryRow[]): { month: string; high: number; medium: number; low: number }[] {
   type Key = string;
@@ -342,10 +389,17 @@ function scoredEntryToJEEntry(p: ScoredEntry, index: number): JEEntryRow {
   const user = Math.round(p.rulesScore * 100);
   const time = p.isWeekend || p.isLateNight ? Math.round(p.rulesScore * 100) : null;
   const acct = Math.round(p.statScore * 100);
+  const rawVendorOrEntity =
+    (p.entityCode && p.entityCode.trim()) ||
+    (p.vendor && p.vendor !== "—" ? p.vendor.trim() : "");
+  const ven = rawVendorOrEntity ? resolveEntityVendorDisplay(rawVendorOrEntity) : { primary: "—" as const };
+  const acctDisp = resolveAccountDisplay(String(p.account ?? "—"));
   return {
     id: p.entryId || `JE-${String(index + 1).padStart(3, "0")}`,
-    vendor: p.vendor || "—",
-    account: p.account || "—",
+    vendor: ven.primary,
+    vendorCode: ven.code,
+    account: acctDisp.primary,
+    accountCode: acctDisp.code,
     postedBy: p.userId || "—",
     date: p.date || "—",
     tags,
@@ -555,6 +609,9 @@ const JESummaryTable = ({
   const [fbComments, setFbComments] = useState<Record<string, string>>({});
   const [fbSubmitting, setFbSubmitting] = useState<string | null>(null);
   const [fbToast, setFbToast] = useState<string | null>(null);
+  /** Serialize Nova calls so rapid row-expands do not burn Anthropic TPM. */
+  const novaSerialRef = useRef<Promise<void>>(Promise.resolve());
+  const lastNovaCompleteRef = useRef(0);
 
   const refreshFbSummary = useCallback(async () => {
     if (!learningClientId) {
@@ -586,33 +643,102 @@ const JESummaryTable = ({
   const filtered = filter === "ALL" ? jeEntries : jeEntries.filter(e => e.level === filter);
   const counts = { HIGH: jeEntries.filter(e=>e.level==="HIGH").length, MEDIUM: jeEntries.filter(e=>e.level==="MEDIUM").length, LOW: jeEntries.filter(e=>e.level==="LOW").length };
 
-  const fetchNovaExplanation = useCallback(async (e: JEEntryRow) => {
-    if (novaCache[e.id]) return;
-    setNovaLoading(e.id);
-    const systemPrompt = "You are a financial fraud detection assistant. Explain why a journal entry was flagged in 3 bullet points. Be specific and use plain English. Max 60 words total.";
-    const signalList = (e.signals && e.signals.length > 0) ? e.signals.join(", ") : "Amount, Duplicate, User, Timing, Account, Vendor (as triggered)";
-    const userPrompt = `Journal entry details:\nVendor: ${e.vendor}\nAmount: ${e.amount}\nPosted by: ${e.postedBy}\nDate: ${e.date}\nAccount: ${e.account}\nSignals triggered: ${signalList}\nRisk score: ${e.score}/100\nExplain why this is suspicious.`;
-    try {
-      const res = await fetch(AI_INVOKE_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model_id: "",
-          prompt: `${systemPrompt}\n\n${userPrompt}`,
-          max_tokens: 200,
-          temperature: 0.3,
-        }),
+  const NOVA_RATE_LIMIT_MSG =
+    "Nova is temporarily limited (your Anthropic org hit tokens-per-minute or requests-per-minute). Wait about one minute, then collapse and expand this row again. Opening many rows in quick succession can trigger this limit.";
+
+  const fetchNovaExplanation = useCallback(
+    (e: JEEntryRow) => {
+      if (novaCache[e.id]) return;
+      const systemPrompt =
+        "You are a financial fraud detection assistant. Explain why a journal entry was flagged in 3 bullet points. Be specific and use plain English. Max 60 words total.";
+      const signalList =
+        e.signals && e.signals.length > 0
+          ? e.signals.join(", ")
+          : "Amount, Duplicate, User, Timing, Account, Vendor (as triggered)";
+      const entityVen =
+        e.vendorCode != null && String(e.vendorCode).trim() !== ""
+          ? `${e.vendor} (${e.vendorCode})`
+          : e.vendor;
+      const acctLine =
+        e.accountCode != null && String(e.accountCode).trim() !== ""
+          ? `${e.account} [${e.accountCode}]`
+          : e.account;
+      const userPrompt = `Journal entry details:\nEntity / vendor: ${entityVen}\nAmount: ${e.amount}\nPosted by: ${e.postedBy}\nDate: ${e.date}\nAccount: ${acctLine}\nSignals triggered: ${signalList}\nRisk score: ${e.score}/100\nExplain why this is suspicious.`;
+      const payload = {
+        model_id: "",
+        prompt: `${systemPrompt}\n\n${userPrompt}`,
+        max_tokens: 180,
+        temperature: 0.3,
+      };
+
+      novaSerialRef.current = novaSerialRef.current.catch(() => undefined).then(async () => {
+        setNovaLoading(e.id);
+        const MIN_GAP_MS = 3200;
+        const gapWait = Math.max(0, MIN_GAP_MS - (Date.now() - lastNovaCompleteRef.current));
+        if (gapWait) await new Promise((r) => setTimeout(r, gapWait));
+
+        const parseDetail = async (res: Response): Promise<string> => {
+          let detail = `Request failed (${res.status})`;
+          try {
+            const errJson = (await res.json()) as { detail?: string | { msg?: string }[] };
+            const d = errJson.detail;
+            if (typeof d === "string") detail = d;
+            else if (Array.isArray(d))
+              detail = d
+                .map((x) =>
+                  typeof x === "object" && x && "msg" in x ? String((x as { msg: string }).msg) : String(x)
+                )
+                .join("; ");
+          } catch {
+            /* ignore */
+          }
+          if (
+            res.status === 429 ||
+            /rate_limit|rate limit|429|tokens per minute/i.test(detail)
+          ) {
+            return NOVA_RATE_LIMIT_MSG;
+          }
+          return detail;
+        };
+
+        try {
+          let res = await fetch(AI_INVOKE_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (res.status === 429) {
+            await new Promise((r) => setTimeout(r, 15000));
+            res = await fetch(AI_INVOKE_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+          }
+          if (!res.ok) {
+            const detail = await parseDetail(res);
+            setNovaCache((prev) => ({ ...prev, [e.id]: detail }));
+            return;
+          }
+          const data = (await res.json()) as { text?: string };
+          const text = (data.text ?? "").trim() || "No explanation available.";
+          setNovaCache((prev) => ({ ...prev, [e.id]: text }));
+        } catch (err) {
+          const raw = err instanceof Error ? err.message : "Unable to load AI analysis. Please try again.";
+          const shown =
+            /rate_limit|rate limit|429|tokens per minute/i.test(raw) ? NOVA_RATE_LIMIT_MSG : raw;
+          setNovaCache((prev) => ({
+            ...prev,
+            [e.id]: shown.length > 420 ? `${shown.slice(0, 417)}…` : shown,
+          }));
+        } finally {
+          lastNovaCompleteRef.current = Date.now();
+          setNovaLoading(null);
+        }
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { text?: string };
-      const text = (data.text ?? "").trim() || "No explanation available.";
-      setNovaCache(prev => ({ ...prev, [e.id]: text }));
-    } catch {
-      setNovaCache(prev => ({ ...prev, [e.id]: "Unable to load AI analysis. Please try again." }));
-    } finally {
-      setNovaLoading(null);
-    }
-  }, [novaCache]);
+    },
+    [novaCache]
+  );
 
   const handleRowClick = useCallback((e: JEEntryRow) => {
     const next = selected === e.id ? null : e.id;
@@ -714,7 +840,7 @@ const JESummaryTable = ({
           <thead>
             <tr style={{ background: `linear-gradient(to right, ${C.navy}, #1E3A8A)` }}>
               {[
-                { label: "Entry" }, { label: "Vendor / Account" }, { label: "Posted By" },
+                { label: "Entry" }, { label: "Entity / Account" }, { label: "Posted By" },
                 { label: "Date / Tags" }, { label: "Amount", right: true },
                 { label: "Amt",  tip: "Amount model" }, { label: "Dup", tip: "Duplicate check" },
                 { label: "User", tip: "User behaviour" }, { label: "Time", tip: "Timing" },
@@ -754,7 +880,13 @@ const JESummaryTable = ({
                   </td>
                   <td style={{ padding: "12px 12px" }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{e.vendor}</div>
-                    <div style={{ fontSize: 11, color: C.textSub, marginTop: 1 }}>{e.account}</div>
+                    {e.vendorCode ? (
+                      <div style={{ fontSize: 10, color: C.textSub, fontFamily: mono, marginTop: 2 }}>{e.vendorCode}</div>
+                    ) : null}
+                    <div style={{ fontSize: 11, color: C.textSub, marginTop: e.vendorCode ? 6 : 1 }}>{e.account}</div>
+                    {e.accountCode ? (
+                      <div style={{ fontSize: 10, color: C.textSub, fontFamily: mono, marginTop: 2 }}>{e.accountCode}</div>
+                    ) : null}
                   </td>
                   <td style={{ padding: "12px 12px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -878,7 +1010,7 @@ const JESummaryTable = ({
                                         client_id: learningClientId,
                                         entry_id: e.id,
                                         entry_data: {
-                                          account: e.account,
+                                          account: e.accountCode ? `${e.account} (${e.accountCode})` : e.account,
                                           amount: e.amountNum,
                                           user: e.postedBy,
                                           date: e.date,
@@ -1099,7 +1231,10 @@ const VendorTab = ({ data }: { data: DerivedStats }) => (
         <SectionTitle sub="Concentration of anomalies by account head">Account Category Exposure</SectionTitle>
         {(() => {
           const byAcct: Record<string, number> = {};
-          data.entries.forEach(e => { byAcct[e.account] = (byAcct[e.account] || 0) + 1; });
+          data.entries.forEach(e => {
+            const ak = (e.accountCode ?? e.account) || "—";
+            byAcct[ak] = (byAcct[ak] || 0) + 1;
+          });
           const total = data.entries.length;
           return Object.entries(byAcct).sort((a,b) => b[1] - a[1]).slice(0, 6).map(([acct, count]) => ({
             acct: acct || "—",
@@ -1110,7 +1245,7 @@ const VendorTab = ({ data }: { data: DerivedStats }) => (
         })().map((a) => (
           <div key={a.acct} style={{ padding: "10px 0", borderBottom: `1px solid ${C.borderLight}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-              <span style={{ fontSize: 13, color: C.textMid, fontWeight: 500 }}>{a.acct}</span>
+              <span style={{ fontSize: 13, color: C.textMid, fontWeight: 500 }}>{resolveAccountDisplay(a.acct).primary}</span>
               <span style={{ fontSize: 12, fontFamily: mono, color: C.textSub }}>{a.pct}% · {a.count} JEs</span>
             </div>
             <MiniBar pct={a.pct} color={a.color} height={5} />
@@ -1641,7 +1776,7 @@ export default function R2RPatternAnalysisPage() {
         ],
         ...top10.map((e) => [
           e.id,
-          e.account,
+          e.accountCode ? `${e.account} (${e.accountCode})` : e.account,
           Math.round(e.amountNum),
           e.postedBy,
           e.date,
@@ -1663,7 +1798,7 @@ export default function R2RPatternAnalysisPage() {
       ];
       const flaggedRows = flaggedSorted.map((e) => [
         e.id,
-        e.account,
+        e.accountCode ? `${e.account} (${e.accountCode})` : e.account,
         Math.round(e.amountNum),
         e.postedBy,
         e.date,
@@ -1687,7 +1822,7 @@ export default function R2RPatternAnalysisPage() {
           else cur.low += 1;
           m.set(key, cur);
         };
-        bump(byAccount, e.account || "—");
+        bump(byAccount, (e.accountCode ?? e.account) || "—");
         bump(byUser, e.postedBy || "—");
         const d = parseEntryDate(e.date);
         const mk = d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` : "Unknown";
@@ -1705,7 +1840,14 @@ export default function R2RPatternAnalysisPage() {
       const riskBreakdown: (string | number)[][] = [
         ["RISK BREAKDOWN — BY ACCOUNT"],
         ["Account", "Entries", "HIGH", "MEDIUM", "LOW", "Avg risk score"],
-        ...sortAgg(byAccount).map((r) => [r.key, r.n, r.high, r.medium, r.low, r.avgScore]),
+        ...sortAgg(byAccount).map((r) => [
+          resolveAccountDisplay(r.key).primary,
+          r.n,
+          r.high,
+          r.medium,
+          r.low,
+          r.avgScore,
+        ]),
         [],
         ["RISK BREAKDOWN — BY USER"],
         ["User", "Entries", "HIGH", "MEDIUM", "LOW", "Avg risk score"],
@@ -1771,7 +1913,7 @@ export default function R2RPatternAnalysisPage() {
             const first = arr[0] || {};
             const keys = Object.keys(first).map((k) => k.toLowerCase());
             const hasAmount = keys.some((k) => k.includes("amount") || k.includes("debit") || k.includes("credit"));
-            const hasContext = keys.some((k) => k.includes("date") || k.includes("vendor") || k.includes("account") || k.includes("posted") || k.includes("user"));
+            const hasContext = keys.some((k) => k.includes("date") || k.includes("vendor") || k.includes("entity") || k.includes("account") || k.includes("posted") || k.includes("user"));
             if (hasAmount && (hasContext || keys.length >= 3)) return arr;
             return [];
           };

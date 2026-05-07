@@ -99,6 +99,29 @@ def _coerce_date_series(series: pd.Series) -> pd.Series:
     return series.map(_coerce_single_date)
 
 
+def _collapse_duplicate_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """After renaming, several headers (e.g. Date + Posted Date) can map to the same label.
+    Pandas then keeps duplicate column names and df['date'] is a DataFrame — breaks .dt accessors."""
+    if not df.columns.duplicated().any():
+        return df
+    seen: set[str] = set()
+    data: dict[str, pd.Series] = {}
+    for j, col in enumerate(df.columns):
+        if col in seen:
+            continue
+        idxs = [i for i, c in enumerate(df.columns) if c == col]
+        if len(idxs) == 1:
+            data[col] = df.iloc[:, idxs[0]]
+        else:
+            parts = [df.iloc[:, i] for i in idxs]
+            s = parts[0].copy()
+            for p in parts[1:]:
+                s = s.combine_first(p)
+            data[col] = s
+        seen.add(col)
+    return pd.DataFrame(data)
+
+
 def _json_val(v: Any) -> Any:
     if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
         return None
@@ -276,6 +299,10 @@ class R2RPatternEngine:
                 col_map[col] = "user"
             elif any(x in cl for x in ["vendor", "party", "counterpart"]):
                 col_map[col] = "vendor"
+            elif cl == "entity" or (
+                "entity" in cl and "identity" not in cl and "counter" not in cl
+            ):
+                col_map[col] = "entity"
             elif any(x in cl for x in ["narration", "description", "memo", "ref"]):
                 col_map[col] = "description"
             elif any(x in cl for x in ["type", "jetype", "voucher_type"]):
@@ -284,6 +311,7 @@ class R2RPatternEngine:
                 col_map[col] = "entry_id"
 
         df = df.rename(columns=col_map)
+        df = _collapse_duplicate_column_names(df)
 
         if "debit" in df.columns or "credit" in df.columns:
             d = pd.to_numeric(df.get("debit", 0), errors="coerce").fillna(0).abs()
@@ -337,6 +365,15 @@ class R2RPatternEngine:
         else:
             df["user_frequency"] = 1
             df["user_encoded"] = 0
+
+        # Entity / company code often substitutes for vendor in ERP extracts.
+        if "vendor" not in df.columns and "entity" in df.columns:
+            df["vendor"] = df["entity"].astype(str)
+        elif "vendor" in df.columns and "entity" in df.columns:
+            v_raw = df["vendor"].astype(str).str.strip()
+            e_raw = df["entity"].astype(str).str.strip()
+            empty_like = v_raw.isin(["", "nan", "none", "—", "NaN", "None"])
+            df["vendor"] = v_raw.where(~empty_like, e_raw)
 
         if "entry_id" not in df.columns:
             df["entry_id"] = [f"JE-{i+1:04d}" for i in range(len(df))]

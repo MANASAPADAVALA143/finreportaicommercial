@@ -6,7 +6,8 @@ import {
   Target,
   Brain,
   LayoutGrid,
-  FileSpreadsheet
+  FileSpreadsheet,
+  ShieldCheck
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
@@ -113,6 +114,14 @@ export const Dashboard: React.FC = () => {
       description: 'Bank upload, rules + Claude categorisation, anomalies, receipts, GL reconcile, monthly PDF',
       link: '/bookkeeping',
       bgColor: 'bg-emerald-500/10',
+      badge: 'New'
+    },
+    {
+      icon: <ShieldCheck className="w-16 h-16 text-amber-400" />,
+      title: 'Audit Intelligence',
+      description: 'Evidence sampling, IFRS checks, controls testing, SOX, and AML monitoring — PDF reports & history',
+      link: '/audit',
+      bgColor: 'bg-amber-500/5',
       badge: 'New'
     }
   ];

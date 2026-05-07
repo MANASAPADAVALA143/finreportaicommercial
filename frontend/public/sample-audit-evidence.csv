@@ -1,0 +1,6 @@
+date,account,debit,credit,description,reference
+2024-01-31,Cash,50000,,Month end transfer,REF001
+2024-01-31,Cash,49999,,Month end transfer,REF002
+2024-01-31,Revenue,,99999,Round number revenue,REF003
+2024-01-15,Expenses,250000,,No description,REF004
+2024-01-28,Director Loan,500000,,Director payment,REF005

@@ -1,0 +1,6 @@
+date,sender,receiver,amount,currency,type,country,reference
+2024-01-02,ACME Ltd,Shell Co A,9500,USD,wire,US,TX1001
+2024-01-02,ACME Ltd,Shell Co B,9400,USD,wire,US,TX1002
+2024-01-02,ACME Ltd,Shell Co C,9200,USD,wire,US,TX1003
+2024-01-05,Offshore A,ACME Ltd,500000,USD,transfer,CY,TX2001
+2024-01-06,ACME Ltd,Offshore A,499000,USD,transfer,CY,TX2002

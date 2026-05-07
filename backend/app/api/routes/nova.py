@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 from app.core.security import get_current_user
 from app.api.schemas import NovaPrompt, NovaResponse
 from app.services import llm_service
+from app.services.llm_service import LLMNotConfiguredError, LLMRateLimitError
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -29,8 +30,12 @@ async def invoke_ai(body: AIInvokeRequest):
             temperature=body.temperature,
         )
         return {"text": text}
+    except LLMNotConfiguredError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except LLMRateLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/analyze", response_model=NovaResponse)

@@ -15,6 +15,8 @@ def init_db():
     import app.models.ifrs_agentic  # noqa: F401 - multi-agent IFRS orchestration
     import app.models.financial_statement_vault  # noqa: F401 - IAS 1 comparative vault
     import app.models.cfo_command_center  # noqa: F401 - CFO Command Center agent runs / briefings
+    import app.models.audit_intelligence  # noqa: F401 - Audit Intelligence agent runs
+    import app.models.history_models  # noqa: F401 - Historical Intelligence baselines
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:

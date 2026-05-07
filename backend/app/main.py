@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import Any
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -13,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import inspect, text
 from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
@@ -51,6 +52,9 @@ from app.api.routes import (
     chat,
     cfo_agents,
     rev_rec_recon,
+    audit_intelligence,
+    history_router,
+    historical_analysis,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -58,6 +62,7 @@ from app.board_pack_generator import generate_pdf
 from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler
 from app.agents.command_center.registry import list_agent_names
 from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
+from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
 
 _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
 os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
@@ -154,6 +159,9 @@ app.include_router(excel_suite.router, prefix="/api/excel")
 app.include_router(excel_addon_routes.router)
 app.include_router(voice_inbound.router)
 app.include_router(rev_rec_recon.router)
+app.include_router(audit_intelligence.router)
+app.include_router(history_router.router, prefix="/api/v2", tags=["History"])
+app.include_router(historical_analysis.router, prefix="/api/v2", tags=["History"])
 
 if settings.ENABLE_FASTAPI_MCP:
     try:
@@ -378,3 +386,323 @@ async def download_board_pack(filename: str):
     if os.path.exists(path):
         return FileResponse(path, media_type="application/pdf", filename=filename)
     return {"error": "Board pack not found"}
+
+
+_EXCEL_ADDIN_CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+}
+
+
+class ExcelAddinAnalyzeBody(BaseModel):
+    """Power Automate / Excel Controls sheet → one endpoint."""
+
+    analysis_type: str = Field(..., min_length=1)
+    company: str = Field(..., min_length=1)
+    period: str = ""
+    currency: str = "USD"
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ExcelAddinAnalyzeResponse(BaseModel):
+    """OpenAPI shape for /api/excel-addin/analyze (ml_engine + narrative vary by analysis_type)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    analysis_type: str
+    company: str
+    period: str
+    currency: str
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    ml_engine: dict[str, Any] = Field(default_factory=dict)
+    narrative: dict[str, Any] = Field(default_factory=dict)
+    claude_error: str | None = None
+
+
+_EXCEL_ADDIN_OPENAPI_TAGS = ["Excel Add-in", "FP&A"]
+
+_EXCEL_ANALYZE_OPENAPI_EXAMPLES: dict[str, dict] = {
+    "variance": {
+        "summary": "Variance (BvA)",
+        "description": "Budget vs actual with optional threshold % and department filter.",
+        "value": {
+            "analysis_type": "variance",
+            "company": "Test Co",
+            "period": "Q1 2026",
+            "currency": "INR",
+            "thresholds": {"variance_pct": 5},
+            "filters": {"department": "All"},
+            "rows": [
+                {"account": "Revenue", "budget": 4000000, "actual": 3650000},
+                {"account": "Salaries", "budget": 1200000, "actual": 1380000},
+            ],
+        },
+    },
+    "forecast": {
+        "summary": "Forecast",
+        "description": "Monthly series → linear extension (needs ≥2 months).",
+        "value": {
+            "analysis_type": "forecast",
+            "company": "Test Co",
+            "period": "",
+            "currency": "USD",
+            "thresholds": {},
+            "filters": {},
+            "rows": [
+                {"month": "2025-10", "revenue": 800, "costs": 520},
+                {"month": "2025-11", "revenue": 830, "costs": 540},
+                {"month": "2025-12", "revenue": 900, "costs": 560},
+            ],
+        },
+    },
+}
+
+
+@app.options("/api/excel-addin/analyze", tags=_EXCEL_ADDIN_OPENAPI_TAGS)
+async def excel_addin_analyze_options():
+    """CORS preflight for browser / Office clients."""
+    return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+
+
+@app.post(
+    "/api/excel-addin/analyze",
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="Unified FP&A analyze (Power Automate / Controls sheet)",
+    response_model=ExcelAddinAnalyzeResponse,
+)
+async def excel_addin_analyze_post(
+    body: ExcelAddinAnalyzeBody = Body(
+        ...,
+        openapi_examples=_EXCEL_ANALYZE_OPENAPI_EXAMPLES,
+    ),
+):
+    """
+    Single dynamic FP&A endpoint: analysis_type + thresholds + filters + rows.
+    Legacy /variance, /budget, /kpi, /forecast, /scenarios, /reports still work
+    but return header X-Deprecated-Use-Instead: /api/excel-addin/analyze.
+    """
+    try:
+        out = analyze_service.run(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if isinstance(out.get("narrative"), dict) and out["narrative"].get("error"):
+        out["claude_error"] = out["narrative"]["error"]
+
+    return JSONResponse(content=out, headers=dict(_EXCEL_ADDIN_CORS))
+
+
+_DEPRECATION_HEADERS = {
+    **_EXCEL_ADDIN_CORS,
+    "X-Deprecated-Use-Instead": "/api/excel-addin/analyze",
+}
+
+
+def _legacy_json_response(payload: dict) -> JSONResponse:
+    return JSONResponse(content=payload, headers=dict(_DEPRECATION_HEADERS))
+
+
+@app.api_route(
+    "/api/excel-addin/variance",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] Variance — use /api/excel-addin/analyze",
+)
+async def excel_addin_variance_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=variance."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_variance(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_variance(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+@app.api_route(
+    "/api/excel-addin/budget",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] Budget — use /api/excel-addin/analyze",
+)
+async def excel_addin_budget_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=budget."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_budget(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_budget(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+@app.api_route(
+    "/api/excel-addin/kpi",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] KPI — use /api/excel-addin/analyze",
+)
+async def excel_addin_kpi_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=kpi."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_kpi(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_kpi(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+@app.api_route(
+    "/api/excel-addin/forecast",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] Forecast — use /api/excel-addin/analyze",
+)
+async def excel_addin_forecast_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=forecast."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_forecast(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_forecast(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+@app.api_route(
+    "/api/excel-addin/scenarios",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] Scenarios — use /api/excel-addin/analyze",
+)
+async def excel_addin_scenarios_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=scenario."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_scenarios(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_scenarios(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+@app.api_route(
+    "/api/excel-addin/reports",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="[Deprecated] Reports — use /api/excel-addin/analyze",
+)
+async def excel_addin_reports_legacy(request: Request):
+    """Deprecated: use POST /api/excel-addin/analyze with analysis_type=report."""
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        inner = legacy_shim.to_analyze_reports(data)
+        out = analyze_service.run(inner)
+        legacy = legacy_shim.response_reports(out)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=f"Missing field: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _legacy_json_response(legacy)
+
+
+class ExcelAddinChatTurn(BaseModel):
+    role: str
+    content: str
+
+
+class ExcelAddinChatBody(BaseModel):
+    message: str = Field(..., min_length=1)
+    variance_context: dict | list | str = Field(default_factory=dict)
+    chat_history: list[ExcelAddinChatTurn] = Field(default_factory=list)
+    session_id: str = ""
+
+
+@app.api_route(
+    "/api/excel-addin/chat",
+    methods=["POST", "OPTIONS"],
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="CFO chat (intent + context)",
+)
+async def excel_addin_chat(request: Request):
+    """
+    CFO decision-engine chat: intent detection + locked prompts + suggested actions.
+    Client keeps chat_history; server does not persist (pass session_id for correlation only).
+    """
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from None
+    try:
+        body = ExcelAddinChatBody.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    hist = [t.model_dump() for t in body.chat_history]
+    intent_detected = intent_layer.detect_intent(body.message)
+    result = chat_layer.handle_chat(
+        body.message,
+        intent_detected,
+        body.variance_context,
+        hist,
+    )
+    out: dict = {
+        "reply": result["reply"],
+        "intent_detected": intent_detected,
+        "confidence": result["confidence"],
+        "suggested_actions": chat_layer.suggested_actions(intent_detected),
+        "session_id": body.session_id or "",
+    }
+    return JSONResponse(content=out, headers=dict(_EXCEL_ADDIN_CORS))

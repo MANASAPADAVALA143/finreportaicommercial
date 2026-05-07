@@ -37,6 +37,8 @@ export interface ScoredEntry {
   entryId: string;
   amount: number;
   vendor: string;
+  /** Raw entity / company code when present (e.g. SG01); used for display fallback. */
+  entityCode?: string;
   account: string;
   costCenter: string;
   userId: string;
@@ -134,8 +136,16 @@ function normaliseEntry(raw: any): any {
     raw.account ?? raw.Account ?? raw.GLAccount ?? raw['GL Account'] ?? ''
   ).trim() || 'Unknown';
   const vendor = String(
-    raw.entity ?? raw.Vendor ?? raw.vendor ?? raw.Party ?? raw.Counterparty ??
-    raw['Vendor Name'] ?? raw.Customer ?? ''
+    raw.Vendor ??
+      raw.vendor ??
+      raw.vendor_name ??
+      raw['Vendor Name'] ??
+      raw.Party ??
+      raw.Counterparty ??
+      raw.Customer ??
+      raw.entity ??
+      raw.Entity ??
+      ''
   ).trim() || 'Unknown';
   const date = raw.posting_date ?? raw.Date ?? raw.date ?? raw.PostingDate ?? raw['Posting Date'] ?? '';
   const time = raw.time ?? raw.Time ?? raw.PostingTime ?? raw['Posting Time'] ?? '12:00';
@@ -813,7 +823,11 @@ export async function analyzeEntries(
 function mapEngineRowToScoredEntry(row: Record<string, unknown>): ScoredEntry {
   const id = String(row.entry_id ?? row.id ?? row.JE_ID ?? row.journal_id ?? '');
   const amount = Math.abs(Number(row.amount ?? 0));
-  const vendor = String(row.vendor ?? '—');
+  const entityCode = String(row.entity ?? row.Entity ?? '').trim();
+  let vendor = String(row.vendor ?? '').trim();
+  if (!vendor || vendor === '—') {
+    vendor = entityCode || '—';
+  }
   const account = String(row.account ?? '—');
   const userId = String(row.user ?? row.preparer ?? row.posted_by ?? '—');
   let date = row.date;
@@ -838,6 +852,7 @@ function mapEngineRowToScoredEntry(row: Record<string, unknown>): ScoredEntry {
     entryId: id || `JE-${Math.random().toString(36).slice(2, 9)}`,
     amount,
     vendor,
+    entityCode: entityCode || undefined,
     account,
     costCenter: 'Unknown',
     userId,
