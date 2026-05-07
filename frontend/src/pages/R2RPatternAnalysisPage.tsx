@@ -12,6 +12,7 @@ import { listClients, createClient, saveUpload, getClientHistory, type R2RClient
 import { postR2RFeedback, getFeedbackHistory, type R2RFeedback } from "../services/r2rLearning.service";
 import { postCfoAgentRun } from "../services/cfoAgents";
 import LearningDashboardTab from "../components/r2r/LearningDashboardTab";
+import { backendOrigin, isBackendConfigured } from "../utils/backendOrigin";
 
 // ─── Design Tokens (matches CFO Decision Intelligence) ───────────────────────
 const C = {
@@ -41,8 +42,8 @@ const C = {
 const font = "'DM Sans', 'Segoe UI', sans-serif";
 const mono = "'DM Mono', 'Consolas', monospace";
 
-const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
-const AI_INVOKE_URL = `${API_BASE.replace(/\/$/, "")}/api/ai/invoke`;
+const API_BASE = backendOrigin();
+const AI_INVOKE_URL = API_BASE ? `${API_BASE.replace(/\/$/, "")}/api/ai/invoke` : "";
 
 const LS_R2R_SENSITIVITY = "r2r_sensitivity";
 const LS_R2R_THRESHOLD = "r2r_threshold";
@@ -672,6 +673,14 @@ const JESummaryTable = ({
       };
 
       novaSerialRef.current = novaSerialRef.current.catch(() => undefined).then(async () => {
+        if (!AI_INVOKE_URL) {
+          setNovaCache((prev) => ({
+            ...prev,
+            [e.id]:
+              "Nova needs VITE_API_URL: set it on your host to your FastAPI origin (same value as the API the app uses), then redeploy.",
+          }));
+          return;
+        }
         setNovaLoading(e.id);
         const MIN_GAP_MS = 3200;
         const gapWait = Math.max(0, MIN_GAP_MS - (Date.now() - lastNovaCompleteRef.current));
@@ -1619,6 +1628,15 @@ export default function R2RPatternAnalysisPage() {
         );
       }
       try {
+        if (!API_BASE) {
+          if (!cancelled) {
+            setUploadError(
+              "This deployment has no API URL. In Vercel: Settings → Environment Variables → add VITE_API_URL = your public FastAPI base (e.g. https://your-app.railway.app), then redeploy. The browser cannot use localhost:8000 for visitors."
+            );
+            setAnalysisBannerLabel(null);
+          }
+          return;
+        }
         if (selectedClientId) {
           await saveUpload(selectedClientId, rawRows, uploadFileName || undefined);
           await getClientHistory(selectedClientId);
@@ -2051,6 +2069,25 @@ export default function R2RPatternAnalysisPage() {
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px", display: "flex", flexDirection: "column", gap: 20 }}>
+        {import.meta.env.PROD && !isBackendConfigured() ? (
+          <div
+            style={{
+              padding: "14px 16px",
+              borderRadius: 10,
+              background: "#FEF3C7",
+              border: "1px solid #F59E0B",
+              color: "#92400E",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>API not configured for production.</strong> Add{" "}
+            <code style={{ background: "rgba(0,0,0,0.06)", padding: "2px 6px", borderRadius: 4 }}>VITE_API_URL</code>{" "}
+            in your frontend host (e.g. Vercel → Environment Variables) to your deployed FastAPI base URL, then redeploy.
+            CORS on the API must allow this site; the template already allows{" "}
+            <code style={{ background: "rgba(0,0,0,0.06)", padding: "2px 6px", borderRadius: 4 }}>*.vercel.app</code>.
+          </div>
+        ) : null}
         <Card style={{ marginBottom: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Upload journal entries</span>

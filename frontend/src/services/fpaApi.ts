@@ -2,8 +2,10 @@
  * Shared JSON POST helper for FPA and report routes (FastAPI `/api/fpa/*`, `/api/reports/*`).
  */
 
+import { backendOrigin } from '../utils/backendOrigin';
+
 function fpaApiBase(): string {
-  let base = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
+  let base = backendOrigin();
   if (typeof window !== 'undefined') {
     const h = window.location.hostname;
     if (

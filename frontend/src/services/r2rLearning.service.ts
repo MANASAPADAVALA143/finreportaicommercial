@@ -1,5 +1,10 @@
-const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
-const BASE = `${API_BASE.replace(/\/$/, "")}/api/r2r`;
+import { backendOrigin } from "../utils/backendOrigin";
+
+const r2rApiRoot = () => {
+  const o = backendOrigin();
+  if (!o) throw new Error("Set VITE_API_URL to your deployed API.");
+  return `${o.replace(/\/$/, "")}/api/r2r`;
+};
 
 export type R2RFeedback = "approved" | "rejected" | "needs_review";
 
@@ -22,7 +27,7 @@ export async function postR2RFeedback(payload: {
   comment?: string;
   reviewed_by?: string;
 }): Promise<{ saved: boolean; learning_triggered?: boolean; adjustments?: string[]; feedback_id?: number }> {
-  const res = await fetch(`${BASE}/feedback`, {
+  const res = await fetch(`${r2rApiRoot()}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -52,7 +57,7 @@ export async function getFeedbackHistory(
   status?: R2RFeedback | ""
 ): Promise<{ count: number; items: unknown[] }> {
   const q = status ? `?status=${encodeURIComponent(status)}` : "";
-  const res = await fetch(`${BASE}/feedback-history/${encodeURIComponent(clientId)}${q}`);
+  const res = await fetch(`${r2rApiRoot()}/feedback-history/${encodeURIComponent(clientId)}${q}`);
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `History failed (${res.status})`);

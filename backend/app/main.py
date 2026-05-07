@@ -123,6 +123,7 @@ _cors_kwargs: dict = {
 _cors_kwargs["allow_origin_regex"] = (
     r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
     r"|https://([\w\-]+\.)*(officeapps\.live\.com|office\.com|microsoft\.com)"
+    r"|https://[a-zA-Z0-9.\-]+\.vercel\.app"
 )
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
