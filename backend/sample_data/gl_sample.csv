@@ -1,0 +1,11 @@
+Date,Reference,Description,Debit,Credit,Account_Code
+2025-01-02,JE001,Office rent payment,150000,,60100
+2025-01-05,JE002,Salary payment,2500000,,61000
+2025-01-08,JE003,Customer receipt,,500000,10100
+2025-01-10,JE004,Vendor payment,75000,,20100
+2025-01-15,JE005,Software subscription,25000,,62000
+2025-01-18,JE006,Utility payment,18000,,63000
+2025-01-20,JE007,Customer receipt,,750000,10100
+2025-01-22,JE008,Travel expense,12000,,64000
+2025-01-25,JE009,Interest received,,8500,10100
+2025-01-28,JE010,Duplicate test,75000,,20100

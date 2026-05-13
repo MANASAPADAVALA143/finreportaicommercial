@@ -1,147 +1,68 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../services/auth';
-import { UserPlus } from 'lucide-react';
-import toast from 'react-hot-toast';
+﻿import { FormEvent, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-export const Register: React.FC = () => {
-  const navigate = useNavigate();
-  const { register, error, clearError } = useAuthStore();
-  const [formData, setFormData] = useState({
-    email: '',
-    password: '',
-    confirmPassword: '',
-    fullName: '',
-    company: ''
-  });
+import { useAuth } from '../context/AuthContext';
+
+export default function Register() {
+  const nav = useNavigate();
+  const { register } = useAuth();
+  const [companyName, setCompanyName] = useState('');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    
-    if (formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
+    setError(null);
+    if (password !== confirm) {
+      setError('Passwords do not match');
       return;
     }
-
     setLoading(true);
-    clearError();
-
     try {
-      await register(formData.email, formData.password, formData.fullName, formData.company);
-      toast.success('Account created successfully!');
-      navigate('/dashboard');
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Registration failed');
+      await register({ company_name: companyName, name, email, password });
+      nav('/dashboard', { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-8">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
-            <UserPlus className="w-8 h-8 text-blue-600" />
-          </div>
-          <h1 className="text-3xl font-bold text-gray-900">Create Account</h1>
-          <p className="text-gray-600 mt-2">Join FinReport AI today</p>
-        </div>
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+      <form onSubmit={onSubmit} className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+        <h1 className="text-2xl font-bold text-white text-center">Create Account</h1>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Full Name
-            </label>
-            <input
-              type="text"
-              value={formData.fullName}
-              onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="John Doe"
-            />
-          </div>
+        <label className="block text-sm text-slate-300">Company name
+          <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" value={companyName} onChange={(e) => setCompanyName(e.target.value)} required />
+        </label>
+        <label className="block text-sm text-slate-300">Your name
+          <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" value={name} onChange={(e) => setName(e.target.value)} required />
+        </label>
+        <label className="block text-sm text-slate-300">Email
+          <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        </label>
+        <label className="block text-sm text-slate-300">Password
+          <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        </label>
+        <label className="block text-sm text-slate-300">Confirm password
+          <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+        </label>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Company
-            </label>
-            <input
-              type="text"
-              value={formData.company}
-              onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Your Company Inc."
-            />
-          </div>
+        {error && <p className="text-sm text-red-400">{error}</p>}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email Address
-            </label>
-            <input
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="you@company.com"
-              required
-            />
-          </div>
+        <button disabled={loading} className="w-full rounded bg-blue-600 py-2 text-white font-medium hover:bg-blue-500 disabled:opacity-50" type="submit">
+          {loading ? 'Creating...' : 'Create Account'}
+        </button>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Password
-            </label>
-            <input
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-              required
-              minLength={8}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Confirm Password
-            </label>
-            <input
-              type="password"
-              value={formData.confirmPassword}
-              onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-              required
-              minLength={8}
-            />
-          </div>
-
-          {error && (
-            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Creating account...' : 'Create Account'}
-          </button>
-        </form>
-
-        <div className="mt-6 text-center text-sm text-gray-600">
-          Already have an account?{' '}
-          <Link to="/login" className="text-blue-600 font-semibold hover:text-blue-700">
-            Sign in
-          </Link>
-        </div>
-      </div>
+        <button type="button" className="w-full text-slate-400 hover:text-slate-200 text-sm" onClick={() => nav('/login')}>
+          Back to login
+        </button>
+      </form>
     </div>
   );
-};
+}

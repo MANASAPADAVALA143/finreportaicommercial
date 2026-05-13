@@ -4,6 +4,16 @@
 
 A comprehensive, production-ready financial platform offering Record-to-Report automation, FP&A suite, CFO advisory services, IFRS compliance, and AI-powered insights using Amazon Nova.
 
+## RBAC seed (local)
+
+After the backend runs `init_db`, a demo tenant and super admin are created automatically:
+
+- Email: `admin@gnanova.com`
+- Password: `Admin@123`
+- Role: `super_admin`
+
+Use `POST /api/auth/login` or the app route `/login`.
+
 ## 🚀 Features
 
 ### Core Capabilities

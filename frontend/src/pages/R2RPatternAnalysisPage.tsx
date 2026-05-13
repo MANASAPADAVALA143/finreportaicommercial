@@ -42,6 +42,11 @@ const C = {
 const font = "'DM Sans', 'Segoe UI', sans-serif";
 const mono = "'DM Mono', 'Consolas', monospace";
 
+/** Width reserved for the right-pinned Risk column — Top reasons sticks to its left. */
+const R2R_PINNED_RISK_COL_RIGHT = 152;
+const R2R_PINNED_REASONS_MIN_WIDTH = 248;
+const R2R_HEADER_STICKY_BG = "#1E3A8A";
+
 const API_BASE = backendOrigin();
 const AI_INVOKE_URL = API_BASE ? `${API_BASE.replace(/\/$/, "")}/api/ai/invoke` : "";
 
@@ -442,10 +447,11 @@ const RiskBar = ({ score, level }: { score: number; level: "HIGH" | "MEDIUM" | "
   const c = cfg[level] || cfg.LOW;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "nowrap" }}>
         <span style={{ fontSize: 17, fontWeight: 900, fontFamily: mono, color: c.text }}>{score}</span>
         <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
-          background: c.bg, color: c.text, border: `1px solid ${c.border}`, letterSpacing: "0.07em" }}>
+          background: c.bg, color: c.text, border: `1px solid ${c.border}`, letterSpacing: "0.07em",
+          whiteSpace: "nowrap", flexShrink: 0 }}>
           {level}
         </span>
       </div>
@@ -783,7 +789,7 @@ const JESummaryTable = ({
   }
 
   return (
-    <Card style={{ marginBottom: 0 }}>
+    <Card style={{ marginBottom: 0, minWidth: 0, maxWidth: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0 }}>All Flagged Journal Entries</h3>
@@ -839,13 +845,27 @@ const JESummaryTable = ({
             color: filter === f ? C.white : C.textSub,
           }}>{f === "ALL" ? "All Entries" : `${f} Risk`}</button>
         ))}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: C.textSub, alignSelf: "center" }}>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: C.textSub, alignSelf: "center", textAlign: "right" }}>
           Showing {filtered.length} flagged · {total} total analysed
+          <span style={{ display: "block", fontSize: 10, color: C.textMute, marginTop: 2, fontWeight: 500 }}>
+            Tip: scroll sideways for entry details — <strong style={{ color: C.textSub }}>Top reasons</strong> and{" "}
+            <strong style={{ color: C.textSub }}>Risk score</strong> stay pinned on the right.
+          </span>
         </span>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1040 }}>
+      <div
+        style={{
+          overflowX: "auto",
+          maxWidth: "100%",
+          minWidth: 0,
+          WebkitOverflowScrolling: "touch",
+          marginLeft: -4,
+          marginRight: -4,
+          paddingBottom: 8,
+        }}
+      >
+        <table style={{ width: "max-content", minWidth: 1220, borderCollapse: "separate", borderSpacing: 0 }}>
           <thead>
             <tr style={{ background: `linear-gradient(to right, ${C.navy}, #1E3A8A)` }}>
               {[
@@ -861,6 +881,29 @@ const JESummaryTable = ({
                   padding: "11px 12px", textAlign: (h as { right?: boolean }).right ? "right" : "left",
                   fontSize: 10, fontWeight: 700, color: "#BFDBFE",
                   letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap",
+                  minWidth:
+                    h.label === "Risk Score"
+                      ? R2R_PINNED_RISK_COL_RIGHT
+                      : h.label === "Top reasons"
+                        ? R2R_PINNED_REASONS_MIN_WIDTH
+                        : undefined,
+                  ...(h.label === "Risk Score"
+                    ? {
+                        position: "sticky" as const,
+                        right: 0,
+                        zIndex: 5,
+                        background: R2R_HEADER_STICKY_BG,
+                        boxShadow: "-6px 0 12px -4px rgba(0,0,0,0.25)",
+                      }
+                    : h.label === "Top reasons"
+                      ? {
+                          position: "sticky" as const,
+                          right: R2R_PINNED_RISK_COL_RIGHT,
+                          zIndex: 4,
+                          background: R2R_HEADER_STICKY_BG,
+                          boxShadow: "-6px 0 12px -4px rgba(0,0,0,0.2)",
+                        }
+                      : {}),
                 }}>
                   {h.label}{(h as { tip?: string }).tip && <span style={{ opacity: 0.55, marginLeft: 2, fontSize: 9 }}>ⓘ</span>}
                 </th>
@@ -870,10 +913,11 @@ const JESummaryTable = ({
           <tbody>
             {filtered.map((e, i) => {
               const sel = selected === e.id;
+              const rowBg = sel ? C.bluePale : i % 2 === 0 ? C.white : "#FAFBFC";
               return (
                 <React.Fragment key={e.id}>
                 <tr onClick={() => handleRowClick(e)}
-                  style={{ background: sel ? C.bluePale : i % 2 === 0 ? C.white : "#FAFBFC",
+                  style={{ background: rowBg,
                     cursor: "pointer", borderTop: `1px solid ${C.borderLight}` }}>
                   <td style={{ padding: "12px 14px", whiteSpace: "nowrap", width: 90 }}>
                     <span style={{
@@ -933,10 +977,31 @@ const JESummaryTable = ({
                       <ScorePill value={v} />
                     </td>
                   ))}
-                  <td style={{ padding: "12px 10px", verticalAlign: "top" }}>
+                  <td style={{
+                    padding: "12px 10px",
+                    verticalAlign: "top",
+                    position: "sticky",
+                    right: R2R_PINNED_RISK_COL_RIGHT,
+                    zIndex: 2,
+                    background: rowBg,
+                    minWidth: R2R_PINNED_REASONS_MIN_WIDTH,
+                    maxWidth: 320,
+                    boxShadow: "-8px 0 14px -6px rgba(15,23,42,0.14)",
+                  }}>
                     <ReasonChips items={e.signals && e.signals.length ? e.signals : []} />
                   </td>
-                  <td style={{ padding: "12px 12px", textAlign: "right" }}>
+                  <td style={{
+                    padding: "12px 12px",
+                    textAlign: "right",
+                    whiteSpace: "nowrap",
+                    minWidth: R2R_PINNED_RISK_COL_RIGHT,
+                    verticalAlign: "top",
+                    position: "sticky",
+                    right: 0,
+                    zIndex: 3,
+                    background: rowBg,
+                    boxShadow: "-8px 0 14px -6px rgba(15,23,42,0.16)",
+                  }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                       <ScoreValueBadge score={e.score} />
                       <RiskBar score={e.score} level={e.level} />
@@ -1983,7 +2048,7 @@ export default function R2RPatternAnalysisPage() {
   };
 
   return (
-    <div style={{ fontFamily: font, background: C.bg, minHeight: "100vh" }}>
+    <div style={{ fontFamily: font, background: C.bg, minHeight: "100vh", width: "100%", minWidth: 0 }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500;700&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes spin{to{transform:rotate(360deg);}}`}</style>
 
       <div style={{ background: `linear-gradient(135deg, ${C.navy} 0%, #1E3A8A 50%, #1D4ED8 100%)`,
@@ -2068,7 +2133,7 @@ export default function R2RPatternAnalysisPage() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ width: "100%", maxWidth: 1100, minWidth: 0, margin: "0 auto", padding: "24px", display: "flex", flexDirection: "column", gap: 20, boxSizing: "border-box" }}>
         {import.meta.env.PROD && !isBackendConfigured() ? (
           <div
             style={{

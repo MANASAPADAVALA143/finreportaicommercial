@@ -17,12 +17,19 @@ def init_db():
     import app.models.cfo_command_center  # noqa: F401 - CFO Command Center agent runs / briefings
     import app.models.audit_intelligence  # noqa: F401 - Audit Intelligence agent runs
     import app.models.history_models  # noqa: F401 - Historical Intelligence baselines
+    import app.models.month_end_close  # noqa: F401 - Month-end close runs
+    import app.models.earnings_review  # noqa: F401 - Earnings Reviewer
+    import app.models.gl_reconciliation  # noqa: F401 - GL Reconciler
+    import app.models.financial_model  # noqa: F401 - FP&A Model Builder
+    import app.models.users  # noqa: F401 - RBAC users/companies/audit
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         from app.services.seed_ifrs_master import seed_if_empty
+        from app.services.auth_service import ensure_seed_data
 
         seed_if_empty(db)
+        ensure_seed_data()
     finally:
         db.close()
 

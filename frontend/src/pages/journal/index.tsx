@@ -27,7 +27,15 @@ export default function JournalPageWithHistoricalTabs() {
           </button>
         </div>
       </div>
-      {tab === 'quick' ? <R2RPatternAnalysisPage /> : <div className="mx-auto max-w-7xl px-4 pb-8"><HistoricalTab /></div>}
+      {tab === 'quick' ? (
+        <div className="min-w-0 w-full">
+          <R2RPatternAnalysisPage />
+        </div>
+      ) : (
+        <div className="mx-auto max-w-7xl px-4 pb-8">
+          <HistoricalTab />
+        </div>
+      )}
     </div>
   );
 }

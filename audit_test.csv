@@ -1,0 +1,10 @@
+date,account,debit,credit,description,reference,user,time
+2024-01-31,Revenue,,50000,,REF001,user1,23:45
+2024-01-31,Revenue,,49999,,REF002,user1,23:47
+2024-01-31,Cash,100000,,,REF003,user1,23:48
+2024-01-15,Expenses,250000,,,REF004,user2,14:00
+2024-01-28,Director Loan,500000,,,REF005,user3,09:00
+2024-01-31,Expenses,10000,,,REF006,user1,23:50
+2024-01-31,Expenses,9999,,,REF007,user1,23:51
+2024-01-31,Revenue,,999999,Round number,REF008,user2,23:55
+2024-01-20,InterCo,75000,,,REF009,user4,11:00

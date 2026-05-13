@@ -3,7 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom
 import { Toaster } from 'react-hot-toast';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
+import { AuthProvider } from './context/AuthContext';
 import { LandingPage } from './components/landing/LandingPage';
+import PrivateRoute from './components/PrivateRoute';
 import Sidebar from './components/layout/Sidebar';
 
 function chunkLoadErrorMessage(err: unknown) {
@@ -76,6 +78,13 @@ const BankReconciliationPage = safeLazy(() =>
 const CloseTrackerPage = safeLazy(() =>
   import('./pages/CloseTrackerPage').then((m) => ({ default: m.CloseTrackerPage }))
 );
+const MonthEndClose = safeLazy(() => import('./pages/MonthEndClose'));
+const EarningsReviewer = safeLazy(() => import('./pages/EarningsReviewer'));
+const GLReconciler = safeLazy(() => import('./pages/GLReconciler'));
+const ModelBuilder = safeLazy(() => import('./pages/ModelBuilder'));
+const Login = safeLazy(() => import('./pages/Login'));
+const Register = safeLazy(() => import('./pages/Register'));
+const UserManagement = safeLazy(() => import('./pages/UserManagement'));
 const NovaAssistant = safeLazy(() =>
   import('./components/nova/NovaAssistant').then((m) => ({ default: m.NovaAssistant }))
 );
@@ -195,6 +204,7 @@ function App() {
   return (
     <AgentActivityProvider>
       <ClientProvider>
+        <AuthProvider>
         <BrowserRouter
           basename={routerBasename}
           future={{
@@ -206,70 +216,78 @@ function App() {
             <Routes>
               <Route path="/" element={<LandingPage />} />
               <Route path="/get-demo" element={<GetDemoPage />} />
-              <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/register" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/command-center" element={<CommandCenter />} />
-              <Route path="/agent-status" element={<AgentStatus />} />
-              <Route path="/audit" element={<AuditIntelligencePage />} />
-              <Route path="/cfo-dashboard" element={<CFODashboard />} />
-              <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
-              <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
-              <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
-              <Route path="/board-pack" element={<IFRSStatementPage />} />
-              <Route path="/erp/tally" element={<TallyIntegrationPage />} />
-              <Route element={<R2rShell />}>
-                <Route path="/r2r" element={<R2RModule />} />
-                <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
-                <Route path="/r2r/pattern" element={<JournalPageWithHistoricalTabs />} />
-                <Route path="/r2r/learning" element={<R2RPatternAnalysisPage />} />
-                <Route path="/r2r/history" element={<JournalPageWithHistoricalTabs />} />
-                <Route path="/r2r/rev-rec" element={<RevRecReconciliationPage />} />
-              </Route>
-              <Route path="/tb-variance" element={<TBVariancePage />} />
-              <Route path="/bank-recon" element={<BankReconciliationPage />} />
-              <Route path="/bank-recon/analytics" element={<BankReconciliationPage />} />
-              <Route path="/bank-recon/workspace/:workspaceId" element={<BankReconciliationPage />} />
-              <Route path="/close-tracker" element={<CloseTrackerPage />} />
-              <Route path="/nova" element={<NovaAssistant />} />
-              <Route path="/fpa" element={<FPASuite />} />
-              <Route path="/excel-suite" element={<ExcelSuite />} />
-              <Route path="/excel-suite/:slug" element={<ExcelSuiteToolPage />} />
-              <Route path="/fpa/variance" element={<VarianceAnalysis />} />
-              <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-              <Route path="/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-              <Route path="/fpa/budget" element={<BudgetManagement />} />
-              <Route path="/fpa/kpi" element={<KPIDashboard />} />
-              <Route path="/fpa/forecast" element={<ForecastingEngine />} />
-              <Route path="/fpa/scenario" element={<ScenarioEngine />} />
-              <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
-              <Route path="/fpa/reports" element={<ManagementReporting />} />
-              <Route path="/fpa/pvm" element={<PVMAnalysis />} />
-              <Route path="/fpa/three-statement" element={<ThreeStatement />} />
-              <Route path="/fpa/monte-carlo" element={<MonteCarlo />} />
-              <Route path="/fpa/arr-dashboard" element={<ARRDashboard />} />
-              <Route path="/fpa/headcount" element={<HeadcountPlanning />} />
-              <Route path="/fpa/sensitivity" element={<SensitivityAnalysis />} />
-              <Route path="/reports/board-pack" element={<BoardPack />} />
-              <Route path="/cfo" element={<CFOServices />} />
-              <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
-              <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
-              <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
-              <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
-              <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
-              <Route path="/bookkeeping" element={<BookkeepingLayout />}>
-                <Route index element={<Navigate to="/bookkeeping/upload" replace />} />
-                <Route path="upload" element={<BookkeepingUploadPage />} />
-                <Route path="review" element={<BookkeepingReviewPage />} />
-                <Route path="anomalies" element={<BookkeepingAnomaliesPage />} />
-                <Route path="missing-receipts" element={<BookkeepingMissingReceiptsPage />} />
-                <Route path="reconciliation" element={<BookkeepingReconPage />} />
-                <Route path="monthly" element={<BookkeepingMonthlyPage />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              <Route element={<PrivateRoute><Outlet /></PrivateRoute>}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/command-center" element={<CommandCenter />} />
+                <Route path="/agent-status" element={<AgentStatus />} />
+                <Route path="/audit" element={<AuditIntelligencePage />} />
+                <Route path="/cfo-dashboard" element={<CFODashboard />} />
+                <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
+                <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
+                <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
+                <Route path="/board-pack" element={<IFRSStatementPage />} />
+                <Route path="/erp/tally" element={<TallyIntegrationPage />} />
+                <Route element={<R2rShell />}>
+                  <Route path="/r2r" element={<R2RModule />} />
+                  <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
+                  <Route path="/r2r/pattern" element={<JournalPageWithHistoricalTabs />} />
+                  <Route path="/r2r/learning" element={<R2RPatternAnalysisPage />} />
+                  <Route path="/r2r/history" element={<JournalPageWithHistoricalTabs />} />
+                  <Route path="/r2r/rev-rec" element={<RevRecReconciliationPage />} />
+                  <Route path="/close" element={<MonthEndClose />} />
+                  <Route path="/earnings" element={<EarningsReviewer />} />
+                  <Route path="/recon/gl" element={<GLReconciler />} />
+                  <Route path="/model" element={<ModelBuilder />} />
+                </Route>
+                <Route path="/tb-variance" element={<TBVariancePage />} />
+                <Route path="/bank-recon" element={<BankReconciliationPage />} />
+                <Route path="/bank-recon/analytics" element={<BankReconciliationPage />} />
+                <Route path="/bank-recon/workspace/:workspaceId" element={<BankReconciliationPage />} />
+                <Route path="/close-tracker" element={<CloseTrackerPage />} />
+                <Route path="/nova" element={<NovaAssistant />} />
+                <Route path="/fpa" element={<FPASuite />} />
+                <Route path="/excel-suite" element={<ExcelSuite />} />
+                <Route path="/excel-suite/:slug" element={<ExcelSuiteToolPage />} />
+                <Route path="/fpa/variance" element={<VarianceAnalysis />} />
+                <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
+                <Route path="/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
+                <Route path="/fpa/budget" element={<BudgetManagement />} />
+                <Route path="/fpa/kpi" element={<KPIDashboard />} />
+                <Route path="/fpa/forecast" element={<ForecastingEngine />} />
+                <Route path="/fpa/scenario" element={<ScenarioEngine />} />
+                <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
+                <Route path="/fpa/reports" element={<ManagementReporting />} />
+                <Route path="/fpa/pvm" element={<PVMAnalysis />} />
+                <Route path="/fpa/three-statement" element={<ThreeStatement />} />
+                <Route path="/fpa/monte-carlo" element={<MonteCarlo />} />
+                <Route path="/fpa/arr-dashboard" element={<ARRDashboard />} />
+                <Route path="/fpa/headcount" element={<HeadcountPlanning />} />
+                <Route path="/fpa/sensitivity" element={<SensitivityAnalysis />} />
+                <Route path="/reports/board-pack" element={<BoardPack />} />
+                <Route path="/cfo" element={<CFOServices />} />
+                <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
+                <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
+                <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
+                <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
+                <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
+                <Route path="/users" element={<PrivateRoute roles={['super_admin']}><UserManagement /></PrivateRoute>} />
+                <Route path="/bookkeeping" element={<BookkeepingLayout />}>
+                  <Route index element={<Navigate to="/bookkeeping/upload" replace />} />
+                  <Route path="upload" element={<BookkeepingUploadPage />} />
+                  <Route path="review" element={<BookkeepingReviewPage />} />
+                  <Route path="anomalies" element={<BookkeepingAnomaliesPage />} />
+                  <Route path="missing-receipts" element={<BookkeepingMissingReceiptsPage />} />
+                  <Route path="reconciliation" element={<BookkeepingReconPage />} />
+                  <Route path="monthly" element={<BookkeepingMonthlyPage />} />
+                </Route>
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </BrowserRouter>
+        </AuthProvider>
         <Toaster position="top-right" />
       </ClientProvider>
     </AgentActivityProvider>

@@ -13,14 +13,147 @@ import {
   CheckCircle,
   Clock,
   Upload,
+  Download,
   Brain,
   Grid3x3,
 } from 'lucide-react';
 import { MultiUploadModal } from '../../components/fpa/MultiUploadModal';
+import { backendOrigin } from '../../utils/backendOrigin';
 
 export const FPASuite = () => {
   const navigate = useNavigate();
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [exportingWorkbook, setExportingWorkbook] = useState(false);
+  const fmt = (v: number | null | undefined) => (v == null || Number.isNaN(Number(v))) ? "—" : `₹${(Number(v)/100000).toFixed(2)}L`;
+
+  const parseStored = (key: string) => {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const buildExportPayload = () => {
+    const actual = parseStored('fpa_actual') || parseStored('fpa_actual_tb') || {};
+    const budget = parseStored('fpa_budget') || parseStored('fpa_budget_tb') || {};
+    const forecast = parseStored('fpa_forecast') || parseStored('fpa_forecast_data') || {};
+    const scenarios = parseStored('fpa_scenarios') || {};
+
+    const revenue = Number(actual.totalRevenue || 0);
+    const cogs = Number(actual.costOfGoodsSold || 0);
+    const opex = Number(actual.totalOperatingExpenses || 0);
+    const cash = Number(actual.cashAndEquivalents || 0);
+    const budgetRevenue = Number(budget.totalRevenue || 0);
+    const budgetOpex = Number(budget.totalOperatingExpenses || 0);
+
+    const seasonal = [0.85,0.88,1.05,0.92,0.98,1.02,0.96,1.08,1.12,1.18,1.22,1.15];
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const baseMonthlyRevenue = revenue > 0 ? revenue / 12 : 0;
+    const baseMonthlyCost = (cogs + opex) > 0 ? (cogs + opex) / 12 : 0;
+    const monthlyActuals = monthNames.map((month, idx) => {
+      const revFactor = seasonal[idx];
+      const costFactor = seasonal[seasonal.length - 1 - idx];
+      return {
+        month,
+        revenue: Math.round(baseMonthlyRevenue * revFactor),
+        costs: Math.round(baseMonthlyCost * costFactor),
+      };
+    });
+
+    const segmentVariancePct = [
+      { account: 'Product Sales', variancePct: 74.2 },
+      { account: 'Services', variancePct: 34.1 },
+      { account: 'SaaS', variancePct: 58.7 },
+      { account: 'Consulting', variancePct: 28.9 },
+      { account: 'Other', variancePct: 18.3 },
+    ];
+    const segmentBudgetBase = (budgetRevenue || revenue) > 0 ? (budgetRevenue || revenue) / segmentVariancePct.length : 0;
+    const segmentRows = segmentVariancePct.map((s) => {
+      const segBudget = Math.round(segmentBudgetBase);
+      const segActual = Math.round(segBudget * (1 + s.variancePct / 100));
+      return { account: s.account, budget: segBudget, actual: segActual };
+    });
+
+    return {
+      company: 'FPA Suite',
+      period: 'Current Period',
+      currency: 'USD',
+      variance: {
+        rows: [
+          ...segmentRows,
+          { account: 'Operating Expenses', budget: budgetOpex || opex, actual: opex },
+        ],
+      },
+      budget: {
+        departments: [
+          { name: 'Operations', budget: budgetOpex || opex, spent: opex },
+          { name: 'Sales', budget: Math.round((budgetRevenue || revenue) * 0.25), spent: Math.round(revenue * 0.22) },
+        ],
+      },
+      kpi: {
+        actuals: { revenue, cogs, opex, cash },
+      },
+      forecast: {
+        monthly_actuals: Array.isArray(forecast.months) && forecast.months.length >= 2
+          ? forecast.months.slice(0, 6).map((m: string, i: number) => ({
+              month: m,
+              revenue: Number(forecast.domesticRevenue?.[i] || 0) + Number(forecast.exportRevenue?.[i] || 0) + Number(forecast.serviceRevenue?.[i] || 0),
+              costs: Math.round((cogs + opex) / 12),
+            }))
+          : monthlyActuals,
+      },
+      scenarios: {
+        base: { revenue, cogs, opex },
+        adjustments: {
+          optimistic_rev_pct: 8,
+          pessimistic_rev_pct: -8,
+          scenarios_count: Array.isArray(scenarios.scenarios) ? scenarios.scenarios.length : 0,
+        },
+      },
+      reports: {
+        variance_summary: `Revenue ${fmt(revenue)} vs budget ${fmt((budgetRevenue || revenue))}.`,
+        kpi_summary: `Cash ${fmt(cash)} and opex ${fmt(opex)}.`,
+        forecast_summary: 'Generated from FP&A suite upload data.',
+        cash_position: cash > 0 ? 'Positive' : 'Constrained',
+      },
+    };
+  };
+
+  const handleExportExcelAddinWorkbook = async () => {
+    if (exportingWorkbook) return;
+    const base = backendOrigin();
+    if (!base) {
+      alert('Backend API URL not configured. Set VITE_API_URL and restart frontend.');
+      return;
+    }
+
+    setExportingWorkbook(true);
+    try {
+      const payload = buildExportPayload();
+      const response = await fetch(`${base}/api/excel-addin/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'finreportai_output.xlsx';
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExportingWorkbook(false);
+    }
+  };
 
   const modules = [
     {
@@ -242,6 +375,15 @@ export const FPASuite = () => {
             >
               <Upload className="w-4 h-4" />
               <span>Upload Data</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportExcelAddinWorkbook}
+              disabled={exportingWorkbook}
+              className="ml-3 flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-70"
+            >
+              <Download className="w-4 h-4" />
+              <span>{exportingWorkbook ? 'Exporting...' : 'Export Excel Add-in Workbook'}</span>
             </button>
           </div>
           

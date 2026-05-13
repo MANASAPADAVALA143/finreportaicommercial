@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import logging
 import os
@@ -17,11 +18,19 @@ load_dotenv()
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import inspect, text
 from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
 from app.core.database import get_db
+from app.routers import month_end_close as month_end_close_router
+from app.routers import earnings_review as earnings_review_router
+from app.routers import gl_reconciliation as gl_reconciliation_router
+from app.routers import model_builder as model_builder_router
+from app.routers import auth as rbac_auth_router
+from app.routers import users as rbac_users_router
 from app.api.routes import (
     upload_routes,
     auth_routes,
@@ -163,6 +172,12 @@ app.include_router(rev_rec_recon.router)
 app.include_router(audit_intelligence.router)
 app.include_router(history_router.router, prefix="/api/v2", tags=["History"])
 app.include_router(historical_analysis.router, prefix="/api/v2", tags=["History"])
+app.include_router(month_end_close_router.router)
+app.include_router(earnings_review_router.router)
+app.include_router(gl_reconciliation_router.router)
+app.include_router(model_builder_router.router)
+app.include_router(rbac_auth_router.router)
+app.include_router(rbac_users_router.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:
@@ -424,6 +439,20 @@ class ExcelAddinAnalyzeResponse(BaseModel):
     claude_error: str | None = None
 
 
+class ExcelAddinExportBody(BaseModel):
+    """Build one workbook from all 6 Excel add-in module payloads."""
+
+    company: str = Field("Unknown")
+    period: str = Field("")
+    currency: str = Field("USD")
+    variance: dict[str, Any] = Field(default_factory=dict)
+    budget: dict[str, Any] = Field(default_factory=dict)
+    kpi: dict[str, Any] = Field(default_factory=dict)
+    forecast: dict[str, Any] = Field(default_factory=dict)
+    scenarios: dict[str, Any] = Field(default_factory=dict)
+    reports: dict[str, Any] = Field(default_factory=dict)
+
+
 _EXCEL_ADDIN_OPENAPI_TAGS = ["Excel Add-in", "FP&A"]
 
 _EXCEL_ANALYZE_OPENAPI_EXAMPLES: dict[str, dict] = {
@@ -505,6 +534,267 @@ _DEPRECATION_HEADERS = {
 
 def _legacy_json_response(payload: dict) -> JSONResponse:
     return JSONResponse(content=payload, headers=dict(_DEPRECATION_HEADERS))
+
+
+def _to_num(v: Any) -> float:
+    try:
+        if v is None:
+            return 0.0
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(str(v).replace(",", "").strip())
+    except Exception:
+        return 0.0
+
+
+def _title(ws, text: str) -> None:
+    ws["A1"] = text
+    ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="0F2D5E")
+    ws.merge_cells("A1:F1")
+    ws["A2"] = f"Generated: {datetime.utcnow().isoformat()}Z"
+    ws["A2"].font = Font(size=10, color="334155")
+
+
+def _header_row(ws, row: int, labels: list[str]) -> None:
+    for i, label in enumerate(labels, 1):
+        c = ws.cell(row=row, column=i, value=label)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1E3A8A")
+        c.alignment = Alignment(horizontal="center")
+
+
+def _status_fill(flag: str) -> PatternFill:
+    f = str(flag or "").upper()
+    if f in {"FAV", "GREEN", "GOOD"}:
+        return PatternFill("solid", fgColor="DCFCE7")
+    if f in {"ADV", "RED", "CRITICAL"}:
+        return PatternFill("solid", fgColor="FEE2E2")
+    return PatternFill("solid", fgColor="FEF9C3")
+
+
+def _build_executive_summary_sheet(wb: Workbook, payloads: dict[str, dict[str, Any]], results: dict[str, dict[str, Any]]) -> None:
+    ws = wb.create_sheet("Executive Summary")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Executive Summary")
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 16
+
+    kpi = payloads.get("kpi", {}).get("actuals", {}) if isinstance(payloads.get("kpi"), dict) else {}
+    rev = _to_num(kpi.get("revenue"))
+    cogs = _to_num(kpi.get("cogs"))
+    opex = _to_num(kpi.get("opex"))
+    ebitda = rev - cogs - opex
+    net_profit = ebitda
+    health_score = _to_num(results.get("reports", {}).get("health_score"))
+    gross_margin = ((rev - cogs) / rev * 100.0) if rev else 0.0
+    net_margin = (net_profit / rev * 100.0) if rev else 0.0
+
+    _header_row(ws, 4, ["KPI", "Value", "Status"])
+    kpi_rows = [
+        ("Revenue", rev, "GOOD" if rev > 0 else "WATCH"),
+        ("Gross Margin %", gross_margin, "GOOD" if gross_margin >= 50 else "WATCH"),
+        ("EBITDA", ebitda, "GOOD" if ebitda >= 0 else "CRITICAL"),
+        ("Net Margin %", net_margin, "GOOD" if net_margin >= 10 else "WATCH"),
+        ("Health Score", health_score, "GOOD" if health_score >= 70 else "WATCH"),
+    ]
+    r = 5
+    for name, value, status in kpi_rows:
+        ws.cell(row=r, column=1, value=name)
+        ws.cell(row=r, column=2, value=value)
+        ws.cell(row=r, column=3, value=status)
+        ws.cell(row=r, column=3).fill = _status_fill(status)
+        r += 1
+
+    _header_row(ws, 12, ["P&L Line", "Actual", "Budget", "Variance", "Variance %", "Flag"])
+    variance_rows = payloads.get("variance", {}).get("rows", []) if isinstance(payloads.get("variance"), dict) else []
+    if not isinstance(variance_rows, list):
+        variance_rows = []
+    rr = 13
+    for item in variance_rows:
+        if not isinstance(item, dict):
+            continue
+        account = str(item.get("account", "Line Item"))
+        actual = _to_num(item.get("actual"))
+        budget = _to_num(item.get("budget"))
+        variance = actual - budget
+        v_pct = ((variance / budget) * 100.0) if budget else 0.0
+        flag = "FAV" if variance >= 0 else "ADV"
+        ws.cell(row=rr, column=1, value=account)
+        ws.cell(row=rr, column=2, value=actual)
+        ws.cell(row=rr, column=3, value=budget)
+        ws.cell(row=rr, column=4, value=variance)
+        ws.cell(row=rr, column=5, value=v_pct / 100.0)
+        ws.cell(row=rr, column=5).number_format = "0.0%"
+        ws.cell(row=rr, column=6, value=flag)
+        ws.cell(row=rr, column=6).fill = _status_fill(flag)
+        rr += 1
+
+
+def _build_variance_sheet(wb: Workbook, payloads: dict[str, dict[str, Any]]) -> None:
+    ws = wb.create_sheet("Variance Analysis")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Variance Analysis")
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 12
+    _header_row(ws, 4, ["Category", "Budget", "Actual", "Variance", "Variance %", "Flag"])
+    rows = payloads.get("variance", {}).get("rows", []) if isinstance(payloads.get("variance"), dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    r = 5
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("account", "Line Item"))
+        budget = _to_num(item.get("budget"))
+        actual = _to_num(item.get("actual"))
+        variance = actual - budget
+        v_pct = (variance / budget * 100.0) if budget else 0.0
+        flag = "FAV" if variance >= 0 else "ADV"
+        ws.cell(row=r, column=1, value=name)
+        ws.cell(row=r, column=2, value=budget)
+        ws.cell(row=r, column=3, value=actual)
+        ws.cell(row=r, column=4, value=variance)
+        ws.cell(row=r, column=5, value=v_pct / 100.0)
+        ws.cell(row=r, column=5).number_format = "0.0%"
+        ws.cell(row=r, column=6, value=flag)
+        ws.cell(row=r, column=6).fill = _status_fill(flag)
+        r += 1
+
+
+def _build_kpi_dashboard_sheet(wb: Workbook, payloads: dict[str, dict[str, Any]], results: dict[str, dict[str, Any]]) -> None:
+    ws = wb.create_sheet("KPI Dashboard")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "KPI Dashboard")
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 14
+    kpi = payloads.get("kpi", {}).get("actuals", {}) if isinstance(payloads.get("kpi"), dict) else {}
+    rev = _to_num(kpi.get("revenue"))
+    cogs = _to_num(kpi.get("cogs"))
+    opex = _to_num(kpi.get("opex"))
+    cash = _to_num(kpi.get("cash"))
+    ebitda = rev - cogs - opex
+    gross_margin = ((rev - cogs) / rev * 100.0) if rev else 0.0
+    ebitda_margin = (ebitda / rev * 100.0) if rev else 0.0
+    net_margin = ebitda_margin
+    health_score = _to_num(results.get("reports", {}).get("health_score"))
+    ratios = [
+        ("Revenue", rev),
+        ("COGS", cogs),
+        ("Gross Margin %", gross_margin),
+        ("EBITDA", ebitda),
+        ("EBITDA Margin %", ebitda_margin),
+        ("Net Margin %", net_margin),
+        ("Cash Position", cash),
+        ("Health Score", health_score),
+    ]
+    _header_row(ws, 4, ["KPI", "Value", "Status"])
+    r = 5
+    for name, value in ratios:
+        status = "GOOD"
+        if "margin" in name.lower() and value < 0:
+            status = "CRITICAL"
+        if name == "Health Score" and value < 70:
+            status = "WATCH"
+        ws.cell(row=r, column=1, value=name)
+        ws.cell(row=r, column=2, value=value)
+        ws.cell(row=r, column=3, value=status)
+        ws.cell(row=r, column=3).fill = _status_fill(status)
+        r += 1
+
+
+def _build_balance_sheet(wb: Workbook, payloads: dict[str, dict[str, Any]]) -> None:
+    ws = wb.create_sheet("Balance Sheet")
+    ws.sheet_view.showGridLines = False
+    _title(ws, "Balance Sheet")
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 18
+    kpi = payloads.get("kpi", {}).get("actuals", {}) if isinstance(payloads.get("kpi"), dict) else {}
+    cash = _to_num(kpi.get("cash"))
+    receivables = _to_num(kpi.get("receivables"))
+    inventory = _to_num(kpi.get("inventory"))
+    assets = cash + receivables + inventory
+    liabilities = _to_num(kpi.get("liabilities"))
+    equity = assets - liabilities
+    _header_row(ws, 4, ["Section", "Amount"])
+    rows = [
+        ("Cash & Equivalents", cash),
+        ("Accounts Receivable", receivables),
+        ("Inventory", inventory),
+        ("Total Assets", assets),
+        ("Total Liabilities", liabilities),
+        ("Equity", equity),
+    ]
+    r = 5
+    for name, value in rows:
+        ws.cell(row=r, column=1, value=name)
+        ws.cell(row=r, column=2, value=value)
+        if "Total" in name or name == "Equity":
+            ws.cell(row=r, column=1).font = Font(bold=True)
+            ws.cell(row=r, column=2).font = Font(bold=True)
+        r += 1
+
+
+def _with_defaults(data: dict[str, Any], company: str, period: str, currency: str) -> dict[str, Any]:
+    out = dict(data)
+    out.setdefault("company", company)
+    out.setdefault("period", period)
+    out.setdefault("currency", currency)
+    return out
+
+
+@app.post(
+    "/api/excel-addin/export",
+    tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    summary="Export all 6 Excel add-in analyses into one XLSX workbook",
+)
+async def excel_addin_export(body: ExcelAddinExportBody):
+    module_builders: list[tuple[str, dict[str, Any], Any, Any]] = [
+        ("variance", body.variance, legacy_shim.to_analyze_variance, legacy_shim.response_variance),
+        ("budget", body.budget, legacy_shim.to_analyze_budget, legacy_shim.response_budget),
+        ("kpi", body.kpi, legacy_shim.to_analyze_kpi, legacy_shim.response_kpi),
+        ("forecast", body.forecast, legacy_shim.to_analyze_forecast, legacy_shim.response_forecast),
+        ("scenarios", body.scenarios, legacy_shim.to_analyze_scenarios, legacy_shim.response_scenarios),
+        ("reports", body.reports, legacy_shim.to_analyze_reports, legacy_shim.response_reports),
+    ]
+
+    payloads: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    for module_name, raw_data, to_analyze, to_legacy in module_builders:
+        module_payload = _with_defaults(raw_data, body.company, body.period, body.currency)
+        payloads[module_name] = module_payload
+        try:
+            analyze_payload = to_analyze(module_payload)
+            out = analyze_service.run(analyze_payload)
+            results[module_name] = to_legacy(out)
+        except Exception as exc:  # noqa: BLE001
+            results[module_name] = {"error": str(exc)}
+
+    wb = Workbook()
+    default_ws = wb.active
+    wb.remove(default_ws)
+    _build_executive_summary_sheet(wb, payloads, results)
+    _build_variance_sheet(wb, payloads)
+    _build_kpi_dashboard_sheet(wb, payloads, results)
+    _build_balance_sheet(wb, payloads)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=finreportai_output.xlsx"},
+    )
 
 
 @app.api_route(
@@ -707,3 +997,17 @@ async def excel_addin_chat(request: Request):
         "session_id": body.session_id or "",
     }
     return JSONResponse(content=out, headers=dict(_EXCEL_ADDIN_CORS))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        limit_concurrency=10,
+        limit_max_requests=100,
+        timeout_keep_alive=5,
+    )
