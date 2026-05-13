@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS-C Chat | FinReport AI</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { display:flex; min-height:100vh; background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; }
+  .sidebar { width:240px; min-height:100vh; background:var(--card-bg); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; }
+  .sidebar-logo { padding:24px 20px 16px; border-bottom:1px solid var(--border); }
+  .sidebar-logo .logo-mark { font-size:20px; font-weight:700; color:var(--cyan); letter-spacing:-0.5px; }
+  .sidebar-logo .logo-sub { font-size:11px; color:var(--text-muted); margin-top:2px; }
+  .nav-section { padding:12px 12px 4px; font-size:10px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.8px; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:9px 16px; margin:1px 8px; border-radius:8px; text-decoration:none; color:var(--text-muted); font-size:13px; transition:all .15s; cursor:pointer; }
+  .nav-item:hover { background:rgba(45,212,207,.08); color:var(--cyan); }
+  .nav-item.active { background:rgba(45,212,207,.12); color:var(--cyan); font-weight:600; }
+  .nav-item .icon { width:16px; text-align:center; font-size:14px; }
+  .main { flex:1; display:flex; flex-direction:column; overflow:hidden; max-height:100vh; }
+  .topbar { height:60px; background:var(--card-bg); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 24px; gap:16px; flex-shrink:0; }
+  .topbar h1 { font-size:18px; font-weight:600; flex:1; }
+  .nexus-badge { display:flex; align-items:center; gap:8px; background:rgba(45,212,207,.08); border:1px solid rgba(45,212,207,.25); border-radius:20px; padding:6px 14px; font-size:12px; font-weight:600; color:var(--cyan); }
+  .nexus-dot { width:8px; height:8px; background:#22c55e; border-radius:50%; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* Chat layout */
+  .chat-wrapper { flex:1; display:flex; overflow:hidden; }
+
+  /* Left: conversation history */
+  .history-panel { width:220px; background:var(--card-bg); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; }
+  .history-header { padding:16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  .history-header h3 { font-size:13px; font-weight:600; }
+  .new-chat-btn { padding:4px 10px; background:rgba(45,212,207,.12); border:1px solid rgba(45,212,207,.3); border-radius:6px; color:var(--cyan); font-size:11px; font-weight:600; cursor:pointer; }
+  .new-chat-btn:hover { background:rgba(45,212,207,.2); }
+  .history-list { flex:1; overflow-y:auto; padding:8px; }
+  .history-item { padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:4px; transition:background .15s; }
+  .history-item:hover { background:rgba(255,255,255,.05); }
+  .history-item.active { background:rgba(45,212,207,.1); border:1px solid rgba(45,212,207,.2); }
+  .history-item .h-title { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .history-item .h-time { font-size:10px; color:var(--text-muted); margin-top:2px; }
+
+  /* Entity sel in history panel */
+  .entity-sel-wrap { padding:10px; border-bottom:1px solid var(--border); }
+  .entity-sel-wrap select { width:100%; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:12px; }
+
+  /* Main chat area */
+  .chat-area { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  .messages { flex:1; overflow-y:auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+
+  /* Welcome state */
+  .welcome { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; text-align:center; padding:40px; }
+  .welcome-avatar { width:80px; height:80px; background:linear-gradient(135deg, rgba(45,212,207,.3), rgba(45,212,207,.05)); border:2px solid rgba(45,212,207,.4); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:36px; margin-bottom:20px; }
+  .welcome h2 { font-size:22px; font-weight:700; margin-bottom:8px; }
+  .welcome p { color:var(--text-muted); font-size:14px; max-width:400px; line-height:1.6; margin-bottom:24px; }
+  .suggestions { display:grid; grid-template-columns:1fr 1fr; gap:10px; max-width:520px; }
+  .suggestion-chip { padding:12px 14px; background:var(--card-bg); border:1px solid var(--border); border-radius:10px; font-size:12px; text-align:left; cursor:pointer; transition:all .2s; color:var(--text); }
+  .suggestion-chip:hover { border-color:var(--cyan); background:rgba(45,212,207,.06); color:var(--cyan); }
+  .suggestion-chip .chip-icon { font-size:16px; margin-bottom:6px; }
+  .suggestion-chip .chip-text { font-weight:500; }
+
+  /* Message bubbles */
+  .msg { display:flex; gap:12px; max-width:800px; }
+  .msg.user { flex-direction:row-reverse; align-self:flex-end; }
+  .msg-avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; margin-top:2px; }
+  .msg.user .msg-avatar { background:rgba(45,212,207,.2); }
+  .msg.assistant .msg-avatar { background:linear-gradient(135deg, rgba(45,212,207,.3), rgba(139,92,246,.2)); }
+  .msg-content { flex:1; }
+  .msg-bubble { padding:12px 16px; border-radius:12px; font-size:13px; line-height:1.7; }
+  .msg.user .msg-bubble { background:rgba(45,212,207,.12); border:1px solid rgba(45,212,207,.2); border-radius:12px 12px 4px 12px; }
+  .msg.assistant .msg-bubble { background:var(--card-bg); border:1px solid var(--border); border-radius:12px 12px 12px 4px; }
+  .msg-meta { font-size:10px; color:var(--text-muted); margin-top:4px; }
+  .msg.user .msg-meta { text-align:right; }
+
+  /* Tool use badge */
+  .tool-badge { display:inline-flex; align-items:center; gap:5px; background:rgba(139,92,246,.12); border:1px solid rgba(139,92,246,.25); border-radius:6px; padding:3px 8px; font-size:10px; font-weight:600; color:#a78bfa; margin-bottom:8px; }
+
+  /* Data cards in messages */
+  .data-card { background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:8px; font-size:12px; }
+  .data-card table { width:100%; border-collapse:collapse; }
+  .data-card td { padding:5px 8px; border-bottom:1px solid rgba(255,255,255,.04); }
+  .data-card tr:last-child td { border-bottom:none; }
+  .data-card td:first-child { color:var(--text-muted); width:40%; }
+
+  /* Thinking indicator */
+  .thinking { display:flex; align-items:center; gap:8px; color:var(--text-muted); font-size:13px; padding:12px 16px; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; }
+  .think-dots { display:flex; gap:4px; }
+  .think-dot { width:6px; height:6px; background:var(--cyan); border-radius:50%; animation:think .8s infinite; }
+  .think-dot:nth-child(2) { animation-delay:.2s; }
+  .think-dot:nth-child(3) { animation-delay:.4s; }
+  @keyframes think { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-6px);opacity:1} }
+
+  /* Input area */
+  .input-area { padding:16px 24px 20px; border-top:1px solid var(--border); background:var(--card-bg); flex-shrink:0; }
+  .input-row { display:flex; gap:10px; align-items:flex-end; background:var(--bg); border:1px solid var(--border); border-radius:14px; padding:10px 14px; transition:border-color .2s; }
+  .input-row:focus-within { border-color:rgba(45,212,207,.5); }
+  .chat-input { flex:1; background:transparent; border:none; outline:none; color:var(--text); font-size:14px; resize:none; min-height:24px; max-height:160px; line-height:1.5; font-family:inherit; }
+  .input-actions { display:flex; gap:8px; align-items:center; }
+  .send-btn { width:36px; height:36px; background:var(--cyan); border:none; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:opacity .2s; flex-shrink:0; font-size:16px; }
+  .send-btn:hover { opacity:.85; }
+  .send-btn:disabled { opacity:.4; cursor:not-allowed; }
+  .attach-btn { width:32px; height:32px; background:transparent; border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:14px; color:var(--text-muted); }
+  .attach-btn:hover { border-color:var(--cyan); color:var(--cyan); }
+  .input-hint { font-size:11px; color:var(--text-muted); margin-top:8px; text-align:center; }
+
+  /* Markdown-like formatting in messages */
+  .msg-bubble strong { color:var(--cyan); }
+  .msg-bubble code { background:rgba(45,212,207,.1); padding:1px 5px; border-radius:4px; font-family:'Fira Code',monospace; font-size:11px; }
+  .msg-bubble ul { margin:6px 0 6px 16px; }
+  .msg-bubble li { margin-bottom:3px; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark">FinReport AI</div>
+    <div class="logo-sub">Global Accounting Platform</div>
+  </div>
+  <div class="nav-section">Main</div>
+  <a class="nav-item" href="dashboard.html"><span class="icon">📊</span>Dashboard</a>
+  <a class="nav-item" href="ifrs-generator.html"><span class="icon">📄</span>IFRS Reports</a>
+  <a class="nav-item" href="client-onboarding.html"><span class="icon">🏢</span>Clients</a>
+
+  <div class="nav-section">Accounting</div>
+  <a class="nav-item" href="business-overview.html"><span class="icon">🏦</span>Business Overview</a>
+  <a class="nav-item" href="invoices.html"><span class="icon">🧾</span>Invoices & AR</a>
+  <a class="nav-item" href="expense-claims.html"><span class="icon">💸</span>Expense Claims</a>
+  <a class="nav-item" href="fixed-assets.html"><span class="icon">🏗️</span>Fixed Assets</a>
+  <a class="nav-item" href="bank-accounts.html"><span class="icon">🏛️</span>Bank Accounts</a>
+  <a class="nav-item" href="contacts.html"><span class="icon">👥</span>Contacts</a>
+  <a class="nav-item" href="chart-of-accounts.html"><span class="icon">📋</span>Chart of Accounts</a>
+  <a class="nav-item" href="tax-rates.html"><span class="icon">🧮</span>Tax Rates</a>
+
+  <div class="nav-section">AI Agent</div>
+  <a class="nav-item" href="agent-command.html"><span class="icon">🤖</span>NEXUS-C Command</a>
+  <a class="nav-item" href="decision-queue.html"><span class="icon">⚖️</span>Decision Queue</a>
+  <a class="nav-item active" href="agent-chat.html"><span class="icon">💬</span>Agent Chat</a>
+
+  <div class="nav-section">Setup</div>
+  <a class="nav-item" href="accounting-onboarding.html"><span class="icon">⚙️</span>Entity Setup</a>
+</nav>
+
+<!-- Main -->
+<div class="main">
+  <div class="topbar">
+    <h1>💬 NEXUS-C Agent Chat</h1>
+    <div class="nexus-badge">
+      <div class="nexus-dot"></div>
+      NEXUS-C · claude-sonnet-4-6
+    </div>
+  </div>
+
+  <div class="chat-wrapper">
+
+    <!-- History panel -->
+    <div class="history-panel">
+      <div class="entity-sel-wrap">
+        <select id="entitySel" onchange="onEntityChange()">
+          <option value="">Select Entity...</option>
+        </select>
+      </div>
+      <div class="history-header">
+        <h3>Conversations</h3>
+        <button class="new-chat-btn" onclick="newChat()">+ New</button>
+      </div>
+      <div class="history-list" id="historyList">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- Chat area -->
+    <div class="chat-area">
+      <div class="messages" id="messages">
+        <!-- Welcome screen -->
+        <div class="welcome" id="welcomeScreen">
+          <div class="welcome-avatar">🤖</div>
+          <h2>Ask NEXUS-C anything</h2>
+          <p>Your AI accounting agent with full access to your financial data. Ask about invoices, expenses, bank reconciliation, or trigger agent tasks.</p>
+          <div class="suggestions">
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">📊</div>
+              <div class="chip-text">What is my current AR balance and which invoices are overdue?</div>
+            </div>
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">💸</div>
+              <div class="chip-text">Summarise this month's expense claims and flag anything unusual</div>
+            </div>
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">🏦</div>
+              <div class="chip-text">How many unmatched bank transactions do I have?</div>
+            </div>
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">📉</div>
+              <div class="chip-text">Which fixed assets are due for depreciation this month?</div>
+            </div>
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">🧾</div>
+              <div class="chip-text">Generate an AR aging report for me</div>
+            </div>
+            <div class="suggestion-chip" onclick="sendSuggestion(this)">
+              <div class="chip-icon">⚖️</div>
+              <div class="chip-text">What decisions are pending in the human queue?</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <div class="input-row">
+          <textarea
+            id="chatInput"
+            class="chat-input"
+            placeholder="Ask NEXUS-C anything about your finances..."
+            rows="1"
+            onkeydown="handleKey(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+          <div class="input-actions">
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">➤</button>
+          </div>
+        </div>
+        <div class="input-hint">NEXUS-C has access to your invoices, expenses, bank accounts, and agent tasks · Press Enter to send</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = '/api/accounting';
+let entityId = localStorage.getItem('acc_entity_id') || '';
+let conversations = JSON.parse(localStorage.getItem('nexus_conversations') || '[]');
+let currentConvId = null;
+let isThinking = false;
+
+/* ── Bootstrap ─────────────────────────────────────── */
+async function init() {
+  await loadEntities();
+  if (entityId) document.getElementById('entitySel').value = entityId;
+  renderHistory();
+  // Start fresh conversation if none
+  if (!currentConvId && conversations.length) selectConv(conversations[0].id);
+}
+
+async function loadEntities() {
+  try {
+    const r = await fetch(`${API}/entities`);
+    const list = await r.json();
+    const sel = document.getElementById('entitySel');
+    list.forEach(e => {
+      const o = document.createElement('option');
+      o.value = e.id; o.textContent = e.name;
+      sel.appendChild(o);
+    });
+    if (entityId) sel.value = entityId;
+  } catch {}
+}
+
+function onEntityChange() {
+  entityId = document.getElementById('entitySel').value;
+  localStorage.setItem('acc_entity_id', entityId);
+}
+
+/* ── Conversation management ─────────────────────────────────────── */
+function newChat() {
+  const conv = {
+    id: Date.now(),
+    title: 'New Conversation',
+    created: new Date().toISOString(),
+    messages: []
+  };
+  conversations.unshift(conv);
+  saveConversations();
+  selectConv(conv.id);
+}
+
+function selectConv(id) {
+  currentConvId = id;
+  const conv = conversations.find(c => c.id === id);
+  renderHistory();
+  renderMessages(conv?.messages || []);
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  if (!conversations.length) {
+    list.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;text-align:center;">No conversations yet</div>';
+    return;
+  }
+  list.innerHTML = conversations.map(c => `
+    <div class="history-item ${c.id === currentConvId ? 'active' : ''}" onclick="selectConv(${c.id})">
+      <div class="h-title">${escHtml(c.title)}</div>
+      <div class="h-time">${timeAgo(c.created)}</div>
+    </div>
+  `).join('');
+}
+
+function saveConversations() {
+  // Only keep last 20 conversations, trim message content to avoid localStorage limits
+  const trimmed = conversations.slice(0, 20).map(c => ({
+    ...c,
+    messages: c.messages.slice(-30)
+  }));
+  try { localStorage.setItem('nexus_conversations', JSON.stringify(trimmed)); } catch {}
+}
+
+function getCurrentConv() {
+  return conversations.find(c => c.id === currentConvId);
+}
+
+/* ── Render messages ─────────────────────────────────────── */
+function renderMessages(msgs) {
+  const container = document.getElementById('messages');
+  if (!msgs.length) {
+    container.innerHTML = document.getElementById('welcomeTemplate')?.innerHTML || getWelcomeHTML();
+    return;
+  }
+  container.innerHTML = msgs.map(renderMsg).join('');
+  scrollToBottom();
+}
+
+function getWelcomeHTML() {
+  return `<div class="welcome" id="welcomeScreen">
+    <div class="welcome-avatar">🤖</div>
+    <h2>Ask NEXUS-C anything</h2>
+    <p>Your AI accounting agent with full access to your financial data.</p>
+    <div class="suggestions">
+      <div class="suggestion-chip" onclick="sendSuggestion(this)">
+        <div class="chip-icon">📊</div>
+        <div class="chip-text">What is my current AR balance and which invoices are overdue?</div>
+      </div>
+      <div class="suggestion-chip" onclick="sendSuggestion(this)">
+        <div class="chip-icon">💸</div>
+        <div class="chip-text">Summarise this month's expense claims and flag anything unusual</div>
+      </div>
+      <div class="suggestion-chip" onclick="sendSuggestion(this)">
+        <div class="chip-icon">🏦</div>
+        <div class="chip-text">How many unmatched bank transactions do I have?</div>
+      </div>
+      <div class="suggestion-chip" onclick="sendSuggestion(this)">
+        <div class="chip-icon">📉</div>
+        <div class="chip-text">Which fixed assets are due for depreciation this month?</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderMsg(msg) {
+  const isUser = msg.role === 'user';
+  const avatar = isUser ? '👤' : '🤖';
+  const time = msg.time ? new Date(msg.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+  const toolBadge = msg.tool ? `<div class="tool-badge">🔧 Used tool: ${msg.tool}</div>` : '';
+  const formattedContent = formatContent(msg.content);
+  return `<div class="msg ${msg.role}">
+    <div class="msg-avatar">${avatar}</div>
+    <div class="msg-content">
+      ${toolBadge}
+      <div class="msg-bubble">${formattedContent}</div>
+      <div class="msg-meta">${time}${isUser ? '' : ' · NEXUS-C'}</div>
+    </div>
+  </div>`;
+}
+
+function formatContent(text) {
+  return escHtml(text)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^• (.*)/gm, '<li>$1</li>')
+    .replace(/^- (.*)/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/\n/g, '<br>');
+}
+
+/* ── Send message ─────────────────────────────────────── */
+function sendSuggestion(el) {
+  const text = el.querySelector('.chip-text').textContent;
+  document.getElementById('chatInput').value = text;
+  sendMessage();
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text || isThinking) return;
+  if (!entityId) { alert('Please select an entity first.'); return; }
+
+  // Create conversation if needed
+  if (!currentConvId) newChat();
+
+  const conv = getCurrentConv();
+  if (!conv) return;
+
+  // Update title from first message
+  if (!conv.messages.length) {
+    conv.title = text.slice(0, 40) + (text.length > 40 ? '...' : '');
+  }
+
+  // Add user message
+  const userMsg = { role:'user', content:text, time: new Date().toISOString() };
+  conv.messages.push(userMsg);
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Hide welcome, show messages
+  renderMessages(conv.messages);
+  showThinking();
+  isThinking = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const r = await fetch(`${API}/entities/${entityId}/agent/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ message: text, history: conv.messages.slice(-10) })
+    });
+    const data = await r.json();
+    hideThinking();
+
+    const assistantMsg = {
+      role: 'assistant',
+      content: data.reply || data.message || 'I processed your request.',
+      tool: data.tool_used || null,
+      time: new Date().toISOString()
+    };
+    conv.messages.push(assistantMsg);
+    saveConversations();
+    renderHistory();
+    renderMessages(conv.messages);
+  } catch(e) {
+    hideThinking();
+    const errMsg = { role:'assistant', content:`Sorry, I encountered an error: ${e.message}. Please try again.`, time: new Date().toISOString() };
+    conv.messages.push(errMsg);
+    renderMessages(conv.messages);
+  }
+
+  isThinking = false;
+  document.getElementById('sendBtn').disabled = false;
+  scrollToBottom();
+}
+
+/* ── Thinking indicator ─────────────────────────────────────── */
+function showThinking() {
+  const container = document.getElementById('messages');
+  const el = document.createElement('div');
+  el.id = 'thinkingIndicator';
+  el.className = 'msg assistant';
+  el.innerHTML = `<div class="msg-avatar">🤖</div>
+    <div class="msg-content">
+      <div class="thinking">
+        <div class="think-dots">
+          <div class="think-dot"></div>
+          <div class="think-dot"></div>
+          <div class="think-dot"></div>
+        </div>
+        NEXUS-C is thinking...
+      </div>
+    </div>`;
+  container.appendChild(el);
+  scrollToBottom();
+}
+
+function hideThinking() {
+  document.getElementById('thinkingIndicator')?.remove();
+}
+
+/* ── Helpers ─────────────────────────────────────── */
+function scrollToBottom() {
+  const c = document.getElementById('messages');
+  requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso)) / 1000;
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+init();
+</script>
+</body>
+</html>

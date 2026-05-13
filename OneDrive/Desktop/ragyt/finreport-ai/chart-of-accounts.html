@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • Chart of Accounts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:18px; flex-wrap:wrap; }
+    .fg-input { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); color:#EEF2FF; border-radius:8px; padding:8px 13px; font-family:inherit; font-size:.88rem; outline:none; }
+    .fg-input:focus { border-color:#2DD4CF; }
+    .fg-select { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); color:#EEF2FF; border-radius:8px; padding:8px 13px; font-family:inherit; font-size:.88rem; outline:none; }
+    .fg-select option { background:#0D1B2E; }
+    .acc-table { width:100%; border-collapse:collapse; }
+    .acc-table th { text-align:left; font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:#6B8CAE; font-weight:700; padding:8px 12px; border-bottom:1px solid rgba(255,255,255,.07); }
+    .acc-table td { padding:9px 12px; border-bottom:1px solid rgba(255,255,255,.04); font-size:.85rem; color:#CBD5E1; vertical-align:middle; }
+    .acc-table tr:hover td { background:rgba(255,255,255,.02); }
+    .type-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.7rem; font-weight:700; text-transform:uppercase; }
+    .t-asset { background:rgba(45,212,207,.12); color:#2DD4CF; }
+    .t-liability { background:rgba(248,113,113,.12); color:#F87171; }
+    .t-equity { background:rgba(167,139,250,.12); color:#A78BFA; }
+    .t-revenue { background:rgba(52,211,153,.12); color:#34D399; }
+    .t-expense { background:rgba(251,146,60,.12); color:#FB923C; }
+    .ai-dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:#A78BFA; margin-right:5px; }
+    .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; z-index:100; }
+    .modal { background:#0F1E35; border:1px solid rgba(255,255,255,.1); border-radius:16px; padding:28px; width:480px; max-width:95vw; }
+    .modal h3 { font-size:1.1rem; font-weight:800; color:#EEF2FF; margin-bottom:18px; }
+    .form-col { display:flex; flex-direction:column; gap:12px; }
+    .form-group { display:flex; flex-direction:column; gap:5px; }
+    .fg-label { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#6B8CAE; font-weight:700; }
+    .btn-primary { background:linear-gradient(135deg,#2DD4CF,#A78BFA); border:none; color:#071018; padding:10px 22px; border-radius:9px; font-family:inherit; font-size:.9rem; font-weight:800; cursor:pointer; }
+    .btn-ghost { background:transparent; border:1px solid rgba(255,255,255,.1); color:#6B8CAE; padding:10px 18px; border-radius:9px; font-family:inherit; font-size:.9rem; font-weight:700; cursor:pointer; }
+    .spin { display:inline-block; width:13px; height:13px; border:2px solid rgba(45,212,207,.3); border-top-color:#2DD4CF; border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .entity-sel { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); color:#EEF2FF; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:.88rem; outline:none; }
+    .group-header { background:rgba(255,255,255,.03); padding:6px 12px; font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:#475569; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a class="active" href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;">
+      <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+      <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div>
+        <div style="font-size:20px;font-weight:700;">Chart of Accounts</div>
+        <div class="meta">Manage your GL account structure</div>
+      </div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadAccounts()"></select>
+        <button class="btn-cta" onclick="openModal()">+ Add Account</button>
+        <button class="btn-cta" style="background:rgba(167,139,250,.2);color:#A78BFA;border:1px solid rgba(167,139,250,.3);" onclick="aiGenerate()" id="btn-ai-gen">✨ AI Generate</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input class="fg-input" id="search" placeholder="Search accounts…" oninput="filterAccounts()" style="width:220px;">
+      <select class="fg-select" id="filter-type" onchange="filterAccounts()">
+        <option value="">All Types</option>
+        <option value="Asset">Asset</option>
+        <option value="Liability">Liability</option>
+        <option value="Equity">Equity</option>
+        <option value="Revenue">Revenue</option>
+        <option value="Expense">Expense</option>
+      </select>
+      <span id="acc-count" style="color:#6B8CAE;font-size:.85rem;margin-left:auto;"></span>
+    </div>
+
+    <div class="card" style="background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;overflow:hidden;">
+      <table class="acc-table">
+        <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Sub-type</th><th>Tax Code</th><th>Balance</th><th>Source</th><th></th></tr></thead>
+        <tbody id="acc-tbody"><tr><td colspan="8" style="text-align:center;padding:32px;color:#6B8CAE;">Select an entity to load accounts</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- Add Account Modal -->
+<div class="modal-bg" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3>Add Account</h3>
+    <div class="form-col">
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;">
+        <div class="form-group"><label class="fg-label">Code</label><input class="fg-input" id="m-code" placeholder="1010" /></div>
+        <div class="form-group"><label class="fg-label">Account Name</label><input class="fg-input" id="m-name" placeholder="Bank - Operating Account" /></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group"><label class="fg-label">Type</label>
+          <select class="fg-select" id="m-type">
+            <option value="Asset">Asset</option><option value="Liability">Liability</option>
+            <option value="Equity">Equity</option><option value="Revenue">Revenue</option><option value="Expense">Expense</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="fg-label">Sub-type</label><input class="fg-input" id="m-subtype" placeholder="Bank, AR, AP…" /></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group"><label class="fg-label">Tax Code</label><input class="fg-input" id="m-taxcode" placeholder="VAT20, GST10…" /></div>
+        <div class="form-group"><label class="fg-label">Opening Balance</label><input class="fg-input" id="m-balance" type="number" placeholder="0.00" /></div>
+      </div>
+      <div class="form-group"><label class="fg-label">Description</label><input class="fg-input" id="m-desc" placeholder="Optional description" /></div>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveAccount()" style="margin-left:auto;">Save Account</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allAccounts = [];
+
+const typeClass = { Asset:'t-asset', Liability:'t-liability', Equity:'t-equity', Revenue:'t-revenue', Expense:'t-expense' };
+
+async function loadEntities() {
+  const resp = await fetch('/api/accounting/entities');
+  const data = await resp.json();
+  const sel = document.getElementById('entity-sel');
+  sel.innerHTML = '<option value="">Select entity…</option>';
+  for (const e of (data.entities || [])) {
+    sel.innerHTML += `<option value="${e.id}">${e.name} (${e.country})</option>`;
+  }
+  const stored = localStorage.getItem('acc_entity_id');
+  if (stored) { sel.value = stored; loadAccounts(); }
+}
+
+async function loadAccounts() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) return;
+  localStorage.setItem('acc_entity_id', eid);
+  const resp = await fetch(`/api/accounting/entities/${eid}/accounts`);
+  const data = await resp.json();
+  allAccounts = data.accounts || [];
+  document.getElementById('acc-count').textContent = `${allAccounts.length} accounts`;
+  renderAccounts(allAccounts);
+}
+
+function filterAccounts() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const type = document.getElementById('filter-type').value;
+  const filtered = allAccounts.filter(a =>
+    (!q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)) &&
+    (!type || a.account_type === type)
+  );
+  renderAccounts(filtered);
+  document.getElementById('acc-count').textContent = `${filtered.length} of ${allAccounts.length} accounts`;
+}
+
+function renderAccounts(accounts) {
+  const groups = {};
+  for (const a of accounts) {
+    const t = a.account_type || 'Other';
+    if (!groups[t]) groups[t] = [];
+    groups[t].push(a);
+  }
+  const order = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense', 'Other'];
+  let html = '';
+  for (const type of order) {
+    if (!groups[type]?.length) continue;
+    html += `<tr><td colspan="8" class="group-header">${type} (${groups[type].length})</td></tr>`;
+    for (const a of groups[type]) {
+      html += `<tr>
+        <td style="font-family:monospace;color:#2DD4CF;">${a.code}</td>
+        <td style="font-weight:600;color:#EEF2FF;">${a.name}</td>
+        <td><span class="type-pill ${typeClass[a.account_type] || ''}">${a.account_type || '—'}</span></td>
+        <td style="color:#94A3B8;">${a.sub_type || '—'}</td>
+        <td style="color:#6B8CAE;font-size:.78rem;">${a.tax_code || '—'}</td>
+        <td style="font-family:monospace;font-size:.82rem;">${a.conversion_balance ? '$' + parseFloat(a.conversion_balance).toLocaleString() : '—'}</td>
+        <td>${a.ai_suggested ? '<span style="font-size:.72rem;color:#A78BFA;"><span class="ai-dot"></span>AI</span>' : '<span style="font-size:.72rem;color:#475569;">Manual</span>'}</td>
+        <td>
+          <button onclick="deleteAccount(${a.id})" style="background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.2);color:#F87171;border-radius:6px;padding:3px 9px;cursor:pointer;font-size:.75rem;font-family:inherit;">✕</button>
+        </td>
+      </tr>`;
+    }
+  }
+  document.getElementById('acc-tbody').innerHTML = html || '<tr><td colspan="8" style="text-align:center;padding:24px;color:#6B8CAE;">No accounts found</td></tr>';
+}
+
+async function aiGenerate() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) { alert('Select an entity first.'); return; }
+  if (!confirm('AI will generate 80+ accounts for this entity. This will add to existing accounts. Continue?')) return;
+  const btn = document.getElementById('btn-ai-gen');
+  btn.innerHTML = '<span class="spin"></span> Generating…';
+  btn.disabled = true;
+  const resp = await fetch(`/api/accounting/entities/${eid}/accounts/ai-generate`, { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+  const data = await resp.json();
+  btn.innerHTML = '✨ AI Generate';
+  btn.disabled = false;
+  if (!resp.ok) { alert('Error: ' + data.error); return; }
+  alert(`✓ Generated ${data.count} accounts!`);
+  loadAccounts();
+}
+
+function openModal() { document.getElementById('modal').style.display = 'flex'; }
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+async function saveAccount() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) { alert('Select entity first.'); return; }
+  const body = {
+    code: document.getElementById('m-code').value.trim(),
+    name: document.getElementById('m-name').value.trim(),
+    account_type: document.getElementById('m-type').value,
+    sub_type: document.getElementById('m-subtype').value,
+    tax_code: document.getElementById('m-taxcode').value,
+    description: document.getElementById('m-desc').value,
+    conversion_balance: parseFloat(document.getElementById('m-balance').value) || 0
+  };
+  if (!body.code || !body.name) { alert('Code and Name required.'); return; }
+  const resp = await fetch(`/api/accounting/entities/${eid}/accounts`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  if (!resp.ok) { const d = await resp.json(); alert('Error: ' + d.error); return; }
+  closeModal();
+  loadAccounts();
+}
+
+async function deleteAccount(id) {
+  const eid = document.getElementById('entity-sel').value;
+  if (!confirm('Delete this account?')) return;
+  await fetch(`/api/accounting/entities/${eid}/accounts/${id}`, { method:'DELETE' });
+  loadAccounts();
+}
+
+loadEntities();
+</script>
+</body>
+</html>

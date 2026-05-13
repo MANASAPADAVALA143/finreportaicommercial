@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • Contacts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap;}
+    .fg-input{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 13px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-input:focus{border-color:#2DD4CF;}
+    .fg-select{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 13px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-select option{background:#0D1B2E;}
+    .entity-sel{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:6px 12px;font-family:inherit;font-size:.88rem;outline:none;}
+    .contact-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;}
+    .contact-card{background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:18px;transition:.2s;}
+    .contact-card:hover{border-color:rgba(45,212,207,.3);}
+    .cc-avatar{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#2DD4CF,#A78BFA);display:grid;place-items:center;font-weight:800;font-size:1rem;color:#071018;margin-bottom:12px;}
+    .cc-name{font-size:.95rem;font-weight:800;color:#EEF2FF;margin-bottom:2px;}
+    .cc-company{font-size:.8rem;color:#6B8CAE;margin-bottom:8px;}
+    .cc-detail{font-size:.78rem;color:#94A3B8;display:flex;align-items:center;gap:6px;margin-bottom:3px;}
+    .type-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.68rem;font-weight:700;text-transform:uppercase;margin-bottom:10px;}
+    .t-customer{background:rgba(45,212,207,.12);color:#2DD4CF;}
+    .t-vendor{background:rgba(251,146,60,.12);color:#FB923C;}
+    .t-employee{background:rgba(167,139,250,.12);color:#A78BFA;}
+    .t-owner{background:rgba(52,211,153,.12);color:#34D399;}
+    .cc-actions{display:flex;gap:6px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.05);}
+    .btn-sm{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#94A3B8;border-radius:6px;padding:4px 10px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;transition:.15s;}
+    .btn-sm:hover{color:#EEF2FF;}
+    .btn-sm.danger{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.2);color:#F87171;}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100;}
+    .modal{background:#0F1E35;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:28px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;}
+    .modal h3{font-size:1.1rem;font-weight:800;color:#EEF2FF;margin-bottom:18px;}
+    .form-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .form-group{display:flex;flex-direction:column;gap:5px;}
+    .form-group.full{grid-column:1/-1;}
+    .fg-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#6B8CAE;font-weight:700;}
+    .btn-primary{background:linear-gradient(135deg,#2DD4CF,#A78BFA);border:none;color:#071018;padding:10px 22px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:800;cursor:pointer;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.1);color:#6B8CAE;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:700;cursor:pointer;}
+    .tab-row{display:flex;gap:6px;margin-bottom:18px;}
+    .tab-btn{background:transparent;border:none;color:#6B8CAE;padding:7px 14px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:.88rem;font-weight:700;}
+    .tab-btn.active{background:rgba(45,212,207,.1);color:#2DD4CF;}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a class="active" href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;">
+      <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+      <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div><div style="font-size:20px;font-weight:700;">Contacts</div><div class="meta">Customers, Vendors & Employees</div></div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadContacts()"></select>
+        <button class="btn-cta" onclick="openModal()">+ Add Contact</button>
+      </div>
+    </div>
+
+    <div class="tab-row">
+      <button class="tab-btn active" onclick="setTab('',this)">All</button>
+      <button class="tab-btn" onclick="setTab('CUSTOMER',this)">Customers</button>
+      <button class="tab-btn" onclick="setTab('VENDOR',this)">Vendors</button>
+      <button class="tab-btn" onclick="setTab('EMPLOYEE',this)">Employees</button>
+    </div>
+
+    <div class="toolbar">
+      <input class="fg-input" id="search" placeholder="Search contacts…" oninput="filterContacts()" style="width:220px;">
+      <span id="contact-count" style="color:#6B8CAE;font-size:.85rem;margin-left:auto;"></span>
+    </div>
+
+    <div class="contact-grid" id="contact-grid">
+      <div style="color:#6B8CAE;font-size:.88rem;padding:20px;">Select an entity to load contacts</div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-bg" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3 id="modal-title">Add Contact</h3>
+    <div class="form-grid2">
+      <div class="form-group full"><label class="fg-label">Contact Type</label>
+        <div style="display:flex;gap:8px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="ctype" value="CUSTOMER" checked /> <span style="color:#EEF2FF;font-size:.88rem;">Customer</span></label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="ctype" value="VENDOR" /> <span style="color:#EEF2FF;font-size:.88rem;">Vendor</span></label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="ctype" value="EMPLOYEE" /> <span style="color:#EEF2FF;font-size:.88rem;">Employee</span></label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="radio" name="ctype" value="OWNER" /> <span style="color:#EEF2FF;font-size:.88rem;">Owner</span></label>
+        </div>
+      </div>
+      <div class="form-group"><label class="fg-label">Display Name *</label><input class="fg-input" id="m-dname" placeholder="John Smith" /></div>
+      <div class="form-group"><label class="fg-label">Company Name</label><input class="fg-input" id="m-company" placeholder="Acme Ltd" /></div>
+      <div class="form-group"><label class="fg-label">Email</label><input class="fg-input" id="m-email" type="email" placeholder="john@acme.com" /></div>
+      <div class="form-group"><label class="fg-label">Phone</label><input class="fg-input" id="m-phone" placeholder="+44 20 1234 5678" /></div>
+      <div class="form-group"><label class="fg-label">Country</label><input class="fg-input" id="m-country" placeholder="GB" maxlength="2" style="text-transform:uppercase;" /></div>
+      <div class="form-group"><label class="fg-label">Tax Number</label><input class="fg-input" id="m-taxnum" placeholder="VAT / GST number" /></div>
+      <div class="form-group"><label class="fg-label">Payment Terms (days)</label><input class="fg-input" id="m-terms" type="number" value="30" /></div>
+      <div class="form-group"><label class="fg-label">Credit Limit</label><input class="fg-input" id="m-limit" type="number" placeholder="0.00" /></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveContact()" style="margin-left:auto;">Save Contact</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allContacts = [];
+let activeTab = '';
+
+const typeClass = { CUSTOMER:'t-customer', VENDOR:'t-vendor', EMPLOYEE:'t-employee', OWNER:'t-owner' };
+const typeEmoji = { CUSTOMER:'🏢', VENDOR:'🏭', EMPLOYEE:'👤', OWNER:'👑' };
+
+async function loadEntities() {
+  const resp = await fetch('/api/accounting/entities');
+  const data = await resp.json();
+  const sel = document.getElementById('entity-sel');
+  sel.innerHTML = '<option value="">Select entity…</option>';
+  for (const e of (data.entities||[])) sel.innerHTML += `<option value="${e.id}">${e.name} (${e.country})</option>`;
+  const stored = localStorage.getItem('acc_entity_id');
+  if (stored) { sel.value = stored; loadContacts(); }
+}
+
+async function loadContacts() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) return;
+  localStorage.setItem('acc_entity_id', eid);
+  const resp = await fetch(`/api/accounting/entities/${eid}/contacts`);
+  const data = await resp.json();
+  allContacts = data.contacts || [];
+  filterContacts();
+}
+
+function setTab(type, el) {
+  activeTab = type;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  filterContacts();
+}
+
+function filterContacts() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const filtered = allContacts.filter(c =>
+    (!activeTab || c.contact_type === activeTab) &&
+    (!q || c.display_name.toLowerCase().includes(q) || (c.company_name||'').toLowerCase().includes(q) || (c.email||'').toLowerCase().includes(q))
+  );
+  document.getElementById('contact-count').textContent = `${filtered.length} contacts`;
+  const grid = document.getElementById('contact-grid');
+  if (!filtered.length) { grid.innerHTML = '<div style="color:#6B8CAE;font-size:.88rem;padding:20px;">No contacts found</div>'; return; }
+  grid.innerHTML = filtered.map(c => `
+    <div class="contact-card">
+      <div class="cc-avatar">${(c.display_name||'?')[0].toUpperCase()}</div>
+      <div class="cc-name">${c.display_name}</div>
+      ${c.company_name ? `<div class="cc-company">${c.company_name}</div>` : ''}
+      <span class="type-badge ${typeClass[c.contact_type]||''}">${typeEmoji[c.contact_type]||''} ${c.contact_type}</span>
+      ${c.email ? `<div class="cc-detail">✉️ ${c.email}</div>` : ''}
+      ${c.phone ? `<div class="cc-detail">📞 ${c.phone}</div>` : ''}
+      ${c.country ? `<div class="cc-detail">🌍 ${c.country}${c.tax_number ? ' · ' + c.tax_number : ''}</div>` : ''}
+      <div class="cc-detail">💳 ${c.payment_terms||30} day terms${c.credit_limit ? ' · Limit: $'+Number(c.credit_limit).toLocaleString() : ''}</div>
+      <div class="cc-actions">
+        <button class="btn-sm" onclick="window.location.href='invoices.html'">New Invoice</button>
+        <button class="btn-sm danger" onclick="deleteContact(${c.id})">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openModal() { document.getElementById('modal').style.display = 'flex'; }
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+async function saveContact() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) { alert('Select entity first.'); return; }
+  const ctype = document.querySelector('input[name="ctype"]:checked')?.value || 'CUSTOMER';
+  const body = {
+    contact_type: ctype,
+    display_name: document.getElementById('m-dname').value.trim(),
+    company_name: document.getElementById('m-company').value.trim(),
+    email: document.getElementById('m-email').value.trim(),
+    phone: document.getElementById('m-phone').value.trim(),
+    country: document.getElementById('m-country').value.trim().toUpperCase(),
+    tax_number: document.getElementById('m-taxnum').value.trim(),
+    payment_terms: parseInt(document.getElementById('m-terms').value)||30,
+    credit_limit: parseFloat(document.getElementById('m-limit').value)||null
+  };
+  if (!body.display_name) { alert('Display name required.'); return; }
+  const resp = await fetch(`/api/accounting/entities/${eid}/contacts`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  if (!resp.ok) { const d = await resp.json(); alert('Error: '+d.error); return; }
+  closeModal();
+  loadContacts();
+}
+
+async function deleteContact(id) {
+  const eid = document.getElementById('entity-sel').value;
+  if (!confirm('Delete this contact?')) return;
+  await fetch(`/api/accounting/entities/${eid}/contacts/${id}`, { method:'DELETE' });
+  loadContacts();
+}
+
+loadEntities();
+</script>
+</body>
+</html>

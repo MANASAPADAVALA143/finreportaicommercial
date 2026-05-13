@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • Business Overview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .kpi-grid-6 { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; }
+    .kpi-card-sm { background:var(--card-bg,#0F1E35); border:1px solid var(--border,rgba(255,255,255,.09)); border-radius:14px; padding:18px 20px; position:relative; overflow:hidden; }
+    .kpi-card-sm .label { font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:#6B8CAE; font-weight:700; margin-bottom:6px; }
+    .kpi-card-sm .val { font-family:'JetBrains Mono',monospace; font-size:1.7rem; font-weight:800; color:#EEF2FF; }
+    .kpi-card-sm .sub { font-size:.78rem; color:#6B8CAE; margin-top:4px; }
+    .kpi-card-sm .badge-up { color:#34D399; font-size:.75rem; font-weight:700; }
+    .kpi-card-sm .badge-dn { color:#F87171; font-size:.75rem; font-weight:700; }
+    .kpi-card-sm .accent-line { position:absolute; top:0; left:0; right:0; height:3px; border-radius:14px 14px 0 0; }
+
+    .grid-2c { display:grid; grid-template-columns:1.4fr 1fr; gap:18px; margin-bottom:18px; }
+    .grid-3c { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:18px; }
+    .card { background:var(--card-bg,#0F1E35); border:1px solid var(--border,rgba(255,255,255,.09)); border-radius:14px; padding:20px; }
+    .card-title { font-size:.88rem; font-weight:700; color:#EEF2FF; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; }
+
+    .decision-badge { background:rgba(248,113,113,.15); color:#F87171; border-radius:999px; padding:2px 9px; font-size:.72rem; font-weight:800; }
+    .decision-badge.ok { background:rgba(52,211,153,.15); color:#34D399; }
+
+    .inv-row { display:grid; grid-template-columns:1fr 100px 80px 80px; gap:8px; padding:8px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:.82rem; align-items:center; }
+    .inv-row:last-child { border-bottom:none; }
+    .status-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; }
+    .pill-draft { background:rgba(107,140,174,.15); color:#6B8CAE; }
+    .pill-sent { background:rgba(45,212,207,.15); color:#2DD4CF; }
+    .pill-paid { background:rgba(52,211,153,.15); color:#34D399; }
+    .pill-overdue { background:rgba(248,113,113,.15); color:#F87171; }
+    .pill-void { background:rgba(100,116,139,.15); color:#64748B; }
+
+    .cust-row { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.04); font-size:.83rem; }
+    .cust-row:last-child { border-bottom:none; }
+    .cust-avatar { width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg,#2DD4CF,#A78BFA); display:grid; place-items:center; font-size:.7rem; font-weight:800; color:#071018; flex-shrink:0; }
+    .bar-track { flex:1; background:rgba(255,255,255,.06); border-radius:999px; height:5px; overflow:hidden; }
+    .bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,#2DD4CF,#A78BFA); }
+
+    .ai-insight { background:rgba(167,139,250,.07); border:1px solid rgba(167,139,250,.2); border-radius:10px; padding:12px 14px; margin-bottom:10px; font-size:.85rem; }
+    .ai-insight .ai-title { font-weight:700; color:#EEF2FF; margin-bottom:3px; }
+    .ai-insight .ai-body { color:#94A3B8; font-size:.8rem; line-height:1.5; }
+
+    .entity-sel { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); color:#EEF2FF; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:.88rem; outline:none; }
+    .spin { display:inline-block; width:14px; height:14px; border:2px solid rgba(45,212,207,.3); border-top-color:#2DD4CF; border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a class="active" href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html" id="nav-decisions">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;">
+      <div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div>
+      <div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div>
+      <div style="color:#6B8CAE;font-size:.85rem;" id="entity-label">Loading…</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div>
+        <div style="font-size:20px;font-weight:700;">Business Overview</div>
+        <div class="meta" id="date-label">FY 2025 — YTD</div>
+      </div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadDashboard()">
+          <option value="">Select entity…</option>
+        </select>
+        <button class="btn-cta" onclick="window.location.href='accounting-onboarding.html'">+ New Entity</button>
+        <button class="btn-cta" style="background:rgba(167,139,250,.2);color:#A78BFA;border:1px solid rgba(167,139,250,.3);" onclick="window.location.href='agent-command.html'">
+          🤖 Run Agent
+        </button>
+      </div>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="kpi-grid-6" id="kpi-strip">
+      <div class="kpi-card-sm"><div class="accent-line" style="background:linear-gradient(90deg,#2DD4CF,#0EA5E9)"></div><div class="label">Total Income</div><div class="val" id="kpi-income">—</div><div class="sub" id="kpi-income-sub">YTD</div></div>
+      <div class="kpi-card-sm"><div class="accent-line" style="background:linear-gradient(90deg,#F87171,#FB923C)"></div><div class="label">Total Expenses</div><div class="val" id="kpi-expenses">—</div><div class="sub">YTD</div></div>
+      <div class="kpi-card-sm"><div class="accent-line" style="background:linear-gradient(90deg,#34D399,#2DD4CF)"></div><div class="label">Net Profit</div><div class="val" id="kpi-profit">—</div><div class="sub" id="kpi-margin">Margin</div></div>
+      <div class="kpi-card-sm"><div class="accent-line" style="background:linear-gradient(90deg,#A78BFA,#818CF8)"></div><div class="label">Cash Balance</div><div class="val" id="kpi-cash">—</div><div class="sub">All bank accounts</div></div>
+    </div>
+    <div class="kpi-grid-6" style="grid-template-columns:repeat(4,1fr);">
+      <div class="kpi-card-sm"><div class="label">Accounts Receivable</div><div class="val" id="kpi-ar">—</div><div class="sub" id="kpi-ar-sub">Outstanding</div></div>
+      <div class="kpi-card-sm"><div class="label">Pending Decisions</div><div class="val" id="kpi-decisions">—</div><div class="sub"><a href="decision-queue.html" style="color:#2DD4CF;text-decoration:none;font-size:.75rem;">Review queue →</a></div></div>
+      <div class="kpi-card-sm"><div class="label">Pending Expenses</div><div class="val" id="kpi-expenses-ct">—</div><div class="sub"><a href="expense-claims.html" style="color:#2DD4CF;text-decoration:none;font-size:.75rem;">Review claims →</a></div></div>
+      <div class="kpi-card-sm"><div class="label">Overdue Invoices</div><div class="val" id="kpi-overdue">—</div><div class="sub" style="color:#F87171;" id="kpi-overdue-sub">Past due</div></div>
+    </div>
+
+    <!-- Charts row -->
+    <div class="grid-2c">
+      <div class="card">
+        <div class="card-title">Revenue Trend (Last 6 Months) <span style="font-size:.75rem;color:#6B8CAE;">Monthly</span></div>
+        <canvas id="chart-revenue" height="180"></canvas>
+      </div>
+      <div class="card">
+        <div class="card-title">Top Customers</div>
+        <div id="top-customers">
+          <div style="color:#6B8CAE;font-size:.85rem;text-align:center;padding:20px;">Select an entity to load data</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom row -->
+    <div class="grid-2c">
+      <div class="card">
+        <div class="card-title">
+          Recent Invoices
+          <a href="invoices.html" style="font-size:.75rem;color:#2DD4CF;text-decoration:none;">View all →</a>
+        </div>
+        <div class="inv-row" style="font-size:.72rem;color:#6B8CAE;font-weight:700;padding-bottom:6px;">
+          <span>CUSTOMER</span><span>TOTAL</span><span>DUE DATE</span><span>STATUS</span>
+        </div>
+        <div id="recent-invoices">
+          <div style="color:#6B8CAE;font-size:.85rem;padding:16px 0;">No invoices yet</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">
+          ✨ AI Insights
+          <button onclick="loadAiInsights()" style="background:rgba(167,139,250,.15);border:1px solid rgba(167,139,250,.3);color:#A78BFA;border-radius:8px;padding:4px 12px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">Refresh</button>
+        </div>
+        <div id="ai-insights">
+          <div style="color:#6B8CAE;font-size:.85rem;">Click Refresh to get AI-generated insights about your financial position.</div>
+        </div>
+        <button onclick="window.location.href='agent-chat.html'" style="margin-top:14px;width:100%;background:rgba(45,212,207,.1);border:1px solid rgba(45,212,207,.25);color:#2DD4CF;padding:9px;border-radius:9px;font-family:inherit;font-weight:700;cursor:pointer;font-size:.88rem;">
+          💬 Ask NEXUS-C anything →
+        </button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let revenueChart = null;
+
+async function loadEntities() {
+  const resp = await fetch('/api/accounting/entities');
+  const data = await resp.json();
+  const sel = document.getElementById('entity-sel');
+  const storedId = localStorage.getItem('acc_entity_id');
+  for (const e of (data.entities || [])) {
+    const opt = document.createElement('option');
+    opt.value = e.id;
+    opt.textContent = `${e.name} (${e.country})`;
+    sel.appendChild(opt);
+  }
+  if (storedId) {
+    sel.value = storedId;
+    loadDashboard();
+  }
+}
+
+async function loadDashboard() {
+  const entityId = document.getElementById('entity-sel').value;
+  if (!entityId) return;
+  localStorage.setItem('acc_entity_id', entityId);
+
+  const year = new Date().getFullYear();
+  const resp = await fetch(`/api/accounting/entities/${entityId}/dashboard?date_from=${year}-01-01&date_to=${year}-12-31`);
+  if (!resp.ok) return;
+  const d = await resp.json();
+
+  const fmt = (n) => n >= 1000000 ? '$' + (n/1000000).toFixed(2) + 'M' : n >= 1000 ? '$' + (n/1000).toFixed(1) + 'K' : '$' + (n||0).toFixed(0);
+  const { kpis, top_customers, recent_invoices, monthly_revenue } = d;
+
+  document.getElementById('kpi-income').textContent = fmt(kpis.total_income);
+  document.getElementById('kpi-expenses').textContent = fmt(kpis.total_expenses);
+  document.getElementById('kpi-profit').textContent = fmt(kpis.net_profit);
+  document.getElementById('kpi-margin').textContent = kpis.total_income > 0 ? `Margin: ${((kpis.net_profit / kpis.total_income) * 100).toFixed(1)}%` : '—';
+  document.getElementById('kpi-cash').textContent = fmt(kpis.cash_balance);
+  document.getElementById('kpi-ar').textContent = fmt(kpis.accounts_receivable);
+  document.getElementById('kpi-ar-sub').textContent = `${kpis.overdue_count} overdue`;
+  document.getElementById('kpi-decisions').textContent = kpis.pending_decisions || '0';
+  document.getElementById('kpi-expenses-ct').textContent = kpis.pending_expenses || '0';
+  document.getElementById('kpi-overdue').textContent = kpis.overdue_count || '0';
+
+  // Update nav decision badge
+  if (kpis.pending_decisions > 0) {
+    document.getElementById('nav-decisions').textContent = `✅ Decision Queue (${kpis.pending_decisions})`;
+  }
+
+  // Revenue chart
+  const labels = (monthly_revenue || []).map(r => r.month);
+  const vals = (monthly_revenue || []).map(r => r.total);
+  const ctx = document.getElementById('chart-revenue').getContext('2d');
+  if (revenueChart) revenueChart.destroy();
+  revenueChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Revenue',
+        data: vals,
+        borderColor: '#2DD4CF',
+        backgroundColor: 'rgba(45,212,207,0.08)',
+        borderWidth: 2,
+        pointBackgroundColor: '#2DD4CF',
+        tension: 0.4,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B8CAE', font: { size: 11 } } },
+        y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B8CAE', font: { size: 11 }, callback: v => '$' + (v >= 1000 ? (v/1000).toFixed(0) + 'K' : v) } }
+      }
+    }
+  });
+
+  // Top customers
+  const maxSales = Math.max(...(top_customers || []).map(c => c.total_sales), 1);
+  document.getElementById('top-customers').innerHTML = (top_customers || []).length
+    ? top_customers.map((c, i) => `
+      <div class="cust-row">
+        <div class="cust-avatar">${(c.display_name || '?')[0].toUpperCase()}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.83rem;font-weight:600;color:#EEF2FF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.display_name}</div>
+          <div class="bar-track" style="margin-top:4px"><div class="bar-fill" style="width:${(c.total_sales/maxSales*100).toFixed(0)}%"></div></div>
+        </div>
+        <div style="font-family:monospace;font-size:.82rem;font-weight:700;color:#EEF2FF;white-space:nowrap">${fmt(c.total_sales)}</div>
+      </div>
+    `).join('')
+    : '<div style="color:#6B8CAE;font-size:.85rem;padding:16px 0;">No sales data yet</div>';
+
+  // Recent invoices
+  const statusClass = { DRAFT:'pill-draft', SENT:'pill-sent', PAID:'pill-paid', OVERDUE:'pill-overdue', VOID:'pill-void' };
+  document.getElementById('recent-invoices').innerHTML = (recent_invoices || []).length
+    ? recent_invoices.map(inv => `
+      <div class="inv-row">
+        <span style="color:#EEF2FF;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${inv.customer_name || 'Unknown'}</span>
+        <span style="font-family:monospace;font-weight:700">${fmt(inv.total)}</span>
+        <span style="color:#6B8CAE">${inv.due_date || '—'}</span>
+        <span class="status-pill ${statusClass[inv.status] || 'pill-draft'}">${inv.status}</span>
+      </div>
+    `).join('')
+    : '<div style="color:#6B8CAE;font-size:.85rem;padding:16px 0;">No invoices yet</div>';
+}
+
+async function loadAiInsights() {
+  const entityId = document.getElementById('entity-sel').value;
+  if (!entityId) { alert('Please select an entity first.'); return; }
+  const el = document.getElementById('ai-insights');
+  el.innerHTML = '<div><span class="spin"></span> Generating insights…</div>';
+  const resp = await fetch(`/api/accounting/entities/${entityId}/agent/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: 'Give me 4 key financial insights about this entity right now. Focus on AR, cash position, expense trends, and any anomalies. Format as: emoji + bold title + one sentence explanation. Keep it brief and actionable.' }]
+    })
+  });
+  const data = await resp.json();
+  const text = data.response || 'Unable to generate insights.';
+  // Parse into cards
+  const lines = text.split('\n').filter(l => l.trim());
+  el.innerHTML = lines.map(line => `
+    <div class="ai-insight">
+      <div class="ai-body">${line.replace(/\*\*(.+?)\*\*/g, '<strong style="color:#EEF2FF">$1</strong>')}</div>
+    </div>
+  `).join('');
+}
+
+loadEntities();
+</script>
+</body>
+</html>

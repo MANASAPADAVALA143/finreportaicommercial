@@ -7,6 +7,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 app.use('/api/onboarding', require('./routes/onboarding'));
+app.use('/api/accounting', require('./routes/accounting'));
 
 const SYSTEM_PROMPT = `You are a senior IFRS financial reporting expert at a Big 4 
 accounting firm with 20 years of experience.

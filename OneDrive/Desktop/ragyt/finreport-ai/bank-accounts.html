@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>FinReport AI • Bank Accounts</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .entity-sel,.fg-select{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:7px 12px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-select option,.entity-sel option{background:#0D1B2E;}
+    .fg-input{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 12px;font-family:inherit;font-size:.88rem;outline:none;width:100%;box-sizing:border-box;}
+    .fg-input:focus,.fg-select:focus{border-color:#2DD4CF;}
+    .fg-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#6B8CAE;font-weight:700;display:block;margin-bottom:5px;}
+    .form-group{display:flex;flex-direction:column;gap:4px;}
+    .bank-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:24px;}
+    .bank-card{background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:22px;cursor:pointer;transition:.2s;position:relative;overflow:hidden;}
+    .bank-card:hover{border-color:rgba(45,212,207,.35);}
+    .bank-card.selected{border-color:#2DD4CF;background:rgba(45,212,207,.04);}
+    .bank-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#2DD4CF,#A78BFA);}
+    .bank-name{font-size:1rem;font-weight:800;color:#EEF2FF;margin-bottom:2px;}
+    .bank-num{font-family:'JetBrains Mono',monospace;font-size:.8rem;color:#6B8CAE;margin-bottom:14px;}
+    .bank-balance{font-family:'JetBrains Mono',monospace;font-size:1.8rem;font-weight:800;color:#2DD4CF;}
+    .bank-currency{font-size:.78rem;color:#6B8CAE;margin-top:2px;}
+    .bank-type-badge{position:absolute;top:16px;right:16px;font-size:.68rem;font-weight:700;text-transform:uppercase;padding:3px 9px;border-radius:999px;background:rgba(167,139,250,.12);color:#A78BFA;}
+    .txn-table{width:100%;border-collapse:collapse;}
+    .txn-table th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.07);}
+    .txn-table td{padding:9px 14px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.83rem;color:#CBD5E1;vertical-align:middle;}
+    .txn-table tr:hover td{background:rgba(255,255,255,.02);}
+    .match-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.65rem;font-weight:700;text-transform:uppercase;}
+    .pill-UNMATCHED{background:rgba(251,146,60,.12);color:#FB923C;}
+    .pill-MATCHED{background:rgba(52,211,153,.12);color:#34D399;}
+    .pill-MANUAL{background:rgba(107,140,174,.12);color:#6B8CAE;}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
+    .modal{background:#0F1E35;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:28px;width:500px;max-width:98vw;}
+    .modal h3{font-size:1.1rem;font-weight:800;color:#EEF2FF;margin-bottom:18px;}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .full{grid-column:1/-1;}
+    .btn-primary{background:linear-gradient(135deg,#2DD4CF,#A78BFA);border:none;color:#071018;padding:10px 22px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:800;cursor:pointer;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.1);color:#6B8CAE;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:700;cursor:pointer;}
+    .btn-sm{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#94A3B8;border-radius:6px;padding:3px 9px;font-size:.73rem;font-weight:700;cursor:pointer;font-family:inherit;}
+    .section-label{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#6B8CAE;margin-bottom:10px;}
+    .import-zone{border:2px dashed rgba(45,212,207,.3);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:.2s;background:rgba(45,212,207,.02);margin-bottom:14px;}
+    .import-zone:hover{border-color:#2DD4CF;background:rgba(45,212,207,.05);}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a class="active" href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;"><div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div><div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div></div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div><div style="font-size:20px;font-weight:700;">Bank Accounts</div><div class="meta">Transactions · Import · AI Matching & Reconciliation</div></div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadBanks()"></select>
+        <button class="btn-cta" onclick="openBankModal()">+ Add Bank</button>
+        <button class="btn-cta" style="background:rgba(167,139,250,.2);color:#A78BFA;border:1px solid rgba(167,139,250,.3);" onclick="runMatching()">🤖 AI Match</button>
+      </div>
+    </div>
+
+    <!-- Bank cards -->
+    <div class="bank-grid" id="bank-grid">
+      <div style="color:#6B8CAE;font-size:.88rem;padding:20px;">Select an entity to load bank accounts</div>
+    </div>
+
+    <!-- Transactions panel -->
+    <div id="txn-panel" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="section-label" id="txn-bank-label">Transactions</div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="openTxnModal()" style="background:rgba(45,212,207,.1);border:1px solid rgba(45,212,207,.25);color:#2DD4CF;border-radius:8px;padding:6px 14px;font-family:inherit;font-weight:700;font-size:.82rem;cursor:pointer;">+ Add Transaction</button>
+          <button onclick="document.getElementById('csv-import').click()" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#94A3B8;border-radius:8px;padding:6px 14px;font-family:inherit;font-weight:700;font-size:.82rem;cursor:pointer;">📂 Import CSV</button>
+          <input type="file" id="csv-import" style="display:none" accept=".csv" onchange="importCSV(this)"/>
+        </div>
+      </div>
+      <div style="background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;overflow:hidden;">
+        <table class="txn-table">
+          <thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Reference</th><th>AI Category</th><th>Match</th></tr></thead>
+          <tbody id="txn-tbody"><tr><td colspan="6" style="text-align:center;padding:24px;color:#6B8CAE;">Select a bank account above</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Add Bank Modal -->
+<div class="modal-bg" id="bank-modal" style="display:none" onclick="if(event.target===this)closeBankModal()">
+  <div class="modal">
+    <h3>Add Bank Account</h3>
+    <div class="grid2">
+      <div class="form-group full"><label class="fg-label">Bank Name</label><input class="fg-input" id="b-name" placeholder="HSBC, Chase, Barclays, ANZ…"/></div>
+      <div class="form-group"><label class="fg-label">Account Number</label><input class="fg-input" id="b-num" placeholder="•••• 1234"/></div>
+      <div class="form-group"><label class="fg-label">Account Type</label>
+        <select class="fg-select" id="b-type" style="background:#0B162A;">
+          <option value="CHECKING">Checking / Current</option>
+          <option value="SAVINGS">Savings</option>
+          <option value="CREDIT_CARD">Credit Card</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="fg-label">Currency</label>
+        <select class="fg-select" id="b-currency" style="background:#0B162A;">
+          <option value="USD">USD</option><option value="GBP">GBP</option><option value="AUD">AUD</option>
+          <option value="EUR">EUR</option><option value="SGD">SGD</option><option value="INR">INR</option><option value="AED">AED</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="fg-label">Opening Balance</label><input class="fg-input" id="b-balance" type="number" step="0.01" placeholder="0.00"/></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeBankModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveBank()" style="margin-left:auto;">Add Bank Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Transaction Modal -->
+<div class="modal-bg" id="txn-modal" style="display:none" onclick="if(event.target===this)closeTxnModal()">
+  <div class="modal">
+    <h3>Add Transaction</h3>
+    <div class="grid2">
+      <div class="form-group"><label class="fg-label">Date</label><input class="fg-input" id="t-date" type="date"/></div>
+      <div class="form-group"><label class="fg-label">Amount (+ credit, - debit)</label><input class="fg-input" id="t-amount" type="number" step="0.01" placeholder="-250.00"/></div>
+      <div class="form-group full"><label class="fg-label">Description</label><input class="fg-input" id="t-desc" placeholder="Amazon Web Services, Salary payment…"/></div>
+      <div class="form-group"><label class="fg-label">Reference</label><input class="fg-input" id="t-ref" placeholder="TXN-001"/></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeTxnModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveTxn()" style="margin-left:auto;">Add Transaction</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedBankId=null;
+
+async function loadEntities(){
+  const resp=await fetch('/api/accounting/entities');
+  const data=await resp.json();
+  const sel=document.getElementById('entity-sel');
+  sel.innerHTML='<option value="">Select entity…</option>';
+  for(const e of(data.entities||[]))sel.innerHTML+=`<option value="${e.id}">${e.name} (${e.country})</option>`;
+  const s=localStorage.getItem('acc_entity_id');
+  if(s){sel.value=s;loadBanks();}
+}
+
+async function loadBanks(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid)return;
+  localStorage.setItem('acc_entity_id',eid);
+  const resp=await fetch(`/api/accounting/entities/${eid}/bank-accounts`);
+  const data=await resp.json();
+  const accounts=data.accounts||[];
+  const grid=document.getElementById('bank-grid');
+  if(!accounts.length){grid.innerHTML='<div style="color:#6B8CAE;font-size:.88rem;padding:20px;">No bank accounts yet. Add one to get started.</div>';document.getElementById('txn-panel').style.display='none';return;}
+  const typeLabel={CHECKING:'Checking',SAVINGS:'Savings',CREDIT_CARD:'Credit Card'};
+  const typeIcon={CHECKING:'🏦',SAVINGS:'💰',CREDIT_CARD:'💳'};
+  grid.innerHTML=accounts.map(a=>`
+    <div class="bank-card ${selectedBankId===a.id?'selected':''}" onclick="selectBank(${a.id},'${a.bank_name}')">
+      <span class="bank-type-badge">${typeLabel[a.account_type]||a.account_type}</span>
+      <div class="bank-name">${typeIcon[a.account_type]||'🏦'} ${a.bank_name}</div>
+      <div class="bank-num">${a.account_number?'•••• '+a.account_number.slice(-4):'No account number'}</div>
+      <div class="bank-balance">${a.currency} ${(a.current_balance||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+      <div class="bank-currency">${a.currency} · ${a.last_reconciled_date?'Reconciled '+a.last_reconciled_date:'Not reconciled'}</div>
+    </div>
+  `).join('');
+  if(selectedBankId){loadTransactions(selectedBankId);}
+}
+
+async function selectBank(id,name){
+  selectedBankId=id;
+  document.getElementById('txn-bank-label').textContent=`${name} — Transactions`;
+  document.getElementById('txn-panel').style.display='block';
+  loadBanks();
+  loadTransactions(id);
+}
+
+async function loadTransactions(bankId){
+  const resp=await fetch(`/api/accounting/entities/${document.getElementById('entity-sel').value}/bank-accounts/${bankId}/transactions`);
+  const data=await resp.json();
+  const txns=data.transactions||[];
+  document.getElementById('txn-tbody').innerHTML=txns.length?txns.map(t=>`
+    <tr>
+      <td style="font-size:.82rem;">${t.transaction_date||'—'}</td>
+      <td style="color:#EEF2FF;font-weight:500;">${t.description||'—'}</td>
+      <td style="font-family:monospace;font-weight:700;${t.amount>=0?'color:#34D399;':'color:#F87171;'}">${t.amount>=0?'+':''}${(t.amount||0).toFixed(2)}</td>
+      <td style="font-size:.78rem;color:#6B8CAE;">${t.reference||'—'}</td>
+      <td style="font-size:.75rem;color:#A78BFA;">${t.ai_category?'🤖 '+t.ai_category:''}</td>
+      <td><span class="match-pill pill-${t.match_status}">${t.match_status}</span></td>
+    </tr>
+  `).join(''):'<tr><td colspan="6" style="text-align:center;padding:24px;color:#6B8CAE;">No transactions yet. Add one or import a CSV.</td></tr>';
+}
+
+function openBankModal(){document.getElementById('bank-modal').style.display='flex';}
+function closeBankModal(){document.getElementById('bank-modal').style.display='none';}
+
+async function saveBank(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid){alert('Select entity first.');return;}
+  const body={bank_name:document.getElementById('b-name').value.trim(),account_number:document.getElementById('b-num').value,account_type:document.getElementById('b-type').value,currency:document.getElementById('b-currency').value,current_balance:parseFloat(document.getElementById('b-balance').value)||0};
+  if(!body.bank_name){alert('Bank name required.');return;}
+  await fetch(`/api/accounting/entities/${eid}/bank-accounts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  closeBankModal();loadBanks();
+}
+
+function openTxnModal(){
+  if(!selectedBankId){alert('Select a bank account first.');return;}
+  document.getElementById('txn-modal').style.display='flex';
+  document.getElementById('t-date').value=new Date().toISOString().slice(0,10);
+}
+function closeTxnModal(){document.getElementById('txn-modal').style.display='none';}
+
+async function saveTxn(){
+  const eid=document.getElementById('entity-sel').value;
+  const body={transaction_date:document.getElementById('t-date').value,description:document.getElementById('t-desc').value,amount:parseFloat(document.getElementById('t-amount').value)||0,reference:document.getElementById('t-ref').value};
+  await fetch(`/api/accounting/entities/${eid}/bank-accounts/${selectedBankId}/transactions`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  closeTxnModal();loadTransactions(selectedBankId);
+}
+
+async function importCSV(input){
+  const file=input.files[0];if(!file)return;
+  const eid=document.getElementById('entity-sel').value;
+  const text=await file.text();
+  const lines=text.split('\n').filter(l=>l.trim());
+  const rows=[];
+  for(let i=1;i<lines.length;i++){
+    const cols=lines[i].split(',').map(c=>c.trim().replace(/^"|"$/g,''));
+    if(cols.length>=3){rows.push({date:cols[0],description:cols[1],amount:parseFloat(cols[2])||0,reference:cols[3]||''});}
+  }
+  if(!rows.length){alert('No rows parsed. Ensure CSV format: date, description, amount, reference');return;}
+  await fetch(`/api/accounting/entities/${eid}/bank-accounts/${selectedBankId}/import`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows})});
+  alert(`✓ Imported ${rows.length} transactions`);
+  loadTransactions(selectedBankId);
+}
+
+async function runMatching(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid){alert('Select entity first.');return;}
+  const resp=await fetch(`/api/accounting/entities/${eid}/agent/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'BANK_MATCHING'})});
+  const data=await resp.json();
+  alert(`🤖 Bank matching agent started (Task #${data.task_id}). High-confidence matches are done automatically. Check Decision Queue for uncertain matches.`);
+}
+
+loadEntities();
+</script>
+</body>
+</html>

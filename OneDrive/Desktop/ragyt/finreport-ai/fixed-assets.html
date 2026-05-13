@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>FinReport AI • Fixed Assets</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .entity-sel,.fg-select{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:7px 12px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-select option,.entity-sel option{background:#0D1B2E;}
+    .fg-input{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 12px;font-family:inherit;font-size:.88rem;outline:none;width:100%;box-sizing:border-box;}
+    .fg-input:focus,.fg-select:focus{border-color:#2DD4CF;}
+    .fg-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#6B8CAE;font-weight:700;display:block;margin-bottom:5px;}
+    .form-group{display:flex;flex-direction:column;gap:4px;}
+    .asset-table{width:100%;border-collapse:collapse;}
+    .asset-table th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.07);}
+    .asset-table td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.85rem;color:#CBD5E1;vertical-align:middle;}
+    .asset-table tr:hover td{background:rgba(255,255,255,.02);}
+    .status-pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:.68rem;font-weight:700;text-transform:uppercase;}
+    .pill-ACTIVE{background:rgba(52,211,153,.15);color:#34D399;}
+    .pill-DISPOSED{background:rgba(248,113,113,.15);color:#F87171;}
+    .pill-WRITTEN_OFF{background:rgba(107,140,174,.15);color:#6B8CAE;}
+    .type-icon{font-size:1rem;margin-right:6px;}
+    .btn-sm{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#94A3B8;border-radius:6px;padding:3px 9px;font-size:.73rem;font-weight:700;cursor:pointer;font-family:inherit;}
+    .btn-sm:hover{color:#EEF2FF;}
+    .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
+    .kpi-sm{background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:14px 16px;}
+    .kpi-sm .lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;margin-bottom:4px;}
+    .kpi-sm .val{font-family:'JetBrains Mono',monospace;font-size:1.4rem;font-weight:800;color:#EEF2FF;}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
+    .modal{background:#0F1E35;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:28px;width:560px;max-width:98vw;}
+    .modal h3{font-size:1.1rem;font-weight:800;color:#EEF2FF;margin-bottom:18px;}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .full{grid-column:1/-1;}
+    .btn-primary{background:linear-gradient(135deg,#2DD4CF,#A78BFA);border:none;color:#071018;padding:10px 22px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:800;cursor:pointer;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.1);color:#6B8CAE;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:700;cursor:pointer;}
+    .dep-bar{background:rgba(255,255,255,.06);border-radius:999px;height:5px;overflow:hidden;margin-top:3px;}
+    .dep-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#2DD4CF,#A78BFA);}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a class="active" href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;"><div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div><div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div></div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div><div style="font-size:20px;font-weight:700;">Fixed Assets</div><div class="meta">Asset register · SLM/WDV depreciation · Disposal tracking</div></div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadAssets()"></select>
+        <button class="btn-cta" onclick="openModal()">+ Add Asset</button>
+        <button class="btn-cta" style="background:rgba(167,139,250,.2);color:#A78BFA;border:1px solid rgba(167,139,250,.3);" onclick="runDepreciation()">🤖 Run Depreciation</button>
+      </div>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi-sm"><div class="lbl">Total Assets</div><div class="val" id="k-count">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Cost Value</div><div class="val" id="k-cost">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Accum. Depreciation</div><div class="val" id="k-dep" style="color:#F87171;">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Net Book Value</div><div class="val" id="k-nbv" style="color:#34D399;">—</div></div>
+    </div>
+
+    <div style="background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;overflow:hidden;">
+      <table class="asset-table">
+        <thead><tr><th>Asset #</th><th>Name</th><th>Type</th><th>Purchase Date</th><th>Cost</th><th>Accum. Dep.</th><th>NBV</th><th>Method</th><th>Status</th><th></th></tr></thead>
+        <tbody id="asset-tbody"><tr><td colspan="10" style="text-align:center;padding:32px;color:#6B8CAE;">Select an entity to load assets</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<div class="modal-bg" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3>Add Fixed Asset</h3>
+    <div class="grid2">
+      <div class="form-group full"><label class="fg-label">Asset Name</label><input class="fg-input" id="m-name" placeholder="MacBook Pro 16&quot;, Office Fit-out, Company Van…"/></div>
+      <div class="form-group"><label class="fg-label">Asset Type</label>
+        <select class="fg-select" id="m-type" style="background:#0B162A;">
+          <option value="Equipment">Equipment</option>
+          <option value="Vehicle">Vehicle</option>
+          <option value="Property">Property / Building</option>
+          <option value="Furniture">Furniture & Fixtures</option>
+          <option value="Intangible">Intangible Asset</option>
+          <option value="IT">IT & Computers</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="fg-label">Purchase Date</label><input class="fg-input" id="m-date" type="date"/></div>
+      <div class="form-group"><label class="fg-label">Purchase Price</label><input class="fg-input" id="m-price" type="number" step="0.01" placeholder="0.00" oninput="calcNBV()"/></div>
+      <div class="form-group"><label class="fg-label">Useful Life (years)</label><input class="fg-input" id="m-life" type="number" value="5" oninput="calcNBV()"/></div>
+      <div class="form-group"><label class="fg-label">Depreciation Method</label>
+        <select class="fg-select" id="m-method" style="background:#0B162A;">
+          <option value="SLM">Straight Line (SLM)</option>
+          <option value="WDV">Written Down Value (WDV)</option>
+        </select>
+      </div>
+      <div class="form-group full" id="nbv-preview" style="display:none;">
+        <div style="background:#0D1B2E;border:1px solid rgba(45,212,207,.2);border-radius:9px;padding:12px;font-size:.83rem;">
+          <div style="display:flex;justify-content:space-between;color:#EEF2FF;margin-bottom:4px;"><span>Annual Depreciation:</span><span id="annual-dep" style="font-family:monospace;font-weight:700;color:#2DD4CF;">—</span></div>
+          <div style="display:flex;justify-content:space-between;color:#EEF2FF;"><span>Monthly Depreciation:</span><span id="monthly-dep" style="font-family:monospace;font-weight:700;color:#2DD4CF;">—</span></div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveAsset()" style="margin-left:auto;">Add Asset</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allAssets=[];
+const fmt=n=>'$'+(n||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+const typeIcon={Equipment:'🖥️',Vehicle:'🚗',Property:'🏢',Furniture:'🪑',Intangible:'💡',IT:'💻'};
+
+async function loadEntities(){
+  const resp=await fetch('/api/accounting/entities');
+  const data=await resp.json();
+  const sel=document.getElementById('entity-sel');
+  sel.innerHTML='<option value="">Select entity…</option>';
+  for(const e of(data.entities||[]))sel.innerHTML+=`<option value="${e.id}">${e.name} (${e.country})</option>`;
+  const s=localStorage.getItem('acc_entity_id');
+  if(s){sel.value=s;loadAssets();}
+}
+
+async function loadAssets(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid)return;
+  localStorage.setItem('acc_entity_id',eid);
+  const resp=await fetch(`/api/accounting/entities/${eid}/fixed-assets`);
+  const data=await resp.json();
+  allAssets=data.assets||[];
+  updateKPIs();
+  renderAssets();
+}
+
+function updateKPIs(){
+  const active=allAssets.filter(a=>a.status==='ACTIVE');
+  document.getElementById('k-count').textContent=active.length;
+  document.getElementById('k-cost').textContent=fmt(active.reduce((s,a)=>s+(a.purchase_price||0),0));
+  document.getElementById('k-dep').textContent=fmt(active.reduce((s,a)=>s+(a.accumulated_depreciation||0),0));
+  document.getElementById('k-nbv').textContent=fmt(active.reduce((s,a)=>s+(a.net_book_value||0),0));
+}
+
+function renderAssets(){
+  document.getElementById('asset-tbody').innerHTML=allAssets.length?allAssets.map(a=>{
+    const depPct=a.purchase_price>0?Math.min(100,((a.accumulated_depreciation||0)/a.purchase_price)*100):0;
+    return `<tr>
+      <td style="font-family:monospace;font-weight:700;color:#2DD4CF;">${a.asset_number}</td>
+      <td style="font-weight:600;color:#EEF2FF;">${typeIcon[a.asset_type]||'📦'} ${a.name}</td>
+      <td style="font-size:.78rem;color:#94A3B8;">${a.asset_type}</td>
+      <td style="font-size:.82rem;">${a.purchase_date||'—'}</td>
+      <td style="font-family:monospace;">${fmt(a.purchase_price)}</td>
+      <td>
+        <div style="font-family:monospace;font-size:.82rem;color:#F87171;">${fmt(a.accumulated_depreciation)}</div>
+        <div class="dep-bar"><div class="dep-fill" style="width:${depPct.toFixed(0)}%"></div></div>
+      </td>
+      <td style="font-family:monospace;font-weight:700;color:#34D399;">${fmt(a.net_book_value)}</td>
+      <td style="font-size:.75rem;color:#6B8CAE;">${a.depreciation_method}</td>
+      <td><span class="status-pill pill-${a.status}">${a.status}</span></td>
+      <td>${a.status==='ACTIVE'?`<button class="btn-sm" onclick="disposeAsset(${a.id})">Dispose</button>`:''}</td>
+    </tr>`;
+  }).join(''):'<tr><td colspan="10" style="text-align:center;padding:24px;color:#6B8CAE;">No assets found</td></tr>';
+}
+
+function calcNBV(){
+  const price=parseFloat(document.getElementById('m-price').value)||0;
+  const life=parseInt(document.getElementById('m-life').value)||5;
+  if(price>0&&life>0){
+    const annual=price/life;
+    const monthly=annual/12;
+    document.getElementById('nbv-preview').style.display='block';
+    document.getElementById('annual-dep').textContent='$'+annual.toFixed(2)+'/yr';
+    document.getElementById('monthly-dep').textContent='$'+monthly.toFixed(2)+'/mo';
+  }else{document.getElementById('nbv-preview').style.display='none';}
+}
+
+function openModal(){document.getElementById('modal').style.display='flex';document.getElementById('m-date').value=new Date().toISOString().slice(0,10);}
+function closeModal(){document.getElementById('modal').style.display='none';}
+
+async function saveAsset(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid){alert('Select entity first.');return;}
+  const life=parseInt(document.getElementById('m-life').value)||5;
+  const body={name:document.getElementById('m-name').value.trim(),asset_type:document.getElementById('m-type').value,purchase_date:document.getElementById('m-date').value,purchase_price:parseFloat(document.getElementById('m-price').value)||0,useful_life_years:life,depreciation_method:document.getElementById('m-method').value};
+  if(!body.name||!body.purchase_price){alert('Name and price required.');return;}
+  const resp=await fetch(`/api/accounting/entities/${eid}/fixed-assets`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!resp.ok){const d=await resp.json();alert('Error: '+d.error);return;}
+  closeModal();loadAssets();
+}
+
+async function disposeAsset(id){
+  const eid=document.getElementById('entity-sel').value;
+  const amt=prompt('Disposal proceeds (enter 0 if written off):');
+  if(amt===null)return;
+  const date=new Date().toISOString().slice(0,10);
+  await fetch(`/api/accounting/entities/${eid}/fixed-assets/${id}/dispose`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({disposal_date:date,disposal_amount:parseFloat(amt)||0})});
+  loadAssets();
+}
+
+async function runDepreciation(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid){alert('Select entity first.');return;}
+  const period=new Date().toISOString().slice(0,7);
+  const resp=await fetch(`/api/accounting/entities/${eid}/agent/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_type:'DEPRECIATION_CALC'})});
+  const data=await resp.json();
+  alert(`🤖 Depreciation calculated (Task #${data.task_id}). Check Decision Queue — journal entries require your approval before posting.`);
+}
+
+loadEntities();
+</script>
+</body>
+</html>

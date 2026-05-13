@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>FinReport AI • Invoices</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .entity-sel,.fg-select{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:7px 12px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-select option,.entity-sel option{background:#0D1B2E;}
+    .fg-input{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 12px;font-family:inherit;font-size:.88rem;outline:none;width:100%;box-sizing:border-box;}
+    .fg-input:focus,.fg-select:focus{border-color:#2DD4CF;box-shadow:0 0 0 3px rgba(45,212,207,.1);}
+    .fg-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#6B8CAE;font-weight:700;display:block;margin-bottom:5px;}
+    .form-group{display:flex;flex-direction:column;gap:4px;}
+    .tab-row{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;}
+    .tab-btn{background:transparent;border:1px solid rgba(255,255,255,.08);color:#6B8CAE;padding:6px 14px;border-radius:8px;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:700;transition:.15s;}
+    .tab-btn.active{background:rgba(45,212,207,.1);color:#2DD4CF;border-color:rgba(45,212,207,.3);}
+    .inv-table{width:100%;border-collapse:collapse;}
+    .inv-table th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.07);}
+    .inv-table td{padding:11px 14px;border-bottom:1px solid rgba(255,255,255,.04);font-size:.85rem;color:#CBD5E1;vertical-align:middle;}
+    .inv-table tr:hover td{background:rgba(255,255,255,.02);}
+    .status-pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:.68rem;font-weight:700;text-transform:uppercase;}
+    .pill-DRAFT{background:rgba(107,140,174,.15);color:#6B8CAE;}
+    .pill-SENT{background:rgba(45,212,207,.15);color:#2DD4CF;}
+    .pill-PAID{background:rgba(52,211,153,.15);color:#34D399;}
+    .pill-OVERDUE{background:rgba(248,113,113,.15);color:#F87171;}
+    .pill-VOID{background:rgba(100,116,139,.15);color:#64748B;}
+    .pill-QUOTE{background:rgba(167,139,250,.15);color:#A78BFA;}
+    .ai-badge{font-size:.65rem;background:rgba(167,139,250,.15);color:#A78BFA;border-radius:999px;padding:2px 6px;margin-left:4px;}
+    .btn-sm{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:#94A3B8;border-radius:6px;padding:3px 9px;font-size:.73rem;font-weight:700;cursor:pointer;font-family:inherit;}
+    .btn-sm:hover{color:#EEF2FF;}
+    .btn-sm.success{background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.2);color:#34D399;}
+    .btn-sm.danger{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.2);color:#F87171;}
+    .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
+    .kpi-sm{background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:14px 16px;}
+    .kpi-sm .lbl{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;margin-bottom:4px;}
+    .kpi-sm .val{font-family:'JetBrains Mono',monospace;font-size:1.4rem;font-weight:800;color:#EEF2FF;}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:flex-start;justify-content:center;z-index:100;padding:40px 20px;overflow-y:auto;}
+    .modal{background:#0F1E35;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:28px;width:680px;max-width:98vw;}
+    .modal h3{font-size:1.1rem;font-weight:800;color:#EEF2FF;margin-bottom:18px;}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+    .full{grid-column:1/-1;}
+    .btn-primary{background:linear-gradient(135deg,#2DD4CF,#A78BFA);border:none;color:#071018;padding:10px 22px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:800;cursor:pointer;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.1);color:#6B8CAE;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:700;cursor:pointer;}
+    .line-item-row{display:grid;grid-template-columns:3fr 60px 90px 70px 90px 30px;gap:8px;align-items:center;margin-bottom:8px;}
+    .line-item-row input{background:#0B162A;border:1px solid rgba(255,255,255,.08);color:#EEF2FF;border-radius:7px;padding:7px 9px;font-family:inherit;font-size:.83rem;outline:none;width:100%;box-sizing:border-box;}
+    .line-item-row input:focus{border-color:#2DD4CF;}
+    .li-header{display:grid;grid-template-columns:3fr 60px 90px 70px 90px 30px;gap:8px;padding:4px 0;margin-bottom:4px;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:#475569;font-weight:700;}
+    .total-section{background:#0D1B2E;border-radius:10px;padding:14px;margin-top:16px;}
+    .total-row{display:flex;justify-content:space-between;padding:5px 0;font-size:.88rem;color:#94A3B8;}
+    .total-row.grand{font-weight:800;font-size:1rem;color:#EEF2FF;border-top:1px solid rgba(255,255,255,.1);padding-top:10px;margin-top:4px;}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a href="tax-rates.html">🧾 Tax Rates</a>
+      <a class="active" href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;"><div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div><div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div></div>
+  </aside>
+
+  <main class="main">
+    <div class="top-header">
+      <div><div style="font-size:20px;font-weight:700;">Invoices & Sales</div><div class="meta">Quotes · Invoices · Credit Notes · Receipts</div></div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadInvoices()"></select>
+        <button class="btn-cta" onclick="openModal('INVOICE')">+ New Invoice</button>
+        <button class="btn-cta" style="background:rgba(167,139,250,.2);color:#A78BFA;border:1px solid rgba(167,139,250,.3);" onclick="openModal('QUOTE')">+ Quote</button>
+        <button class="btn-cta" style="background:rgba(248,113,113,.12);color:#F87171;border:1px solid rgba(248,113,113,.25);" onclick="openModal('CREDIT_NOTE')">+ Credit Note</button>
+      </div>
+    </div>
+
+    <div class="kpi-row" id="kpi-row">
+      <div class="kpi-sm"><div class="lbl">Total Invoiced</div><div class="val" id="k-total">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Outstanding (AR)</div><div class="val" id="k-ar">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Overdue</div><div class="val" id="k-overdue" style="color:#F87171;">—</div></div>
+      <div class="kpi-sm"><div class="lbl">Paid YTD</div><div class="val" id="k-paid" style="color:#34D399;">—</div></div>
+    </div>
+
+    <div class="tab-row">
+      <button class="tab-btn active" onclick="setTab('',this)">All</button>
+      <button class="tab-btn" onclick="setTab('DRAFT',this)">Draft</button>
+      <button class="tab-btn" onclick="setTab('SENT',this)">Sent</button>
+      <button class="tab-btn" onclick="setTab('PAID',this)">Paid</button>
+      <button class="tab-btn" onclick="setTab('OVERDUE',this)">Overdue</button>
+      <button class="tab-btn" onclick="setInvType('QUOTE',this)">Quotes</button>
+      <button class="tab-btn" onclick="setInvType('CREDIT_NOTE',this)">Credit Notes</button>
+    </div>
+
+    <div style="background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;overflow:hidden;">
+      <table class="inv-table">
+        <thead><tr><th>Number</th><th>Customer</th><th>Type</th><th>Issue Date</th><th>Due Date</th><th>Total</th><th>Paid</th><th>Status</th><th></th></tr></thead>
+        <tbody id="inv-tbody"><tr><td colspan="9" style="text-align:center;padding:32px;color:#6B8CAE;">Select an entity to load invoices</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- Invoice Modal -->
+<div class="modal-bg" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3 id="modal-title">New Invoice</h3>
+    <div class="grid2">
+      <div class="form-group"><label class="fg-label">Customer</label>
+        <select class="fg-select" id="m-customer" style="background:#0B162A;"></select>
+      </div>
+      <div class="form-group"><label class="fg-label">Currency</label>
+        <select class="fg-select" id="m-currency" style="background:#0B162A;">
+          <option value="USD">USD</option><option value="GBP">GBP</option><option value="AUD">AUD</option>
+          <option value="EUR">EUR</option><option value="SGD">SGD</option><option value="INR">INR</option><option value="AED">AED</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="fg-label">Issue Date</label><input class="fg-input" id="m-issue" type="date"/></div>
+      <div class="form-group"><label class="fg-label">Due Date</label><input class="fg-input" id="m-due" type="date"/></div>
+      <div class="form-group full"><label class="fg-label">Reference</label><input class="fg-input" id="m-ref" placeholder="PO number, project code…"/></div>
+    </div>
+
+    <div style="margin-top:18px;">
+      <div class="li-header"><span>Description</span><span>Qty</span><span>Unit Price</span><span>Tax %</span><span>Amount</span><span></span></div>
+      <div id="line-items"></div>
+      <button onclick="addLine()" style="background:rgba(45,212,207,.08);border:1px solid rgba(45,212,207,.2);color:#2DD4CF;border-radius:8px;padding:7px 16px;font-family:inherit;font-size:.82rem;font-weight:700;cursor:pointer;margin-top:6px;">+ Add Line</button>
+    </div>
+
+    <div class="total-section">
+      <div class="total-row"><span>Subtotal</span><span id="t-subtotal">$0.00</span></div>
+      <div class="total-row"><span>Tax</span><span id="t-tax">$0.00</span></div>
+      <div class="total-row grand"><span>Total</span><span id="t-total">$0.00</span></div>
+    </div>
+
+    <div class="form-group full" style="margin-top:14px;"><label class="fg-label">Notes</label><textarea class="fg-input" id="m-notes" rows="2" placeholder="Payment instructions, thank you note…" style="resize:vertical;"></textarea></div>
+
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveInvoice('DRAFT')" style="margin-left:auto;">Save as Draft</button>
+      <button class="btn-primary" onclick="saveInvoice('SENT')" style="background:linear-gradient(135deg,#34D399,#2DD4CF);">Save & Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let allInvoices=[], activeStatus='', activeType='INVOICE', invType='INVOICE';
+const fmt=n=>n>=1000000?'$'+(n/1e6).toFixed(2)+'M':n>=1000?'$'+(n/1e3).toFixed(1)+'K':'$'+(n||0).toFixed(2);
+
+async function loadEntities(){
+  const resp=await fetch('/api/accounting/entities');
+  const data=await resp.json();
+  const sel=document.getElementById('entity-sel');
+  sel.innerHTML='<option value="">Select entity…</option>';
+  for(const e of(data.entities||[]))sel.innerHTML+=`<option value="${e.id}">${e.name} (${e.country})</option>`;
+  const s=localStorage.getItem('acc_entity_id');
+  if(s){sel.value=s;loadInvoices();}
+}
+
+async function loadInvoices(){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid)return;
+  localStorage.setItem('acc_entity_id',eid);
+  const resp=await fetch(`/api/accounting/entities/${eid}/invoices`);
+  const data=await resp.json();
+  allInvoices=data.invoices||[];
+  updateKPIs();
+  renderInvoices();
+}
+
+function updateKPIs(){
+  const invoices=allInvoices.filter(i=>i.invoice_type==='INVOICE');
+  document.getElementById('k-total').textContent=fmt(invoices.reduce((s,i)=>s+i.total,0));
+  document.getElementById('k-ar').textContent=fmt(invoices.filter(i=>['SENT','OVERDUE'].includes(i.status)).reduce((s,i)=>s+i.amount_due,0));
+  document.getElementById('k-overdue').textContent=fmt(invoices.filter(i=>i.status==='OVERDUE').reduce((s,i)=>s+i.amount_due,0));
+  document.getElementById('k-paid').textContent=fmt(invoices.filter(i=>i.status==='PAID').reduce((s,i)=>s+i.total,0));
+}
+
+function setTab(status,el){
+  activeStatus=status;activeType='';
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  renderInvoices();
+}
+function setInvType(type,el){
+  activeType=type;activeStatus='';
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  renderInvoices();
+}
+
+function renderInvoices(){
+  const filtered=allInvoices.filter(i=>{
+    if(activeType)return i.invoice_type===activeType;
+    if(activeStatus)return i.status===activeStatus;
+    return true;
+  });
+  document.getElementById('inv-tbody').innerHTML=filtered.length?filtered.map(inv=>`
+    <tr>
+      <td style="font-family:monospace;font-weight:700;color:#2DD4CF;">${inv.invoice_number}${inv.agent_created?'<span class="ai-badge">AI</span>':''}</td>
+      <td style="font-weight:600;color:#EEF2FF;">${inv.customer_name||'—'}</td>
+      <td style="font-size:.75rem;color:#6B8CAE;">${inv.invoice_type}</td>
+      <td style="font-size:.82rem;">${inv.issue_date||'—'}</td>
+      <td style="font-size:.82rem;${inv.status==='OVERDUE'?'color:#F87171;':''};">${inv.due_date||'—'}</td>
+      <td style="font-family:monospace;font-weight:700;">${fmt(inv.total)}</td>
+      <td style="font-family:monospace;font-size:.82rem;color:#34D399;">${fmt(inv.amount_paid)}</td>
+      <td><span class="status-pill pill-${inv.status}">${inv.status}</span></td>
+      <td style="white-space:nowrap;">
+        ${inv.status==='DRAFT'?`<button class="btn-sm success" onclick="updateStatus(${inv.id},'SENT')">Send</button>`:''}
+        ${inv.status==='SENT'?`<button class="btn-sm" onclick="updateStatus(${inv.id},'PAID')">Mark Paid</button>`:''}
+        <button class="btn-sm danger" onclick="deleteInvoice(${inv.id})">✕</button>
+      </td>
+    </tr>
+  `).join(''):'<tr><td colspan="9" style="text-align:center;padding:24px;color:#6B8CAE;">No invoices found</td></tr>';
+}
+
+async function openModal(type){
+  invType=type;
+  document.getElementById('modal-title').textContent=type==='QUOTE'?'New Quote':type==='CREDIT_NOTE'?'New Credit Note':'New Invoice';
+  document.getElementById('modal').style.display='flex';
+  const eid=document.getElementById('entity-sel').value;
+  if(eid){
+    const resp=await fetch(`/api/accounting/entities/${eid}/contacts?contact_type=CUSTOMER`);
+    const data=await resp.json();
+    const sel=document.getElementById('m-customer');
+    sel.innerHTML='<option value="">Select customer…</option>';
+    for(const c of(data.contacts||[]))sel.innerHTML+=`<option value="${c.id}">${c.display_name}</option>`;
+  }
+  const today=new Date().toISOString().slice(0,10);
+  const due=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  document.getElementById('m-issue').value=today;
+  document.getElementById('m-due').value=due;
+  document.getElementById('line-items').innerHTML='';
+  addLine();
+  calcTotals();
+}
+function closeModal(){document.getElementById('modal').style.display='none';}
+
+let lineCount=0;
+function addLine(){
+  lineCount++;
+  const id=lineCount;
+  const div=document.createElement('div');
+  div.className='line-item-row';div.id='line-'+id;
+  div.innerHTML=`
+    <input placeholder="Description" oninput="calcTotals()"/>
+    <input type="number" value="1" min="0" oninput="calcTotals()"/>
+    <input type="number" value="0.00" step="0.01" oninput="calcTotals()"/>
+    <input type="number" value="0" step="0.01" oninput="calcTotals()"/>
+    <input type="number" readonly style="color:#2DD4CF;background:#0B1A2E;"/>
+    <button onclick="document.getElementById('line-${id}').remove();calcTotals()" style="background:rgba(248,113,113,.1);border:none;color:#F87171;border-radius:5px;cursor:pointer;padding:4px 7px;font-size:.8rem;">✕</button>
+  `;
+  document.getElementById('line-items').appendChild(div);
+}
+
+function calcTotals(){
+  let sub=0,tax=0;
+  document.querySelectorAll('.line-item-row').forEach(row=>{
+    const inputs=row.querySelectorAll('input');
+    const qty=parseFloat(inputs[1]?.value)||0;
+    const price=parseFloat(inputs[2]?.value)||0;
+    const taxRate=parseFloat(inputs[3]?.value)||0;
+    const amt=qty*price;
+    const taxAmt=amt*(taxRate/100);
+    if(inputs[4])inputs[4].value=amt.toFixed(2);
+    sub+=amt;tax+=taxAmt;
+  });
+  document.getElementById('t-subtotal').textContent='$'+sub.toFixed(2);
+  document.getElementById('t-tax').textContent='$'+tax.toFixed(2);
+  document.getElementById('t-total').textContent='$'+(sub+tax).toFixed(2);
+}
+
+async function saveInvoice(status){
+  const eid=document.getElementById('entity-sel').value;
+  if(!eid){alert('Select entity first.');return;}
+  const lines=[];
+  document.querySelectorAll('.line-item-row').forEach(row=>{
+    const inputs=row.querySelectorAll('input');
+    lines.push({description:inputs[0]?.value,quantity:parseFloat(inputs[1]?.value)||1,unit_price:parseFloat(inputs[2]?.value)||0,tax_rate:parseFloat(inputs[3]?.value)||0});
+  });
+  const body={invoice_type:invType,customer_id:document.getElementById('m-customer').value||null,status,issue_date:document.getElementById('m-issue').value,due_date:document.getElementById('m-due').value,currency:document.getElementById('m-currency').value,reference:document.getElementById('m-ref').value,notes:document.getElementById('m-notes').value,line_items:lines};
+  const resp=await fetch(`/api/accounting/entities/${eid}/invoices`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!resp.ok){const d=await resp.json();alert('Error: '+d.error);return;}
+  closeModal();loadInvoices();
+}
+
+async function updateStatus(id,status){
+  const eid=document.getElementById('entity-sel').value;
+  await fetch(`/api/accounting/entities/${eid}/invoices/${id}/status`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadInvoices();
+}
+
+async function deleteInvoice(id){
+  const eid=document.getElementById('entity-sel').value;
+  if(!confirm('Delete this invoice?'))return;
+  await fetch(`/api/accounting/entities/${eid}/invoices/${id}`,{method:'DELETE'});
+  loadInvoices();
+}
+
+loadEntities();
+</script>
+</body>
+</html>

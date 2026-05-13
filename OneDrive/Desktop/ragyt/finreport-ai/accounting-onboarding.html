@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinReport AI • Entity Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .wizard-layout { display:grid; grid-template-columns:260px 1fr; height:100vh; }
+    .wizard-sidebar { background:#070F1E; border-right:1px solid rgba(255,255,255,.08); padding:28px 20px; display:flex; flex-direction:column; gap:8px; }
+    .wizard-logo { font-size:1.1rem; font-weight:800; color:#EEF2FF; margin-bottom:24px; }
+    .wizard-logo span { color:#2DD4CF; }
+    .step-item { display:flex; align-items:center; gap:12px; padding:10px 12px; border-radius:10px; cursor:default; }
+    .step-item.active { background:rgba(45,212,207,.1); }
+    .step-item.done .step-num { background:#34D399; color:#0B1A0B; }
+    .step-num { width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,.08); display:grid; place-items:center; font-size:12px; font-weight:800; color:#6B8CAE; flex-shrink:0; transition:.2s; }
+    .step-item.active .step-num { background:#2DD4CF; color:#071018; }
+    .step-label { font-size:.85rem; font-weight:600; color:#6B8CAE; }
+    .step-item.active .step-label { color:#EEF2FF; }
+    .step-item.done .step-label { color:#34D399; }
+    .step-line { width:2px; height:20px; background:rgba(255,255,255,.06); margin-left:24px; }
+
+    .wizard-content { overflow-y:auto; background:#0B1220; }
+    .wizard-inner { max-width:720px; margin:0 auto; padding:48px 40px; }
+    .wizard-header { margin-bottom:32px; }
+    .wizard-header h1 { font-size:1.7rem; font-weight:800; color:#EEF2FF; margin-bottom:6px; }
+    .wizard-header p { color:#6B8CAE; font-size:.95rem; }
+
+    .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+    .form-group { display:flex; flex-direction:column; gap:6px; }
+    .form-group.full { grid-column:1/-1; }
+    label.fg-label { color:#6B8CAE; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+    .fg-input, .fg-select { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); color:#EEF2FF;
+      border-radius:8px; padding:10px 14px; font-family:'Plus Jakarta Sans',sans-serif; font-size:.9rem;
+      transition:.2s; outline:none; width:100%; box-sizing:border-box; }
+    .fg-input:focus, .fg-select:focus { border-color:#2DD4CF; box-shadow:0 0 0 3px rgba(45,212,207,.12); }
+    .fg-select option { background:#0D1B2E; }
+
+    .tax-info { background:rgba(45,212,207,.07); border:1px solid rgba(45,212,207,.2); border-radius:10px;
+      padding:14px 16px; margin-top:8px; font-size:.88rem; color:#7DD3D0; }
+
+    .choice-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:8px; }
+    .choice-card { background:#0D1B2E; border:1px solid rgba(255,255,255,.1); border-radius:12px;
+      padding:16px; cursor:pointer; transition:.2s; text-align:center; }
+    .choice-card:hover { border-color:rgba(45,212,207,.4); }
+    .choice-card.selected { border-color:#2DD4CF; background:rgba(45,212,207,.07); }
+    .choice-card .cc-icon { font-size:1.6rem; margin-bottom:8px; }
+    .choice-card .cc-label { font-size:.85rem; font-weight:700; color:#EEF2FF; }
+    .choice-card .cc-desc { font-size:.75rem; color:#6B8CAE; margin-top:4px; }
+
+    .coa-choice-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+    .coa-card { background:#0D1B2E; border:2px solid rgba(255,255,255,.08); border-radius:14px;
+      padding:22px; cursor:pointer; transition:.2s; }
+    .coa-card:hover { border-color:rgba(45,212,207,.4); }
+    .coa-card.selected { border-color:#2DD4CF; background:rgba(45,212,207,.05); }
+    .coa-card h3 { font-size:1rem; font-weight:800; color:#EEF2FF; margin-bottom:6px; }
+    .coa-card p { font-size:.83rem; color:#6B8CAE; line-height:1.5; }
+    .coa-card ul { margin:10px 0 0; padding-left:16px; font-size:.82rem; color:#2DD4CF; }
+
+    .ai-gen-result { background:#0D1B2E; border:1px solid rgba(45,212,207,.2); border-radius:12px;
+      padding:16px; margin-top:16px; max-height:300px; overflow-y:auto; }
+    .ai-gen-row { display:grid; grid-template-columns:70px 1fr 100px 100px; gap:8px; padding:6px 0;
+      border-bottom:1px solid rgba(255,255,255,.04); font-size:.82rem; }
+    .ai-gen-row:last-child { border-bottom:none; }
+
+    .nav-btns { display:flex; gap:12px; margin-top:32px; padding-top:24px; border-top:1px solid rgba(255,255,255,.06); }
+    .btn-back { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); color:#6B8CAE;
+      padding:10px 24px; border-radius:9px; font-family:inherit; font-size:.9rem; font-weight:700;
+      cursor:pointer; transition:.2s; }
+    .btn-back:hover { color:#EEF2FF; }
+    .btn-next { background:linear-gradient(135deg,#2DD4CF,#A78BFA); border:none; color:#071018;
+      padding:10px 28px; border-radius:9px; font-family:inherit; font-size:.9rem; font-weight:800;
+      cursor:pointer; transition:.2s; margin-left:auto; }
+    .btn-next:hover { opacity:.9; }
+    .btn-next:disabled { opacity:.4; cursor:not-allowed; }
+
+    .complete-card { background:rgba(45,212,207,.06); border:1px solid rgba(45,212,207,.25);
+      border-radius:14px; padding:28px; text-align:center; }
+    .complete-icon { font-size:3rem; margin-bottom:12px; }
+    .complete-card h2 { font-size:1.5rem; font-weight:800; color:#EEF2FF; margin-bottom:8px; }
+    .complete-card p { color:#6B8CAE; margin-bottom:20px; }
+
+    .module-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+    .module-card { background:#0D1B2E; border:1px solid rgba(255,255,255,.08); border-radius:10px;
+      padding:14px; text-align:center; cursor:pointer; transition:.2s; }
+    .module-card:hover { border-color:rgba(45,212,207,.3); }
+    .module-card .mc-icon { font-size:1.3rem; margin-bottom:6px; }
+    .module-card .mc-label { font-size:.8rem; font-weight:700; color:#EEF2FF; }
+
+    .spin { display:inline-block; width:14px; height:14px; border:2px solid rgba(45,212,207,.3);
+      border-top-color:#2DD4CF; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    .section-divider { border:none; border-top:1px solid rgba(255,255,255,.06); margin:24px 0; }
+    .section-title-sm { font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:#6B8CAE; margin-bottom:12px; }
+  </style>
+</head>
+<body style="margin:0;background:#0B1220;">
+<div class="wizard-layout">
+
+  <!-- ── Left progress sidebar ───────────────────────────────────────── -->
+  <aside class="wizard-sidebar">
+    <div class="wizard-logo">■ FinReport<span>AI</span></div>
+    <div id="stepNav"></div>
+    <div style="margin-top:auto;padding-top:24px;border-top:1px solid rgba(255,255,255,.06);">
+      <div style="font-size:.8rem;color:#6B8CAE;">Entity Setup Wizard</div>
+      <div style="font-size:.72rem;color:#475569;margin-top:3px;">Save progress at each step</div>
+    </div>
+  </aside>
+
+  <!-- ── Main content ─────────────────────────────────────────────────── -->
+  <main class="wizard-content">
+    <div class="wizard-inner">
+
+      <!-- STEP 1: Entity Info -->
+      <div class="step-pane" id="pane-1">
+        <div class="wizard-header">
+          <h1>Entity Information</h1>
+          <p>Set up your company's country, tax configuration, and financial settings.</p>
+        </div>
+        <div class="form-grid">
+          <div class="form-group full">
+            <label class="fg-label">Company / Entity Name</label>
+            <input class="fg-input" id="s1-name" placeholder="e.g. Acme Global Pte. Ltd." />
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Country</label>
+            <select class="fg-select" id="s1-country" onchange="onCountryChange()">
+              <option value="">Select country…</option>
+              <option value="US">🇺🇸 United States</option>
+              <option value="GB">🇬🇧 United Kingdom</option>
+              <option value="AU">🇦🇺 Australia</option>
+              <option value="SG">🇸🇬 Singapore</option>
+              <option value="IN">🇮🇳 India</option>
+              <option value="AE">🇦🇪 UAE</option>
+              <option value="DE">🇩🇪 Germany</option>
+              <option value="FR">🇫🇷 France</option>
+              <option value="CA">🇨🇦 Canada</option>
+              <option value="NZ">🇳🇿 New Zealand</option>
+              <option value="ZA">🇿🇦 South Africa</option>
+              <option value="JP">🇯🇵 Japan</option>
+              <option value="NG">🇳🇬 Nigeria</option>
+              <option value="KE">🇰🇪 Kenya</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Currency</label>
+            <select class="fg-select" id="s1-currency">
+              <option value="USD">USD — US Dollar</option>
+              <option value="GBP">GBP — British Pound</option>
+              <option value="AUD">AUD — Australian Dollar</option>
+              <option value="SGD">SGD — Singapore Dollar</option>
+              <option value="INR">INR — Indian Rupee</option>
+              <option value="AED">AED — UAE Dirham</option>
+              <option value="EUR">EUR — Euro</option>
+              <option value="CAD">CAD — Canadian Dollar</option>
+              <option value="NZD">NZD — New Zealand Dollar</option>
+              <option value="ZAR">ZAR — South African Rand</option>
+              <option value="JPY">JPY — Japanese Yen</option>
+              <option value="NGN">NGN — Nigerian Naira</option>
+              <option value="KES">KES — Kenyan Shilling</option>
+            </select>
+          </div>
+          <div id="tax-info-box" class="full" style="display:none;"></div>
+          <div class="form-group">
+            <label class="fg-label">Tax Registration Status</label>
+            <select class="fg-select" id="s1-tax-status">
+              <option value="YES">Registered</option>
+              <option value="NO">Not Registered</option>
+              <option value="PENDING">Registration Pending</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Tax Number (VAT/GST/EIN etc.)</label>
+            <input class="fg-input" id="s1-tax-number" placeholder="e.g. GB 123 4567 89" />
+          </div>
+          <hr class="section-divider" style="grid-column:1/-1">
+          <div class="form-group">
+            <label class="fg-label">Industry</label>
+            <select class="fg-select" id="s1-industry">
+              <option value="">Select industry…</option>
+              <option>Technology & SaaS</option>
+              <option>Professional Services</option>
+              <option>Manufacturing</option>
+              <option>Retail & E-commerce</option>
+              <option>Financial Services</option>
+              <option>Healthcare</option>
+              <option>Construction & Real Estate</option>
+              <option>Hospitality & F&B</option>
+              <option>Education</option>
+              <option>Non-profit</option>
+              <option>Logistics & Transport</option>
+              <option>Media & Creative</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Fiscal Year End</label>
+            <select class="fg-select" id="s1-fye">
+              <option value="12-31">31 December (Calendar Year)</option>
+              <option value="03-31">31 March</option>
+              <option value="06-30">30 June</option>
+              <option value="09-30">30 September</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Accounting Method</label>
+            <select class="fg-select" id="s1-method">
+              <option value="ACCRUAL">Accrual Basis (Recommended)</option>
+              <option value="CASH">Cash Basis</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="fg-label">Conversion Date</label>
+            <input class="fg-input" id="s1-conv-date" type="date" />
+          </div>
+        </div>
+        <hr class="section-divider">
+        <div class="section-title-sm">Integration Mode</div>
+        <div class="choice-grid">
+          <div class="choice-card selected" onclick="selectChoice('integration','STANDALONE',this)">
+            <div class="cc-icon">🏠</div>
+            <div class="cc-label">Standalone</div>
+            <div class="cc-desc">Use FinReportAI as your primary accounting system</div>
+          </div>
+          <div class="choice-card" onclick="selectChoice('integration','QUICKBOOKS',this)">
+            <div class="cc-icon">🔗</div>
+            <div class="cc-label">QuickBooks Sync</div>
+            <div class="cc-desc">Mirror data from QuickBooks Online</div>
+          </div>
+          <div class="choice-card" onclick="selectChoice('integration','XERO',this)">
+            <div class="cc-icon">🔗</div>
+            <div class="cc-label">Xero Sync</div>
+            <div class="cc-desc">Mirror data from Xero</div>
+          </div>
+        </div>
+        <div class="nav-btns">
+          <button class="btn-next" onclick="step1Next()">Save & Continue →</button>
+        </div>
+      </div>
+
+      <!-- STEP 2: Upload History -->
+      <div class="step-pane" id="pane-2" style="display:none">
+        <div class="wizard-header">
+          <h1>Upload Historical Data</h1>
+          <p>Optionally upload prior period transactions for AI categorisation and trend analysis.</p>
+        </div>
+        <div style="background:#0D1B2E;border:2px dashed rgba(45,212,207,.3);border-radius:14px;padding:40px;text-align:center;cursor:pointer;" onclick="document.getElementById('hist-file').click()">
+          <div style="font-size:2.5rem;margin-bottom:12px;">📂</div>
+          <div style="font-weight:700;color:#EEF2FF;margin-bottom:6px;">Drop your historical data here</div>
+          <div style="color:#6B8CAE;font-size:.88rem;">Supports CSV, Excel, PDF bank statements — AI will auto-categorise</div>
+          <input type="file" id="hist-file" style="display:none" accept=".csv,.xlsx,.xls,.pdf">
+        </div>
+        <div style="margin-top:16px;padding:14px 16px;background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.2);border-radius:10px;font-size:.85rem;color:#A78BFA;">
+          <strong>💡 Optional step</strong> — You can skip this and add data manually later. Historical data helps the AI give better insights from day one.
+        </div>
+        <div id="hist-status" style="margin-top:16px;"></div>
+        <div class="nav-btns">
+          <button class="btn-back" onclick="goStep(1)">← Back</button>
+          <button class="btn-next" onclick="goStep(3)">Skip / Continue →</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: Chart of Accounts -->
+      <div class="step-pane" id="pane-3" style="display:none">
+        <div class="wizard-header">
+          <h1>Chart of Accounts</h1>
+          <p>Set up your accounting structure — AI can generate one based on your country and industry.</p>
+        </div>
+        <div class="coa-choice-grid">
+          <div class="coa-card selected" id="coa-ai-card" onclick="selectCoaMethod('ai')">
+            <h3>✨ AI Generate COA</h3>
+            <p>Recommended for new businesses. Claude generates a complete, country-specific chart of accounts based on your settings.</p>
+            <ul>
+              <li>Pre-configured tax codes</li>
+              <li>Industry-specific categories</li>
+              <li>IFRS/GAAP structure</li>
+              <li>80+ accounts, ready to use</li>
+            </ul>
+          </div>
+          <div class="coa-card" id="coa-upload-card" onclick="selectCoaMethod('upload')">
+            <h3>📤 Import Existing COA</h3>
+            <p>Best if migrating from another system. Upload CSV, Excel or PDF — AI will analyse and suggest missing accounts.</p>
+            <ul>
+              <li>Preserves your account codes</li>
+              <li>AI fills gaps automatically</li>
+              <li>Supports Xero / QuickBooks exports</li>
+            </ul>
+          </div>
+        </div>
+
+        <div id="coa-ai-section" style="margin-top:20px;">
+          <button class="btn-next" style="width:100%;margin-top:0;" id="btn-gen-coa" onclick="generateCoa()">
+            ✨ Generate Chart of Accounts for <span id="coa-country-label">my entity</span>
+          </button>
+          <div id="coa-gen-result" style="display:none"></div>
+        </div>
+
+        <div id="coa-upload-section" style="display:none;margin-top:20px;">
+          <div style="background:#0D1B2E;border:2px dashed rgba(45,212,207,.3);border-radius:12px;padding:28px;text-align:center;cursor:pointer;" onclick="document.getElementById('coa-file').click()">
+            <div style="font-size:2rem;margin-bottom:8px;">📊</div>
+            <div style="color:#EEF2FF;font-weight:700;">Upload COA File</div>
+            <div style="color:#6B8CAE;font-size:.83rem;margin-top:4px;">CSV, Excel (Xero / QB format supported)</div>
+            <input type="file" id="coa-file" style="display:none" accept=".csv,.xlsx,.xls">
+          </div>
+        </div>
+
+        <div class="nav-btns">
+          <button class="btn-back" onclick="goStep(2)">← Back</button>
+          <button class="btn-next" onclick="goStep(4)">Continue →</button>
+        </div>
+      </div>
+
+      <!-- STEP 4: Bank Setup -->
+      <div class="step-pane" id="pane-4" style="display:none">
+        <div class="wizard-header">
+          <h1>Bank Account Setup</h1>
+          <p>Add your bank accounts. You can add more accounts later from the Bank section.</p>
+        </div>
+        <div id="bank-list" style="margin-bottom:16px;"></div>
+        <button onclick="addBankRow()" style="background:rgba(45,212,207,.1);border:1px solid rgba(45,212,207,.3);color:#2DD4CF;padding:10px 18px;border-radius:9px;font-family:inherit;font-weight:700;cursor:pointer;font-size:.9rem;">
+          + Add Bank Account
+        </button>
+        <div class="nav-btns">
+          <button class="btn-back" onclick="goStep(3)">← Back</button>
+          <button class="btn-next" onclick="saveBanks()">Save & Continue →</button>
+        </div>
+      </div>
+
+      <!-- STEP 5: Conversion Balances -->
+      <div class="step-pane" id="pane-5" style="display:none">
+        <div class="wizard-header">
+          <h1>Conversion Balances</h1>
+          <p>Enter opening balances as at your conversion date. Leave blank if starting fresh.</p>
+        </div>
+        <div style="background:rgba(251,146,60,.07);border:1px solid rgba(251,146,60,.2);border-radius:10px;padding:14px 16px;margin-bottom:20px;font-size:.85rem;color:#FB923C;">
+          <strong>📅 Conversion Date:</strong> <span id="conv-date-label">—</span>
+        </div>
+        <div id="balance-accounts" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <div class="nav-btns">
+          <button class="btn-back" onclick="goStep(4)">← Back</button>
+          <button class="btn-next" onclick="saveBalances()">Save & Continue →</button>
+        </div>
+      </div>
+
+      <!-- STEP 6: Complete -->
+      <div class="step-pane" id="pane-6" style="display:none">
+        <div class="complete-card">
+          <div class="complete-icon">🎉</div>
+          <h2>Entity Setup Complete!</h2>
+          <p>Your accounting environment is ready. Choose a module to get started:</p>
+        </div>
+        <div class="module-grid" style="margin-top:24px;">
+          <div class="module-card" onclick="window.location.href='invoices.html'">
+            <div class="mc-icon">🧾</div><div class="mc-label">Invoices</div>
+          </div>
+          <div class="module-card" onclick="window.location.href='contacts.html'">
+            <div class="mc-icon">👥</div><div class="mc-label">Contacts</div>
+          </div>
+          <div class="module-card" onclick="window.location.href='expense-claims.html'">
+            <div class="mc-icon">💳</div><div class="mc-label">Expenses</div>
+          </div>
+          <div class="module-card" onclick="window.location.href='bank-accounts.html'">
+            <div class="mc-icon">🏦</div><div class="mc-label">Bank</div>
+          </div>
+          <div class="module-card" onclick="window.location.href='business-overview.html'">
+            <div class="mc-icon">📊</div><div class="mc-label">Overview</div>
+          </div>
+          <div class="module-card" onclick="window.location.href='agent-command.html'">
+            <div class="mc-icon">🤖</div><div class="mc-label">NEXUS-C Agent</div>
+          </div>
+        </div>
+        <div style="text-align:center;margin-top:28px;">
+          <a href="business-overview.html" class="btn-next" style="text-decoration:none;display:inline-block;">
+            Go to Business Overview →
+          </a>
+        </div>
+      </div>
+
+    </div><!-- wizard-inner -->
+  </main>
+</div>
+
+<script>
+const STEPS = [
+  { label: 'Entity Info', icon: '🏢' },
+  { label: 'Upload History', icon: '📂' },
+  { label: 'Chart of Accounts', icon: '📋' },
+  { label: 'Bank Setup', icon: '🏦' },
+  { label: 'Conv. Balances', icon: '💰' },
+  { label: 'Complete', icon: '🎉' }
+];
+
+const TAX_SCHEMES = {
+  US: { scheme:'SALES_TAX', label:'Sales Tax', note:'Rate varies by state (0–13%)', rates:[], currency:'USD' },
+  GB: { scheme:'VAT', label:'VAT', note:'Standard 20%, Reduced 5%, Zero 0%', rates:['Standard (20%)','Reduced (5%)','Zero Rate (0%)'], currency:'GBP' },
+  AU: { scheme:'GST', label:'GST', note:'Standard 10%, GST-Free 0%', rates:['Standard GST (10%)','GST Free (0%)'], currency:'AUD' },
+  SG: { scheme:'GST', label:'GST', note:'Standard 9%, Zero-Rated 0%', rates:['Standard Rate (9%)','Zero Rate (0%)'], currency:'SGD' },
+  IN: { scheme:'GST', label:'GST', note:'CGST + SGST: 18%, 12%, 5%, 0%', rates:['GST 18%','GST 12%','GST 5%','GST 0%'], currency:'INR' },
+  AE: { scheme:'VAT', label:'VAT', note:'Standard 5%, Zero 0%', rates:['Standard (5%)','Zero Rate (0%)'], currency:'AED' },
+  DE: { scheme:'VAT', label:'MwSt', note:'Standard 19%, Reduced 7%', rates:['Standard (19%)','Reduced (7%)','Zero (0%)'], currency:'EUR' },
+  FR: { scheme:'VAT', label:'TVA', note:'Standard 20%, Reduced 5.5%, Super 2.1%', rates:['Standard (20%)','Reduced (5.5%)','Super Reduced (2.1%)'], currency:'EUR' },
+  CA: { scheme:'GST_HST', label:'GST/HST', note:'GST 5%, HST varies by province', rates:['GST (5%)','HST Ontario (13%)','HST NS (15%)'], currency:'CAD' },
+  NZ: { scheme:'GST', label:'GST', note:'Standard 15%, Zero-Rated 0%', rates:['Standard GST (15%)','Zero Rated (0%)'], currency:'NZD' },
+  ZA: { scheme:'VAT', label:'VAT', note:'Standard 15%, Zero 0%', rates:['Standard (15%)','Zero Rate (0%)'], currency:'ZAR' },
+  JP: { scheme:'VAT', label:'Consumption Tax', note:'Standard 10%, Reduced 8%', rates:['Standard (10%)','Reduced (8%)'], currency:'JPY' },
+  NG: { scheme:'VAT', label:'VAT', note:'Standard 7.5%', rates:['Standard (7.5%)'], currency:'NGN' },
+  KE: { scheme:'VAT', label:'VAT', note:'Standard 16%, Zero 0%', rates:['Standard (16%)','Zero (0%)'], currency:'KES' }
+};
+
+let currentStep = 1;
+let entityId = null;
+let choices = { integration: 'STANDALONE' };
+let coaMethod = 'ai';
+let bankRows = [];
+
+function renderStepNav() {
+  const nav = document.getElementById('stepNav');
+  nav.innerHTML = STEPS.map((s, i) => {
+    const n = i + 1;
+    const isDone = n < currentStep;
+    const isActive = n === currentStep;
+    return `
+      <div class="step-item ${isDone ? 'done' : ''} ${isActive ? 'active' : ''}">
+        <div class="step-num">${isDone ? '✓' : n}</div>
+        <div class="step-label">${s.label}</div>
+      </div>
+      ${n < STEPS.length ? '<div class="step-line"></div>' : ''}
+    `;
+  }).join('');
+}
+
+function goStep(n) {
+  document.querySelectorAll('.step-pane').forEach(p => p.style.display = 'none');
+  document.getElementById('pane-' + n).style.display = 'block';
+  currentStep = n;
+  renderStepNav();
+  window.scrollTo(0, 0);
+  if (n === 5) renderBalanceAccounts();
+}
+
+function onCountryChange() {
+  const country = document.getElementById('s1-country').value;
+  const box = document.getElementById('tax-info-box');
+  const scheme = TAX_SCHEMES[country];
+  if (scheme) {
+    box.style.display = 'block';
+    box.innerHTML = `<div class="tax-info">
+      <strong>🧾 ${scheme.label}</strong> detected for ${country}<br>
+      <span style="font-size:.82rem;opacity:.85">${scheme.note}</span>
+      ${scheme.rates.length ? '<div style="margin-top:6px;font-size:.82rem">Rates: ' + scheme.rates.join(' · ') + '</div>' : ''}
+    </div>`;
+    const currSel = document.getElementById('s1-currency');
+    for (let opt of currSel.options) { if (opt.value === scheme.currency) { currSel.value = scheme.currency; break; } }
+    document.getElementById('coa-country-label').textContent = country;
+  } else {
+    box.style.display = 'none';
+  }
+}
+
+function selectChoice(group, value, el) {
+  choices[group] = value;
+  el.closest('.choice-grid').querySelectorAll('.choice-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function selectCoaMethod(method) {
+  coaMethod = method;
+  document.getElementById('coa-ai-card').classList.toggle('selected', method === 'ai');
+  document.getElementById('coa-upload-card').classList.toggle('selected', method === 'upload');
+  document.getElementById('coa-ai-section').style.display = method === 'ai' ? 'block' : 'none';
+  document.getElementById('coa-upload-section').style.display = method === 'upload' ? 'block' : 'none';
+}
+
+async function step1Next() {
+  const name = document.getElementById('s1-name').value.trim();
+  const country = document.getElementById('s1-country').value;
+  const currency = document.getElementById('s1-currency').value;
+  if (!name || !country || !currency) { alert('Please fill in Entity Name, Country, and Currency.'); return; }
+
+  const scheme = TAX_SCHEMES[country] || {};
+  const body = {
+    name,
+    country,
+    currency,
+    tax_scheme: scheme.scheme || '',
+    tax_number: document.getElementById('s1-tax-number').value.trim(),
+    fiscal_year_end: document.getElementById('s1-fye').value,
+    accounting_method: document.getElementById('s1-method').value,
+    industry: document.getElementById('s1-industry').value,
+    conversion_date: document.getElementById('s1-conv-date').value,
+    integration_mode: choices.integration
+  };
+
+  const resp = await fetch('/api/accounting/entities', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!resp.ok) { alert('Error: ' + data.error); return; }
+  entityId = data.entity.id;
+  localStorage.setItem('acc_entity_id', entityId);
+  goStep(2);
+}
+
+async function generateCoa() {
+  if (!entityId) { alert('Please complete Step 1 first.'); return; }
+  const btn = document.getElementById('btn-gen-coa');
+  btn.innerHTML = '<span class="spin"></span> Generating with AI…';
+  btn.disabled = true;
+  const resp = await fetch(`/api/accounting/entities/${entityId}/accounts/ai-generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await resp.json();
+  btn.innerHTML = '✨ Re-generate Chart of Accounts';
+  btn.disabled = false;
+  if (!resp.ok) { alert('Error: ' + data.error); return; }
+
+  const resultEl = document.getElementById('coa-gen-result');
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = `
+    <div style="margin-top:12px;padding:12px 16px;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.25);border-radius:10px;color:#34D399;font-size:.88rem;font-weight:700;">
+      ✓ Generated ${data.count} accounts successfully
+    </div>
+    <div class="ai-gen-result" style="margin-top:12px;">
+      <div class="ai-gen-row" style="font-weight:700;font-size:.78rem;color:#6B8CAE;">
+        <span>CODE</span><span>NAME</span><span>TYPE</span><span>SUB-TYPE</span>
+      </div>
+      ${(data.accounts || []).slice(0, 30).map(a => `
+        <div class="ai-gen-row">
+          <span style="color:#2DD4CF;font-family:monospace">${a.code}</span>
+          <span style="color:#EEF2FF">${a.name}</span>
+          <span style="color:#A78BFA">${a.account_type || '—'}</span>
+          <span style="color:#6B8CAE">${a.sub_type || '—'}</span>
+        </div>
+      `).join('')}
+      ${data.accounts?.length > 30 ? `<div style="text-align:center;padding:8px;color:#6B8CAE;font-size:.8rem;">…and ${data.accounts.length - 30} more accounts</div>` : ''}
+    </div>
+  `;
+}
+
+function addBankRow() {
+  bankRows.push({ id: Date.now() });
+  renderBankRows();
+}
+
+function renderBankRows() {
+  const el = document.getElementById('bank-list');
+  if (!bankRows.length) { el.innerHTML = '<div style="color:#6B8CAE;font-size:.88rem;margin-bottom:12px;">No bank accounts added yet. Click below to add.</div>'; return; }
+  el.innerHTML = bankRows.map((r, i) => `
+    <div style="background:#0D1B2E;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px;margin-bottom:10px;">
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:10px;align-items:end;">
+        <div class="form-group">
+          <label class="fg-label">Bank Name</label>
+          <input class="fg-input" id="bank-name-${r.id}" placeholder="e.g. HSBC, Chase, Barclays" />
+        </div>
+        <div class="form-group">
+          <label class="fg-label">Account No.</label>
+          <input class="fg-input" id="bank-acc-${r.id}" placeholder="•••• 1234" />
+        </div>
+        <div class="form-group">
+          <label class="fg-label">Type</label>
+          <select class="fg-select" id="bank-type-${r.id}">
+            <option value="CHECKING">Checking</option>
+            <option value="SAVINGS">Savings</option>
+            <option value="CREDIT_CARD">Credit Card</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="fg-label">Opening Balance</label>
+          <input class="fg-input" id="bank-bal-${r.id}" type="number" placeholder="0.00" />
+        </div>
+        <button onclick="bankRows.splice(${i},1);renderBankRows()" style="background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.2);color:#F87171;border-radius:8px;padding:8px 12px;cursor:pointer;font-size:.85rem;">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function saveBanks() {
+  if (!entityId) { goStep(4); return; }
+  for (const r of bankRows) {
+    const bankName = document.getElementById('bank-name-' + r.id)?.value.trim();
+    if (!bankName) continue;
+    await fetch(`/api/accounting/entities/${entityId}/bank-accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bank_name: bankName,
+        account_number: document.getElementById('bank-acc-' + r.id)?.value || '',
+        account_type: document.getElementById('bank-type-' + r.id)?.value || 'CHECKING',
+        current_balance: parseFloat(document.getElementById('bank-bal-' + r.id)?.value || '0')
+      })
+    });
+  }
+  goStep(5);
+}
+
+async function renderBalanceAccounts() {
+  if (!entityId) return;
+  const convDate = document.getElementById('s1-conv-date')?.value || '—';
+  document.getElementById('conv-date-label').textContent = convDate;
+  const resp = await fetch(`/api/accounting/entities/${entityId}/accounts?account_type=Asset`);
+  const data = await resp.json();
+  const el = document.getElementById('balance-accounts');
+  el.innerHTML = (data.accounts || []).slice(0, 20).map(a => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#0D1B2E;border:1px solid rgba(255,255,255,.06);border-radius:9px;">
+      <span style="font-family:monospace;color:#2DD4CF;font-size:.8rem;width:50px">${a.code}</span>
+      <span style="flex:1;font-size:.88rem;color:#EEF2FF">${a.name}</span>
+      <input type="number" placeholder="0.00" class="fg-input" style="width:120px;text-align:right"
+        onchange="updateBalance(${a.id}, this.value)" />
+    </div>
+  `).join('') || '<div style="color:#6B8CAE;font-size:.88rem;">No accounts found. Complete Step 3 first.</div>';
+}
+
+async function updateBalance(accountId, value) {
+  await fetch(`/api/accounting/entities/${entityId}/accounts/${accountId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversion_balance: parseFloat(value) || 0 })
+  });
+}
+
+async function saveBalances() {
+  if (!entityId) { goStep(6); return; }
+  await fetch(`/api/accounting/entities/${entityId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ onboarding_complete: 1 })
+  });
+  goStep(6);
+}
+
+// Init
+renderStepNav();
+renderBankRows();
+goStep(1);
+</script>
+</body>
+</html>

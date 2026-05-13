@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>FinReport AI • Tax Rates</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+  <style>
+    .entity-sel{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:6px 12px;font-family:inherit;font-size:.88rem;outline:none;}
+    .fg-input{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 13px;font-family:inherit;font-size:.88rem;outline:none;width:100%;box-sizing:border-box;}
+    .fg-input:focus{border-color:#2DD4CF;}
+    .fg-select{background:#0D1B2E;border:1px solid rgba(255,255,255,.1);color:#EEF2FF;border-radius:8px;padding:8px 13px;font-family:inherit;font-size:.88rem;outline:none;width:100%;box-sizing:border-box;}
+    .fg-select option{background:#0D1B2E;}
+    .fg-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#6B8CAE;font-weight:700;display:block;margin-bottom:5px;}
+    .form-group{display:flex;flex-direction:column;gap:5px;}
+    .rate-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:20px;}
+    .rate-card{background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:20px;text-align:center;transition:.2s;}
+    .rate-card:hover{border-color:rgba(45,212,207,.3);}
+    .rate-pct{font-family:'JetBrains Mono',monospace;font-size:2.2rem;font-weight:800;color:#2DD4CF;margin-bottom:6px;}
+    .rate-name{font-size:.95rem;font-weight:700;color:#EEF2FF;margin-bottom:4px;}
+    .rate-type{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:#6B8CAE;font-weight:700;margin-bottom:14px;}
+    .btn-del{background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);color:#F87171;border-radius:7px;padding:5px 14px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;}
+    .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100;}
+    .modal{background:#0F1E35;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:28px;width:400px;max-width:95vw;}
+    .modal h3{font-size:1.1rem;font-weight:800;color:#EEF2FF;margin-bottom:18px;}
+    .btn-primary{background:linear-gradient(135deg,#2DD4CF,#A78BFA);border:none;color:#071018;padding:10px 22px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:800;cursor:pointer;}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.1);color:#6B8CAE;padding:10px 18px;border-radius:9px;font-family:inherit;font-size:.9rem;font-weight:700;cursor:pointer;}
+    .country-presets{background:#0D1B2E;border:1px solid rgba(45,212,207,.2);border-radius:10px;padding:14px;margin-top:18px;}
+    .preset-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer;transition:.15s;}
+    .preset-row:last-child{border-bottom:none;}
+    .preset-row:hover{color:#2DD4CF;}
+    .preset-label{flex:1;font-size:.85rem;color:#EEF2FF;}
+    .preset-pct{font-family:monospace;font-size:.85rem;color:#2DD4CF;font-weight:700;}
+    .preset-country{font-size:.8rem;color:#6B8CAE;width:80px;}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="logo">■ FinReport<span class="ai">AI</span></div>
+    <nav class="nav">
+      <a href="dashboard.html">🏠 CFO Dashboard</a>
+      <a href="ifrs-generator.html">📄 IFRS Generator</a>
+      <a href="client-onboarding.html">🤝 Client Onboarding</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">Accounting</div>
+      <a href="business-overview.html">📊 Business Overview</a>
+      <a href="chart-of-accounts.html">📋 Chart of Accounts</a>
+      <a href="contacts.html">👥 Contacts</a>
+      <a class="active" href="tax-rates.html">🧾 Tax Rates</a>
+      <a href="invoices.html">🧾 Invoices</a>
+      <a href="expense-claims.html">💳 Expense Claims</a>
+      <a href="fixed-assets.html">🏗️ Fixed Assets</a>
+      <a href="bank-accounts.html">🏦 Bank Accounts</a>
+      <div style="padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#475569;font-weight:700;margin-top:8px;">AI Agent</div>
+      <a href="agent-command.html">⚡ NEXUS-C Command</a>
+      <a href="decision-queue.html">✅ Decision Queue</a>
+      <a href="agent-chat.html">💬 Agent Chat</a>
+    </nav>
+    <div style="text-align:center;"><div style="width:46px;height:46px;border-radius:24px;background:linear-gradient(135deg,#2DD4CF,#A78BFA);margin:auto;"></div><div style="margin-top:6px;color:#EEF2FF;font-weight:700;">Accounting Hub</div></div>
+  </aside>
+  <main class="main">
+    <div class="top-header">
+      <div><div style="font-size:20px;font-weight:700;">Tax Rates</div><div class="meta">Configure VAT, GST, and Sales Tax rates</div></div>
+      <div class="actions">
+        <select class="entity-sel" id="entity-sel" onchange="loadRates()"></select>
+        <button class="btn-cta" onclick="openModal()">+ Add Rate</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 280px;gap:20px;">
+      <div>
+        <div id="rate-grid" class="rate-grid"><div style="color:#6B8CAE;font-size:.88rem;">Select an entity to load tax rates</div></div>
+      </div>
+      <div>
+        <div class="card" style="background:#0F1E35;border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:18px;">
+          <div style="font-size:.85rem;font-weight:700;color:#EEF2FF;margin-bottom:12px;">🌍 Quick Presets</div>
+          <div style="font-size:.78rem;color:#6B8CAE;margin-bottom:10px;">Click to add to your entity</div>
+          <div class="country-presets" id="presets"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-bg" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3>Add Tax Rate</h3>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="form-group"><label class="fg-label">Rate Name</label><input class="fg-input" id="m-name" placeholder="Standard VAT" /></div>
+      <div class="form-group"><label class="fg-label">Rate (%)</label><input class="fg-input" id="m-rate" type="number" step="0.01" placeholder="20" /></div>
+      <div class="form-group"><label class="fg-label">Tax Type</label>
+        <select class="fg-select" id="m-type">
+          <option value="OUTPUT">Output (Sales)</option>
+          <option value="INPUT">Input (Purchases)</option>
+          <option value="BOTH">Both</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveRate()" style="margin-left:auto;">Add Rate</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PRESETS = [
+  {country:'🇬🇧 UK', name:'VAT Standard', rate:20, tax_type:'BOTH'},
+  {country:'🇬🇧 UK', name:'VAT Reduced', rate:5, tax_type:'BOTH'},
+  {country:'🇬🇧 UK', name:'VAT Zero', rate:0, tax_type:'BOTH'},
+  {country:'🇦🇺 AU', name:'GST Standard', rate:10, tax_type:'BOTH'},
+  {country:'🇦🇺 AU', name:'GST Free', rate:0, tax_type:'OUTPUT'},
+  {country:'🇸🇬 SG', name:'GST Standard', rate:9, tax_type:'BOTH'},
+  {country:'🇮🇳 IN', name:'GST 18%', rate:18, tax_type:'BOTH'},
+  {country:'🇮🇳 IN', name:'GST 12%', rate:12, tax_type:'BOTH'},
+  {country:'🇮🇳 IN', name:'GST 5%', rate:5, tax_type:'BOTH'},
+  {country:'🇦🇪 UAE', name:'VAT Standard', rate:5, tax_type:'BOTH'},
+  {country:'🇩🇪 DE', name:'MwSt Standard', rate:19, tax_type:'BOTH'},
+  {country:'🇩🇪 DE', name:'MwSt Reduced', rate:7, tax_type:'BOTH'},
+  {country:'🇺🇸 US', name:'No Tax', rate:0, tax_type:'OUTPUT'},
+  {country:'🇨🇦 CA', name:'GST', rate:5, tax_type:'BOTH'},
+  {country:'🇳🇿 NZ', name:'GST Standard', rate:15, tax_type:'BOTH'},
+];
+
+async function loadEntities() {
+  const resp = await fetch('/api/accounting/entities');
+  const data = await resp.json();
+  const sel = document.getElementById('entity-sel');
+  sel.innerHTML = '<option value="">Select entity…</option>';
+  for (const e of (data.entities||[])) sel.innerHTML += `<option value="${e.id}">${e.name} (${e.country})</option>`;
+  const stored = localStorage.getItem('acc_entity_id');
+  if (stored) { sel.value = stored; loadRates(); }
+  renderPresets();
+}
+
+async function loadRates() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) return;
+  localStorage.setItem('acc_entity_id', eid);
+  const resp = await fetch(`/api/accounting/entities/${eid}/tax-rates`);
+  const data = await resp.json();
+  const rates = data.tax_rates || [];
+  const grid = document.getElementById('rate-grid');
+  if (!rates.length) { grid.innerHTML = '<div style="color:#6B8CAE;font-size:.88rem;padding:20px;">No tax rates yet. Add one or use a preset →</div>'; return; }
+  grid.innerHTML = rates.map(r => `
+    <div class="rate-card">
+      <div class="rate-pct">${parseFloat(r.rate).toFixed(r.rate % 1 ? 1 : 0)}%</div>
+      <div class="rate-name">${r.name}</div>
+      <div class="rate-type">${r.tax_type}</div>
+      <button class="btn-del" onclick="deleteRate(${r.id})">Remove</button>
+    </div>
+  `).join('');
+}
+
+function renderPresets() {
+  document.getElementById('presets').innerHTML = PRESETS.map((p,i) => `
+    <div class="preset-row" onclick="addPreset(${i})">
+      <span class="preset-country">${p.country}</span>
+      <span class="preset-label">${p.name}</span>
+      <span class="preset-pct">${p.rate}%</span>
+      <span style="color:#2DD4CF;font-size:.8rem;">+</span>
+    </div>
+  `).join('');
+}
+
+async function addPreset(i) {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) { alert('Select entity first.'); return; }
+  const p = PRESETS[i];
+  await fetch(`/api/accounting/entities/${eid}/tax-rates`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p) });
+  loadRates();
+}
+
+function openModal() { document.getElementById('modal').style.display = 'flex'; }
+function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+async function saveRate() {
+  const eid = document.getElementById('entity-sel').value;
+  if (!eid) { alert('Select entity first.'); return; }
+  const body = { name:document.getElementById('m-name').value.trim(), rate:parseFloat(document.getElementById('m-rate').value)||0, tax_type:document.getElementById('m-type').value };
+  if (!body.name) { alert('Name required.'); return; }
+  await fetch(`/api/accounting/entities/${eid}/tax-rates`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+  closeModal();
+  loadRates();
+}
+
+async function deleteRate(id) {
+  const eid = document.getElementById('entity-sel').value;
+  if (!confirm('Remove this tax rate?')) return;
+  await fetch(`/api/accounting/entities/${eid}/tax-rates/${id}`, { method:'DELETE' });
+  loadRates();
+}
+
+loadEntities();
+</script>
+</body>
+</html>
