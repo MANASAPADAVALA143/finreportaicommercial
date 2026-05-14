@@ -64,6 +64,10 @@ from app.api.routes import (
     audit_intelligence,
     history_router,
     historical_analysis,
+    entity_health,
+    payment_calendar,
+    covenant_tracker,
+    ar_collections,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -178,6 +182,10 @@ app.include_router(gl_reconciliation_router.router)
 app.include_router(model_builder_router.router)
 app.include_router(rbac_auth_router.router)
 app.include_router(rbac_users_router.router)
+app.include_router(entity_health.router)
+app.include_router(payment_calendar.router)
+app.include_router(covenant_tracker.router)
+app.include_router(ar_collections.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:

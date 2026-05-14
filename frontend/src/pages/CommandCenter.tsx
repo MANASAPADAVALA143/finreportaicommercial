@@ -1,5 +1,6 @@
 import '@fontsource/ibm-plex-mono';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 const AITHENTIC = {
   bg: '#060A12',
@@ -41,6 +42,7 @@ type BriefResponse = {
 };
 
 export default function CommandCenter() {
+  const navigate = useNavigate();
   const [brief, setBrief] = useState<BriefResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [boardPackProgress, setBoardPackProgress] = useState<string[]>([]);
@@ -349,6 +351,34 @@ export default function CommandCenter() {
           </div>
         </div>
       )}
+
+      {/* ── CFO Operating Desk ── */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: AITHENTIC.textDim, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>
+          CFO Operating Desk
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+          {[
+            { route: '/cfo/entity-health', label: 'ENTITY HEALTH', val: '74.8%', sub: 'Group close readiness', note: '4 critical blockers', noteCol: AITHENTIC.red, valCol: AITHENTIC.yellow },
+            { route: '/cfo/payment-calendar', label: 'PAYMENT CALENDAR', val: '€4.89M', sub: 'W7 projected cash', note: 'Below €5.5M threshold', noteCol: AITHENTIC.red, valCol: AITHENTIC.red },
+            { route: '/cfo/covenant-tracker', label: 'COVENANTS', val: '0.7× left', sub: 'Net Debt/EBITDA headroom', note: '1 on watch — tightening', noteCol: AITHENTIC.yellow, valCol: AITHENTIC.yellow },
+            { route: '/cfo/ar-collections', label: 'AR & COLLECTIONS', val: 'DSO 34d', sub: 'vs 30 day target', note: '€287K at risk — Atlas', noteCol: AITHENTIC.red, valCol: AITHENTIC.red },
+          ].map(({ route, label, val, sub, note, noteCol, valCol }) => (
+            <div
+              key={route}
+              onClick={() => void navigate(route)}
+              style={{ background: AITHENTIC.surface, border: `1px solid ${AITHENTIC.border}`, borderRadius: 4, padding: 16, cursor: 'pointer', transition: 'border-color .15s' }}
+              onMouseEnter={e => (e.currentTarget.style.borderColor = AITHENTIC.teal)}
+              onMouseLeave={e => (e.currentTarget.style.borderColor = AITHENTIC.border)}
+            >
+              <div style={{ fontSize: 9, color: AITHENTIC.textDim, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: valCol, marginBottom: 4 }}>{val}</div>
+              <div style={{ fontSize: 11, color: AITHENTIC.textDim, marginBottom: 6 }}>{sub}</div>
+              <div style={{ fontSize: 10, color: noteCol, fontWeight: 600 }}>{note}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       <div style={{ background: AITHENTIC.surface, border: `1px solid ${AITHENTIC.border}`, borderRadius: 4, padding: 20 }}>
         <div

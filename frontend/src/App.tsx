@@ -127,6 +127,10 @@ const HeadcountPlanning = safeLazy(() => import('./pages/fpa/HeadcountPlanning')
 const SensitivityAnalysis = safeLazy(() => import('./pages/fpa/SensitivityAnalysis'));
 const BoardPack = safeLazy(() => import('./pages/reports/BoardPack'));
 const CFOServices = safeLazy(() => import('./pages/cfo/CFOServices.tsx'));
+const EntityHealth = safeLazy(() => import('./pages/cfo/EntityHealth'));
+const PaymentCalendar = safeLazy(() => import('./pages/cfo/PaymentCalendar'));
+const CovenantTracker = safeLazy(() => import('./pages/cfo/CovenantTracker'));
+const ARCollections = safeLazy(() => import('./pages/cfo/ARCollections'));
 const CFODecisionIntelligence = safeLazy(() => import('./pages/CFODecisionIntelligence'));
 const BookkeepingLayout = safeLazy(() =>
   import('./pages/bookkeeping/BookkeepingLayout').then((m) => ({ default: m.BookkeepingLayout }))
@@ -271,6 +275,10 @@ function App() {
                 <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
                 <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
                 <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
+                <Route path="/cfo/entity-health" element={<EntityHealth />} />
+                <Route path="/cfo/payment-calendar" element={<PaymentCalendar />} />
+                <Route path="/cfo/covenant-tracker" element={<CovenantTracker />} />
+                <Route path="/cfo/ar-collections" element={<ARCollections />} />
                 <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
                 <Route path="/users" element={<PrivateRoute roles={['super_admin']}><UserManagement /></PrivateRoute>} />
                 <Route path="/bookkeeping" element={<BookkeepingLayout />}>

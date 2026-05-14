@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { BarChart2, BookOpen, Calendar, GitMerge, History, LineChart, TrendingUp, Users } from 'lucide-react';
+import { BarChart2, BookOpen, Calendar, GitMerge, History, LineChart, TrendingUp, Users, Building2, CalendarDays, ShieldAlert, FileText } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 const r2rLinkBase =
@@ -19,6 +19,10 @@ export default function Sidebar() {
   const glReconActive = pathname === '/recon/gl';
   const modelBuilderActive = pathname === '/model';
   const usersActive = pathname === '/users';
+  const entityHealthActive = pathname === '/cfo/entity-health';
+  const paymentCalActive = pathname === '/cfo/payment-calendar';
+  const covenantActive = pathname === '/cfo/covenant-tracker';
+  const arCollActive = pathname === '/cfo/ar-collections';
 
   const role = user?.role ?? 'accountant';
   const roleBadge =
@@ -124,6 +128,25 @@ export default function Sidebar() {
             User Management
           </NavLink>
         ) : null}
+      </div>
+      <div className="mt-6 px-2 border-t border-slate-800 pt-4">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">CFO Operating Desk</p>
+        <NavLink to="/cfo/entity-health" className={() => `${r2rLinkBase} ${entityHealthActive ? r2rActive : r2rIdle}`} end>
+          <Building2 className="w-4 h-4 shrink-0" aria-hidden />
+          Entity Health
+        </NavLink>
+        <NavLink to="/cfo/payment-calendar" className={() => `${r2rLinkBase} ${paymentCalActive ? r2rActive : r2rIdle}`} end>
+          <CalendarDays className="w-4 h-4 shrink-0" aria-hidden />
+          Payment Calendar
+        </NavLink>
+        <NavLink to="/cfo/covenant-tracker" className={() => `${r2rLinkBase} ${covenantActive ? r2rActive : r2rIdle}`} end>
+          <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden />
+          Covenant Tracker
+        </NavLink>
+        <NavLink to="/cfo/ar-collections" className={() => `${r2rLinkBase} ${arCollActive ? r2rActive : r2rIdle}`} end>
+          <FileText className="w-4 h-4 shrink-0" aria-hidden />
+          AR &amp; Collections
+        </NavLink>
       </div>
       <div className="mt-auto px-2 pt-4 border-t border-slate-800">
         <div className="flex items-center gap-2 mb-2">
