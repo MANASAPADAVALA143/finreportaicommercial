@@ -745,6 +745,125 @@ Style: Big 4 senior manager memo. Professional, direct, specific.
     }
 
 
+class ModificationReconRequest(BaseModel):
+    period: str
+    contract_id: str = ""
+    customer_name: str = ""
+    modification_type: str = "prospective"  # prospective | cumulative_catchup
+    original_transaction_price: float
+    revenue_recognised_to_date: float
+    modification_additional_value: float
+    remaining_months_original: float
+    remaining_months_after_modification: float
+
+
+@router.post("/modification-recon")
+async def modification_recon(request: ModificationReconRequest):
+    """
+    IFRS 15 contract modification analysis (para 18–21).
+    Supports prospective (para 20) and cumulative catch-up (para 21) treatments.
+    """
+    mod_type = (request.modification_type or "prospective").lower()
+
+    # Derive remaining obligation before modification
+    remaining_before = request.original_transaction_price - request.revenue_recognised_to_date
+
+    # New transaction price after modification
+    new_transaction_price = request.original_transaction_price + request.modification_additional_value
+
+    # Remaining obligation after modification
+    remaining_after = remaining_before + request.modification_additional_value
+
+    lines: list[dict] = []
+
+    if mod_type == "cumulative_catchup":
+        # Para 21: treat as if modification existed from inception
+        # Recalculate revenue that should have been recognised to date
+        # using the blended rate of new TP over full performance period
+        total_months = request.remaining_months_original + (
+            request.remaining_months_original - request.remaining_months_after_modification
+        )
+        if total_months <= 0:
+            total_months = request.remaining_months_original or 1
+        should_have_recognised = (new_transaction_price / total_months) * (
+            total_months - request.remaining_months_after_modification
+        ) if total_months else 0
+
+        catchup_adjustment = round(should_have_recognised - request.revenue_recognised_to_date, 2)
+        new_monthly_revenue = round(remaining_after / max(request.remaining_months_after_modification, 1), 2)
+        ifrs_para = "IFRS 15 para 21"
+        treatment_label = "Cumulative catch-up — current period adjustment"
+
+        lines = [
+            {"label": "Original transaction price", "amount": request.original_transaction_price},
+            {"label": "Modification — additional value", "amount": request.modification_additional_value},
+            {"label": "New transaction price", "amount": round(new_transaction_price, 2)},
+            {"label": "Revenue recognised to date", "amount": request.revenue_recognised_to_date},
+            {"label": "Should have recognised (blended rate)", "amount": round(should_have_recognised, 2)},
+            {"label": "Cumulative catch-up adjustment", "amount": catchup_adjustment},
+            {"label": "Remaining obligation after modification", "amount": round(remaining_after, 2)},
+            {"label": "New monthly revenue going forward", "amount": new_monthly_revenue},
+        ]
+        reconciled = abs(catchup_adjustment) < 1.0
+
+    else:
+        # Para 20 (prospective): treat modification as a new contract going forward
+        catchup_adjustment = 0.0
+        new_monthly_revenue = round(remaining_after / max(request.remaining_months_after_modification, 1), 2)
+        ifrs_para = "IFRS 15 para 20"
+        treatment_label = "Prospective — modification treated as new contract from modification date"
+
+        lines = [
+            {"label": "Revenue recognised to date (unchanged)", "amount": request.revenue_recognised_to_date},
+            {"label": "Remaining obligation before modification", "amount": round(remaining_before, 2)},
+            {"label": "Modification — additional value", "amount": request.modification_additional_value},
+            {"label": "Remaining obligation after modification", "amount": round(remaining_after, 2)},
+            {"label": "Remaining months (after modification)", "amount": request.remaining_months_after_modification},
+            {"label": "New monthly revenue going forward", "amount": new_monthly_revenue},
+            {"label": "Catch-up adjustment (prospective = nil)", "amount": 0.0},
+        ]
+        reconciled = True
+
+    nova_prompt = f"""
+You are an IFRS 15 expert reviewing a contract modification.
+Period: {request.period}
+Contract: {request.contract_id or 'N/A'} — {request.customer_name or 'N/A'}
+Modification type: {treatment_label}
+Standard reference: {ifrs_para}
+
+Original transaction price: ${request.original_transaction_price:,.0f}
+Modification additional value: ${request.modification_additional_value:,.0f}
+New transaction price: ${new_transaction_price:,.0f}
+Revenue recognised to date: ${request.revenue_recognised_to_date:,.0f}
+Cumulative catch-up adjustment: ${catchup_adjustment:,.2f}
+New monthly revenue going forward: ${new_monthly_revenue:,.2f}
+
+Write exactly 3 sentences:
+1. Confirm which IFRS 15 paragraph applies and why (para 18/20/21) with the key criteria.
+2. State the financial impact of the modification treatment chosen.
+3. Recommended accounting entry or disclosure action for this period.
+Plain professional English. No boilerplate.
+"""
+    nova_commentary = await call_nova(nova_prompt)
+
+    return {
+        "period": request.period,
+        "contract_id": request.contract_id,
+        "customer_name": request.customer_name,
+        "modification_type": mod_type,
+        "ifrs_para": ifrs_para,
+        "treatment_label": treatment_label,
+        "lines": lines,
+        "new_transaction_price": round(new_transaction_price, 2),
+        "remaining_after_modification": round(remaining_after, 2),
+        "catchup_adjustment": catchup_adjustment,
+        "new_monthly_revenue": new_monthly_revenue,
+        "reconciled": reconciled,
+        "nova_commentary": nova_commentary,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+
 @router.post("/download-excel")
 async def download_excel_pack(request: PeriodClosePackRequest):
     from app.services.rev_rec_excel import generate_period_close_pack

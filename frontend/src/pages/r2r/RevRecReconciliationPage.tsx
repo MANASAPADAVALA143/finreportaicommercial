@@ -208,6 +208,19 @@ export default function RevRecReconciliationPage() {
   const [commentaryResult, setCommentaryResult] = useState<Record<string, unknown> | null>(null);
   const [commentaryLoading, setCommentaryLoading] = useState(false);
 
+  const [modificationInput, setModificationInput] = useState({
+    contract_id: '',
+    customer_name: '',
+    modification_type: 'prospective' as 'prospective' | 'cumulative_catchup',
+    original_transaction_price: 0,
+    revenue_recognised_to_date: 0,
+    modification_additional_value: 0,
+    remaining_months_original: 12,
+    remaining_months_after_modification: 12,
+  });
+  const [modificationResult, setModificationResult] = useState<Record<string, unknown> | null>(null);
+  const [modificationLoading, setModificationLoading] = useState(false);
+
   const [periodCloseResult, setPeriodCloseResult] = useState<Record<string, unknown> | null>(null);
   const [periodCloseLoading, setPeriodCloseLoading] = useState(false);
   const [periodCloseExcelLoading, setPeriodCloseExcelLoading] = useState(false);
@@ -219,6 +232,7 @@ export default function RevRecReconciliationPage() {
     setRpoResult(null);
     setCommissionResult(null);
     setCommentaryResult(null);
+    setModificationResult(null);
     setPeriodCloseResult(null);
     setReviewedEntries(new Set());
     setExpandedThreeWay(new Set());
@@ -398,6 +412,22 @@ export default function RevRecReconciliationPage() {
       toast.error(e instanceof Error ? e.message : 'Commission recon failed');
     } finally {
       setCommissionLoading(false);
+    }
+  };
+
+  const runModification = async () => {
+    setModificationLoading(true);
+    try {
+      const data = await callRevRec<Record<string, unknown>>('modification-recon', {
+        period,
+        ...modificationInput,
+      });
+      setModificationResult(data);
+      toast.success('Contract modification analysis complete');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Modification recon failed');
+    } finally {
+      setModificationLoading(false);
     }
   };
 
@@ -1409,6 +1439,195 @@ export default function RevRecReconciliationPage() {
                 </ol>
               </div>
             ) : null}
+          </div>
+        </section>
+
+        {/* Module 7 — Contract Modification Recon */}
+        <section className="bg-white rounded-2xl shadow-lg border border-slate-200 mb-8 overflow-hidden">
+          <div className="px-6 py-3 text-white font-semibold" style={{ backgroundColor: REV_REC_NAVY }}>
+            Contract Modification Recon
+            <span className="ml-3 text-xs font-normal opacity-70">IFRS 15 para 18–21 — Prospective vs Cumulative Catch-Up</span>
+          </div>
+          <div className="grid lg:grid-cols-2 gap-8 p-6">
+            {/* Left: inputs */}
+            <div className="space-y-3">
+              <label className="block text-sm">
+                <span className="text-slate-600 font-medium">Contract ID</span>
+                <input
+                  type="text"
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2"
+                  placeholder="e.g. CT-4421"
+                  value={modificationInput.contract_id}
+                  onChange={(e) => setModificationInput((s) => ({ ...s, contract_id: e.target.value }))}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="text-slate-600 font-medium">Customer name</span>
+                <input
+                  type="text"
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2"
+                  placeholder="e.g. Atlas Corp"
+                  value={modificationInput.customer_name}
+                  onChange={(e) => setModificationInput((s) => ({ ...s, customer_name: e.target.value }))}
+                />
+              </label>
+
+              <div>
+                <p className="text-sm font-medium text-slate-600 mb-2">Modification treatment</p>
+                <div className="flex gap-2">
+                  {([
+                    ['prospective', 'Prospective (Para 20)'],
+                    ['cumulative_catchup', 'Cumulative Catch-Up (Para 21)'],
+                  ] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setModificationInput((s) => ({ ...s, modification_type: val }))}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold border-2 ${
+                        modificationInput.modification_type === val
+                          ? 'border-blue-600 bg-blue-50 text-blue-800'
+                          : 'border-slate-200 bg-white text-slate-600'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  {modificationInput.modification_type === 'prospective'
+                    ? 'Para 20: New distinct goods/services added at standalone price — treat as separate contract going forward.'
+                    : 'Para 21: Modification creates blended performance obligation — catch-up adjustment in current period.'}
+                </p>
+              </div>
+
+              {(
+                [
+                  ['original_transaction_price', 'Original transaction price ($)'],
+                  ['revenue_recognised_to_date', 'Revenue recognised to date ($)'],
+                  ['modification_additional_value', 'Modification — additional value ($)'],
+                  ['remaining_months_original', 'Remaining months (original contract)'],
+                  ['remaining_months_after_modification', 'Remaining months (after modification)'],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="block text-sm">
+                  <span className="text-slate-600 font-medium">{label}</span>
+                  <input
+                    type="number"
+                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2"
+                    value={modificationInput[key]}
+                    onChange={(e) =>
+                      setModificationInput((s) => ({ ...s, [key]: parseFloat(e.target.value) || 0 }))
+                    }
+                  />
+                </label>
+              ))}
+
+              <button
+                type="button"
+                disabled={modificationLoading}
+                onClick={runModification}
+                className="w-full py-3 rounded-xl text-white font-semibold flex justify-center items-center gap-2 disabled:opacity-60"
+                style={{ backgroundColor: REV_REC_NAVY }}
+              >
+                {modificationLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+                Analyse Modification
+              </button>
+            </div>
+
+            {/* Right: results */}
+            <div>
+              {!modificationResult ? (
+                <div className="text-slate-500 text-sm space-y-3">
+                  <p>Run the analysis to see the IFRS 15 treatment and catch-up calculation.</p>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs text-slate-500 space-y-1">
+                    <p className="font-semibold text-slate-600">IFRS 15 para 18–21 quick guide</p>
+                    <p>
+                      <span className="font-medium">Para 20 — Prospective:</span> Modification adds distinct goods/services at
+                      their standalone selling price. Treat as a separate new contract; no retrospective adjustment.
+                    </p>
+                    <p>
+                      <span className="font-medium">Para 21 — Catch-up:</span> Modification changes existing performance
+                      obligation. Recognise a cumulative catch-up adjustment in the current period.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Treatment banner */}
+                  <div className="rounded-xl px-4 py-3 border border-blue-200 bg-blue-50 text-sm">
+                    <p className="font-bold text-blue-800" style={{ color: REV_REC_NAVY }}>
+                      {String(modificationResult.ifrs_para || '')}
+                    </p>
+                    <p className="text-slate-600 mt-1">{String(modificationResult.treatment_label || '')}</p>
+                  </div>
+
+                  {/* Waterfall table */}
+                  <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-slate-600">
+                          <th className="px-3 py-2">Line</th>
+                          <th className="px-3 py-2 text-right">Amount ($)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {((modificationResult.lines as Record<string, unknown>[]) || []).map((line, idx) => {
+                          const isCatchup = String(line.label).toLowerCase().includes('catch-up');
+                          const isNew = String(line.label).toLowerCase().includes('new monthly');
+                          return (
+                            <tr
+                              key={idx}
+                              className={`border-t border-slate-100 ${
+                                isCatchup
+                                  ? Number(line.amount) !== 0
+                                    ? 'bg-amber-50 font-semibold text-amber-900'
+                                    : 'text-emerald-700 font-medium'
+                                  : isNew
+                                    ? 'font-bold text-slate-900'
+                                    : ''
+                              }`}
+                            >
+                              <td className="px-3 py-2">{String(line.label)}</td>
+                              <td className="px-3 py-2 text-right font-mono">
+                                {typeof line.amount === 'number' ? line.amount.toLocaleString() : String(line.amount ?? '')}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Summary chips */}
+                  <div className="flex flex-wrap gap-3">
+                    {Number(modificationResult.catchup_adjustment) !== 0 ? (
+                      <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-amber-100 text-amber-900 font-bold text-xs border border-amber-200">
+                        <AlertTriangle className="w-3 h-3" />
+                        Catch-Up: ${Number(modificationResult.catchup_adjustment).toLocaleString()}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-xs border border-emerald-200">
+                        <Check className="w-3 h-3" /> No catch-up required
+                      </span>
+                    )}
+                    <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-blue-50 text-blue-800 font-semibold text-xs border border-blue-200">
+                      New TP: ${Number(modificationResult.new_transaction_price || 0).toLocaleString()}
+                    </span>
+                    <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
+                      ${Number(modificationResult.new_monthly_revenue || 0).toLocaleString()} / month going forward
+                    </span>
+                  </div>
+
+                  {/* AI insight */}
+                  <div className="rounded-xl p-4 text-sm italic border border-blue-100" style={{ backgroundColor: 'rgba(29, 78, 216, 0.08)' }}>
+                    <p className="font-semibold not-italic mb-1" style={{ color: REV_REC_BLUE }}>
+                      AI Insight
+                    </p>
+                    {String(modificationResult.nova_commentary || '')}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
