@@ -51,6 +51,7 @@ from app.api.routes import (
     stateful_journal,
     bank_recon,
     erp_integration,
+    erp_connections,
     bookkeeping,
     r2r_pattern,
     r2r_learning_routes,
@@ -68,6 +69,7 @@ from app.api.routes import (
     payment_calendar,
     covenant_tracker,
     ar_collections,
+    ca_bank_router,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -165,6 +167,7 @@ app.include_router(r2r_history.router)
 app.include_router(stateful_journal.router)
 app.include_router(bank_recon.router)
 app.include_router(erp_integration.router, prefix="/api")
+app.include_router(erp_connections.router)
 app.include_router(bookkeeping.router)
 app.include_router(r2r_pattern.router)
 app.include_router(r2r_learning_routes.router)
@@ -186,6 +189,7 @@ app.include_router(entity_health.router)
 app.include_router(payment_calendar.router)
 app.include_router(covenant_tracker.router)
 app.include_router(ar_collections.router)
+app.include_router(ca_bank_router.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:

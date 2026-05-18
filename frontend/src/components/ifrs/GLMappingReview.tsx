@@ -133,12 +133,15 @@ export default function GLMappingReview({ trialBalanceId, mappings, harness, onR
 
   const confirmAllHigh = async () => {
     if (!highConfidenceIds.length) {
-      toast("No high confidence suggestions pending");
+      toast("No high confidence suggestions pending (≥85% unconfirmed)");
       return;
     }
     try {
-      const res = await ifrsService.bulkConfirm(highConfidenceIds);
-      toast.success(`Confirmed ${res.updated} mappings`);
+      const res = await ifrsService.confirmHighConfidence(trialBalanceId, 0.85);
+      const msg = res.skipped_blocked > 0
+        ? `Confirmed ${res.confirmed} mappings (${res.skipped_blocked} blocked skipped)`
+        : `Confirmed ${res.confirmed} high-confidence mappings`;
+      toast.success(msg);
       await onRefresh();
     } catch (e: any) {
       toast.error(e?.response?.data?.detail || "Bulk confirm failed");

@@ -1,0 +1,141 @@
+{
+  "HDFC": {
+    "keywords": ["hdfc", "hdfc bank"],
+    "date_fmt": "\\d{2}/\\d{2}/\\d{2,4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 4, "credit": 5, "balance": 6
+    },
+    "csv_cols": {
+      "date":     ["Date", "Value Date", "Txn Date"],
+      "narration": ["Narration", "Description", "Particulars"],
+      "debit":    ["Withdrawal Amt.", "Withdrawal Amt", "Debit Amount", "DR"],
+      "credit":   ["Deposit Amt.", "Deposit Amt", "Credit Amount", "CR"],
+      "balance":  ["Closing Balance", "Balance"]
+    }
+  },
+  "ICICI": {
+    "keywords": ["icici", "icici bank"],
+    "date_fmt": "\\d{2}-\\d{2}-\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Transaction Date", "Value Date", "Date"],
+      "narration": ["Transaction Remarks", "Narration", "Description", "Particulars"],
+      "amount":   ["Amount"],
+      "balance":  ["Balance"]
+    }
+  },
+  "SBI": {
+    "keywords": ["sbi", "state bank", "state bank of india"],
+    "date_fmt": "\\d{2} [A-Za-z]{3} \\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 2, "debit": 4, "credit": 5, "balance": 6
+    },
+    "csv_cols": {
+      "date":     ["Txn Date", "Transaction Date", "Value Date", "Date"],
+      "narration": ["Description", "Narration", "Particulars", "Remarks"],
+      "debit":    ["Debit", "Withdrawal", "DR"],
+      "credit":   ["Credit", "Deposit", "CR"],
+      "balance":  ["Balance"]
+    }
+  },
+  "AXIS": {
+    "keywords": ["axis", "axis bank"],
+    "date_fmt": "\\d{2}-\\d{2}-\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Tran Date", "Transaction Date", "Date", "Value Date"],
+      "narration": ["PARTICULARS", "Narration", "Description", "Particulars"],
+      "debit":    ["DR", "Debit", "Withdrawal Amt", "Debit Amount"],
+      "credit":   ["CR", "Credit", "Deposit Amt", "Credit Amount"],
+      "balance":  ["BAL", "Balance", "Closing Balance"]
+    }
+  },
+  "KOTAK": {
+    "keywords": ["kotak", "kotak mahindra"],
+    "date_fmt": "\\d{2}[-/]\\d{2}[-/]\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Transaction Date", "Date", "Value Date"],
+      "narration": ["Description", "Narration", "Particulars", "Transaction Remarks"],
+      "debit":    ["Debit", "Withdrawal", "DR", "Debit Amount"],
+      "credit":   ["Credit", "Deposit", "CR", "Credit Amount"],
+      "balance":  ["Balance", "Closing Balance"]
+    }
+  },
+  "KOTAK_CURRENT": {
+    "keywords": ["kotak current", "kotak mahindra current"],
+    "date_fmt": "\\d{2}[-/]\\d{2}[-/]\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Transaction Date", "Date", "Value Date"],
+      "narration": ["Description", "Narration", "Particulars", "Transaction Remarks"],
+      "debit":    ["Debit", "Withdrawal", "DR", "Debit Amount"],
+      "credit":   ["Credit", "Deposit", "CR", "Credit Amount"],
+      "balance":  ["Balance", "Closing Balance"]
+    }
+  },
+  "YES": {
+    "keywords": ["yes bank", "yes bank limited"],
+    "date_fmt": "\\d{2}-[A-Za-z]{3}-\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Date", "Transaction Date"],
+      "narration": ["Particulars", "Narration", "Description", "Remarks"],
+      "debit":    ["Debit", "Withdrawal", "DR"],
+      "credit":   ["Credit", "Deposit", "CR"],
+      "balance":  ["Balance"]
+    }
+  },
+  "INDUSIND": {
+    "keywords": ["indusind", "indusind bank"],
+    "date_fmt": "\\d{2}/\\d{2}/\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Date", "Transaction Date", "Value Date"],
+      "narration": ["Narration", "Description", "Particulars", "Details"],
+      "debit":    ["Debit Amount", "Debit", "DR", "Withdrawal"],
+      "credit":   ["Credit Amount", "Credit", "CR", "Deposit"],
+      "balance":  ["Balance", "Closing Balance"]
+    }
+  },
+  "FEDERAL": {
+    "keywords": ["federal bank", "the federal bank"],
+    "date_fmt": "\\d{2}/\\d{2}/\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Txn Date", "Transaction Date", "Value Date", "Date"],
+      "narration": ["Particulars", "Narration", "Description", "Remarks"],
+      "debit":    ["Debit", "Withdrawal", "DR"],
+      "credit":   ["Credit", "Deposit", "CR"],
+      "balance":  ["Balance", "Closing Balance"]
+    }
+  },
+  "PNB": {
+    "keywords": ["pnb", "punjab national bank"],
+    "date_fmt": "\\d{2}/\\d{2}/\\d{4}",
+    "pdf_cols": {
+      "date": 0, "narration": 1, "debit": 3, "credit": 4, "balance": 5
+    },
+    "csv_cols": {
+      "date":     ["Date", "Transaction Date", "Value Date"],
+      "narration": ["Narration", "Description", "Particulars"],
+      "debit":    ["Debit", "Withdrawal", "DR"],
+      "credit":   ["Credit", "Deposit", "CR"],
+      "balance":  ["Balance", "Closing Balance"]
+    }
+  }
+}

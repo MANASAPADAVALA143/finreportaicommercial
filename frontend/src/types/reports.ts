@@ -19,7 +19,7 @@ export interface BoardPackSection {
   title: string;
   included: boolean;
   order: number;
-  aiGenerated: boolean;
+  aiGenerated?: boolean;
   approved: boolean;
 }
 

@@ -9,7 +9,7 @@ import {
   type ScoredEntry,
 } from "../services/patternAnalysis";
 import { listClients, createClient, saveUpload, getClientHistory, type R2RClient } from "../services/r2rHistoryService";
-import { postR2RFeedback, getFeedbackHistory, type R2RFeedback } from "../services/r2rLearning.service";
+import { postR2RFeedback, getFeedbackHistory, getLearningProgress, type R2RFeedback } from "../services/r2rLearning.service";
 import { postCfoAgentRun } from "../services/cfoAgents";
 import LearningDashboardTab from "../components/r2r/LearningDashboardTab";
 import { backendOrigin, isBackendConfigured } from "../utils/backendOrigin";
@@ -235,7 +235,8 @@ function parseAmountStr(s: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-const FISCAL_MONTH_ORDER = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+const _FISCAL_MONTH_ORDER = ["Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep"];
+void _FISCAL_MONTH_ORDER; // reserved for fiscal-year sorting
 
 /** Company / legal entity codes common in multi-entity GL extracts (replaces missing vendor). */
 const ENTITY_DISPLAY_MAP: Record<string, string> = {
@@ -310,11 +311,11 @@ function computeVendorPatterns(entries: JEEntryRow[]): { vendor: string; acct: s
     byVendor[e.vendor].accounts.push(e.account);
     byVendor[e.vendor].amounts.push(parseAmountStr(e.amount));
     byVendor[e.vendor].scores.push(e.score);
-    if (e.amt >= 70) byVendor[e.vendor].flags.add("Amt");
-    if (e.dup >= 70) byVendor[e.vendor].flags.add("Dup");
-    if (e.user >= 70) byVendor[e.vendor].flags.add("User");
-    if (e.time >= 70) byVendor[e.vendor].flags.add("Time");
-    if (e.acct >= 70) byVendor[e.vendor].flags.add("Acct");
+    if ((e.amt ?? 0) >= 70) byVendor[e.vendor].flags.add("Amt");
+    if ((e.dup ?? 0) >= 70) byVendor[e.vendor].flags.add("Dup");
+    if ((e.user ?? 0) >= 70) byVendor[e.vendor].flags.add("User");
+    if ((e.time ?? 0) >= 70) byVendor[e.vendor].flags.add("Time");
+    if ((e.acct ?? 0) >= 70) byVendor[e.vendor].flags.add("Acct");
     if (e.tags.includes("Wknd")) byVendor[e.vendor].flags.add("Wknd");
     if (e.tags.includes("M-End")) byVendor[e.vendor].flags.add("M-End");
   });
@@ -1548,7 +1549,7 @@ const StatTab = ({ data }: { data: DerivedStats }) => {
 };
 
 // ─── Tab: AI Insights ─────────────────────────────────────────────────────────
-const AIInsightsTab = ({ data }: { data: DerivedStats }) => (
+const AIInsightsTab = ({ data, onExport }: { data: DerivedStats; onExport?: () => void }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
     <Card style={{ borderLeft: `4px solid ${C.blue}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
@@ -1601,7 +1602,7 @@ const AIInsightsTab = ({ data }: { data: DerivedStats }) => (
       </table>
       <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
         <button
-          onClick={handleExportReport}
+          onClick={onExport}
           style={{ background: C.blue, color: C.white, border: "none", borderRadius: 8,
             padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: font }}
         >
@@ -1638,9 +1639,12 @@ export default function R2RPatternAnalysisPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const [clients, setClients] = useState<R2RClient[]>([]);
-  const [clientsLoading, setClientsLoading] = useState(false);
+  const [_clientsLoading, setClientsLoading] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [newClientName, setNewClientName] = useState("");
+
+  // Baseline banner state — loaded when client changes
+  const [baselineMeta, setBaselineMeta] = useState<Record<string, unknown> | null>(null);
 
   const [patternResult, setPatternResult] = useState<AnalyzeEntriesResult | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
@@ -1665,6 +1669,24 @@ export default function R2RPatternAnalysisPage() {
       .catch(() => setClients([]))
       .finally(() => setClientsLoading(false));
   }, []);
+
+  // Fetch baseline metadata when client changes — drives the info banner
+  useEffect(() => {
+    setBaselineMeta(null);
+    if (!selectedClientId) return;
+    getLearningProgress(selectedClientId)
+      .then((data) => {
+        // Only show banner if there's real baseline data
+        const hasBaseline =
+          (data.baseline_accounts as number) > 0 ||
+          (data.months_of_data as number) > 0 ||
+          data.learning_status === "calibrated" ||
+          data.learning_status === "optimised" ||
+          data.learning_status === "learning";
+        setBaselineMeta(hasBaseline ? data : null);
+      })
+      .catch(() => setBaselineMeta(null));
+  }, [selectedClientId]);
 
   useEffect(() => {
     if (!rawRows.length) {
@@ -1713,7 +1735,8 @@ export default function R2RPatternAnalysisPage() {
           th,
           materialityAmountStr,
           materialityPctStr,
-          { signal: ac.signal }
+          { signal: ac.signal },
+          selectedClientId || undefined
         );
         if (!cancelled) setPatternResult(res);
       } catch (e) {
@@ -2042,7 +2065,7 @@ export default function R2RPatternAnalysisPage() {
       case "vendor": return <VendorTab data={derivedStats} />;
       case "user":   return <UserTab data={derivedStats} />;
       case "stats":  return <StatTab data={derivedStats} />;
-      case "ai":     return <AIInsightsTab data={derivedStats} />;
+      case "ai":     return <AIInsightsTab data={derivedStats} onExport={handleExportReport} />;
       default:       return null;
     }
   };
@@ -2249,7 +2272,7 @@ export default function R2RPatternAnalysisPage() {
             </div>
           </div>
           <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${C.borderLight}` }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>Client (optional — for learning over time)</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>Client — select to compare against uploaded baseline</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <select
                 value={selectedClientId ?? ""}
@@ -2287,10 +2310,53 @@ export default function R2RPatternAnalysisPage() {
                   Add client
                 </button>
               </span>
-              {selectedClientId && (
+              {selectedClientId && !baselineMeta && (
                 <span style={{ fontSize: 11, color: C.green }}>✓ Saved to client · baseline from full history</span>
               )}
             </div>
+
+            {/* ── Baseline-detected info banner ── */}
+            {selectedClientId && baselineMeta && (() => {
+              const clientName = clients.find((c) => c.id === selectedClientId)?.name ?? selectedClientId;
+              const thresholds = (baselineMeta.thresholds || {}) as Record<string, number>;
+              const weekendPenalty = thresholds.weekend_penalty_score;
+              const baselineAccounts = baselineMeta.baseline_accounts as number | undefined;
+              const baselineUsers    = baselineMeta.baseline_users    as number | undefined;
+              // Compute approx weekend rate from weekend_penalty suppression
+              const weekendRatePct =
+                baselineMeta.weekend_rate_pct != null
+                  ? `${baselineMeta.weekend_rate_pct}%`
+                  : weekendPenalty != null && weekendPenalty < 5
+                  ? "suppressed"
+                  : null;
+              return (
+                <div style={{
+                  marginTop: 8,
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  background: "#ECFDF5",
+                  border: "1px solid #6EE7B7",
+                  fontSize: 12,
+                  color: "#065F46",
+                  lineHeight: 1.65,
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                }}>
+                  <span style={{ fontSize: 16, marginTop: -1 }}>⚡</span>
+                  <div>
+                    <strong>Baseline detected for {clientName}</strong>
+                    {baselineAccounts ? ` — ${baselineAccounts} account${baselineAccounts !== 1 ? "s" : ""} profiled` : ""}
+                    {baselineUsers    ? `, ${baselineUsers} known user${baselineUsers !== 1 ? "s" : ""}` : ""}
+                    {weekendRatePct   ? `, weekend rate ${weekendRatePct}` : ""}.
+                    {" "}
+                    <span style={{ opacity: 0.8 }}>
+                      Weekend flag suppressed for normal patterns · Known users not flagged as new vendors.
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <label style={{ cursor: "pointer", padding: "10px 18px", borderRadius: 8, background: C.blue, color: C.white, fontSize: 13, fontWeight: 600 }}>

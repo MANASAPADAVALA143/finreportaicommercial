@@ -165,10 +165,10 @@ def build_plain_english_summary(
         "what_is_score": (
             f"This entry scored {composite_score:.0f}/100. "
             + {
-                "CRITICAL": "Scores ≥ 80 are Critical — immediate action required before period close.",
-                "HIGH":     "Scores ≥ 65 are High risk — review required before period close.",
-                "MEDIUM":   "Scores ≥ 45 are Medium risk — review recommended; likely unusual but may be legitimate.",
-                "LOW":      "Scores below 45 are Low risk — within normal parameters.",
+                "CRITICAL": "Scores ≥ 75 are Critical — immediate action required before period close.",
+                "HIGH":     "Scores ≥ 55 are High risk — review required before period close.",
+                "MEDIUM":   "Scores ≥ 42 are Medium risk — review recommended; likely unusual but may be legitimate.",
+                "LOW":      "Scores below 42 are Low risk — within normal parameters.",
             }.get(risk_level, f"Risk level: {risk_level}.")
         ),
 

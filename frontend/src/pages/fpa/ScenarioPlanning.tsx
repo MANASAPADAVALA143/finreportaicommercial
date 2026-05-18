@@ -69,6 +69,7 @@ const ScenarioPlanning: React.FC = () => {
   const [uploadedData, setUploadedData] = useState<UploadedFinancialData | null>(null);
   const [driverModelEnabled, setDriverModelEnabled] = useState(false);
   const [showWorkingCapital, setShowWorkingCapital] = useState(false);
+  const [showNewScenarioModal, setShowNewScenarioModal] = useState(false);
 
   // Load data from localStorage on mount
   useEffect(() => {
@@ -1144,9 +1145,9 @@ CFO language, specific and actionable, max 250 words.`;
                   { label: 'EBITDA Margin %', key: 'ebitdaMargin', format: (v: number) => v.toFixed(1) + '%' },
                   { label: 'Net Profit', key: 'netProfit', format: formatCurrency },
                   { label: 'Net Margin %', key: 'netMargin', format: (v: number) => v.toFixed(1) + '%' },
-                  { label: 'Year-End Cash', key: 'cashPosition', format: formatCurrency },
-                  { label: 'Cash Runway', key: 'runway', format: (v: number) => v + ' months' },
-                  { label: 'Break-Even Month', key: 'breakEvenMonth', format: (v: string) => v }
+                  { label: 'Year-End Cash', key: 'cashPosition', format: formatCurrency as (v: any) => string },
+                  { label: 'Cash Runway', key: 'runway', format: (v: any) => v + ' months' },
+                  { label: 'Break-Even Month', key: 'breakEvenMonth', format: (v: any) => v }
                 ].map((row, idx) => (
                   <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="py-3 px-4 font-medium text-gray-900">{row.label}</td>
@@ -1252,7 +1253,7 @@ CFO language, specific and actionable, max 250 words.`;
       )}
 
       {/* Worst Case Warning */}
-      {scenarios.find(s => s.type === 'worst')?.results.runway < 8 && (
+      {(scenarios.find(s => s.type === 'worst')?.results?.runway ?? Infinity) < 8 && (
         <div className="max-w-[1800px] mx-auto mb-6">
           <div className="bg-red-50 border-2 border-red-200 rounded-xl p-6">
             <div className="flex items-start gap-3">

@@ -896,7 +896,8 @@ export async function analyzePatternBackend(
   customThreshold: string = '40',
   materialityAmount: string = '',
   materialityPct: string = '',
-  opts?: AnalyzePatternBackendOptions
+  opts?: AnalyzePatternBackendOptions,
+  clientId?: string
 ): Promise<AnalyzeEntriesResult> {
   if (!rows?.length) {
     const emptyBaseline = buildClientBaseline([]);
@@ -942,6 +943,7 @@ export async function analyzePatternBackend(
     ...(thTrim ? { custom_threshold: thTrim } : {}),
     ...(ma !== '' ? { materiality_amount: ma } : {}),
     ...(mp !== '' ? { materiality_pct: mp } : {}),
+    ...(clientId ? { client_id: clientId } : {}),
   };
 
   const analysisLabel = `${SENSITIVITY_DISPLAY[sensitivity] ?? sensitivity} threshold (${customThreshold}+)`;

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { parseCFODecisionFromWorkbook, saveCFODecisionData } from '../services/cfoDecisionDataService';
+import { parseCFODecisionFromWorkbook } from '../services/cfoDecisionDataService';
 import { parseTrialBalanceFromRows } from '../services/fpaDataService';
 import { saveCFOServicesContext } from '../types/cfoServicesContext';
 import { parseCFOServicesContextFromRows } from '../utils/cfoContextParser';
@@ -31,9 +31,6 @@ interface ParsedFinancialData {
   fileName: string;
 }
 
-function normalizeSheetName(name: string): string {
-  return name.toLowerCase().trim().replace(/[\s-]+/g, '_');
-}
 
 export const UploadData: React.FC = () => {
   const navigate = useNavigate();
@@ -214,7 +211,7 @@ export const UploadData: React.FC = () => {
     if (rawRows.length < 2) return [];
     const norm = (s: string) => String(s ?? '').trim().toLowerCase().replace(/\s*\(₹\)\s*/gi, '').replace(/\s+/g, ' ');
     let headerRowIndex = -1;
-    let nameColIdx = -1, debitColIdx = -1, creditColIdx = -1, glColIdx = -1, typeColIdx = -1;
+    let nameColIdx = -1, debitColIdx = -1, creditColIdx = -1, _glColIdx = -1, _typeColIdx = -1;
     for (let r = 0; r < Math.min(rawRows.length, 10); r++) {
       const row = rawRows[r];
       if (!Array.isArray(row)) continue;
@@ -229,9 +226,9 @@ export const UploadData: React.FC = () => {
           if (c.includes('debit') || c === 'dr') debitColIdx = j;
           if (c.includes('credit') || c === 'cr') creditColIdx = j;
           if ((c.includes('account') && c.includes('name')) || c.includes('particulars') || c === 'name') nameColIdx = j;
-          if ((c.includes('gl') && c.includes('code')) || c === 'code') glColIdx = j;
+          if ((c.includes('gl') && c.includes('code')) || c === 'code') _glColIdx = j;
           if (c.includes('account') && nameColIdx < 0) nameColIdx = j;
-          if (c.includes('type')) typeColIdx = j;
+          if (c.includes('type')) _typeColIdx = j;
         }
         if (nameColIdx < 0) for (let j = 0; j < cells.length; j++) { if (cells[j].includes('account') || cells[j] === 'name') { nameColIdx = j; break; } }
         break;
@@ -253,7 +250,7 @@ export const UploadData: React.FC = () => {
     return parseTrialBalanceFromSheet(rowsAsObjects);
   }
 
-  const parseFinancialFile = (file: File): Promise<ParsedFinancialData> => {
+  const _parseFinancialFile = (file: File): Promise<ParsedFinancialData> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -312,7 +309,7 @@ export const UploadData: React.FC = () => {
           
           trialBalance.forEach(entry => {
             const type = entry.accountType.toLowerCase();
-            const netAmount = entry.debit - entry.credit;
+            const _netAmount = entry.debit - entry.credit; void _netAmount;
             
             if (type.includes('asset')) {
               totalAssets += entry.debit;

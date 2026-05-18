@@ -318,15 +318,15 @@ const KPIDashboard: React.FC = () => {
             </div>
             <div className="flex items-center gap-4">
               <div className="text-right">
-                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter(k => k.status === 'excellent' || k.status === 'good').length}</div>
+                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter((k: any) => k.status === 'excellent' || k.status === 'good').length}</div>
                 <div className="text-sm text-blue-100">On Target</div>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter(k => k.status === 'warning').length}</div>
+                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter((k: any) => k.status === 'warning').length}</div>
                 <div className="text-sm text-blue-100">Warning</div>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter(k => k.status === 'critical').length}</div>
+                <div className="text-2xl font-bold">{(realKPIs?.allKPIs || []).filter((k: any) => k.status === 'critical').length}</div>
                 <div className="text-sm text-blue-100">Critical</div>
               </div>
             </div>

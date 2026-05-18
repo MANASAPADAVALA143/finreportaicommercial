@@ -47,7 +47,7 @@ export const MonteCarloView: React.FC<MonteCarloViewProps> = ({
     setProgress(0);
     const ITER = iterations;
     setTimeout(() => {
-      const r = runMonteCarlo(baseAssumptions, ITER, baseAnnualRevenue, openingCashCr);
+      const r = runMonteCarlo(baseAssumptions, ITER);
       setResult(r);
       setProgress(ITER);
       setRunning(false);

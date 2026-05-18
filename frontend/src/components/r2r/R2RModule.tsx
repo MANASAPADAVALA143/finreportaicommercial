@@ -33,6 +33,11 @@ interface AnalysisMetrics {
   precision: number;
   recall: number;
   f1Score: number;
+  // Optional ground-truth validation fields (present when dataset has labelled anomalies)
+  groundTruthAnomalies?: number;
+  detectedAnomalies?: number;
+  missedAnomalies?: number;
+  falseAlarms?: number;
 }
 
 interface ConfusionMatrix {
@@ -552,23 +557,23 @@ export const R2RModule: React.FC = () => {
                   
                   <div className="bg-white rounded-xl p-6 shadow-sm">
                     <p className="text-sm font-medium text-green-700 mb-2">Detected</p>
-                    <p className="text-4xl font-bold text-green-600">{metrics.detectedAnomalies}</p>
+                    <p className="text-4xl font-bold text-green-600">{metrics.detectedAnomalies ?? 0}</p>
                     <p className="text-xs text-gray-500 mt-2">
-                      {metrics.groundTruthAnomalies > 0 
-                        ? `${((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100).toFixed(0)}% recall rate`
+                      {(metrics.groundTruthAnomalies ?? 0) > 0
+                        ? `${(((metrics.detectedAnomalies ?? 0) / (metrics.groundTruthAnomalies ?? 1)) * 100).toFixed(0)}% recall rate`
                         : 'N/A'}
                     </p>
                   </div>
-                  
+
                   <div className="bg-white rounded-xl p-6 shadow-sm">
                     <p className="text-sm font-medium text-red-700 mb-2">Missed</p>
-                    <p className="text-4xl font-bold text-red-600">{metrics.missedAnomalies}</p>
+                    <p className="text-4xl font-bold text-red-600">{metrics.missedAnomalies ?? 0}</p>
                     <p className="text-xs text-gray-500 mt-2">False negatives</p>
                   </div>
-                  
+
                   <div className="bg-white rounded-xl p-6 shadow-sm">
                     <p className="text-sm font-medium text-yellow-700 mb-2">False Alarms</p>
-                    <p className="text-4xl font-bold text-yellow-600">{metrics.falseAlarms}</p>
+                    <p className="text-4xl font-bold text-yellow-600">{metrics.falseAlarms ?? 0}</p>
                     <p className="text-xs text-gray-500 mt-2">False positives</p>
                   </div>
                 </div>
@@ -579,24 +584,24 @@ export const R2RModule: React.FC = () => {
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
                       <div className="flex justify-between text-xs text-gray-600 mb-2">
-                        <span>Detected: {metrics.detectedAnomalies}</span>
-                        <span>Missed: {metrics.missedAnomalies}</span>
+                        <span>Detected: {metrics.detectedAnomalies ?? 0}</span>
+                        <span>Missed: {metrics.missedAnomalies ?? 0}</span>
                       </div>
                       <div className="w-full bg-red-200 rounded-full h-4 overflow-hidden flex">
-                        <div 
-                          className="bg-green-500 h-4 transition-all flex items-center justify-center text-xs text-white font-semibold" 
-                          style={{ width: `${metrics.groundTruthAnomalies > 0 ? (metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100 : 0}%` }}
+                        <div
+                          className="bg-green-500 h-4 transition-all flex items-center justify-center text-xs text-white font-semibold"
+                          style={{ width: `${(metrics.groundTruthAnomalies ?? 0) > 0 ? ((metrics.detectedAnomalies ?? 0) / (metrics.groundTruthAnomalies ?? 1)) * 100 : 0}%` }}
                         >
-                          {metrics.groundTruthAnomalies > 0 && ((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100) > 10 
-                            ? `${((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100).toFixed(0)}%` 
+                          {(metrics.groundTruthAnomalies ?? 0) > 0 && (((metrics.detectedAnomalies ?? 0) / (metrics.groundTruthAnomalies ?? 1)) * 100) > 10
+                            ? `${(((metrics.detectedAnomalies ?? 0) / (metrics.groundTruthAnomalies ?? 1)) * 100).toFixed(0)}%`
                             : ''}
                         </div>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className="text-2xl font-bold text-purple-600">
-                        {metrics.groundTruthAnomalies > 0 
-                          ? `${((metrics.detectedAnomalies / metrics.groundTruthAnomalies) * 100).toFixed(1)}%`
+                        {(metrics.groundTruthAnomalies ?? 0) > 0
+                          ? `${(((metrics.detectedAnomalies ?? 0) / (metrics.groundTruthAnomalies ?? 1)) * 100).toFixed(1)}%`
                           : 'N/A'}
                       </p>
                       <p className="text-xs text-gray-500">Recall</p>

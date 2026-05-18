@@ -9,6 +9,7 @@ import { MonteCarloView } from '../../components/scenario/MonteCarloView';
 import type { ScenarioType, ScenarioAssumptions, ScenarioResult } from '../../types/scenarioEngine';
 import { DEFAULT_ASSUMPTIONS } from '../../types/scenarioEngine';
 import { calculateScenario } from '../../services/scenarioCalculator';
+import { loadFPAData } from '../../services/fpaDataService';
 import { api } from '../../services/api';
 import toast from 'react-hot-toast';
 

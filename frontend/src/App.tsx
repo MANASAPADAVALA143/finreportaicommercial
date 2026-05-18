@@ -97,6 +97,8 @@ const IFRSStatementGenerator = safeLazy(() =>
 const IFRSStatementPage = safeLazy(() => import('./pages/ifrs-statement/IFRSStatementPage'));
 const AgenticGenerator = safeLazy(() => import('./pages/ifrs/AgenticGenerator'));
 const TallyIntegrationPage = safeLazy(() => import('./pages/erp/TallyIntegrationPage'));
+const ConnectionsPage      = safeLazy(() => import('./pages/Connections/ConnectionsPage'));
+const ZohoCallback         = safeLazy(() => import('./pages/Connections/ZohoCallback'));
 const FPASuite = safeLazy(() =>
   import('./pages/fpa/FPASuite').then((m) => ({ default: m.FPASuite }))
 );
@@ -169,6 +171,10 @@ const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
 const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
 const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
 const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntelligencePage'));
+// CA Firm Tools
+const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
+const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
+const CABankRecon = safeLazy(() => import('./pages/ca-firm/CABankRecon'));
 
 /** Matches Vite `base` (root vs GitHub Pages subpath). */
 const normalizedBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '') || '/';
@@ -233,6 +239,8 @@ function App() {
                 <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
                 <Route path="/board-pack" element={<IFRSStatementPage />} />
                 <Route path="/erp/tally" element={<TallyIntegrationPage />} />
+                <Route path="/connections" element={<ConnectionsPage />} />
+                <Route path="/connections/zoho/callback" element={<ZohoCallback />} />
                 <Route element={<R2rShell />}>
                   <Route path="/r2r" element={<R2RModule />} />
                   <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
@@ -291,6 +299,10 @@ function App() {
                   <Route path="monthly" element={<BookkeepingMonthlyPage />} />
                 </Route>
               </Route>
+              {/* CA Firm Tools */}
+              <Route path="/ca-firm/bank-processor" element={<BankStatementProcessor />} />
+              <Route path="/ca-firm/tb-financials"  element={<TBToFinancials />} />
+              <Route path="/ca-firm/bank-recon"     element={<CABankRecon />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

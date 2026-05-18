@@ -44,6 +44,9 @@ export default function AgenticGenerator() {
   const { activeClient } = useClient();
   const tenantId = activeClient?.companyId || TENANT;
 
+  /** Returns headers carrying the active tenant identifier */
+  const hdr = useCallback(() => ({ 'X-Tenant-Id': tenantId }), [tenantId]);
+
   const [file, setFile] = useState<File | null>(null);
   const [tbId, setTbId] = useState<number | null>(null);
   const [priorTbId, setPriorTbId] = useState<string>('');
@@ -88,7 +91,7 @@ export default function AgenticGenerator() {
       wsRef.current = null;
       return;
     }
-    const ws = new WebSocket(getWsUrl(runId));
+    const ws = new WebSocket(wsUrlFor(runId));
     wsRef.current = ws;
     ws.onmessage = (ev) => {
       try {
@@ -120,7 +123,7 @@ export default function AgenticGenerator() {
     return () => {
       ws.close();
     };
-  }, [runId, status?.status, getWsUrl]);
+  }, [runId, status?.status]);
 
   useEffect(() => {
     if (logRef.current) {

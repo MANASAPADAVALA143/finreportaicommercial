@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
@@ -87,6 +87,56 @@ class ScoringResult(Base):
     reviewed_by = Column(String, nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountBaseline(Base):
+    """
+    Per-client, per-account statistical baseline built from historical data.
+    Used by the scoring engine to suppress false positives for known-normal behaviour.
+    """
+    __tablename__ = "account_baselines"
+
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    client_id      = Column(String, nullable=False, index=True)
+    account        = Column(String, nullable=False)
+
+    mean_amount    = Column(Float, nullable=True)
+    std_amount     = Column(Float, nullable=True)
+    median_amount  = Column(Float, nullable=True)
+    p10_amount     = Column(Float, nullable=True)   # 10th percentile
+    p90_amount     = Column(Float, nullable=True)   # 90th percentile
+    lower_fence    = Column(Float, nullable=True)   # Q1 - 1.5*IQR
+    upper_fence    = Column(Float, nullable=True)   # Q3 + 3.0*IQR
+
+    weekend_rate   = Column(Float, nullable=True)   # fraction of entries on weekends
+    known_users    = Column(JSON,  nullable=True)   # list of ALL user_id strings seen in history
+    entry_count    = Column(Integer, nullable=True)
+    months_covered = Column(Integer, nullable=True)
+
+    created_at     = Column(DateTime, default=datetime.utcnow)
+    updated_at     = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "account", name="uq_account_baseline_client_account"),
+    )
+
+
+class ClientCOA(Base):
+    """
+    Per-client Chart of Accounts — Tally ledger names uploaded by the CA firm.
+    Used to constrain AI categorisation prompts to client-specific ledgers.
+    """
+    __tablename__ = "client_coa"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    client_id    = Column(String, nullable=False, index=True)
+    ledger_name  = Column(String, nullable=False)
+    ledger_group = Column(String, nullable=True)   # e.g. "Indirect Expenses", "Current Liabilities"
+    created_at   = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("client_id", "ledger_name", name="uq_client_coa_ledger"),
+    )
 
 
 class IFRSLineItemLegacy(Base):

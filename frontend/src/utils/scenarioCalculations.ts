@@ -291,7 +291,8 @@ export function calculateSensitivity(
   baseline: BaselineData = DEFAULT_BASELINE
 ) {
   const baseResults = calculateScenario(baseAssumptions, baseline);
-  const baseNetProfit = baseResults.netProfit;
+  const _baseNetProfit = baseResults.netProfit;
+  void _baseNetProfit; // baseline reference reserved for future waterfall
   
   const variables: Array<keyof ScenarioAssumptions> = [
     'revenueGrowth',

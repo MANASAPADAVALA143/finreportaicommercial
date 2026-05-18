@@ -19,8 +19,6 @@ export function calculateScenario(
   const monthlyPL: MonthlyPL[] = [];
   let cumulativeCash = openingCashCr;
 
-  const seasonal = [0.85, 0.88, 0.9, 0.95, 1.0, 1.02, 1.05, 1.08, 1.1, 1.12, 1.08, 1.05];
-
   MONTHS.forEach((month, index) => {
     const revenue = monthlyRevenue[index];
 
@@ -182,7 +180,7 @@ export function runMonteCarlo(
       capex: Math.max(0, rand(baseAssumptions.capex, 5)),
     };
 
-    const r = calculateScenario(randomised, 'base', baseAnnualRevenue, openingCashCr);
+    const r = calculateScenario(randomised, 'base', BASE_REVENUE_CR, OPENING_CASH_CR);
     results.push({
       revenue: r.annualKPIs.revenue,
       ebitda: r.annualKPIs.ebitda,

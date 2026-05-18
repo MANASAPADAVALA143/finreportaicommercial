@@ -199,8 +199,14 @@ def _load_cached_narratives(
     company_id: str,
     journal_ids: list[str],
     db: Session,
+    current_scores: dict[str, dict] | None = None,
 ) -> dict[str, str]:
-    """Return cached narratives that haven't expired yet."""
+    """
+    Return cached narratives that haven't expired AND still match
+    the current risk_level + composite_score (±5 pts tolerance).
+    Stale entries (score changed since caching) are skipped so the
+    narrative regenerates with up-to-date values.
+    """
     if not journal_ids:
         return {}
     cutoff = datetime.now(tz=timezone.utc).replace(tzinfo=None)
@@ -215,8 +221,25 @@ def _load_cached_narratives(
     result: dict[str, str] = {}
     for row in rows:
         age_hours = (cutoff - (row.created_at or cutoff)).total_seconds() / 3600
-        if age_hours <= _NARRATIVE_TTL_HOURS:
-            result[row.journal_id] = row.narrative
+        if age_hours > _NARRATIVE_TTL_HOURS:
+            continue  # expired
+
+        # Invalidate if risk_level or score changed since caching
+        if current_scores and row.journal_id in current_scores:
+            curr = current_scores[row.journal_id]
+            cached_risk  = row.risk_level or ""
+            cached_score = row.composite_score or 0.0
+            curr_risk    = curr.get("risk_level", "")
+            curr_score   = curr.get("composite_score", 0.0)
+            if cached_risk != curr_risk or abs(cached_score - curr_score) > 5:
+                log.info(
+                    "[NARRATIVE] Invalidating stale cache for %s "
+                    "(was %s/%.1f, now %s/%.1f)",
+                    row.journal_id, cached_risk, cached_score, curr_risk, curr_score,
+                )
+                continue  # force regeneration
+
+        result[row.journal_id] = row.narrative
     return result
 
 
@@ -382,8 +405,17 @@ async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(g
     if flagged_entries:
         flagged_jids = [e["journal_id"] for e in flagged_entries]
 
-        # Load what's already cached
-        cached = _load_cached_narratives(company_id, flagged_jids, db)
+        # Build current-score lookup for cache invalidation
+        current_scores = {
+            e["journal_id"]: {
+                "risk_level":      e["composite"].get("risk_level"),
+                "composite_score": e["composite"].get("composite_score", 0),
+            }
+            for e in flagged_entries
+        }
+
+        # Load what's already cached (stale entries auto-invalidated)
+        cached = _load_cached_narratives(company_id, flagged_jids, db, current_scores)
 
         # Identify which need fresh generation
         need_generation = [

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
@@ -242,7 +242,7 @@ function variancePct(current: number, prior: number): number | null {
   return ((current - prior) / Math.abs(prior)) * 100;
 }
 
-function pickTrialBalanceSheet(wb: { SheetNames: string[]; Sheets: XLSX.WorkSheets }, periodHint: 'current' | 'prior'): string {
+function pickTrialBalanceSheet(wb: { SheetNames: string[]; Sheets: Record<string, XLSX.WorkSheet> }, periodHint: 'current' | 'prior'): string {
   const names = wb.SheetNames;
   const lower = names.map((n) => n.toLowerCase());
   if (periodHint === 'current') {
@@ -314,7 +314,7 @@ export function TBVariancePage() {
 
   useEffect(() => {
     setCompanyName(activeClient?.name ?? '');
-  }, [activeClient?.id]);
+  }, [activeClient?.companyId ?? activeClient?.name]);
 
   const tableRows = useMemo(() => {
     if (showAllNonZero) return results;

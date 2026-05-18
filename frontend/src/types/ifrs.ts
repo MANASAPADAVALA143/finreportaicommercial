@@ -26,7 +26,11 @@ export interface TrialBalanceEntry {
   debit: number;
   credit: number;
   mappedIfrsLine?: string;     // auto-filled from CompanyMapping
-  mappingStatus: "mapped" | "unmapped" | "new_code";
+  mappingStatus: "mapped" | "unmapped" | "new_code" | "uncertain";
+  accountType?: string;        // e.g. "asset" | "liability" | "equity" | "revenue" | "expense"
+  net?: number;                // debit - credit (computed)
+  confidence?: number;
+  suggestedMapping?: string;
 }
 
 // ==================== IFRS LINE ITEM MASTER ====================
@@ -83,44 +87,64 @@ export interface CurrentAssets {
   inventories: number;
   prepayments: number;
   otherCurrent: number;
+  otherCurrentAssets?: number;  // alias used by statementGenerator
+  total?: number;
   totalCurrent: number;
+  [key: string]: number | undefined;
 }
 
 export interface NonCurrentAssets {
   propertyPlantEquipment: number;
   intangibleAssets: number;
   investments: number;
+  deferredTax?: number;
   otherNonCurrent: number;
+  otherNonCurrentAssets?: number;
+  total?: number;
   totalNonCurrent: number;
+  [key: string]: number | undefined;
 }
 
 export interface Liabilities {
   current: CurrentLiabilities;
   nonCurrent: NonCurrentLiabilities;
   totalLiabilities: number;
+  total?: number;
 }
 
 export interface CurrentLiabilities {
   tradePayables: number;
   shortTermBorrowings: number;
   accruedExpenses: number;
+  currentTaxPayable?: number;
+  provisions?: number;
+  otherCurrentLiabilities?: number;
   otherCurrent: number;
+  total?: number;
   totalCurrent: number;
+  [key: string]: number | undefined;
 }
 
 export interface NonCurrentLiabilities {
   borrowings: number;
+  longTermBorrowings?: number;
   deferredTax: number;
   provisions: number;
+  otherNonCurrentLiabilities?: number;
   otherNonCurrent: number;
+  total?: number;
   totalNonCurrent: number;
+  [key: string]: number | undefined;
 }
 
 export interface EquitySection {
   shareCapital: number;
   retainedEarnings: number;
+  reserves?: number;
   otherReserves: number;
+  total?: number;
   totalEquity: number;
+  [key: string]: number | undefined;
 }
 
 // ==================== PROFIT & LOSS ====================
@@ -129,16 +153,18 @@ export interface ProfitLoss {
   revenue: number;
   costOfSales: number;
   grossProfit: number;
-  grossMarginPercent: number;
+  grossMarginPercent?: number;
   operatingExpenses: OperatingExpenses;
   operatingProfit: number;
-  operatingMarginPercent: number;
+  operatingMarginPercent?: number;
   financeIncome: number;
   financeCosts: number;
   profitBeforeTax: number;
   incomeTax: number;
   netProfit: number;
-  netMarginPercent: number;
+  profitAfterTax?: number;  // alias for netProfit used by statementGenerator
+  netMarginPercent?: number;
+  [key: string]: number | OperatingExpenses | undefined;
 }
 
 export interface OperatingExpenses {
@@ -162,8 +188,10 @@ export interface CashFlow {
 }
 
 export interface CashFlowSection {
-  items: CashFlowItem[];
+  items?: CashFlowItem[];
   total: number;
+  // Extended properties used by statementGenerator (flat structure)
+  [key: string]: CashFlowItem[] | number | Record<string, number> | undefined;
 }
 
 export interface CashFlowItem {
@@ -243,4 +271,17 @@ export interface TrialBalanceRow {
   accountName: string;
   debit: number;
   credit: number;
+}
+
+// ==================== GENERATED STATEMENTS ====================
+
+export interface GeneratedStatements {
+  entityName?: string;
+  periodEnd?: string;
+  currency?: string;
+  financialPosition: BalanceSheet;
+  profitLoss: ProfitLoss;
+  cashFlows: CashFlow;
+  changesInEquity: Equity;
+  [key: string]: unknown;
 }

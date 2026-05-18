@@ -6,7 +6,11 @@ interface Props {
   roles?: Array<'super_admin' | 'cfo' | 'finance_manager' | 'accountant' | 'auditor'>;
 }
 
-export default function PrivateRoute({ children, roles }: Props) {
+export default function PrivateRoute({ children, roles: _roles }: Props) {
+  // TEMP: Auth bypassed for local demo — remove this line and uncomment below when auth is ready
+  return children;
+
+  /* --- Uncomment when auth is re-enabled ---
   const { isAuthenticated, user } = useAuth();
   const location = useLocation();
 
@@ -14,9 +18,10 @@ export default function PrivateRoute({ children, roles }: Props) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
-  if (roles && roles.length > 0 && !roles.includes(user.role)) {
+  if (_roles && _roles.length > 0 && !_roles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
   }
 
   return children;
+  --- */
 }

@@ -150,6 +150,15 @@ export const ifrsService = {
     return data as { updated: number };
   },
 
+  async confirmHighConfidence(tbId: number, threshold = 0.85) {
+    const { data } = await axios.post(
+      `${BASE_URL}/trial-balance/${tbId}/confirm-high-confidence`,
+      { threshold },
+      { headers: headers() }
+    );
+    return data as { confirmed: number; skipped_blocked: number; threshold: number; confirmed_ids: number[] };
+  },
+
   async getLineItemMaster() {
     const { data } = await axios.get(`${BASE_URL}/line-item-master`, { headers: headers() });
     return data as { items: IFRSLineItemMasterRow[]; count: number };

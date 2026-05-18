@@ -654,7 +654,7 @@ export default function GLReconciler() {
             </section>
             {showHistory && history.length > 0 && (
               <ul className="text-xs text-slate-500 space-y-1 max-h-32 overflow-y-auto">
-                {(history as { recon_id: string; period: string; status: string }[]).map((h) => (
+                {(history as { recon_id: string; period: string; status: string; account_code?: string }[]).map((h) => (
                   <li key={h.recon_id}>
                     {h.period} — {h.account_code} — {h.status}
                   </li>

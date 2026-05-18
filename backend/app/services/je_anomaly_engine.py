@@ -43,14 +43,14 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "behavioral":  15.0,  # new actors, off-hours, month-end clustering
 }
 
-# ── Default hardcoded thresholds (overridden by ThresholdCalibrator) ──────────
-# BEFORE: Critical>=50, High>=40, Medium>=30
-# AFTER:  Critical>=80, High>=65, Medium>=45
+# ── Default hardcoded thresholds ──────────────────────────────────────────────
+# v3: CRITICAL>=75, HIGH>=55, MEDIUM>=35
+# Calibrated so a 9.1× outlier (stat=100, ml=70) scores ≥75 → CRITICAL
 # Target distribution: Critical<5%, High 5-10%, Medium 10-20%
 DEFAULT_THRESHOLDS: dict[str, float] = {
-    "CRITICAL": 80.0,
-    "HIGH":     65.0,
-    "MEDIUM":   45.0,
+    "CRITICAL": 75.0,
+    "HIGH":     55.0,
+    "MEDIUM":   42.0,
 }
 
 
@@ -764,15 +764,30 @@ class EnsembleScorer:
         w = self.weights
         results = []
         for s, m, p, b in zip(stat_scores, ml_scores, pat_scores, beh_scores):
-            weighted = (
-                w["statistical"] / 100 * s +
-                w["ml"]          / 100 * m +
-                w["pattern"]     / 100 * p +
-                w["behavioral"]  / 100 * b
-            )
-            flagging = sum(1 for x in [s, m, p, b] if x >= 40)
-            bonus    = 5.0 if flagging >= 3 else 0.0
-            composite = min(weighted + bonus, 100.0)
+            layer_arr   = [s, m, p, b]
+            weights_arr = [
+                w["statistical"] / 100,
+                w["ml"]          / 100,
+                w["pattern"]     / 100,
+                w["behavioral"]  / 100,
+            ]
+
+            # Hybrid formula: 50% best single layer + 50% weighted average
+            # Rationale: when only 1-2 layers fire strongly, pure weighted-avg
+            # dilutes the signal because zero-weight layers drag the score down.
+            # 9.1× outlier example: stat=100, ml=70, pat=0, beh=0
+            #   weighted_avg = 0.30×100 + 0.25×70 + 0 + 0 = 47.5
+            #   max_score    = 100
+            #   hybrid_raw   = 0.50×100 + 0.50×47.5 = 73.75
+            #   bonus        = +5 (2 layers ≥ 40)   → 78.75 → CRITICAL ✓
+            max_score    = max(layer_arr)
+            weighted_avg = sum(wi * si for wi, si in zip(weights_arr, layer_arr))
+            hybrid_raw   = 0.50 * max_score + 0.50 * weighted_avg
+
+            flagging = sum(1 for x in layer_arr if x >= 40)
+            bonus    = 15.0 if flagging >= 3 else (5.0 if flagging >= 2 else 0.0)
+
+            composite = min(hybrid_raw + bonus, 100.0)
             results.append({
                 "composite_score":  round(composite, 1),
                 "risk_level":       self.risk_level(composite),
@@ -869,7 +884,7 @@ class JEAnomalyEngine:
         calibration_info: dict[str, Any] = {
             "calibrated": False,
             "note": (
-                "Fixed thresholds: CRITICAL≥80, HIGH≥65, MEDIUM≥45. "
+                "Fixed thresholds: CRITICAL≥75, HIGH≥55, MEDIUM≥42. "
                 "Dynamic calibration disabled — it was computing thresholds from "
                 "normal history Z-scores, producing values far below the fixed targets."
             ),
@@ -896,20 +911,36 @@ class JEAnomalyEngine:
             z    = float(stat_out["ctx_zscore"][i])
 
             reasons: list[str] = []
-            if stat_out["per_entry"][i] >= 40:
+            # Stat: direct z-score check first (catches z>3 even if stat_score is low)
+            if z > 3.0:
+                reasons.append(f"Amount is {z:.1f}× above account norm")
+            elif stat_out["per_entry"][i] >= 25:
                 reasons.append(_zscore_to_plain(z))
-            if beh_out["new_actor"][i] >= 40:
-                reasons.append("Posting actor (user/account) not seen in history")
+            if beh_out["timing"][i] >= 40:
+                reasons.append("Off-hours or weekend posting")
             if pat_out["duplicate"][i] >= 50:
                 reasons.append("Duplicate / near-duplicate entry detected")
-            if beh_out["timing"][i] >= 40:
-                reasons.append("Off-hours or weekend posting vs normal business pattern")
+            if beh_out["new_actor"][i] >= 40:
+                reasons.append("Posted by new or unusual actor")
             if pat_out["splitting"][i] >= 40:
                 reasons.append("Potential amount-splitting pattern detected")
             if pat_out["velocity"][i] >= 40:
                 reasons.append("High posting velocity by same user in short window")
             if ml_out["per_entry"][i] >= 60:
                 reasons.append("ML models flag as structurally anomalous")
+            # Fallback: always show at least one reason
+            if not reasons:
+                reasons.append("Multiple minor risk indicators detected")
+
+            # ── Normal-range cap ─────────────────────────────────────────────
+            # If the primary reason is "within normal range" the entry is not
+            # anomalous by amount — cap composite at 38 so it stays LOW.
+            # Z-score of ~1.45 with no other signals should never reach MEDIUM.
+            _first_reason = reasons[0] if reasons else ""
+            if "within normal range" in _first_reason.lower() or "within the normal" in _first_reason.lower():
+                capped = min(comp["composite_score"], 38.0)
+                if capped != comp["composite_score"]:
+                    comp = {**comp, "composite_score": capped, "risk_level": self._ens.risk_level(capped)}
 
             entries.append({
                 "journal_id":   str(row["journal_id"]),
@@ -956,6 +987,19 @@ class JEAnomalyEngine:
             })
 
         entries.sort(key=lambda e: e["composite"]["composite_score"], reverse=True)
+
+        # ── DEBUG: log top-5 scores so we can diagnose low-score issues ──────
+        for _e in entries[:5]:
+            _c = _e["composite"]
+            _ls = _c.get("layer_scores", {})
+            logger.info(
+                "[JEEngine] TOP entry jid=%s  composite=%.1f (%s)  "
+                "stat=%.1f  ml=%.1f  pat=%.1f  beh=%.1f  z=%.2f",
+                _e["journal_id"], _c["composite_score"], _c["risk_level"],
+                _ls.get("statistical", 0), _ls.get("ml", 0),
+                _ls.get("pattern", 0), _ls.get("behavioral", 0),
+                _e["layer_detail"]["statistical"]["ctx_zscore"],
+            )
 
         by_risk: Counter = Counter(e["composite"]["risk_level"] for e in entries)
         batch_stats: dict[str, Any] = {

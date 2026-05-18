@@ -62,7 +62,7 @@ interface GeneratedStatements {
 
 export const IFRSStatementGenerator = () => {
   const navigate = useNavigate();
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
   
   // Step 1 state
   const [file, setFile] = useState<File | null>(null);
@@ -119,7 +119,7 @@ export const IFRSStatementGenerator = () => {
       for (const k of keys) {
         const nk = norm(k);
         for (const [header, val] of Object.entries(row || {})) {
-          if (val == null && val !== 0) continue;
+          if (val == null) continue;
           const hn = norm(String(header));
           if (hn === nk || hn.includes(nk) || nk.includes(hn)) return val as string | number;
         }
@@ -750,7 +750,7 @@ export const IFRSStatementGenerator = () => {
 
           setUploadingCustom(false);
         },
-        error: (error) => {
+        error: (error: Error) => {
           alert(`Failed to parse file: ${error.message}`);
           setUploadingCustom(false);
         }
@@ -826,8 +826,8 @@ export const IFRSStatementGenerator = () => {
         currency
       });
       
-      setStatements(result);
-      setEditedStatements(JSON.parse(JSON.stringify(result)));
+      setStatements(result as unknown as GeneratedStatements);
+      setEditedStatements(JSON.parse(JSON.stringify(result)) as GeneratedStatements);
       setCurrentStep(3);
       setCompletedSections(['financial-position', 'profit-loss', 'cash-flows', 'equity']);
       try {
@@ -840,7 +840,7 @@ export const IFRSStatementGenerator = () => {
         });
         setNoteCustomizations((prev) => ({ ...prev, ...stored }));
       } catch (_) {}
-      await generateAllNotes(result);
+      await generateAllNotes(result as unknown as GeneratedStatements);
     } catch (error: any) {
       alert('Failed to generate statements: ' + error.message);
     } finally {
@@ -923,7 +923,7 @@ export const IFRSStatementGenerator = () => {
     
     try {
       if (format === 'json') {
-        const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
+        const blob = new Blob([JSON.stringify(editedStatements, null, 2)], { type: 'application/json' });
         const url = window.URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -937,10 +937,10 @@ export const IFRSStatementGenerator = () => {
         const workbook = XLSX.utils.book_new();
         
         // Balance Sheet
-        const bsData = formatBalanceSheetForExport(toExport.financialPosition);
+        const bsData = formatBalanceSheetForExport(editedStatements!.financialPosition);
         const bsSheet = XLSX.utils.aoa_to_sheet(bsData);
         XLSX.utils.book_append_sheet(workbook, bsSheet, 'Balance Sheet');
-        const plData = formatProfitLossForExport(toExport.profitLoss);
+        const plData = formatProfitLossForExport(editedStatements!.profitLoss);
         const plSheet = XLSX.utils.aoa_to_sheet(plData);
         XLSX.utils.book_append_sheet(workbook, plSheet, 'Profit & Loss');
         
@@ -1763,7 +1763,7 @@ const Step3EditableReview: React.FC<Step3EditableReviewProps> = ({
       {activeSection === 'financial-position' && (
         <EditableFinancialPositionView
           data={editedStatements.financialPosition}
-          onChange={(fp) => setEditedStatements((p) => (p ? { ...p, financialPosition: fp } : p))}
+          onChange={(fp: any) => setEditedStatements((p) => (p ? { ...p, financialPosition: fp } : p))}
           entityName={entityName}
           periodEnd={periodEnd}
           currency={currency}
@@ -1772,7 +1772,7 @@ const Step3EditableReview: React.FC<Step3EditableReviewProps> = ({
       {activeSection === 'profit-loss' && (
         <EditableProfitLossView
           data={editedStatements.profitLoss}
-          onChange={(pl) => setEditedStatements((p) => (p ? { ...p, profitLoss: pl } : p))}
+          onChange={(pl: any) => setEditedStatements((p) => (p ? { ...p, profitLoss: pl } : p))}
           entityName={entityName}
           periodEnd={periodEnd}
           currency={currency}
@@ -1781,7 +1781,7 @@ const Step3EditableReview: React.FC<Step3EditableReviewProps> = ({
       {activeSection === 'cash-flows' && (
         <EditableCashFlowView
           data={editedStatements.cashFlows}
-          onChange={(cf) => setEditedStatements((p) => (p ? { ...p, cashFlows: cf } : p))}
+          onChange={(cf: any) => setEditedStatements((p) => (p ? { ...p, cashFlows: cf } : p))}
           entityName={entityName}
           periodEnd={periodEnd}
           currency={currency}
@@ -1790,7 +1790,7 @@ const Step3EditableReview: React.FC<Step3EditableReviewProps> = ({
       {activeSection === 'equity' && (
         <EditableEquityView
           data={editedStatements.changesInEquity}
-          onChange={(eq) => setEditedStatements((p) => (p ? { ...p, changesInEquity: eq } : p))}
+          onChange={(eq: any) => setEditedStatements((p) => (p ? { ...p, changesInEquity: eq } : p))}
           entityName={entityName}
           periodEnd={periodEnd}
           currency={currency}

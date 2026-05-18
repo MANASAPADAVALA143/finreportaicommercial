@@ -1,153 +1,168 @@
-import { NavLink, useLocation } from 'react-router-dom';
-import { BarChart2, BookOpen, Calendar, GitMerge, History, LineChart, TrendingUp, Users, Building2, CalendarDays, ShieldAlert, FileText } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+/**
+ * Sidebar.tsx
+ * ──────────────────────────────────────────────────────────────────────────────
+ * Config-driven sidebar. Navigation items come from productConfig.ts which
+ * reads VITE_PRODUCT to determine which product is active:
+ *
+ *   VITE_PRODUCT=invoiceflow  → AP Automation sidebar
+ *   VITE_PRODUCT=finreportai  → R2R + FP&A + CFO sidebar
+ *   VITE_PRODUCT=combined     → Full Gnanova Finance OS sidebar (default)
+ *
+ * To add a new nav item: edit src/config/productConfig.ts only.
+ * This component never needs to change for new pages.
+ */
 
-const r2rLinkBase =
-  'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors border border-transparent';
-const r2rIdle = 'text-slate-300 hover:bg-slate-800/80 hover:text-white';
-const r2rActive = 'bg-blue-600 text-white border-blue-500 shadow-sm';
+import { NavLink, useLocation } from 'react-router-dom';
+import {
+  Activity,
+  BarChart2,
+  BookOpen,
+  Building2,
+  CalendarDays,
+  Calendar,
+  CheckCircle,
+  Clock,
+  CreditCard,
+  FileText,
+  GitMerge,
+  History,
+  Landmark,
+  Layers,
+  LayoutDashboard,
+  LineChart,
+  Package,
+  PieChart,
+  Plug,
+  Receipt,
+  RefreshCcw,
+  ShieldAlert,
+  ShoppingCart,
+  TableProperties,
+  TrendingUp,
+  Upload,
+  Users,
+} from 'lucide-react';
+
+import { useAuth } from '../../context/AuthContext';
+import { currentSections, currentBranding, type NavItem } from '../../config/productConfig';
+
+// ── Icon map ──────────────────────────────────────────────────────────────────
+
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>> = {
+  Activity,
+  BarChart2,
+  BookOpen,
+  Building2,
+  CalendarDays,
+  Calendar,
+  CheckCircle,
+  Clock,
+  CreditCard,
+  FileText,
+  GitMerge,
+  History,
+  Landmark,
+  Layers,
+  LayoutDashboard,
+  LineChart,
+  Package,
+  PieChart,
+  Plug,
+  Receipt,
+  RefreshCcw,
+  ShieldAlert,
+  ShoppingCart,
+  TableProperties,
+  TrendingUp,
+  Upload,
+  Users,
+};
+
+// ── Style constants ────────────────────────────────────────────────────────────
+
+const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors border border-transparent';
+const linkIdle   = 'text-slate-300 hover:bg-slate-800/80 hover:text-white';
+const linkActive = 'bg-blue-600 text-white border-blue-500 shadow-sm';
+
+// ── NavItem component ──────────────────────────────────────────────────────────
+
+function SidebarLink({ item }: { item: NavItem }) {
+  const { pathname } = useLocation();
+  const { hasPermission } = useAuth();
+
+  // Permission gate
+  if (item.permission && !hasPermission(item.permission) && !hasPermission('*')) {
+    return null;
+  }
+
+  const isActive = pathname === item.path || pathname.startsWith(item.path + '/');
+  const Icon = ICON_MAP[item.icon] ?? BarChart2;
+
+  return (
+    <NavLink
+      to={item.path}
+      className={() => `${linkBase} ${isActive ? linkActive : linkIdle}`}
+      end
+    >
+      <Icon className="w-4 h-4 shrink-0" aria-hidden />
+      {item.label}
+    </NavLink>
+  );
+}
+
+// ── Main Sidebar ───────────────────────────────────────────────────────────────
 
 export default function Sidebar() {
-  const { pathname } = useLocation();
-  const { user, hasPermission, logout } = useAuth();
-  const patternActive = pathname === '/r2r/pattern' || pathname === '/r2r-pattern';
-  const learningActive = pathname === '/r2r/learning';
-  const historyActive = pathname === '/r2r/history';
-  const revRecActive = pathname === '/r2r/rev-rec';
-  const monthEndActive = pathname === '/close';
-  const earningsActive = pathname === '/earnings';
-  const glReconActive = pathname === '/recon/gl';
-  const modelBuilderActive = pathname === '/model';
-  const usersActive = pathname === '/users';
-  const entityHealthActive = pathname === '/cfo/entity-health';
-  const paymentCalActive = pathname === '/cfo/payment-calendar';
-  const covenantActive = pathname === '/cfo/covenant-tracker';
-  const arCollActive = pathname === '/cfo/ar-collections';
+  const { user, logout } = useAuth();
 
   const role = user?.role ?? 'accountant';
   const roleBadge =
-    role === 'super_admin'
-      ? 'bg-purple-700'
-      : role === 'cfo'
-      ? 'bg-blue-700'
-      : role === 'finance_manager'
-      ? 'bg-teal-700'
-      : role === 'auditor'
-      ? 'bg-orange-700'
-      : 'bg-green-700';
+    role === 'super_admin'    ? 'bg-purple-700'
+    : role === 'cfo'          ? 'bg-blue-700'
+    : role === 'finance_manager' ? 'bg-teal-700'
+    : role === 'auditor'      ? 'bg-orange-700'
+    : 'bg-green-700';
 
   return (
     <aside className="w-56 shrink-0 border-r border-slate-700 bg-slate-900 flex flex-col min-h-screen py-6 px-3">
+
+      {/* Brand header */}
       <div className="px-2 mb-4">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">FinReport AI</p>
-        <p className="text-sm font-bold text-white">R2R</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          {currentBranding.tagline}
+        </p>
+        <p className="text-sm font-bold text-white">{currentBranding.name}</p>
       </div>
-      <nav className="flex flex-col gap-0.5" aria-label="Record to Report">
-        <NavLink
-          to="/r2r/pattern"
-          className={() => `${r2rLinkBase} ${patternActive ? r2rActive : r2rIdle}`}
-          end
-        >
-          <BarChart2 className="w-4 h-4 shrink-0" aria-hidden />
-          Pattern Analysis
-        </NavLink>
-        <NavLink
-          to="/r2r/learning"
-          className={() => `${r2rLinkBase} ${learningActive ? r2rActive : r2rIdle}`}
-          end
-        >
-          <BookOpen className="w-4 h-4 shrink-0" aria-hidden />
-          Learning
-        </NavLink>
-        <NavLink
-          to="/r2r/history"
-          className={() => `${r2rLinkBase} ${historyActive ? r2rActive : r2rIdle}`}
-          end
-        >
-          <History className="w-4 h-4 shrink-0" aria-hidden />
-          History
-        </NavLink>
-        <NavLink
-          to="/r2r/rev-rec"
-          className={() => `${r2rLinkBase} ${revRecActive ? r2rActive : r2rIdle}`}
-          end
-        >
-          <LineChart className="w-4 h-4 shrink-0" aria-hidden />
-          Rev Rec Reconciliation
-        </NavLink>
-        {hasPermission('close') || hasPermission('*') ? (
-          <NavLink
-            to="/close"
-            className={() => `${r2rLinkBase} ${monthEndActive ? r2rActive : r2rIdle}`}
-            end
-          >
-            <Calendar className="w-4 h-4 shrink-0" aria-hidden />
-            Month-End Close
-          </NavLink>
-        ) : null}
-        {hasPermission('gl_recon') || hasPermission('*') ? (
-          <NavLink
-            to="/recon/gl"
-            className={() => `${r2rLinkBase} ${glReconActive ? r2rActive : r2rIdle}`}
-            end
-          >
-            <GitMerge className="w-4 h-4 shrink-0" aria-hidden />
-            GL Reconciler
-          </NavLink>
-        ) : null}
-      </nav>
-      <div className="mt-6 px-2 border-t border-slate-800 pt-4">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">FP&amp;A</p>
-        {hasPermission('earnings') || hasPermission('*') ? (
-          <NavLink
-            to="/earnings"
-            className={() => `${r2rLinkBase} ${earningsActive ? r2rActive : r2rIdle}`}
-            end
-          >
-            <TrendingUp className="w-4 h-4 shrink-0" aria-hidden />
-            Earnings Reviewer
-          </NavLink>
-        ) : null}
-        {hasPermission('model_builder') || hasPermission('*') ? (
-          <NavLink
-            to="/model"
-            className={() => `${r2rLinkBase} ${modelBuilderActive ? r2rActive : r2rIdle}`}
-            end
-          >
-            <BarChart2 className="w-4 h-4 shrink-0" aria-hidden />
-            Model Builder
-          </NavLink>
-        ) : null}
-        {role === 'super_admin' ? (
-          <NavLink
-            to="/users"
-            className={() => `${r2rLinkBase} ${usersActive ? r2rActive : r2rIdle}`}
-            end
-          >
-            <Users className="w-4 h-4 shrink-0" aria-hidden />
-            User Management
-          </NavLink>
-        ) : null}
+
+      {/* Dynamic nav sections */}
+      <div className="flex flex-col gap-4 flex-1 overflow-y-auto">
+        {currentSections.map((section, si) => (
+          <div key={si}>
+            {si > 0 && <div className="border-t border-slate-800 mb-3" />}
+            <p className={`text-[10px] font-semibold uppercase tracking-wider mb-1 px-2 ${section.headingColor ?? 'text-slate-500'}`}>
+              {section.heading}
+            </p>
+            <nav className="flex flex-col gap-0.5">
+              {section.items.map((item) => (
+                <SidebarLink key={item.path} item={item} />
+              ))}
+            </nav>
+          </div>
+        ))}
+
+        {/* Super-admin always gets User Management regardless of product */}
+        {role === 'super_admin' && (
+          <div>
+            <div className="border-t border-slate-800 mb-3" />
+            <p className="text-[10px] font-semibold uppercase tracking-wider mb-1 px-2 text-slate-500">Admin</p>
+            <nav className="flex flex-col gap-0.5">
+              <SidebarLink item={{ label: 'User Management', path: '/users', icon: 'Users' }} />
+            </nav>
+          </div>
+        )}
       </div>
-      <div className="mt-6 px-2 border-t border-slate-800 pt-4">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-2">CFO Operating Desk</p>
-        <NavLink to="/cfo/entity-health" className={() => `${r2rLinkBase} ${entityHealthActive ? r2rActive : r2rIdle}`} end>
-          <Building2 className="w-4 h-4 shrink-0" aria-hidden />
-          Entity Health
-        </NavLink>
-        <NavLink to="/cfo/payment-calendar" className={() => `${r2rLinkBase} ${paymentCalActive ? r2rActive : r2rIdle}`} end>
-          <CalendarDays className="w-4 h-4 shrink-0" aria-hidden />
-          Payment Calendar
-        </NavLink>
-        <NavLink to="/cfo/covenant-tracker" className={() => `${r2rLinkBase} ${covenantActive ? r2rActive : r2rIdle}`} end>
-          <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden />
-          Covenant Tracker
-        </NavLink>
-        <NavLink to="/cfo/ar-collections" className={() => `${r2rLinkBase} ${arCollActive ? r2rActive : r2rIdle}`} end>
-          <FileText className="w-4 h-4 shrink-0" aria-hidden />
-          AR &amp; Collections
-        </NavLink>
-      </div>
+
+      {/* User footer */}
       <div className="mt-auto px-2 pt-4 border-t border-slate-800">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-8 h-8 rounded-full bg-slate-700 text-slate-100 text-xs flex items-center justify-center">

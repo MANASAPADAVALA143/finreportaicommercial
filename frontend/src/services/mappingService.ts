@@ -2,11 +2,10 @@
 // "Map Once, Use Forever" Architecture
 // Company GL codes mapped to IFRS line items — saved permanently
 
-import type { 
-  CompanyMapping, 
-  TrialBalanceEntry, 
+import type {
+  TrialBalanceEntry,
   IFRSLineItem,
-  AIMappingResult 
+  AIMappingResult
 } from "../types/ifrs";
 
 // ==================== IFRS MASTER LINE ITEMS ====================
@@ -70,7 +69,6 @@ export const LIABILITY_MAPPING_OPTIONS: Array<{ value: string; label: string }> 
 // ==================== STORAGE KEYS ====================
 
 const STORAGE_KEY_MAPPINGS = "finreportai_company_mappings";
-const STORAGE_KEY_COMPANIES = "finreportai_companies";
 
 // ==================== COMPANY MAPPING CRUD ====================
 

@@ -49,6 +49,7 @@ export function ExcelSuiteToolPage() {
   }
 
   async function runDownload() {
+    if (!mod) return;   // narrowed — mod is always defined here (guarded at render)
     if (!file) {
       toast.error('Choose an Excel file first.');
       return;

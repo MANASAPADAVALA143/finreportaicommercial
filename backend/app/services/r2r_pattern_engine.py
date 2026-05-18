@@ -28,6 +28,203 @@ BENFORD_EXPECTED: dict[int, float] = {
     9: 0.046,
 }
 
+# ── FIX 3: Documented, fixed risk-level thresholds ────────────────────────────
+# Changing these constants is the ONLY place needed to adjust boundaries.
+HIGH_RISK_THRESHOLD  = 38   # score >= 38 → HIGH  (immediate review)
+MEDIUM_RISK_THRESHOLD = 20  # score >= 20 → MEDIUM (review within 5 business days)
+# score < 20 → LOW (pass)
+
+
+# ── FIX 1: IQR-based amount bounds ───────────────────────────────────────────
+def compute_amount_bounds(amounts: list[float]) -> dict:
+    """
+    Compute IQR-based lower and upper fences from the batch.
+    Called ONCE per upload before scoring individual entries.
+    Replaces all hardcoded amount thresholds.
+    """
+    arr = np.array([abs(a) for a in amounts if a != 0 and np.isfinite(a)])
+    if len(arr) < 4:
+        return {
+            "q1": 0.0, "q3": 1e9, "iqr": 1e9,
+            "lower_fence": 0.0, "upper_fence": 1e12,
+            "p10": 0.0, "p90": 1e12,
+            "mean": 0.0, "std": 0.0,
+        }
+    q1  = float(np.percentile(arr, 25))
+    q3  = float(np.percentile(arr, 75))
+    iqr = q3 - q1
+    return {
+        "q1":          q1,
+        "q3":          q3,
+        "iqr":         iqr,
+        "lower_fence": q1 - 1.5 * iqr,   # below this = unusually small
+        "upper_fence": q3 + 3.0 * iqr,   # above this = unusually large
+        "p10":         float(np.percentile(arr, 10)),
+        "p90":         float(np.percentile(arr, 90)),
+        "mean":        float(np.mean(arr)),
+        "std":         float(np.std(arr)),
+    }
+
+
+def flag_unusual_amount(amount: float, bounds: dict) -> tuple[bool, bool, str]:
+    """Returns (is_small, is_large, reason_text). Uses IQR fences — NOT hardcoded numbers."""
+    abs_amount = abs(amount)
+    is_small = abs_amount < bounds["lower_fence"] and abs_amount < bounds["p10"]
+    is_large = abs_amount > bounds["upper_fence"] and abs_amount > bounds["p90"]
+    if is_small:
+        return True, False, "unusually small amount"
+    if is_large:
+        return False, True, "top-tier amount in this period"
+    return False, False, ""
+
+
+# ── FIX 2: Negative amount detection ─────────────────────────────────────────
+_CREDIT_NORMAL_ACCOUNTS = ("revenue", "sales", "income", "liability", "creditor", "payable")
+
+def check_negative_amount(raw_amount: float, account: str) -> dict:
+    """
+    Flag negative amounts as a reversal/credit signal.
+    Must be called BEFORE abs(raw_amount) conversion — do NOT lose the sign.
+    """
+    if raw_amount >= 0:
+        return {"is_negative": False, "flag_text": "", "risk_add": 0}
+    acct_lower = (account or "").lower()
+    is_expected_credit = any(w in acct_lower for w in _CREDIT_NORMAL_ACCOUNTS)
+    if is_expected_credit:
+        return {
+            "is_negative": True,
+            "flag_text": "credit entry (normal for this account type)",
+            "risk_add": 3,
+        }
+    return {
+        "is_negative": True,
+        "flag_text": "negative amount — possible reversal or manual credit; verify supporting document",
+        "risk_add": 8,
+    }
+
+
+# ── FIX 4: Frequency-based new-user detection ────────────────────────────────
+def build_user_frequency_map(entries_user_col: "pd.Series") -> dict:
+    """Compute user posting frequency from the batch. Called ONCE before the loop."""
+    from collections import Counter
+    return Counter(str(u) for u in entries_user_col if pd.notna(u))
+
+
+def check_user_frequency(
+    user_id: str,
+    freq_map: dict,
+    total_entries: int,
+    client_known_users: list | None = None,
+) -> dict:
+    """
+    Segment 2 (client selected): checks stored known_users list.
+    Segment 1 (no client):       uses batch frequency — statistically grounded.
+    """
+    uid = str(user_id)
+    if client_known_users is not None:
+        if uid not in client_known_users:
+            return {
+                "flagged": True,
+                "flag_text": "user not in client's posting history",
+                "risk_add": 12,
+                "mode": "client_history",
+            }
+        return {"flagged": False, "flag_text": "", "risk_add": 0, "mode": "client_history"}
+
+    count = freq_map.get(uid, 0)
+    pct   = count / total_entries if total_entries > 0 else 0.0
+    if count <= 2:
+        return {
+            "flagged": True,
+            "flag_text": "infrequent user — appears only once or twice in this dataset",
+            "risk_add": 10,
+            "mode": "batch_frequency",
+        }
+    if pct < 0.02:
+        return {
+            "flagged": True,
+            "flag_text": "low-frequency user in this dataset",
+            "risk_add": 5,
+            "mode": "batch_frequency",
+        }
+    return {"flagged": False, "flag_text": "", "risk_add": 0, "mode": "batch_frequency"}
+
+
+# ── Baseline-aware helper functions ──────────────────────────────────────────
+
+def load_client_baselines(client_id: str, db: "Any") -> dict:
+    """
+    Returns {account_name: AccountBaseline} for a client.
+    Returns {} if client_id is empty or no baselines stored yet.
+    """
+    if not client_id or not db:
+        return {}
+    try:
+        from app.db.models import AccountBaseline
+        rows = db.query(AccountBaseline).filter(AccountBaseline.client_id == client_id).all()
+        result = {r.account: r for r in rows}
+        if result:
+            print(f"[R2R] Baselines loaded for client={client_id!r}: {list(result.keys())}")
+        return result
+    except Exception as exc:  # DB not yet migrated etc.
+        import logging
+        logging.getLogger(__name__).warning("load_client_baselines failed: %s", exc)
+        return {}
+
+
+def get_amount_zscore(amount: float, account: str, baselines: dict) -> float:
+    """
+    Z-score of |amount| vs historical baseline for this account.
+    Returns 0.0 if no baseline (no flag, no penalty).
+    """
+    b = baselines.get(account)
+    if b and b.std_amount and b.std_amount > 0:
+        return abs(abs(amount) - b.mean_amount) / b.std_amount
+    return 0.0
+
+
+def is_weekend_anomalous(is_weekend: bool, account: str, baselines: dict) -> bool:
+    """
+    Weekend is anomalous only if the client historically posts <15% of entries on weekends.
+    If weekend_rate ≥ 0.15 in history: this client regularly works weekends — suppress flag.
+    If no baseline exists: flag (conservative default).
+    """
+    if not is_weekend:
+        return False
+    b = baselines.get(account)
+    if b is not None and b.weekend_rate is not None:
+        return b.weekend_rate < 0.15
+    return True  # no history → flag by default
+
+
+def is_new_user(user_id: str, account: str, baselines: dict) -> bool:
+    """
+    A user is 'new' only if they do NOT appear in the client's historical known_users
+    for this account.  Falls back to False (no flag) when no baseline exists.
+    """
+    b = baselines.get(account)
+    if b is not None and b.known_users:
+        return str(user_id) not in b.known_users
+    return False  # no history → don't flag as new user
+
+
+# ── Minimum-signal guard ──────────────────────────────────────────────────────
+
+def enforce_minimum_signals(risk_level: str, signal_count: int) -> str:
+    """
+    Prevent weak single signals from inflating risk level.
+    Rules (evaluated in priority order):
+      • < 2 signals  →  never MEDIUM or HIGH  →  cap at LOW
+      • < 3 signals  →  never HIGH            →  cap at MEDIUM
+    """
+    # Priority 1: fewer than 2 signals → always LOW regardless of level
+    if risk_level in ("MEDIUM", "HIGH") and signal_count < 2:
+        return "LOW"
+    # Priority 2: fewer than 3 signals → HIGH becomes MEDIUM (only if it survived priority 1)
+    if risk_level == "HIGH" and signal_count < 3:
+        return "MEDIUM"
+    return risk_level
+
 
 def _first_digit_amount(x: float) -> int:
     if x <= 0 or not np.isfinite(x):
@@ -162,6 +359,7 @@ INTERNAL_COLS = frozenset(
         "credit",
         "entry_type",
         "plain_english_reason",
+        "raw_amount",  # stored internally; surfaced as is_reversal flag below
     }
 )
 
@@ -175,8 +373,9 @@ class R2RPatternEngine:
         "behavioural": 10,
     }
 
-    HIGH_THRESHOLD = 65
-    MEDIUM_THRESHOLD = 40
+    # FIX 3: fixed documented thresholds — referenced from module-level constants
+    HIGH_THRESHOLD   = HIGH_RISK_THRESHOLD    # 38
+    MEDIUM_THRESHOLD = MEDIUM_RISK_THRESHOLD  # 20
 
     def analyse(
         self,
@@ -185,18 +384,13 @@ class R2RPatternEngine:
         sensitivity: str = "balanced",
         materiality_amount: float = 0.0,
         materiality_pct: float = 0.0,
+        client_known_users: list | None = None,
+        client_id: str | None = None,
+        db: "Any | None" = None,
     ) -> dict:
         del client_history
         if len(df) < 10:
             return {"error": "Need at least 10 entries"}
-
-        sens = (sensitivity or "balanced").strip().lower()
-        if sens == "conservative":
-            rank_med, rank_high = 0.82, 0.90
-        elif sens == "strict":
-            rank_med, rank_high = 0.91, 0.97
-        else:
-            rank_med, rank_high = 0.88, 0.94
 
         upload_count = len(df)
         df = self._prepare_features(df)
@@ -226,8 +420,25 @@ class R2RPatternEngine:
             "rows_analysed": len(df),
         }
 
+        # Load client-specific baselines from DB (empty dict if no client / no history)
+        baselines = load_client_baselines(client_id or "", db)
+
+        # FIX 1: compute IQR bounds ONCE for the whole batch
+        amount_bounds = compute_amount_bounds(df["amount"].tolist())
+
+        # FIX 4: build user frequency map ONCE before the scoring loop
+        user_freq_map: dict = {}
+        if "user" in df.columns:
+            user_freq_map = build_user_frequency_map(df["user"])
+
         l1 = self._layer1_statistical(df)
-        l2 = self._layer2_rules(df)
+        l2 = self._layer2_rules(
+            df,
+            amount_bounds=amount_bounds,
+            user_freq_map=user_freq_map,
+            client_known_users=client_known_users,
+            baselines=baselines,
+        )
         l3 = self._layer3_ml(df)
         l4 = self._layer4_behavioural(df)
 
@@ -240,42 +451,31 @@ class R2RPatternEngine:
         ) * 100
         df["risk_score"] = df["risk_score"].clip(0, 100)
 
-        p85 = df["risk_score"].quantile(0.85)
-        p60 = df["risk_score"].quantile(0.60)
-        high_threshold = max(self.HIGH_THRESHOLD, float(p85) * 0.8)
-        med_threshold = max(self.MEDIUM_THRESHOLD, float(p60) * 0.7)
-
-        # Score-based tiers
-        score_lvl = pd.Series("LOW", index=df.index, dtype=object)
-        score_lvl[df["risk_score"] >= med_threshold] = "MEDIUM"
-        score_lvl[df["risk_score"] >= high_threshold] = "HIGH"
-
-        # Rank-based tiers for larger uploads (~8–15% flagged: top ~5% HIGH, next ~7% MEDIUM)
-        rank_lvl = pd.Series("LOW", index=df.index, dtype=object)
-        n = len(df)
-        if n >= 80:
-            rp = df["risk_score"].rank(method="average", pct=True)
-            rank_lvl[rp >= rank_med] = "MEDIUM"
-            rank_lvl[rp >= rank_high] = "HIGH"
-
-        order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
-
-        def _max_lvl(a: str, b: str) -> str:
-            return a if order[str(a)] >= order[str(b)] else b
-
-        df["risk_level"] = [
-            _max_lvl(score_lvl.iloc[i], rank_lvl.iloc[i]) for i in range(n)
-        ]
+        # FIX 3: use fixed, documented thresholds — no dynamic adjustment
+        df["risk_level"] = "LOW"
+        df.loc[df["risk_score"] >= self.MEDIUM_THRESHOLD, "risk_level"] = "MEDIUM"
+        df.loc[df["risk_score"] >= self.HIGH_THRESHOLD,   "risk_level"] = "HIGH"
 
         reasons = self._collect_reasons(df, l1, l2, l3, l4)
         df["risk_reasons"] = pd.Series(reasons, index=df.index)
+
+        # Minimum-signal guard: single weak signals cannot reach MEDIUM/HIGH
+        rule_flags_list: list[list[str]] = l2["rule_flags"].tolist()
+        for pos, ix in enumerate(df.index):
+            n_signals = len(rule_flags_list[pos])
+            current_level = df.at[ix, "risk_level"]
+            new_level = enforce_minimum_signals(current_level, n_signals)
+            if new_level != current_level:
+                df.at[ix, "risk_level"] = new_level
+
         plain_list = [
             self._plain_english_for_row(df.loc[ix], reasons[pos])
             for pos, ix in enumerate(df.index)
         ]
         df["plain_english_reason"] = plain_list
 
-        return self._build_output(df, l1, l2, l3, l4, materiality_meta=materiality_meta)
+        return self._build_output(df, l1, l2, l3, l4, materiality_meta=materiality_meta,
+                                  amount_bounds=amount_bounds)
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
@@ -317,13 +517,17 @@ class R2RPatternEngine:
             d = pd.to_numeric(df.get("debit", 0), errors="coerce").fillna(0).abs()
             c = pd.to_numeric(df.get("credit", 0), errors="coerce").fillna(0).abs()
             df["amount"] = np.where(d > 0, d, c)
+            df["raw_amount"] = df["amount"]   # debit/credit cols are already signed
         elif "amount" in df.columns:
-            df["amount"] = pd.to_numeric(
+            # FIX 2: store raw (signed) amount BEFORE abs conversion
+            df["raw_amount"] = pd.to_numeric(
                 df["amount"].astype(str).str.replace(",", "", regex=False),
                 errors="coerce",
-            ).fillna(0).abs()
+            ).fillna(0)
+            df["amount"] = df["raw_amount"].abs()
         else:
-            df["amount"] = 0.0
+            df["amount"]     = 0.0
+            df["raw_amount"] = 0.0
 
         if "date" in df.columns:
             df["date"] = _coerce_date_series(df["date"])
@@ -425,45 +629,98 @@ class R2RPatternEngine:
 
         return result
 
-    def _layer2_rules(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _layer2_rules(
+        self,
+        df: pd.DataFrame,
+        amount_bounds: dict | None = None,
+        user_freq_map: dict | None = None,
+        client_known_users: list | None = None,
+        baselines: dict | None = None,
+    ) -> pd.DataFrame:
         result = pd.DataFrame(index=df.index)
         rules_score = pd.Series(0.0, index=df.index)
         flags: list[list[str]] = [[] for _ in range(len(df))]
         idx_pos = {ix: pos for pos, ix in enumerate(df.index)}
+        _bounds  = amount_bounds or compute_amount_bounds(df["amount"].tolist())
+        _freq    = user_freq_map or {}
+        _bsl     = baselines or {}     # AccountBaseline objects keyed by account name
+        n_total  = len(df)
 
         def add_flag(ix: Any, msg: str) -> None:
             flags[idx_pos[ix]].append(msg)
 
+        # ── Weekend posting (weight 5 — weak signal, cannot make MEDIUM alone) ──
         if "is_weekend" in df.columns:
-            mask = df["is_weekend"] == 1
-            rules_score[mask] += 15
-            for ix in df.index[mask]:
-                add_flag(ix, "Weekend posting")
+            account_col = df["account"] if "account" in df.columns else pd.Series("", index=df.index)
+            for ix in df.index[df["is_weekend"] == 1]:
+                acct = str(account_col.loc[ix]) if "account" in df.columns else ""
+                if is_weekend_anomalous(True, acct, _bsl):
+                    rules_score[ix] += 5   # reduced from 15; suppressed if client posts weekends
+                    add_flag(ix, "Weekend posting")
 
         if "is_night" in df.columns:
             mask = df["is_night"] == 1
-            rules_score[mask] += 20
+            rules_score[mask] += 10   # reduced from 20 — late_night_posting weight
             for ix in df.index[mask]:
                 add_flag(ix, "Night posting")
 
         if "is_round" in df.columns:
             mask = (df["is_round"] == 1) & (df["amount"] >= 10000)
-            rules_score[mask] += 10
+            rules_score[mask] += 8   # reduced from 10 — round_number weight
             for ix in df.index[mask]:
                 add_flag(ix, "Round number")
 
         p95 = df["amount"].quantile(0.95)
         mask = df["amount"] >= p95
-        rules_score[mask] += 20
+        rules_score[mask] += 12   # reduced from 20 — unusually_large_amount weight
         for ix in df.index[mask]:
             add_flag(ix, "High value entry")
 
-        p05 = df["amount"].quantile(0.05)
-        if float(p05) > 0:
-            mask = (df["amount"] <= p05) & (df["amount"] > 0)
-            rules_score[mask] += 8
-            for ix in df.index[mask]:
-                add_flag(ix, "Unusually small amount")
+        # ── IQR-based "unusually small / large" (weights reduced; z-score guard for small) ──
+        account_col2 = df["account"] if "account" in df.columns else pd.Series("", index=df.index)
+        for ix in df.index:
+            amt  = float(df.loc[ix, "amount"])
+            acct = str(account_col2.loc[ix]) if "account" in df.columns else ""
+            is_small, is_large, reason = flag_unusual_amount(amt, _bounds)
+            if is_small:
+                # Only flag as small if z-score < -2 vs baseline OR no baseline
+                z = get_amount_zscore(amt, acct, _bsl)
+                b = _bsl.get(acct)
+                has_baseline = b is not None and b.mean_amount is not None
+                if not has_baseline or (has_baseline and z > 2.0):
+                    rules_score[ix] += 6   # reduced from 8
+                    add_flag(ix, reason)
+            elif is_large:
+                rules_score[ix] += 12   # reduced from 15; only if z-score also elevated
+                add_flag(ix, reason)
+
+        # FIX 2: Negative amount detection (raw_amount preserved in _prepare_features)
+        if "raw_amount" in df.columns:
+            account_col = df["account"] if "account" in df.columns else pd.Series("", index=df.index)
+            for ix in df.index:
+                neg_info = check_negative_amount(float(df.loc[ix, "raw_amount"]), str(account_col.loc[ix]))
+                if neg_info["is_negative"]:
+                    rules_score[ix] += neg_info["risk_add"]
+                    add_flag(ix, neg_info["flag_text"])
+
+        # ── User detection: baseline-aware (history) → batch frequency (no history) ──
+        if "user" in df.columns:
+            account_col3 = df["account"] if "account" in df.columns else pd.Series("", index=df.index)
+            for ix in df.index:
+                uid  = str(df.loc[ix, "user"])
+                acct = str(account_col3.loc[ix]) if "account" in df.columns else ""
+                if _bsl:
+                    # Baseline mode: flag only if user not seen in client's history
+                    if is_new_user(uid, acct, _bsl):
+                        rules_score[ix] += 15   # new_user_vs_history weight
+                        add_flag(ix, "User not in client's posting history")
+                else:
+                    # Batch frequency fallback (no history available)
+                    freq_info = check_user_frequency(uid, _freq, n_total, client_known_users)
+                    if freq_info["flagged"]:
+                        add_pts = min(freq_info["risk_add"], 6)   # cap at infrequent_user_batch=6
+                        rules_score[ix] += add_pts
+                        add_flag(ix, freq_info["flag_text"])
 
         if "is_month_end" in df.columns and "user" in df.columns:
             mask_me = df["is_month_end"] == 1
@@ -473,7 +730,7 @@ class R2RPatternEngine:
                 user_month_end = int((user_mask & mask_me).sum())
                 if user_total > 5 and user_month_end / user_total > 0.5:
                     hit = user_mask & mask_me
-                    rules_score[hit] += 12
+                    rules_score[hit] += 15   # increased from 12 — period_end_manual weight
                     for ix in df.index[hit]:
                         add_flag(ix, "High month-end concentration")
 
@@ -497,7 +754,7 @@ class R2RPatternEngine:
                         tmin = grp["date"].min()
                         tmax = grp["date"].max()
                         if pd.notna(tmin) and pd.notna(tmax) and (tmax - tmin).days <= 3:
-                            rules_score.loc[idxs] = rules_score.loc[idxs] + 25
+                            rules_score.loc[idxs] = rules_score.loc[idxs] + 20   # duplicate_amount_same_day weight
                             for ix in idxs:
                                 add_flag(ix, "Potential duplicate")
                         continue
@@ -515,7 +772,7 @@ class R2RPatternEngine:
                                 break
                         if hit:
                             ix = idxs[i]
-                            rules_score.loc[ix] += 25
+                            rules_score.loc[ix] += 20   # duplicate_amount_same_day weight
                             add_flag(ix, "Potential duplicate")
 
         suspicious = [
@@ -704,6 +961,10 @@ class R2RPatternEngine:
             ctx.append("posted to a clearing/misc-type account")
         if "new_user" in ul or "new user" in ul:
             ctx.append("by a new or infrequent user")
+        # FIX 2: raw_amount sign check for plain-English output
+        raw_amt = float(row.get("raw_amount", amt) or amt)
+        if raw_amt < 0:
+            ctx.append("negative/reversal amount")
         if is_we:
             ctx.append("on a weekend")
         if is_night:
@@ -744,6 +1005,20 @@ class R2RPatternEngine:
                 mapped.append("user touches many accounts")
             elif "month-end" in rl:
                 mapped.append("heavy month-end concentration for this user")
+            elif "negative amount" in rl or "possible reversal" in rl:
+                mapped.append("negative amount — possible reversal; verify supporting doc")
+            elif "credit entry" in rl and "normal" in rl:
+                mapped.append("credit entry (normal for this account)")
+            elif "infrequent user" in rl or "only once or twice" in rl:
+                mapped.append("infrequent user in this dataset")
+            elif "low-frequency user" in rl:
+                mapped.append("low-frequency user in this dataset")
+            elif "not in client" in rl:
+                mapped.append("user not seen in client's posting history")
+            elif "unusually small" in rl:
+                mapped.append("unusually small amount for this batch")
+            elif "top-tier amount" in rl:
+                mapped.append("top-tier amount in this period")
             else:
                 short = r.split("(")[0].strip()
                 if len(short) > 90:
@@ -812,6 +1087,10 @@ class R2RPatternEngine:
         per = row.get("plain_english_reason")
         if per is not None and not (isinstance(per, float) and np.isnan(per)):
             entry["plain_english_reason"] = str(per)
+        # FIX 2: expose reversal flag so frontend/Excel can show a "Reversal?" column
+        raw = row.get("raw_amount")
+        if raw is not None:
+            entry["is_reversal"] = bool(float(raw) < 0)
         return entry
 
     def _build_output(
@@ -822,6 +1101,7 @@ class R2RPatternEngine:
         l3: pd.DataFrame,
         l4: pd.DataFrame,
         materiality_meta: dict[str, Any] | None = None,
+        amount_bounds: dict | None = None,
     ) -> dict[str, Any]:
         total = len(df)
         high = int((df["risk_level"] == "HIGH").sum())
@@ -905,6 +1185,27 @@ class R2RPatternEngine:
             "behavioural_anomalies": behavioural_flagged,
         }
 
+        # FIX 3: document thresholds in every report output
+        risk_thresholds_meta: dict[str, Any] = {
+            "high":   f"Score >= {HIGH_RISK_THRESHOLD}",
+            "medium": f"Score {MEDIUM_RISK_THRESHOLD}–{HIGH_RISK_THRESHOLD - 1}",
+            "low":    f"Score < {MEDIUM_RISK_THRESHOLD}",
+            "note":   "Fixed thresholds — consistent across all uploads for this session",
+        }
+
+        # FIX 1: surface IQR bounds so auditors see what was used
+        amount_thresholds_meta: dict[str, Any] = {}
+        if amount_bounds:
+            amount_thresholds_meta = {
+                "lower_fence": round(amount_bounds["lower_fence"], 2),
+                "upper_fence": round(amount_bounds["upper_fence"], 2),
+                "q1":          round(amount_bounds["q1"], 2),
+                "q3":          round(amount_bounds["q3"], 2),
+                "mean":        round(amount_bounds["mean"], 2),
+                "std":         round(amount_bounds["std"], 2),
+                "based_on":    "IQR method from uploaded batch",
+            }
+
         summary: dict[str, Any] = {
             "total_entries": total,
             "high_risk": high,
@@ -921,6 +1222,8 @@ class R2RPatternEngine:
                 "Rules Engine (10+ rules)",
                 "Behavioural Profiling",
             ],
+            "risk_thresholds":        risk_thresholds_meta,
+            "amount_thresholds_used": amount_thresholds_meta,
         }
         if materiality_meta:
             summary["materiality"] = materiality_meta

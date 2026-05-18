@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { api } from '../services/api';
 
 interface User {
   id: string;

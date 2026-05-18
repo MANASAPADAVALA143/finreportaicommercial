@@ -120,8 +120,8 @@ Current scenario: ${scenario.toUpperCase()} CASE
 - Expense multiplier: ${(multiplier.expenses * 100).toFixed(0)}%
 
 KEY METRICS:
-- FY2026 Revenue Forecast: ${formatCurrency(adjustedRevenueData.reduce((sum, row) => sum + row.forecast, 0))}
-- FY2026 Expense Forecast: ${formatCurrency(adjustedExpenseData.reduce((sum, row) => sum + row.fy26, 0))}
+- FY2026 Revenue Forecast: ${formatCurrency(adjustedRevenueData.reduce((sum: number, row: any) => sum + row.forecast, 0))}
+- FY2026 Expense Forecast: ${formatCurrency(adjustedExpenseData.reduce((sum: number, row: any) => sum + row.fy26, 0))}
 - 13-Week Cash: Opens ₹2.5Cr, closes ₹3.4Cr
 
 Provide brief insights (max 150 words):
@@ -143,7 +143,7 @@ Provide brief insights (max 150 words):
       const workbook = XLSX.utils.book_new();
       
       // Revenue sheet
-      const revenueSheet = XLSX.utils.json_to_sheet(adjustedRevenueData.map(row => ({
+      const revenueSheet = XLSX.utils.json_to_sheet(adjustedRevenueData.map((row: any) => ({
         Month: row.month,
         'Actual/Forecast': formatCurrency(row.actual || row.forecast),
         Budget: formatCurrency(row.budget),
@@ -155,7 +155,7 @@ Provide brief insights (max 150 words):
       XLSX.utils.book_append_sheet(workbook, revenueSheet, 'Revenue Forecast');
 
       // Expense sheet
-      const expenseSheet = XLSX.utils.json_to_sheet(adjustedExpenseData.map(row => ({
+      const expenseSheet = XLSX.utils.json_to_sheet(adjustedExpenseData.map((row: any) => ({
         Department: row.department,
         'Oct 25': formatCurrency(row.oct),
         'Nov 25': formatCurrency(row.nov),
@@ -187,8 +187,8 @@ Provide brief insights (max 150 words):
     }
   };
 
-  const totalRevenueForecast = adjustedRevenueData.reduce((sum, row) => sum + row.forecast, 0);
-  const totalExpenseForecast = adjustedExpenseData.reduce((sum, row) => sum + row.fy26, 0);
+  const totalRevenueForecast = adjustedRevenueData.reduce((sum: number, row: any) => sum + row.forecast, 0);
+  const totalExpenseForecast = adjustedExpenseData.reduce((sum: number, row: any) => sum + row.fy26, 0);
   const netProfitForecast = totalRevenueForecast - totalExpenseForecast;
   const netMargin = totalRevenueForecast > 0 ? (netProfitForecast / totalRevenueForecast) * 100 : 0;
   if (netMargin > 50) {
@@ -196,12 +196,12 @@ Provide brief insights (max 150 words):
   }
 
   const pushForecastToCommandCenter = useCallback(async () => {
-    const totalRev = adjustedRevenueData.reduce((sum, row) => sum + (Number(row.forecast) || 0), 0);
+    const totalRev = adjustedRevenueData.reduce((sum: number, row: any) => sum + (Number(row.forecast) || 0), 0);
     if (totalRev <= 0) return;
-    const refBudget = adjustedRevenueData.reduce((sum, row) => sum + (Number(row.budget) || 0), 0);
+    const refBudget = adjustedRevenueData.reduce((sum: number, row: any) => sum + (Number(row.budget) || 0), 0);
     const ytd = adjustedRevenueData
-      .filter((row) => row.isActual)
-      .reduce((sum, row) => sum + (Number(row.actual) || Number(row.forecast) || 0), 0);
+      .filter((row: any) => row.isActual)
+      .reduce((sum: number, row: any) => sum + (Number(row.actual) || Number(row.forecast) || 0), 0);
     await postCfoAgentRun(
       'fpa_forecast',
       {
@@ -437,7 +437,7 @@ Provide brief insights (max 150 words):
                     </tr>
                   </thead>
                   <tbody>
-                    {adjustedRevenueData.map((row, idx) => (
+                    {adjustedRevenueData.map((row: any, idx: number) => (
                       <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="py-3 px-4 font-medium text-gray-900">{row.month}</td>
                         <td className="py-3 px-4 text-right">
@@ -527,7 +527,7 @@ Provide brief insights (max 150 words):
                     </tr>
                   </thead>
                   <tbody>
-                    {adjustedExpenseData.map((row, idx) => (
+                    {adjustedExpenseData.map((row: any, idx: number) => (
                       <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="py-3 px-4 font-medium text-gray-900">{row.department}</td>
                         <td className="py-3 px-4 text-right text-gray-600">{formatCurrency(row.oct)}</td>

@@ -159,7 +159,7 @@ export async function verifyReceipt(transactionId: number, receiptText: string):
   const r = await fetch(`${API_BASE}/api/bookkeeping/verify-receipt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction_id: transactionId, receipt_text }),
+    body: JSON.stringify({ transaction_id: transactionId, receipt_text: receiptText }),
   });
   return parseJson(r);
 }

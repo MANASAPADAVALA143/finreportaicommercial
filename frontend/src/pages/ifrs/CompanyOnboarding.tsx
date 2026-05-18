@@ -127,7 +127,7 @@ export const CompanyOnboarding = () => {
           setShowPreview(true);
           setUploading(false);
         },
-        error: (error) => {
+        error: (error: Error) => {
           setError(`Failed to parse file: ${error.message}`);
           setUploading(false);
         }
@@ -178,8 +178,8 @@ export const CompanyOnboarding = () => {
     const template = INDUSTRY_TEMPLATES.find(t => t.id === templateId);
     if (!template) return;
 
-    setMappings(template.mappings);
-    
+    setMappings(template.mappings as unknown as Record<string, string>);
+
     // Generate sample chart of accounts from template
     const sampleCoA: ChartOfAccountsRow[] = Object.entries(template.mappings).map(([glCode, ifrsLine]) => ({
       glCode,

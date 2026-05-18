@@ -415,7 +415,8 @@ export const calculateRealKPIs = (actualData: any, budgetData: any) => {
   // Efficiency KPIs
   const assetTurnover = (actual.totalAssets || 1) > 0 ? (actual.totalRevenue || 0) / (actual.totalAssets || 1) : 0;
   const roa = (actual.totalAssets || 1) > 0 ? (netProfit / (actual.totalAssets || 1)) * 100 : 0;
-  const roe = (actual.equity || 1) > 0 ? (netProfit / (actual.equity || 1)) * 100 : 0;
+  const _roe = (actual.equity || 1) > 0 ? (netProfit / (actual.equity || 1)) * 100 : 0;
+  void _roe; // reserved for future ROE KPI card
 
   const efficiencyKPIs = [
     {

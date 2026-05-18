@@ -50,7 +50,7 @@ Output only the note content text, no headers or "Note X" title.`;
 function getFallbackNoteContent(
   noteType: string,
   company: CompanyInfo,
-  data: Record<string, unknown>
+  _data: Record<string, unknown>
 ): string {
   const name = company.name || 'The Company';
   const period = company.period ?? company.periodEnd ?? 'the reporting period';

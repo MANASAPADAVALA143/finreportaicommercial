@@ -6,6 +6,9 @@ const r2rApiRoot = () => {
   return `${o.replace(/\/$/, "")}/api/r2r`;
 };
 
+// Alias used by getLearningProgress / getFeedbackHistory
+const BASE = r2rApiRoot;
+
 export type R2RFeedback = "approved" | "rejected" | "needs_review";
 
 export type FeedbackEntryData = {
@@ -44,10 +47,39 @@ export async function postR2RFeedback(payload: {
 }
 
 export async function getLearningProgress(clientId: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${BASE}/learning-progress/${encodeURIComponent(clientId)}`);
+  const res = await fetch(`${BASE()}/learning-progress/${encodeURIComponent(clientId)}`);
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `Learning progress failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export type HistoryUploadResult = {
+  status: string;
+  client_id: string;
+  accounts_baselined: number;
+  months_covered: number;
+  total_rows: number;
+  accounts: string[];
+  weekend_rates: Record<string, number>;
+  message: string;
+};
+
+export async function uploadHistory(
+  clientId: string,
+  file: File
+): Promise<HistoryUploadResult> {
+  const form = new FormData();
+  form.append("client_id", clientId);
+  form.append("file", file);
+  const res = await fetch(`${r2rApiRoot()}/upload-history`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || `History upload failed (${res.status})`);
   }
   return res.json();
 }

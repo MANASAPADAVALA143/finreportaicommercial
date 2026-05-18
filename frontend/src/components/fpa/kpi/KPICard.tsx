@@ -20,7 +20,7 @@ import {
   RefreshCw,
   Activity
 } from 'lucide-react';
-import { KPIMetric } from '../../types/kpi';
+import { KPIMetric } from '../../../types/kpi';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
 interface KPICardProps {
@@ -146,7 +146,7 @@ const KPICard: React.FC<KPICardProps> = ({ kpi, delay = 0 }) => {
     return <Minus className="text-gray-500" size={20} />;
   };
 
-  const sparklineChartData = kpi.sparklineData.map((val, idx) => ({ value: val }));
+  const sparklineChartData = kpi.sparklineData.map((val: number) => ({ value: val }));
 
   return (
     <motion.div

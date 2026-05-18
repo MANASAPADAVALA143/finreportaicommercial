@@ -4,9 +4,12 @@ GL → IFRS mapping via Anthropic Claude (Week 1).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 from app.services.json_llm_extract import parse_llm_json_array
@@ -240,7 +243,8 @@ def apply_ai_mappings_to_db(
         ]
         try:
             results = map_gl_batch_to_ifrs(payload)
-        except Exception:
+        except Exception as _exc:
+            logger.exception("GL mapping batch %d failed: %s", i // BATCH_SIZE, _exc)
             results = []
 
         if not results:
@@ -344,7 +348,8 @@ def apply_ai_mappings_only_missing(
         ]
         try:
             results = map_gl_batch_to_ifrs(payload)
-        except Exception:
+        except Exception as _exc:
+            logger.exception("GL mapping batch %d failed: %s", i // BATCH_SIZE, _exc)
             results = []
 
         if not results:
