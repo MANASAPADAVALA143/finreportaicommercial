@@ -116,7 +116,18 @@ def _entries_to_df(entries: list[EntryIn]) -> pd.DataFrame:
                 e.journal_id, e.posting_date,
             )
             continue
-        hr = e.posting_hour if e.posting_hour is not None else int(dt.hour)
+        # BUG 3 FIX — posting_hour=0 when date string has no time component
+        # BEFORE: int(dt.hour) on "2024-01-15" → 0 → flagged as after-hours (0 < 9)
+        # AFTER:  check for time in raw string; if absent, use 0 as sentinel
+        #         (engine timing_score now treats hr==0 as "unknown" and skips timing flag)
+        raw_date_str = str(e.posting_date).strip()
+        has_time = len(raw_date_str) > 10 and (":" in raw_date_str[10:] or "T" in raw_date_str)
+        if e.posting_hour is not None:
+            hr = int(e.posting_hour)
+        elif has_time:
+            hr = int(dt.hour)   # real time component present
+        else:
+            hr = 0              # sentinel: date-only, timing unknown → engine will skip flag
         rows.append({
             "journal_id":   e.journal_id,
             "posting_date": dt,

@@ -327,8 +327,11 @@ class MLAnomalyLayer:
         feats = pd.DataFrame(index=df.index)
         feats["amount_log"]    = np.log1p(df["amount"].abs().astype(float))
         feats["is_weekend"]    = (df["posting_dow"].astype(int) >= 5).astype(float)
-        feats["is_afterhours"] = ((df["posting_hour"].astype(int) < 9) |
-                                  (df["posting_hour"].astype(int) > 18)).astype(float)
+        # BUG 3 FIX — business hours 08:00–20:00; hour=0 means date-only (unknown), treat as in-hours
+        # BEFORE: < 9 or > 18 flagged ~hour 0 (all date-only entries) as after-hours
+        # AFTER:  < 8 or > 20; hour==0 is treated as in-hours (unknown time → assume normal)
+        _hr = df["posting_hour"].astype(int)
+        feats["is_afterhours"] = ((_hr > 0) & ((_hr < 8) | (_hr > 20))).astype(float)
         feats["is_round"]      = (df["amount"].astype(float) % 1000 == 0).astype(float)
         feats["is_manual"]     = (df["source"].astype(str).str.lower() == "manual").astype(float)
         feats["is_monthend"]   = (df["posting_date"].dt.day >= 28).astype(float)
@@ -674,18 +677,26 @@ class BehavioralLayer:
 
     @staticmethod
     def timing_score(df: pd.DataFrame, hist_df: pd.DataFrame) -> np.ndarray:
+        # BUG 3 FIX — business hours 08:00–20:00 (wide window); hour==0 = unknown, skip
+        # BEFORE: < 9 or > 18 → posting_hour=0 (date-only entries, no time) always flagged
+        # AFTER:  < 8 or > 20; posting_hour==0 means no time data → treated as in-hours
         scores = np.zeros(len(df))
         hist_afterhours_pct = hist_weekend_pct = 0.0
         if not hist_df.empty:
             h = hist_df["posting_hour"].astype(int)
-            hist_afterhours_pct = float(((h < 9) | (h > 18)).mean() * 100)
+            # Only count non-zero hours in history afterhours pct
+            h_known = h[h > 0]
+            hist_afterhours_pct = float(((h_known < 8) | (h_known > 20)).mean() * 100) if len(h_known) else 0.0
             hist_weekend_pct    = float((hist_df["posting_dow"].astype(int) >= 5).mean() * 100)
         for i, (_, row) in enumerate(df.iterrows()):
-            s = 0.0
-            if int(row["posting_hour"]) < 9 or int(row["posting_hour"]) > 18:
+            s   = 0.0
+            hr  = int(row["posting_hour"])
+            dow = int(row["posting_dow"])
+            # hour==0 → date-only, no time component → cannot determine; skip timing flag
+            if hr > 0 and (hr < 8 or hr > 20):
                 if hist_afterhours_pct < 10.0:
                     s += 40.0
-            if int(row["posting_dow"]) >= 5:
+            if dow >= 5:
                 if hist_weekend_pct < 5.0:
                     s += 40.0
             scores[i] = min(s, 80.0)
@@ -849,23 +860,22 @@ class JEAnomalyEngine:
         if client_weights:
             self._ens.weights = dict(client_weights)
 
-        # Fix 3: Dynamic threshold calibration from history distribution
-        calibration_info: dict[str, Any] = {}
-        if not skip_calibration and len(hist_df) >= 50:
-            hist_scores = self._score_history_sample(hist_df)
-            cal = self._cal.calibrate(hist_scores)
-            self._ens.thresholds = {
-                "CRITICAL": cal["CRITICAL"],
-                "HIGH":     cal["HIGH"],
-                "MEDIUM":   cal["MEDIUM"],
-            }
-            calibration_info = cal
-            logger.info("[JEEngine] Calibrated thresholds: %s", cal)
-        else:
-            calibration_info = {
-                "calibrated": False,
-                "note": "Default thresholds used (< 50 history rows)",
-            }
+        # BUG 1 FIX — ThresholdCalibrator DISABLED
+        # BEFORE: calibrator ran on history Z-scores → produced CRITICAL≈35, HIGH≈22,
+        #         MEDIUM≈12 (all far below 80/65/45) → overrode defaults every time
+        #         → 57% of entries flagged HIGH even with correct DEFAULT_THRESHOLDS set
+        # AFTER:  always use fixed DEFAULT_THRESHOLDS (80/65/45); calibrator not called
+        # Target distribution: Critical <5%, High 5-10%, Medium 10-20%
+        calibration_info: dict[str, Any] = {
+            "calibrated": False,
+            "note": (
+                "Fixed thresholds: CRITICAL≥80, HIGH≥65, MEDIUM≥45. "
+                "Dynamic calibration disabled — it was computing thresholds from "
+                "normal history Z-scores, producing values far below the fixed targets."
+            ),
+        }
+        # Always enforce fixed thresholds (reset in case FeedbackLearner mutated them)
+        self._ens.thresholds = dict(DEFAULT_THRESHOLDS)
 
         # Run all layers
         stat_out = self._stat.score(df, hist_df)

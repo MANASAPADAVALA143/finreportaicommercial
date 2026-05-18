@@ -400,15 +400,32 @@ export default function HistoricalTab() {
 
   const exportCsv = () => {
     if (!result?.entries?.length) return;
-    const lines = ['journal_id,account,amount,risk_level,composite_score,top_reason'];
+    // BUG 2 FIX — composite_score was reading correctly but formatting as bare JS number;
+    // now explicit Number().toFixed(1) and all 4 layer scores included for auditability
+    const header = [
+      'journal_id', 'account', 'amount', 'posting_date', 'user_id', 'source',
+      'risk_level', 'composite_score',
+      'stat_score', 'ml_score', 'pattern_score', 'behavioral_score',
+      'top_reason',
+    ].join(',');
+    const lines = [header];
     for (const e of result.entries) {
+      const ld = e.layer_detail;
+      const safe = (v: unknown) => String(v ?? '').replace(/,/g, ' ').replace(/\n/g, ' ');
       lines.push([
-        e.journal_id,
-        e.account,
-        e.amount,
+        safe(e.journal_id),
+        safe(e.account),
+        Number(e.amount).toFixed(2),
+        safe((e as any).posting_date ?? ''),
+        safe((e as any).user_id ?? ''),
+        safe((e as any).source ?? ''),
         e.composite.risk_level,
-        e.composite.composite_score,
-        (e.composite.top_reasons?.[0] || '').replace(/,/g, ' '),
+        Number(e.composite.composite_score ?? 0).toFixed(1),
+        ld ? Number(ld.statistical.score).toFixed(1) : '',
+        ld ? Number(ld.ml.score).toFixed(1)          : '',
+        ld ? Number(ld.pattern.score).toFixed(1)     : '',
+        ld ? Number(ld.behavioral.score).toFixed(1)  : '',
+        safe(e.composite.top_reasons?.[0] ?? ''),
       ].join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
