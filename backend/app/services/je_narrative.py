@@ -53,7 +53,7 @@ def _rule_based_narrative(entry: dict[str, Any], scores: dict[str, Any]) -> str:
 
     return (
         f"This {risk}-risk journal entry (composite score {score:.0f}/100) "
-        f"for account {acct} with an amount of ${amount:,.2f} posted by {user} "
+        f"for account {acct} with an amount of ₹{amount:,.2f} posted by {user} "
         f"was flagged due to: {reason}. "
         "Recommend auditor review and corroborating documentation."
     )
@@ -82,7 +82,7 @@ Journal Entry Details
 ─────────────────────
 • Journal ID   : {entry.get('journal_id', 'N/A')}
 • Account      : {entry.get('account', 'N/A')}
-• Amount       : ${entry.get('amount', 0):,.2f}
+• Amount       : ₹{entry.get('amount', 0):,.2f}
 • Posted by    : {entry.get('user_id', 'N/A')}
 • Source       : {entry.get('source', 'N/A')}
 • Posting date : {entry.get('posting_date', 'N/A')}
