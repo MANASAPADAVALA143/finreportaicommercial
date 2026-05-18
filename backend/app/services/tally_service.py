@@ -3,12 +3,14 @@ Tally Prime / Tally ERP 9 XML gateway client (localhost ODBC port, default 9000)
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
+import httpx
 import pandas as pd
 import requests
 
@@ -106,6 +108,11 @@ class TallyService:
             }
         except Exception as e:
             return {"connected": False, "error": str(e)}
+
+    async def get_companies(self) -> list[str]:
+        """Async wrapper — run sync company-list probe in thread pool."""
+        result = await asyncio.to_thread(self.test_connection)
+        return result.get("companies", [])
 
     def _parse_company_list(self, xml_str: str) -> list[str]:
         try:
@@ -321,6 +328,164 @@ class TallyService:
             except Exception as e:
                 results[key] = {"status": "error", "error": str(e)}
         return results
+
+    # ── Async ERP sync methods (used by erp_sync_service) ────────────────────
+
+    async def get_purchase_vouchers(
+        self, company: str, days_back: int = 30
+    ) -> list[dict[str, Any]]:
+        """Fetch Purchase vouchers from Tally asynchronously."""
+        to_dt   = datetime.utcnow()
+        from_dt = to_dt - timedelta(days=days_back)
+        xml = f"""<ENVELOPE>
+          <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+          <BODY><EXPORTDATA><REQUESTDESC>
+            <REPORTNAME>Voucher Register</REPORTNAME>
+            <STATICVARIABLES>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <SVCURRENTCOMPANY>{company}</SVCURRENTCOMPANY>
+              <SVFROMDATE>{from_dt.strftime('%Y%m%d')}</SVFROMDATE>
+              <SVTODATE>{to_dt.strftime('%Y%m%d')}</SVTODATE>
+              <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+            </STATICVARIABLES>
+          </REQUESTDESC></EXPORTDATA></BODY>
+        </ENVELOPE>"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    self.base_url,
+                    content=xml.encode("utf-8"),
+                    headers={"Content-Type": "text/xml"},
+                )
+                return self._parse_vouchers(resp.text)
+        except Exception as exc:
+            logger.error("[TallyService] get_purchase_vouchers failed: %s", exc)
+            return []
+
+    async def get_journal_vouchers(
+        self, company: str, days_back: int = 30
+    ) -> list[dict[str, Any]]:
+        """Fetch Journal vouchers from Tally asynchronously."""
+        to_dt   = datetime.utcnow()
+        from_dt = to_dt - timedelta(days=days_back)
+        xml = f"""<ENVELOPE>
+          <HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>
+          <BODY><EXPORTDATA><REQUESTDESC>
+            <REPORTNAME>Voucher Register</REPORTNAME>
+            <STATICVARIABLES>
+              <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+              <SVCURRENTCOMPANY>{company}</SVCURRENTCOMPANY>
+              <SVFROMDATE>{from_dt.strftime('%Y%m%d')}</SVFROMDATE>
+              <SVTODATE>{to_dt.strftime('%Y%m%d')}</SVTODATE>
+              <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+            </STATICVARIABLES>
+          </REQUESTDESC></EXPORTDATA></BODY>
+        </ENVELOPE>"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    self.base_url,
+                    content=xml.encode("utf-8"),
+                    headers={"Content-Type": "text/xml"},
+                )
+                return self._parse_vouchers(resp.text)
+        except Exception as exc:
+            logger.error("[TallyService] get_journal_vouchers failed: %s", exc)
+            return []
+
+    def _parse_vouchers(self, raw_xml: str) -> list[dict[str, Any]]:
+        """Parse Tally VOUCHER elements into list of dicts."""
+        try:
+            root     = ET.fromstring(self._clean_tally_xml(raw_xml))
+            vouchers = []
+            for v in root.iter("VOUCHER"):
+                def ft(*tags: str) -> str:
+                    for tag in tags:
+                        el = v.find(tag)
+                        if el is not None and el.text:
+                            return el.text.strip()
+                    return ""
+                entries = []
+                for entry in v.iter("ALLLEDGERENTRIES.LIST"):
+                    ledger   = entry.findtext("LEDGERNAME") or ""
+                    positive = (entry.findtext("ISDEEMEDPOSITIVE") or "").lower()
+                    amt_el   = entry.find("AMOUNT")
+                    if ledger and amt_el is not None and amt_el.text:
+                        try:
+                            entries.append({
+                                "ledger":   ledger,
+                                "is_debit": positive == "yes",
+                                "amount":   abs(float(amt_el.text.replace(",", ""))),
+                            })
+                        except ValueError:
+                            pass
+                # net amount = sum of debit entries
+                net = sum(e["amount"] for e in entries if e["is_debit"])
+                vouchers.append({
+                    "id":             ft("GUID", "VOUCHERNUMBER"),
+                    "date":           ft("DATE", "VOUCHERDATE"),
+                    "voucher_number": ft("VOUCHERNUMBER"),
+                    "voucher_type":   ft("VOUCHERTYPENAME"),
+                    "narration":      ft("NARRATION"),
+                    "amount":         net,
+                    "party_name":     ft("PARTYNAME", "PARTYLEDGERNAME"),
+                    "ledger_entries": entries,
+                })
+            return vouchers
+        except ET.ParseError as exc:
+            logger.error("[TallyService] XML parse error: %s", exc)
+            return []
+
+    def format_vouchers_for_invoiceflow(
+        self, vouchers: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Convert Tally purchase vouchers to InvoiceFlow AP format."""
+        result = []
+        for v in vouchers:
+            iso_date = self._tally_date_to_iso(v.get("date", ""))
+            result.append({
+                "invoice_id":   v.get("voucher_number") or v.get("id", ""),
+                "vendor_name":  v.get("party_name", "Unknown"),
+                "invoice_date": iso_date,
+                "due_date":     iso_date,
+                "amount":       v.get("amount", 0.0),
+                "currency":     "INR",
+                "status":       "pending",
+                "description":  v.get("narration", ""),
+                "source":       "tally",
+            })
+        return result
+
+    def format_vouchers_for_anomaly(
+        self, vouchers: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Convert Tally journal vouchers to JE Anomaly format."""
+        result = []
+        for v in vouchers:
+            iso_date = self._tally_date_to_iso(v.get("date", ""))
+            for entry in v.get("ledger_entries", []):
+                result.append({
+                    "entry_id":        f"{v.get('id', '')}_{entry.get('ledger', '')}",
+                    "posting_date":    iso_date,
+                    "amount":          entry.get("amount", 0.0),
+                    "account_code":    entry.get("ledger", ""),
+                    "account_name":    entry.get("ledger", ""),
+                    "description":     v.get("narration", ""),
+                    "posted_by":       "Tally",
+                    "document_number": v.get("voucher_number", ""),
+                    "currency":        "INR",
+                    "debit_credit":    "D" if entry.get("is_debit") else "C",
+                    "source":          "tally",
+                })
+        return result
+
+    @staticmethod
+    def _tally_date_to_iso(tally_date: str) -> str:
+        """Convert YYYYMMDD → ISO YYYY-MM-DD. Return today if invalid."""
+        d = str(tally_date).strip()
+        if len(d) == 8 and d.isdigit():
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+        return datetime.utcnow().strftime("%Y-%m-%d")
 
     def auto_map_from_tally_groups(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()

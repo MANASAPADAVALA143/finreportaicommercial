@@ -111,8 +111,9 @@ async def connect_tally(req: TallyConnectRequest) -> dict[str, Any]:
     """Test Tally connectivity, then persist the connection config."""
     from app.services.tally_service import TallyService  # noqa: PLC0415
 
+    import asyncio  # noqa: PLC0415
     tally  = TallyService(host=req.server_ip, port=req.port)
-    test   = await tally.test_connection()
+    test   = await asyncio.to_thread(tally.test_connection)
     if not test.get("connected"):
         raise HTTPException(400, detail=f"Cannot reach Tally: {test.get('error')}")
 
@@ -164,12 +165,13 @@ async def get_tally_companies(
     """Probe a Tally instance for its company list (used during setup)."""
     from app.services.tally_service import TallyService  # noqa: PLC0415
 
+    import asyncio  # noqa: PLC0415
     tally = TallyService(host=server_ip, port=port)
-    test  = await tally.test_connection()
+    test  = await asyncio.to_thread(tally.test_connection)
     if not test.get("connected"):
         raise HTTPException(400, detail=f"Cannot reach Tally at {server_ip}:{port}")
 
-    companies = await tally.get_companies()
+    companies = test.get("companies", [])
     return {"connected": True, "companies": companies}
 
 
