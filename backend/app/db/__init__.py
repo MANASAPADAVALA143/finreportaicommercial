@@ -23,6 +23,27 @@ def init_db():
     import app.models.financial_model  # noqa: F401 - FP&A Model Builder
     import app.models.users  # noqa: F401 - RBAC users/companies/audit
     Base.metadata.create_all(bind=engine)
+
+    # ── Safe column / table additions for SQLite (create_all skips existing tables)
+    try:
+        with engine.connect() as conn:
+            # meta_json column on je_account_baseline
+            existing_cols = {
+                row[1]
+                for row in conn.execute(
+                    __import__("sqlalchemy").text("PRAGMA table_info(je_account_baseline)")
+                )
+            }
+            if "meta_json" not in existing_cols:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE je_account_baseline ADD COLUMN meta_json TEXT"
+                    )
+                )
+                conn.commit()
+    except Exception:
+        pass  # Non-SQLite or table doesn't exist yet — create_all handles it
+
     db = SessionLocal()
     try:
         from app.services.seed_ifrs_master import seed_if_empty

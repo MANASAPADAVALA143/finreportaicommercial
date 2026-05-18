@@ -139,10 +139,18 @@ def upload_history(body: HistoryUploadIn, db: Session = Depends(get_db)):
         posting_hour = int(getattr(dt, "hour", 10) if pd.notna(getattr(dt, "hour", np.nan)) else 10)
         posting_dow = int(dt.weekday())
 
+        # ✅ FIX: derive upload_month from each row's actual posting_date
+        # so a 12-month file produces 12 distinct month labels instead of 1.
+        # The upload_month request field is kept as a fallback for rows with bad dates.
+        try:
+            row_month = dt.strftime("%Y-%m")
+        except Exception:
+            row_month = upload_month  # fallback
+
         db.add(
             JournalHistory(
                 company_id=company_id,
-                upload_month=upload_month,
+                upload_month=row_month,
                 upload_batch=upload_batch,
                 journal_id=entry.journal_id,
                 posting_date=dt.date(),

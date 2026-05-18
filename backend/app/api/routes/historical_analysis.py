@@ -1,401 +1,506 @@
 from __future__ import annotations
 
-from collections import Counter
+import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from scipy.stats import chisquare
-from sklearn.ensemble import IsolationForest
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.history_models import AccountBaseline, JournalHistory
+from app.models.history_models import JENarrative, JournalHistory
+from app.services.feedback_learner import FeedbackLearner
+from app.services.je_anomaly_engine import JEAnomalyEngine
+from app.services.je_data_adapter import JEDataAdapter, JEDataValidator
+from app.services.je_narrative import JENarrativeService
+from app.utils.plain_english import build_plain_english_summary
 
-try:
-    import shap  # type: ignore
-except Exception:  # noqa: BLE001
-    shap = None
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_engine    = JEAnomalyEngine()
+_adapter   = JEDataAdapter()
+_validator = JEDataValidator()
+_feedback  = FeedbackLearner()
+_narrative = JENarrativeService()
+
+# Narrative cache TTL in hours — re-generate after this many hours
+_NARRATIVE_TTL_HOURS = 24
+# Risk levels that get LLM narratives
+_NARRATIVE_RISK_LEVELS = {"CRITICAL", "HIGH"}
+# Max entries sent to Claude per analysis run
+_NARRATIVE_MAX_ENTRIES = 20
+
+
+def _np_safe(obj: Any) -> Any:
+    """Recursively convert numpy scalars → Python natives so FastAPI can serialise."""
+    if isinstance(obj, dict):
+        return {k: _np_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_np_safe(v) for v in obj]
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
+
+# ── Pydantic input models ─────────────────────────────────────────────────────
+
+class FeedbackItemIn(BaseModel):
+    journal_id:    str
+    auditor_label: str   # TRUE_POSITIVE | FALSE_POSITIVE | MISSED_ANOMALY | IGNORE
+    layer_scores:  dict[str, float] = {}
+    risk_level:    str | None = None
+    notes:         str | None = None
+
+
+class FeedbackIn(BaseModel):
+    company_id: str
+    feedback:   list[FeedbackItemIn]
+
 
 class EntryIn(BaseModel):
-    journal_id: str
+    journal_id:   str
     posting_date: str
-    account: str
-    amount: float
-    user_id: str
-    source: str = "ERP"
-    description: str | None = None
-    entity: str | None = None
+    account:      str
+    amount:       float
+    user_id:      str
+    source:       str        = "ERP"
+    description:  str | None = None
+    entity:       str | None = None
     posting_hour: int | None = None
 
 
 class HistoricalAnalysisIn(BaseModel):
-    company_id: str
-    entries: list[EntryIn]
+    company_id:      str
+    entries:         list[EntryIn]
     analysis_months: int = 6
 
 
-def _normalize_rows(entries: list[EntryIn]) -> pd.DataFrame:
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_date(raw: str) -> "pd.Timestamp | pd.NaT":
+    """Parse a date string, including Excel serial numbers (e.g. '45000')."""
+    dt = pd.to_datetime(raw, errors="coerce", dayfirst=False)
+    if pd.isna(dt):
+        try:
+            serial = float(raw)
+            if 30000 < serial < 60000:
+                import datetime as _dt
+                dt = pd.Timestamp(_dt.datetime(1899, 12, 30) + _dt.timedelta(days=serial))
+        except (ValueError, TypeError):
+            pass
+    return dt
+
+
+def _entries_to_df(entries: list[EntryIn]) -> pd.DataFrame:
+    """Convert Pydantic EntryIn list → canonical DataFrame for JEAnomalyEngine."""
     rows = []
+    skipped = 0
     for e in entries:
-        dt = pd.to_datetime(e.posting_date, errors="coerce")
+        dt = _parse_date(str(e.posting_date).strip())
         if pd.isna(dt):
+            skipped += 1
+            log.warning(
+                "[HISTORICAL] Skipping journal_id=%r — unparseable date: %r",
+                e.journal_id, e.posting_date,
+            )
             continue
-        hr = e.posting_hour if e.posting_hour is not None else (int(dt.hour) if pd.notna(getattr(dt, "hour", np.nan)) else 10)
-        rows.append(
-            {
-                "journal_id": e.journal_id,
-                "posting_date": dt,
-                "posting_hour": int(hr),
-                "posting_dow": int(dt.weekday()),
-                "account": e.account,
-                "amount": float(e.amount),
-                "user_id": e.user_id,
-                "source": e.source or "ERP",
-                "description": e.description or "",
-                "entity": e.entity or "",
-            }
-        )
+        hr = e.posting_hour if e.posting_hour is not None else int(dt.hour)
+        rows.append({
+            "journal_id":   e.journal_id,
+            "posting_date": dt,
+            "posting_hour": int(hr),
+            "posting_dow":  int(dt.weekday()),
+            "account":      e.account,
+            "amount":       abs(float(e.amount)),
+            "user_id":      e.user_id,
+            "source":       e.source or "ERP",
+            "description":  e.description or "",
+            "entity":       e.entity or "",
+        })
+    log.info(
+        "[HISTORICAL] entries_to_df: received=%d valid=%d skipped_bad_date=%d",
+        len(entries), len(rows), skipped,
+    )
     return pd.DataFrame(rows)
 
 
-def _if_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out["amount_log"] = np.log1p(out["amount"].abs())
-    out["is_weekend"] = (out["posting_dow"] >= 5).astype(int)
-    out["is_afterhours"] = ((out["posting_hour"] < 9) | (out["posting_hour"] > 18)).astype(int)
-    out["is_round"] = (out["amount"] % 1000 == 0).astype(int)
-    out["is_manual"] = (out["source"].astype(str).str.lower() == "manual").astype(int)
-    out["is_monthend"] = (out["posting_date"].dt.day >= 28).astype(int)
-    out["account_encoded"] = out["account"].astype(str).map(lambda x: hash(x) % 500)
-    out["user_encoded"] = out["user_id"].astype(str).map(lambda x: hash(x) % 200)
-    return out
+def _hist_to_df(hist_rows: list) -> pd.DataFrame:
+    """ORM JournalHistory list → canonical DataFrame."""
+    if not hist_rows:
+        return pd.DataFrame()
+    data = []
+    for r in hist_rows:
+        dt = pd.to_datetime(r.posting_date, errors="coerce")
+        if pd.isna(dt):
+            continue
+        data.append({
+            "journal_id":   str(r.journal_id or ""),
+            "posting_date": dt,
+            "posting_hour": int(r.posting_hour or 10),
+            "posting_dow":  int(r.posting_dow  or 0),
+            "account":      str(r.account or ""),
+            "amount":       abs(float(r.amount or 0)),
+            "user_id":      str(r.user_id or ""),
+            "source":       str(r.source or "ERP"),
+            "description":  str(r.description or ""),
+            "entity":       str(r.entity or ""),
+            "upload_month": str(r.upload_month or ""),
+        })
+    return pd.DataFrame(data)
 
 
-def _normalize_if_score(decision_scores: np.ndarray) -> np.ndarray:
-    if len(decision_scores) == 0:
-        return np.array([])
-    lo = float(np.min(decision_scores))
-    hi = float(np.max(decision_scores))
-    denom = (hi - lo) if (hi - lo) != 0 else 1.0
-    norm = 1 - ((decision_scores - lo) / denom)
-    return np.clip(norm * 100, 0, 100)
-
-
-def _drift_summary(amount_drift: float, volume_drift: float, manual_drift: float) -> str:
+def _drift_summary(
+    volume_drift_signed: float,
+    amount_drift: float,
+    manual_drift: float,
+) -> str:
+    """Build a human-readable drift summary using SIGNED volume drift."""
     parts = []
     if amount_drift > 30:
         parts.append(f"Amount drift +{amount_drift:.1f}%")
-    if volume_drift > 40:
-        parts.append(f"Volume drift +{volume_drift:.1f}%")
+    # Volume drift: show signed, flag only outside ±20%
+    if abs(volume_drift_signed) > 20:
+        sign = "+" if volume_drift_signed > 0 else ""
+        direction = "above" if volume_drift_signed > 0 else "below"
+        parts.append(
+            f"Volume drift {sign}{volume_drift_signed:.1f}% {direction} baseline avg"
+        )
     if manual_drift > 15:
         parts.append(f"Manual drift +{manual_drift:.1f} pts")
     return " | ".join(parts) if parts else "No material drift detected"
 
 
+# ── Narrative cache helpers ───────────────────────────────────────────────────
+
+def _load_cached_narratives(
+    company_id: str,
+    journal_ids: list[str],
+    db: Session,
+) -> dict[str, str]:
+    """Return cached narratives that haven't expired yet."""
+    if not journal_ids:
+        return {}
+    cutoff = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+    rows = (
+        db.query(JENarrative)
+        .filter(
+            JENarrative.company_id == company_id,
+            JENarrative.journal_id.in_(journal_ids),
+        )
+        .all()
+    )
+    result: dict[str, str] = {}
+    for row in rows:
+        age_hours = (cutoff - (row.created_at or cutoff)).total_seconds() / 3600
+        if age_hours <= _NARRATIVE_TTL_HOURS:
+            result[row.journal_id] = row.narrative
+    return result
+
+
+def _save_narratives(
+    company_id: str,
+    narratives: dict[str, str],
+    entries_out: list[dict[str, Any]],
+    db: Session,
+) -> None:
+    """Upsert freshly-generated narratives into the cache table."""
+    if not narratives:
+        return
+    # Build a quick lookup of composite metadata from entries_out
+    meta: dict[str, dict[str, Any]] = {}
+    for e in entries_out:
+        jid  = e.get("journal_id", "")
+        comp = e.get("composite", {})
+        meta[jid] = {
+            "risk_level":      comp.get("risk_level"),
+            "composite_score": comp.get("composite_score"),
+        }
+
+    for jid, text in narratives.items():
+        existing = (
+            db.query(JENarrative)
+            .filter(JENarrative.company_id == company_id, JENarrative.journal_id == jid)
+            .first()
+        )
+        m = meta.get(jid, {})
+        if existing:
+            existing.narrative       = text
+            existing.risk_level      = m.get("risk_level")
+            existing.composite_score = m.get("composite_score")
+            existing.created_at      = datetime.utcnow()
+        else:
+            db.add(JENarrative(
+                company_id      = company_id,
+                journal_id      = jid,
+                risk_level      = m.get("risk_level"),
+                composite_score = m.get("composite_score"),
+                narrative       = text,
+                model_used      = "claude-sonnet-4-5",
+                created_at      = datetime.utcnow(),
+            ))
+    try:
+        db.commit()
+    except Exception as exc:
+        log.warning("[NARRATIVE] Failed to save narrative cache: %s", exc)
+        db.rollback()
+
+
+# ── Main endpoint (async for narrative await) ─────────────────────────────────
+
 @router.post("/analyze-historical")
-def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(get_db)):
+async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(get_db)):
     company_id = body.company_id.strip()
     if not company_id:
         raise HTTPException(status_code=400, detail="company_id is required.")
-    df = _normalize_rows(body.entries)
+
+    log.info(
+        "[HISTORICAL] analyze_historical: company_id=%r entries=%d",
+        company_id, len(body.entries),
+    )
+    if body.entries:
+        s = body.entries[0]
+        log.debug(
+            "[HISTORICAL] First entry: journal_id=%r posting_date=%r account=%r amount=%s",
+            s.journal_id, s.posting_date, s.account, s.amount,
+        )
+
+    # ── Build DataFrames ──────────────────────────────────────────────────────
+    df = _entries_to_df(body.entries)
     if df.empty:
-        raise HTTPException(status_code=400, detail="No valid entries to analyze.")
+        detail = (
+            f"No valid entries to analyze. Received {len(body.entries)} row(s) but all were skipped. "
+            "Common causes: (1) date format not recognised — ensure posting_date is YYYY-MM-DD "
+            "or DD/MM/YYYY; (2) column names don't match expected fields. "
+            "Check the backend console for per-row debug output."
+        )
+        raise HTTPException(status_code=400, detail=detail)
 
-    baselines = {
-        b.account: b
-        for b in db.query(AccountBaseline).filter(AccountBaseline.company_id == company_id).all()
-    }
+    hist_rows = (
+        db.query(JournalHistory)
+        .filter(JournalHistory.company_id == company_id)
+        .all()
+    )
+    hist_df = _hist_to_df(hist_rows)
 
-    hist_rows = db.query(JournalHistory).filter(JournalHistory.company_id == company_id).all()
-    hist_df = pd.DataFrame(
-        [
-            {
-                "journal_id": r.journal_id,
-                "posting_date": pd.to_datetime(r.posting_date),
-                "posting_hour": int(r.posting_hour or 10),
-                "posting_dow": int(r.posting_dow or 0),
-                "account": r.account,
-                "amount": float(r.amount or 0),
-                "user_id": r.user_id or "",
-                "source": r.source or "ERP",
-                "description": r.description or "",
-                "entity": r.entity or "",
-                "upload_month": r.upload_month or "",
-            }
-            for r in hist_rows
-        ]
+    # ── Validate ──────────────────────────────────────────────────────────────
+    validation = _validator.validate(df, hist_df)
+    if not validation["ok"]:
+        raise HTTPException(status_code=400, detail=" | ".join(validation["errors"]))
+
+    # ── Load per-client weights and run 5-layer engine ────────────────────────
+    client_weights = _feedback.load_weights(company_id, db)
+    result = _engine.analyze(df, hist_df, client_weights=client_weights if client_weights else None)
+    entries_out: list[dict[str, Any]] = result["entries"]
+    batch_stats: dict[str, Any]       = result["batch_stats"]
+
+    # ── Augment entries with plain-English summary ────────────────────────────
+    n_hist  = len(hist_df)
+    n_batch = len(df)
+    for entry in entries_out:
+        ld   = entry.get("layer_detail", {})
+        stat = ld.get("statistical", {})
+        beh  = ld.get("behavioral", {})
+        comp = entry.get("composite", {})
+
+        flags: list[str] = []
+        if beh.get("new_actor", 0) >= 40:
+            flags.append("new_user")
+        if beh.get("timing", 0) >= 40:
+            flags.append("afterhours_anomaly")
+        if beh.get("monthend", 0) >= 40:
+            flags.append("monthend_spike")
+        pat = ld.get("pattern", {})
+        if pat.get("round_number", 0) >= 45:
+            flags.append("round_number")
+        if pat.get("duplicate", 0) >= 80:
+            flags.append("duplicate_entry")
+
+        plain = build_plain_english_summary(
+            journal_id      = entry["journal_id"],
+            account         = entry["account"],
+            amount          = entry["amount"],
+            risk_level      = comp.get("risk_level", "LOW"),
+            composite_score = comp.get("composite_score", 0.0),
+            zscore_value    = float(stat.get("ctx_zscore", 0.0)),
+            zscore_source   = "multi-context" if n_hist > 0 else "batch",
+            isolation_score = float(ld.get("ml", {}).get("if_score", 0.0)),
+            iqr_upper       = 0.0,
+            iqr_lower       = 0.0,
+            behaviour_flags = flags,
+            compliance_score= int(pat.get("duplicate", 0) > 50) * 35,
+            shap_top_features=[],
+            n_history       = n_hist,
+            n_batch         = n_batch,
+        )
+        entry["plain"] = plain
+
+        # Compatibility shim
+        entry["composite"]["score_breakdown"] = {
+            "statistical":  comp.get("layer_scores", {}).get("statistical", 0),
+            "ml":           comp.get("layer_scores", {}).get("ml", 0),
+            "pattern":      comp.get("layer_scores", {}).get("pattern", 0),
+            "behavioral":   comp.get("layer_scores", {}).get("behavioral", 0),
+        }
+
+        # Initialise narrative slot (filled below)
+        entry["audit_narrative"] = None
+
+    # ── LLM Narrative generation for CRITICAL + HIGH entries ──────────────────
+    flagged_entries = [
+        e for e in entries_out
+        if e.get("composite", {}).get("risk_level") in _NARRATIVE_RISK_LEVELS
+    ]
+    # Sort by composite_score descending so top-20 are the most suspicious
+    flagged_entries.sort(
+        key=lambda e: e.get("composite", {}).get("composite_score", 0),
+        reverse=True,
     )
 
-    # Model 4: Benford (population)
-    benford_expected = {1: 30.1, 2: 17.6, 3: 12.5, 4: 9.7, 5: 7.9, 6: 6.7, 7: 5.8, 8: 5.1, 9: 4.6}
-    leading_digits = []
-    for amt in df["amount"].tolist():
-        if abs(float(amt)) < 10:
-            continue
-        ds = "".join(ch for ch in str(abs(float(amt))) if ch.isdigit())
-        if ds:
-            leading_digits.append(int(ds[0]))
-    observed = Counter(leading_digits)
-    n = len(leading_digits)
-    if n >= 50:
-        obs_freq = [observed.get(d, 0) for d in range(1, 10)]
-        exp_freq = [benford_expected[d] / 100 * n for d in range(1, 10)]
-        chi2, p_value = chisquare(obs_freq, exp_freq)
-    else:
-        chi2, p_value = 0.0, 1.0
-    benford_result = {
-        "chi2": round(float(chi2), 3),
-        "p_value": round(float(p_value), 4),
-        "population_flag": bool(p_value < 0.05),
-        "severity": "critical" if p_value < 0.01 else ("high" if p_value < 0.05 else "normal"),
-        "observed_distribution": {str(d): observed.get(d, 0) for d in range(1, 10)},
-        "expected_distribution": {str(d): round(benford_expected[d], 1) for d in range(1, 10)},
-        "interpretation": (
-            "Population shows significant Benford deviation — possible manipulation"
-            if p_value < 0.05
-            else "Population follows expected Benford distribution — normal"
-        ),
-    }
+    if flagged_entries:
+        flagged_jids = [e["journal_id"] for e in flagged_entries]
 
-    # Model 7: Drift (population)
+        # Load what's already cached
+        cached = _load_cached_narratives(company_id, flagged_jids, db)
+
+        # Identify which need fresh generation
+        need_generation = [
+            e for e in flagged_entries
+            if e["journal_id"] not in cached
+        ][:_NARRATIVE_MAX_ENTRIES]
+
+        if need_generation:
+            # Build inputs for generate_batch
+            batch_input = [
+                {
+                    "entry": {
+                        "journal_id":   e["journal_id"],
+                        "account":      e["account"],
+                        "amount":       e["amount"],
+                        "user_id":      e.get("user_id", ""),
+                        "source":       e.get("source", "ERP"),
+                        "posting_date": e.get("posting_date", ""),
+                        "description":  e.get("description", ""),
+                        "entity":       e.get("entity", ""),
+                    },
+                    "scores": {
+                        "risk_level":      e["composite"].get("risk_level"),
+                        "composite_score": e["composite"].get("composite_score", 0),
+                        "top_reasons":     e["composite"].get("top_reasons", []),
+                        "layer_scores":    e["composite"].get("layer_scores", {}),
+                    },
+                }
+                for e in need_generation
+            ]
+
+            try:
+                fresh = await _narrative.generate_batch(
+                    batch_input, max_entries=_NARRATIVE_MAX_ENTRIES
+                )
+                log.info(
+                    "[NARRATIVE] Generated %d new narratives for company=%r",
+                    len(fresh), company_id,
+                )
+                # Cache them
+                _save_narratives(company_id, fresh, entries_out, db)
+                cached.update(fresh)
+            except Exception as exc:
+                log.warning("[NARRATIVE] Batch generation failed: %s", exc)
+
+        # Merge narratives back into entries
+        narrative_lookup = cached
+        for entry in entries_out:
+            jid = entry["journal_id"]
+            if jid in narrative_lookup:
+                entry["audit_narrative"] = narrative_lookup[jid]
+
+    # ── Drift analysis (population level) ─────────────────────────────────────
+    # BEFORE: used hist_part["entry_count"].mean() → divided by a per-group mean
+    #         which could equal analysis_months (6) instead of actual baseline months (12),
+    #         producing +50% drift when true drift is ~0%.
+    # AFTER:  baseline_monthly_avg = total_baseline_entries / distinct_months_in_baseline
+    #         volume_drift = SIGNED (positive = above baseline, negative = below)
+    #         alert threshold: ±20% (not 40%); within ±10% = no alert shown
     drift_result: dict[str, Any]
-    if not hist_df.empty and hist_df["upload_month"].nunique() >= 3:
+    if not hist_df.empty and "upload_month" in hist_df.columns and hist_df["upload_month"].nunique() >= 3:
+        # ── Amount & manual drift: use monthly grouped data (unchanged logic) ──
         monthly = (
             hist_df.groupby("upload_month")
             .agg(
-                avg_amount=("amount", "mean"),
-                entry_count=("amount", "count"),
-                manual_pct=("source", lambda x: float((x.astype(str).str.lower() == "manual").mean() * 100)),
+                avg_amount = ("amount", "mean"),
+                manual_pct = ("source", lambda x: float(
+                    (x.astype(str).str.lower() == "manual").mean() * 100
+                )),
             )
             .reset_index()
             .sort_values("upload_month")
         )
-        hist_part = monthly.iloc[:-1] if len(monthly) > 1 else monthly
-        hist_avg = float(hist_part["avg_amount"].mean() or 0)
-        curr_avg = float(df["amount"].mean() or 0)
-        amount_drift_pct = abs(curr_avg - hist_avg) / max(abs(hist_avg), 1) * 100
-        hist_vol = float(hist_part["entry_count"].mean() or 0)
-        curr_vol = float(len(df))
-        volume_drift_pct = abs(curr_vol - hist_vol) / max(hist_vol, 1) * 100
-        hist_manual = float(hist_part["manual_pct"].mean() or 0)
-        curr_manual = float((df["source"].astype(str).str.lower() == "manual").mean() * 100)
-        manual_drift_pct = abs(curr_manual - hist_manual)
-        drift_result = {
-            "amount_drift_pct": round(amount_drift_pct, 1),
-            "volume_drift_pct": round(volume_drift_pct, 1),
-            "manual_drift_pct": round(manual_drift_pct, 1),
-            "amount_drift_flag": amount_drift_pct > 30,
-            "volume_drift_flag": volume_drift_pct > 40,
-            "manual_drift_flag": manual_drift_pct > 15,
-            "overall_drift_flag": (amount_drift_pct > 30 or volume_drift_pct > 40 or manual_drift_pct > 15),
-            "months_compared": int(monthly["upload_month"].nunique()),
-            "summary": _drift_summary(amount_drift_pct, volume_drift_pct, manual_drift_pct),
-        }
-    else:
-        drift_result = {"overall_drift_flag": False, "message": "Need 3+ months of history for drift detection"}
+        hist_avg     = float(monthly["avg_amount"].mean() or 0)
+        curr_avg     = float(df["amount"].mean() or 0)
+        amount_drift = abs(curr_avg - hist_avg) / max(abs(hist_avg), 1) * 100
+        hist_manual  = float(monthly["manual_pct"].mean() or 0)
+        curr_manual  = float((df["source"].astype(str).str.lower() == "manual").mean() * 100)
+        manual_drift = abs(curr_manual - hist_manual)
 
-    # Model 3: Isolation Forest
-    curr_df = _if_features(df)
-    if not hist_df.empty and len(hist_df) >= 100:
-        train_df = pd.concat([_if_features(hist_df), curr_df], ignore_index=True)
-        training_source = f"history+batch ({len(hist_df)}+{len(curr_df)} rows)"
-    else:
-        train_df = curr_df.copy()
-        training_source = f"batch only ({len(curr_df)} rows)"
-    feature_cols = ["amount_log", "is_weekend", "is_afterhours", "is_round", "is_manual", "is_monthend", "account_encoded", "user_encoded"]
-    iso = IsolationForest(n_estimators=200, contamination=0.08, max_features=0.8, random_state=42)
-    iso.fit(train_df[feature_cols])
-    curr_scores = iso.decision_function(curr_df[feature_cols])
-    if_risks = _normalize_if_score(curr_scores)
-    shap_map: dict[int, list[str]] = {}
-    if shap is not None and len(curr_df) > 0:
-        try:
-            explainer = shap.TreeExplainer(iso)
-            sv = explainer.shap_values(curr_df[feature_cols])
-            sv_arr = np.array(sv)
-            for i in range(len(curr_df)):
-                vals = sv_arr[i]
-                idxs = np.argsort(np.abs(vals))[::-1][:3]
-                shap_map[i] = [feature_cols[j] for j in idxs]
-        except Exception:  # noqa: BLE001
-            shap_map = {}
+        # ── Volume drift: CORRECT formula ────────────────────────────────────
+        # Count distinct YYYY-MM labels actually present in baseline
+        n_baseline_months   = int(hist_df["upload_month"].nunique())
+        baseline_monthly_avg = len(hist_df) / max(n_baseline_months, 1)
+        curr_vol             = float(len(df))
+        # Signed: positive = current batch larger than baseline avg (potentially inflated)
+        #         negative = current batch smaller (normal seasonal variation)
+        volume_drift_signed  = (curr_vol - baseline_monthly_avg) / max(baseline_monthly_avg, 1) * 100
 
-    # Per-entry models + composite
-    entries_out = []
-    for i, row in df.reset_index(drop=True).iterrows():
-        baseline = baselines.get(str(row["account"]))
+        # Alert only when outside ±20%; within ±10% is silent
+        volume_drift_flag = abs(volume_drift_signed) > 20
 
-        # Model 1: zscore
-        if baseline and int(baseline.total_entries or 0) >= 30:
-            mean = float(baseline.mean_amount or 0)
-            std = max(float(baseline.std_amount or 1), 1.0)
-            source = f"history ({int(baseline.months_loaded or 0)} months)"
-        else:
-            acct_amounts = df.loc[df["account"] == row["account"], "amount"].astype(float)
-            mean = float(acct_amounts.mean() if len(acct_amounts) else 0)
-            std = max(float(acct_amounts.std() if len(acct_amounts) else 1), 1.0)
-            source = "batch only"
-        zscore = abs((float(row["amount"]) - mean) / std)
-        zres = {
-            "zscore": round(zscore, 2),
-            "mean_used": round(mean, 2),
-            "std_used": round(std, 2),
-            "baseline_source": source,
-            "flag": zscore > 3,
-            "severity": "critical" if zscore > 5 else ("high" if zscore > 3 else ("watch" if zscore > 2 else "normal")),
-        }
-
-        # Model 2: IQR
-        if baseline and baseline.p25_amount is not None and baseline.p75_amount is not None:
-            p25, p75 = float(baseline.p25_amount), float(baseline.p75_amount)
-            iqr_source = "history"
-        else:
-            acct_amounts = df.loc[df["account"] == row["account"], "amount"].astype(float).values
-            p25 = float(np.percentile(acct_amounts, 25)) if len(acct_amounts) else float(row["amount"])
-            p75 = float(np.percentile(acct_amounts, 75)) if len(acct_amounts) else float(row["amount"])
-            iqr_source = "batch"
-        iqr = p75 - p25
-        lower_fence = p25 - (1.5 * iqr)
-        upper_fence = p75 + (3.0 * iqr)
-        amt = float(row["amount"])
-        iqr_flag = amt < lower_fence or amt > upper_fence
-        iqr_extreme = amt < (p25 - 3 * iqr) or amt > (p75 + 3 * iqr)
-        iqr_res = {
-            "flag": bool(iqr_flag),
-            "extreme": bool(iqr_extreme),
-            "lower_fence": round(float(lower_fence), 2),
-            "upper_fence": round(float(upper_fence), 2),
-            "baseline_source": iqr_source,
-        }
-
-        # Model 5: Behaviour
-        checks: dict[str, bool] = {}
-        if baseline and baseline.normal_users:
-            checks["new_user"] = str(row["user_id"]) not in list(baseline.normal_users or [])
-        else:
-            checks["new_user"] = False
-        if baseline and baseline.normal_sources:
-            checks["unusual_source"] = str(row["source"]) not in list(baseline.normal_sources or [])
-        else:
-            checks["unusual_source"] = str(row["source"]).lower() == "manual"
-        is_weekend = int(row["posting_dow"]) >= 5
-        checks["weekend_anomaly"] = bool(is_weekend and baseline and float(baseline.weekend_pct or 0) < 5.0) if baseline else bool(is_weekend)
-        is_afterhours = int(row["posting_hour"]) < 9 or int(row["posting_hour"]) > 18
-        checks["afterhours_anomaly"] = bool(is_afterhours and baseline and float(baseline.afterhours_pct or 0) < 10.0) if baseline else bool(is_afterhours)
-        is_monthend = pd.Timestamp(row["posting_date"]).day >= 28
-        checks["monthend_spike"] = bool(is_monthend and baseline and float(baseline.monthend_pct or 0) < 15.0) if baseline else bool(is_monthend)
-        if baseline and baseline.normal_entities:
-            checks["unusual_entity"] = bool(row.get("entity") and str(row["entity"]) not in list(baseline.normal_entities or []))
-        else:
-            checks["unusual_entity"] = False
-        is_round = (float(row["amount"]) % 1000) == 0
-        checks["round_number"] = bool(is_round and baseline and float(baseline.round_num_pct or 0) < 10.0) if baseline else bool(is_round)
-        flags_triggered = [k for k, v in checks.items() if v]
-        behaviour_score = min(len(flags_triggered) * 15, 100)
-        behaviour_res = {
-            "flags": checks,
-            "flags_triggered": flags_triggered,
-            "behaviour_score": behaviour_score,
-            "flag": len(flags_triggered) >= 2,
-            "baseline_used": baseline is not None,
-        }
-
-        # Model 6: Compliance
-        sod_flag = str(row["source"]).lower() == "manual" and str(row["user_id"]).lower() == "new_user"
-        duplicates = df[
-            (df["account"] == row["account"])
-            & (df["amount"] == row["amount"])
-            & (df["posting_date"] == row["posting_date"])
-            & (df["journal_id"] != row["journal_id"])
-        ]
-        duplicate_flag = len(duplicates) > 0
-        missing_desc = not str(row.get("description") or "").strip()
-        no_reference = str(row.get("description") or "").strip().lower() in {"", "nan", "none"}
-        if baseline and baseline.p75_amount is not None:
-            large_manual = str(row["source"]).lower() == "manual" and float(row["amount"]) > float(baseline.p75_amount) * 2
-        else:
-            large_manual = str(row["source"]).lower() == "manual" and float(row["amount"]) > 100000
-        compliance_score = int(sod_flag) * 40 + int(duplicate_flag) * 35 + int(missing_desc) * 10 + int(no_reference) * 10 + int(large_manual) * 25
-        compliance_res = {
-            "sod_violation": sod_flag,
-            "duplicate_entry": duplicate_flag,
-            "missing_desc": missing_desc,
-            "no_reference": no_reference,
-            "large_manual": large_manual,
-            "compliance_score": compliance_score,
-            "flag": bool(sod_flag or duplicate_flag or large_manual),
-        }
-
-        # Model 3 output
-        if_score = float(if_risks[i]) if i < len(if_risks) else 0.0
-        isolation_res = {
-            "risk_score": round(if_score, 1),
-            "decision_score": float(curr_scores[i]) if i < len(curr_scores) else 0.0,
-            "flag": if_score > 65,
-            "severity": "critical" if if_score > 85 else ("high" if if_score > 65 else ("watch" if if_score > 45 else "normal")),
-            "shap_top_features": shap_map.get(i, []),
-            "training_source": training_source,
-        }
-
-        # composite
-        zscore_norm = min((zres["zscore"] / 5) * 100, 100)
-        iqr_norm = 100 if iqr_res["extreme"] else (60 if iqr_res["flag"] else 0)
-        behaviour_norm = float(behaviour_res["behaviour_score"])
-        compliance_norm = float(compliance_res["compliance_score"])
-        composite = 0.25 * zscore_norm + 0.10 * iqr_norm + 0.30 * if_score + 0.20 * behaviour_norm + 0.15 * compliance_norm
-        risk_level = "CRITICAL" if composite >= 80 else ("HIGH" if composite >= 60 else ("MEDIUM" if composite >= 40 else "LOW"))
-        score_breakdown = {
-            "z_score_contribution": round(0.25 * zscore_norm, 1),
-            "iqr_contribution": round(0.10 * iqr_norm, 1),
-            "isolation_forest": round(0.30 * if_score, 1),
-            "behaviour_pattern": round(0.20 * behaviour_norm, 1),
-            "compliance": round(0.15 * compliance_norm, 1),
-        }
-        top_reasons = []
-        if zres["zscore"] > 3:
-            top_reasons.append(f"Z-Score {zres['zscore']}x above account historical mean")
-        if "new_user" in behaviour_res["flags_triggered"]:
-            top_reasons.append("New user not seen in historical baseline")
-        if compliance_res["large_manual"]:
-            top_reasons.append("Large manual entry above account baseline range")
-        if isolation_res["shap_top_features"]:
-            top_reasons.append(f"Top contributors: {', '.join(isolation_res['shap_top_features'])}")
-        if len(top_reasons) < 3 and compliance_res["duplicate_entry"]:
-            top_reasons.append("Duplicate posting pattern detected in same day/account/amount")
-
-        entries_out.append(
-            {
-                "journal_id": row["journal_id"],
-                "account": row["account"],
-                "amount": float(row["amount"]),
-                "user_id": row["user_id"],
-                "source": row["source"],
-                "posting_date": pd.Timestamp(row["posting_date"]).strftime("%Y-%m-%d"),
-                "models": {
-                    "zscore": zres,
-                    "iqr": iqr_res,
-                    "isolation": isolation_res,
-                    "behaviour": behaviour_res,
-                    "compliance": compliance_res,
-                },
-                "composite": {
-                    "composite_score": round(composite, 1),
-                    "risk_level": risk_level,
-                    "score_breakdown": score_breakdown,
-                    "top_reasons": top_reasons[:3],
-                },
-            }
+        log.info(
+            "[DRIFT] baseline_entries=%d n_months=%d baseline_avg=%.1f "
+            "current_entries=%d volume_drift=%.1f%%",
+            len(hist_df), n_baseline_months, baseline_monthly_avg,
+            int(curr_vol), volume_drift_signed,
         )
 
-    entries_out = sorted(entries_out, key=lambda x: x["composite"]["composite_score"], reverse=True)
-    flagged_count = sum(1 for e in entries_out if e["composite"]["risk_level"] in {"CRITICAL", "HIGH", "MEDIUM"})
-    months_loaded = int(hist_df["upload_month"].nunique()) if not hist_df.empty else 0
+        drift_result = {
+            "amount_drift_pct":       round(amount_drift, 1),
+            # Signed volume drift (positive = above baseline avg, negative = below)
+            "volume_drift_pct":       round(volume_drift_signed, 1),
+            "volume_drift_direction": "above" if volume_drift_signed > 0 else "below",
+            "volume_baseline_avg":    round(baseline_monthly_avg, 1),
+            "volume_current":         int(curr_vol),
+            "manual_drift_pct":       round(manual_drift, 1),
+            "amount_drift_flag":      amount_drift > 30,
+            "volume_drift_flag":      volume_drift_flag,
+            "manual_drift_flag":      manual_drift > 15,
+            "overall_drift_flag":     (
+                amount_drift > 30 or volume_drift_flag or manual_drift > 15
+            ),
+            "months_compared":        n_baseline_months,
+            "summary":                _drift_summary(volume_drift_signed, amount_drift, manual_drift),
+        }
+    else:
+        drift_result = {
+            "overall_drift_flag": False,
+            "message": "Need 3+ months of history for drift detection",
+        }
+
+    # ── Baseline quality ──────────────────────────────────────────────────────
+    months_loaded = (
+        int(hist_df["upload_month"].nunique())
+        if not hist_df.empty and "upload_month" in hist_df.columns
+        else 0
+    )
     if months_loaded >= 6:
         baseline_quality = "strong"
     elif months_loaded >= 3:
@@ -405,17 +510,147 @@ def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(get_db)
     else:
         baseline_quality = "none"
 
+    flagged_count = batch_stats["critical"] + batch_stats["high"] + batch_stats["medium"]
+
+    payload = _np_safe({
+        "company_id":       company_id,
+        "analysis_months":  int(body.analysis_months),
+        "baseline_quality": baseline_quality,
+        "training_source":  (
+            f"history ({n_hist} rows) + batch ({n_batch} rows)"
+            if n_hist > 0 else f"batch only ({n_batch} rows)"
+        ),
+        "validation":       validation,
+        "population_analysis": {
+            "benford":                batch_stats["benford"],
+            "drift":                  drift_result,
+            "total_entries_analysed": int(len(df)),
+            "flagged_count":          int(flagged_count),
+            "flag_rate_pct":          round((flagged_count / max(len(df), 1)) * 100, 1),
+        },
+        "batch_stats": {
+            "total":    batch_stats["total"],
+            "critical": batch_stats["critical"],
+            "high":     batch_stats["high"],
+            "medium":   batch_stats["medium"],
+            "low":      batch_stats["low"],
+        },
+        "entries":      entries_out,
+        "layer_weights": client_weights,
+    })
+    return JSONResponse(content=payload)
+
+
+# ── Standalone narrative endpoint ─────────────────────────────────────────────
+
+class NarrativeIn(BaseModel):
+    company_id:      str
+    journal_id:      str
+    account:         str
+    amount:          float
+    user_id:         str
+    source:          str = "ERP"
+    posting_date:    str = ""
+    description:     str | None = None
+    entity:          str | None = None
+    risk_level:      str = "HIGH"
+    composite_score: float = 0.0
+    top_reasons:     list[str] = []
+    layer_scores:    dict[str, float] = {}
+
+
+@router.post("/narrative/{journal_id}")
+async def get_narrative(journal_id: str, body: NarrativeIn, db: Session = Depends(get_db)):
+    """
+    Generate (or return cached) an LLM audit narrative for a single entry.
+
+    Useful for on-demand regeneration from the frontend detail panel.
+    """
+    company_id = body.company_id.strip()
+    if not company_id:
+        raise HTTPException(status_code=400, detail="company_id is required.")
+
+    # Check cache first
+    cached = _load_cached_narratives(company_id, [journal_id], db)
+    if cached.get(journal_id):
+        return {"journal_id": journal_id, "narrative": cached[journal_id], "cached": True}
+
+    entry = {
+        "journal_id":   journal_id,
+        "account":      body.account,
+        "amount":       body.amount,
+        "user_id":      body.user_id,
+        "source":       body.source,
+        "posting_date": body.posting_date,
+        "description":  body.description or "",
+        "entity":       body.entity or "",
+    }
+    scores = {
+        "risk_level":      body.risk_level,
+        "composite_score": body.composite_score,
+        "top_reasons":     body.top_reasons,
+        "layer_scores":    body.layer_scores,
+    }
+
+    try:
+        text = await _narrative.generate_narrative(entry, scores)
+    except Exception as exc:
+        log.warning("[NARRATIVE] Standalone generation failed for %s: %s", journal_id, exc)
+        raise HTTPException(status_code=500, detail=f"Narrative generation failed: {exc}")
+
+    # Cache it
+    _save_narratives(
+        company_id,
+        {journal_id: text},
+        [{"journal_id": journal_id, "composite": {"risk_level": body.risk_level, "composite_score": body.composite_score}}],
+        db,
+    )
+
+    return {"journal_id": journal_id, "narrative": text, "cached": False}
+
+
+# ── Auditor feedback endpoint ─────────────────────────────────────────────────
+
+@router.post("/feedback")
+def submit_auditor_feedback(body: FeedbackIn, db: Session = Depends(get_db)):
+    """
+    Accept auditor accept/reject decisions and retune per-client layer weights.
+    """
+    company_id = body.company_id.strip()
+    if not company_id:
+        raise HTTPException(status_code=400, detail="company_id is required.")
+    if not body.feedback:
+        raise HTTPException(status_code=400, detail="feedback list is empty.")
+
+    feedback_dicts = [f.model_dump() for f in body.feedback]
+
+    update_result = _feedback.process_feedback(company_id, feedback_dicts, db)
+    pr = _feedback.precision_recall(feedback_dicts)
+
+    log.info(
+        "[FEEDBACK] company_id=%s processed=%d skipped=%d precision=%s recall=%s",
+        company_id,
+        update_result["processed"],
+        update_result["skipped"],
+        pr.get("precision_pct"),
+        pr.get("recall_pct"),
+    )
+
+    return {
+        "company_id":      company_id,
+        "processed":       update_result["processed"],
+        "skipped":         update_result["skipped"],
+        "new_weights":     update_result["new_weights"],
+        "weight_delta":    update_result["weight_delta"],
+        "precision_recall": pr,
+    }
+
+
+@router.get("/feedback/weights/{company_id}")
+def get_client_weights(company_id: str, db: Session = Depends(get_db)):
+    """Return the current ensemble layer weights for a client."""
+    weights = _feedback.load_weights(company_id.strip(), db)
     return {
         "company_id": company_id,
-        "analysis_months": int(body.analysis_months),
-        "baseline_quality": baseline_quality,
-        "training_source": training_source,
-        "population_analysis": {
-            "benford": benford_result,
-            "drift": drift_result,
-            "total_entries_analysed": int(len(df)),
-            "flagged_count": int(flagged_count),
-            "flag_rate_pct": round((flagged_count / max(len(df), 1)) * 100, 1),
-        },
-        "entries": entries_out,
+        "layer_weights": weights,
     }

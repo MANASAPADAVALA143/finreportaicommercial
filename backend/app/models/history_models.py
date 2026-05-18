@@ -60,4 +60,28 @@ class AccountBaseline(Base):
     benford_chi2 = Column(Float, nullable=True)
     benford_normal = Column(Float, nullable=True)
 
+    # FeedbackLearner stores per-client layer weights here as JSON
+    meta_json = Column(JSON, nullable=True)
+
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class JENarrative(Base):
+    """
+    Cache table for LLM-generated audit narratives.
+
+    Keyed by (company_id, journal_id) so the same entry is never billed
+    to Claude twice during the same analysis run.  Rows expire after
+    `ttl_hours` hours (enforced at read time in the service layer).
+    """
+
+    __tablename__ = "je_narratives"
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(String(100), index=True, nullable=False)
+    journal_id = Column(String(100), index=True, nullable=False)
+    risk_level = Column(String(20), nullable=True)
+    composite_score = Column(Float, nullable=True)
+    narrative = Column(Text, nullable=False)
+    model_used = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
