@@ -70,6 +70,7 @@ from app.api.routes import (
     covenant_tracker,
     ar_collections,
     ca_bank_router,
+    tally_push,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -190,6 +191,7 @@ app.include_router(payment_calendar.router)
 app.include_router(covenant_tracker.router)
 app.include_router(ar_collections.router)
 app.include_router(ca_bank_router.router)
+app.include_router(tally_push.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:
