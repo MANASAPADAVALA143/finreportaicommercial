@@ -6,8 +6,10 @@ import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle, Download,
   RefreshCw, ArrowLeft, Target, BarChart3,
   Activity, Bell, CheckCircle, Zap, FileText, Clock,
-  Settings, MessageSquare, X, Upload
+  Settings, MessageSquare, X, Upload, Receipt, AlertTriangle,
+  Timer, ExternalLink
 } from 'lucide-react';
+import { fetchAPKPIs, emptyAPKPIs, type APKPIs } from '../lib/invoiceFlowApi';
 import {
   AreaChart, Area, BarChart, Bar, PieChart as RechartsPie,
   Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis,
@@ -150,9 +152,12 @@ export const CFODashboard = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DashboardData>(mockCFOData);
   const [showChatBot, setShowChatBot] = useState(false);
+  const [apKPIs, setApKPIs] = useState<APKPIs>(emptyAPKPIs);
 
   useEffect(() => {
     fetchDashboardData();
+    // Load AP Overview KPIs from InvoiceFlow Supabase
+    fetchAPKPIs().then(setApKPIs).catch(() => setApKPIs({ ...emptyAPKPIs, loading: false }));
   }, [timeRange]);
 
   const fetchDashboardData = async () => {
@@ -803,6 +808,131 @@ export const CFODashboard = () => {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* AP OVERVIEW SECTION */}
+      <div className="max-w-7xl mx-auto px-6 pb-8">
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+          {/* Section header */}
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">
+                <Receipt className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">AP Overview</h2>
+                <p className="text-xs text-gray-500">Live data from InvoiceFlow · refreshed on load</p>
+              </div>
+            </div>
+            <a
+              href="https://apinvoice-production.up.railway.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition"
+            >
+              Open InvoiceFlow <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+
+          {apKPIs.error && (
+            <p className="text-xs text-red-500 mb-4">
+              ⚠ Could not load AP data: {apKPIs.error}
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {/* 1 — Open Invoices */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+              className="bg-blue-50 rounded-xl p-4 border border-blue-100"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="w-4 h-4 text-blue-500" />
+                <span className="text-xs font-medium text-blue-700">Open Invoices</span>
+              </div>
+              {apKPIs.loading ? (
+                <div className="h-7 w-16 bg-blue-100 animate-pulse rounded" />
+              ) : (
+                <div className="text-2xl font-bold text-blue-900">{apKPIs.openInvoices}</div>
+              )}
+              <p className="text-xs text-blue-500 mt-1">Awaiting approval</p>
+            </motion.div>
+
+            {/* 2 — Overdue Amount */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.10 }}
+              className="bg-red-50 rounded-xl p-4 border border-red-100"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-4 h-4 text-red-500" />
+                <span className="text-xs font-medium text-red-700">Overdue Amount</span>
+              </div>
+              {apKPIs.loading ? (
+                <div className="h-7 w-24 bg-red-100 animate-pulse rounded" />
+              ) : (
+                <div className="text-2xl font-bold text-red-900">
+                  ₹{apKPIs.overdueAmount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </div>
+              )}
+              <p className="text-xs text-red-500 mt-1">Past due date</p>
+            </motion.div>
+
+            {/* 3 — This Month AP Spend */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+              className="bg-emerald-50 rounded-xl p-4 border border-emerald-100"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign className="w-4 h-4 text-emerald-500" />
+                <span className="text-xs font-medium text-emerald-700">Month AP Spend</span>
+              </div>
+              {apKPIs.loading ? (
+                <div className="h-7 w-24 bg-emerald-100 animate-pulse rounded" />
+              ) : (
+                <div className="text-2xl font-bold text-emerald-900">
+                  ₹{apKPIs.thisMonthSpend.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                </div>
+              )}
+              <p className="text-xs text-emerald-500 mt-1">Current month</p>
+            </motion.div>
+
+            {/* 4 — Duplicate Alerts */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.20 }}
+              className="bg-amber-50 rounded-xl p-4 border border-amber-100"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+                <span className="text-xs font-medium text-amber-700">Duplicate Alerts</span>
+              </div>
+              {apKPIs.loading ? (
+                <div className="h-7 w-10 bg-amber-100 animate-pulse rounded" />
+              ) : (
+                <div className="text-2xl font-bold text-amber-900">{apKPIs.duplicateAlerts}</div>
+              )}
+              <p className="text-xs text-amber-500 mt-1">High-risk invoices</p>
+            </motion.div>
+
+            {/* 5 — Avg Processing Time */}
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}
+              className="bg-purple-50 rounded-xl p-4 border border-purple-100"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Timer className="w-4 h-4 text-purple-500" />
+                <span className="text-xs font-medium text-purple-700">Avg Processing</span>
+              </div>
+              {apKPIs.loading ? (
+                <div className="h-7 w-16 bg-purple-100 animate-pulse rounded" />
+              ) : (
+                <div className="text-2xl font-bold text-purple-900">
+                  {apKPIs.avgProcessingDays} <span className="text-base font-medium">days</span>
+                </div>
+              )}
+              <p className="text-xs text-purple-500 mt-1">Invoice → Approved</p>
+            </motion.div>
           </div>
         </div>
       </div>
