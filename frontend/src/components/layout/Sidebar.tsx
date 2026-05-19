@@ -17,6 +17,7 @@ import {
   Activity,
   BarChart2,
   BookOpen,
+  ExternalLink as ExternalLinkIcon,
   Building2,
   CalendarDays,
   Calendar,
@@ -51,6 +52,7 @@ import { currentSections, currentBranding, type NavItem } from '../../config/pro
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>> = {
   Activity,
   BarChart2,
+  ExternalLink: ExternalLinkIcon,
   BookOpen,
   Building2,
   CalendarDays,
@@ -95,8 +97,27 @@ function SidebarLink({ item }: { item: NavItem }) {
     return null;
   }
 
-  const isActive = pathname === item.path || pathname.startsWith(item.path + '/');
   const Icon = ICON_MAP[item.icon] ?? BarChart2;
+
+  // External links (cross-app navigation to InvoiceFlow etc.) — open in new tab
+  if (item.external) {
+    return (
+      <a
+        href={item.path}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`${linkBase} ${linkIdle} justify-between`}
+      >
+        <span className="flex items-center gap-2">
+          <Icon className="w-4 h-4 shrink-0" aria-hidden />
+          {item.label}
+        </span>
+        <ExternalLink className="w-3 h-3 shrink-0 opacity-50" aria-hidden />
+      </a>
+    );
+  }
+
+  const isActive = pathname === item.path || pathname.startsWith(item.path + '/');
 
   return (
     <NavLink

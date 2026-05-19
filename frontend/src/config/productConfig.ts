@@ -15,10 +15,12 @@
 export type ProductKey = 'invoiceflow' | 'finreportai' | 'combined';
 
 export interface NavItem {
-  label: string;
-  path:  string;
-  icon:  string;           // lucide icon name
-  permission?: string;     // hasPermission() key — omit = always visible
+  label:    string;
+  path:     string;
+  icon:     string;           // lucide icon name
+  permission?: string;        // hasPermission() key — omit = always visible
+  /** If true, path is an absolute URL opened in a new tab (cross-app nav) */
+  external?: boolean;
 }
 
 export interface NavSection {
@@ -29,23 +31,32 @@ export interface NavSection {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // InvoiceFlow items — AP Automation
+// These open InvoiceFlow (separate app) in a new tab.
+// In local dev InvoiceFlow runs on port 5175; in production it's on Railway.
 // ─────────────────────────────────────────────────────────────────────────────
+
+const INVOICEFLOW_URL =
+  (import.meta.env.VITE_INVOICEFLOW_URL as string | undefined) ??
+  'https://apinvoice-production.up.railway.app';
+
+/** Shorthand — build a fully-qualified InvoiceFlow URL */
+const ap = (route: string) => `${INVOICEFLOW_URL}${route}`;
 
 const invoiceflowSections: NavSection[] = [
   {
     heading: 'AP Automation',
     items: [
-      { label: 'Invoice List',      path: '/invoices',           icon: 'FileText' },
-      { label: 'Approvals',         path: '/invoices/approvals', icon: 'CheckCircle' },
-      { label: 'Upload Invoice',    path: '/invoices/upload',    icon: 'Upload' },
-      { label: 'Vendors',           path: '/invoices/vendors',   icon: 'Users' },
-      { label: 'Purchase Orders',   path: '/invoices/po',        icon: 'ShoppingCart' },
-      { label: 'Goods Receipts',    path: '/invoices/grn',       icon: 'Package' },
-      { label: 'GL Accounts',       path: '/invoices/gl',        icon: 'BookOpen' },
-      { label: 'Bank Recon',        path: '/bank-recon',         icon: 'RefreshCcw' },
-      { label: 'AP Aging',          path: '/invoices/aging',     icon: 'Clock' },
-      { label: 'GST Recon',         path: '/invoices/gst',       icon: 'Receipt' },
-      { label: 'Payment Log',       path: '/invoices/payments',  icon: 'CreditCard' },
+      { label: 'Invoice List',      path: ap('/invoices'),        icon: 'FileText',    external: true },
+      { label: 'Approvals',         path: ap('/approvals'),       icon: 'CheckCircle', external: true },
+      { label: 'Upload Invoice',    path: ap('/upload'),          icon: 'Upload',      external: true },
+      { label: 'Vendors',           path: ap('/vendors'),         icon: 'Users',       external: true },
+      { label: 'Purchase Orders',   path: ap('/purchase-orders'), icon: 'ShoppingCart',external: true },
+      { label: 'Goods Receipts',    path: ap('/goods-receipts'),  icon: 'Package',     external: true },
+      { label: 'GL Accounts',       path: ap('/gl-accounts'),     icon: 'BookOpen',    external: true },
+      { label: 'Bank Recon',        path: ap('/bank-recon'),      icon: 'RefreshCcw',  external: true },
+      { label: 'AP Aging',          path: ap('/reports/aging'),   icon: 'Clock',       external: true },
+      { label: 'GST Recon',         path: ap('/gst-recon'),       icon: 'Receipt',     external: true },
+      { label: 'Payment Log',       path: ap('/payment-log'),     icon: 'CreditCard',  external: true },
     ],
   },
 ];
