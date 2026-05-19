@@ -8,6 +8,48 @@ import { LandingPage } from './components/landing/LandingPage';
 import PrivateRoute from './components/PrivateRoute';
 import Sidebar from './components/layout/Sidebar';
 
+/** Cross-app navigation banner — links to InvoiceFlow (AP Automation) */
+function GnanovaBanner() {
+  return (
+    <div
+      style={{
+        height: 36,
+        background: '#0f2d5e',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 20px',
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 13,
+        color: '#e2e8f0',
+        position: 'sticky',
+        top: 0,
+        zIndex: 9999,
+        flexShrink: 0,
+      }}
+    >
+      <span style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Gnanova Finance OS</span>
+      <a
+        href="https://apinvoice-production.up.railway.app"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: '#93c5fd',
+          textDecoration: 'none',
+          fontWeight: 500,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#bfdbfe'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#93c5fd'; }}
+      >
+        📄 AP Invoices →
+      </a>
+    </div>
+  );
+}
+
 function chunkLoadErrorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -222,6 +264,7 @@ function App() {
             v7_relativeSplatPath: true,
           }}
         >
+          <GnanovaBanner />
           <Suspense fallback={<RouteFallback />}>
             <Routes>
               <Route path="/" element={<LandingPage />} />
