@@ -112,7 +112,7 @@ function SidebarLink({ item }: { item: NavItem }) {
           <Icon className="w-4 h-4 shrink-0" aria-hidden />
           {item.label}
         </span>
-        <ExternalLink className="w-3 h-3 shrink-0 opacity-50" aria-hidden />
+        <ExternalLinkIcon className="w-3 h-3 shrink-0 opacity-50" aria-hidden />
       </a>
     );
   }
