@@ -3,12 +3,11 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from twilio.rest import Client as TwilioClient
-
 
 async def send_whatsapp_alert(message: str) -> None:
     """Send WhatsApp to CFO via Twilio."""
     try:
+        from twilio.rest import Client as TwilioClient  # lazy — not installed in all envs
         client = TwilioClient(
             os.getenv("TWILIO_ACCOUNT_SID"),
             os.getenv("TWILIO_AUTH_TOKEN"),
