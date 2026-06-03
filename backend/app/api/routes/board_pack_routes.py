@@ -84,6 +84,14 @@ def finalize_board_pack(
     gen.generate(data, out_path)
     pages = count_pdf_pages(out_path)
 
+    # Task 6 — save report to S3
+    try:
+        from app.core.aws_config import upload_to_s3
+        pdf_bytes = Path(out_path).read_bytes()
+        upload_to_s3(pdf_bytes, Path(out_path).name, folder="reports", country="UAE")
+    except Exception:
+        pass  # S3 save non-critical
+
     bp.watermark = "FINAL"
     bp.status = BoardPackStatus.final
     bp.reviewed_by = body.reviewed_by

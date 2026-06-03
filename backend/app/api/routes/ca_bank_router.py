@@ -164,6 +164,11 @@ async def parse_bank_statement(
     """Parse a bank statement file and return structured transaction rows."""
     fname   = (file.filename or "").lower()
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="bank-statements", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
@@ -222,6 +227,11 @@ async def upload_client_coa(
 
     if file and file.filename:
         content = await file.read()
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(content, file.filename, folder="bank-statements", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
         fname   = (file.filename or "").lower()
         try:
             if fname.endswith(".csv"):
@@ -388,6 +398,11 @@ async def sync_corrections_endpoint(
     Returns updated model stats.
     """
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="bank-statements", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     try:
         df = pd.read_csv(io.BytesIO(content))
     except Exception as exc:

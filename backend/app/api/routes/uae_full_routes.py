@@ -461,7 +461,13 @@ async def import_statement(
     db: Session = Depends(get_db),
 ):
     tenant_id = _tenant(request.headers)
-    csv_text = (await file.read()).decode("utf-8", errors="replace")
+    _file_bytes = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(_file_bytes, file.filename, folder="uploads", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
+    csv_text = _file_bytes.decode("utf-8", errors="replace")
     stmt = import_bank_statement(
         tenant_id=tenant_id, bank_account_id=account_id,
         statement_date=date.fromisoformat(statement_date),

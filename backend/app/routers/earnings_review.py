@@ -44,6 +44,12 @@ async def start_review(
     cur_raw = await current_period_file.read()
     pri_raw = await prior_period_file.read()
     try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(cur_raw, current_period_file.filename, folder="uploads", country="UAE")
+        upload_to_s3(pri_raw, prior_period_file.filename, folder="uploads", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
+    try:
         current = LineItemParser.parse_pl_to_metrics(cur_raw, current_period_file.filename)
         prior = LineItemParser.parse_pl_to_metrics(pri_raw, prior_period_file.filename)
     except Exception as e:
@@ -53,6 +59,11 @@ async def start_review(
     if budget_file and budget_file.filename:
         try:
             b_raw = await budget_file.read()
+            try:
+                from app.core.aws_config import upload_to_s3
+                upload_to_s3(b_raw, budget_file.filename, folder="uploads", country="UAE")
+            except Exception:
+                pass  # S3 save is non-critical — processing continues from memory
             budget = LineItemParser.parse_pl_to_metrics(b_raw, budget_file.filename)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse budget file: {e}") from e
@@ -61,6 +72,11 @@ async def start_review(
     if analyst_file and analyst_file.filename:
         try:
             a_raw = await analyst_file.read()
+            try:
+                from app.core.aws_config import upload_to_s3
+                upload_to_s3(a_raw, analyst_file.filename, folder="uploads", country="UAE")
+            except Exception:
+                pass  # S3 save is non-critical — processing continues from memory
             consensus = parse_analyst_consensus(a_raw, analyst_file.filename)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse analyst consensus: {e}") from e

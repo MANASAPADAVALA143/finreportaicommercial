@@ -51,6 +51,11 @@ async def invoice_aging(file: UploadFile = File(...)):
                       account_manager, contact_email
     """
     raw = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(raw, file.filename, folder="invoices", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     df = _read_csv(raw)
 
     df["outstanding_aed"]        = _num(df, "outstanding_aed")
@@ -119,6 +124,11 @@ async def invoice_aging(file: UploadFile = File(...)):
 @router.post("/payment-prediction", summary="ML-style payment risk scoring")
 async def payment_prediction(file: UploadFile = File(...)):
     raw = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(raw, file.filename, folder="invoices", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     df  = _read_csv(raw)
 
     df["outstanding_aed"]        = _num(df, "outstanding_aed")
@@ -243,6 +253,11 @@ Return ONLY the email (subject line first, then body). No preamble."""
 @router.post("/credit-limits", summary="Credit utilisation per customer with alerts")
 async def credit_limits(file: UploadFile = File(...)):
     raw = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(raw, file.filename, folder="invoices", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     df  = _read_csv(raw)
 
     df["outstanding_aed"] = _num(df, "outstanding_aed")
@@ -283,8 +298,16 @@ async def ar_bank_recon(
     file_ar:   UploadFile = File(...),
     file_bank: UploadFile = File(...),
 ):
-    ar_df   = _read_csv(await file_ar.read())
-    bank_df = _read_csv(await file_bank.read())
+    _ar_raw   = await file_ar.read()
+    _bank_raw = await file_bank.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(_ar_raw, file_ar.filename, folder="invoices", country="UAE")
+        upload_to_s3(_bank_raw, file_bank.filename, folder="invoices", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
+    ar_df   = _read_csv(_ar_raw)
+    bank_df = _read_csv(_bank_raw)
 
     ar_df["paid_amount_aed"]  = _num(ar_df,   "paid_amount_aed")
     ar_df["outstanding_aed"]  = _num(ar_df,   "outstanding_aed")
@@ -334,6 +357,11 @@ async def ar_bank_recon(
 @router.post("/ai-dunning-insight", summary="Claude AI analysis of full AR portfolio")
 async def ai_dunning_insight(file: UploadFile = File(...)):
     raw = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(raw, file.filename, folder="invoices", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     df  = _read_csv(raw)
 
     df["outstanding_aed"] = _num(df, "outstanding_aed")

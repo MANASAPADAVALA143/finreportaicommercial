@@ -30,7 +30,12 @@ async def upload_trial_balance(file: UploadFile = File(...)):
     try:
         # Read file content
         content = await file.read()
-        
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
+
         # Determine file type and parse
         if file.filename.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(io.BytesIO(content))

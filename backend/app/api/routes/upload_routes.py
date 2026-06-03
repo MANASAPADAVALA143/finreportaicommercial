@@ -100,7 +100,12 @@ async def upload_journal_entries(
     try:
         # Read file based on extension
         contents = await file.read()
-        
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(contents, file.filename, folder="journal-entries", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
+
         if file.filename.lower().endswith('.csv'):
             # Read CSV with multiple encoding fallbacks
             try:

@@ -469,6 +469,11 @@ async def upload_book(
     if not ws:
         raise HTTPException(404, "Workspace not found")
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="bank-statements", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     rows, meta = parse_upload(content, file.filename or "book.csv", side="book")
     saved = _save_book_rows(db, ws.id, rows)
     dups = recon_engine.detect_duplicates(saved)
@@ -503,6 +508,11 @@ async def upload_bank(
     if not ws:
         raise HTTPException(404, "Workspace not found")
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="bank-statements", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     rows, meta = parse_upload(content, file.filename or "bank.csv", side="bank")
     saved = _save_bank_rows(db, ws.id, rows)
     dups = recon_engine.detect_duplicates(saved)

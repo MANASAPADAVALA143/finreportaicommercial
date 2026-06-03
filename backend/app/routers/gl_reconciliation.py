@@ -50,6 +50,12 @@ async def start_recon(
     try:
         g_raw = await gl_file.read()
         b_raw = await bank_file.read()
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(g_raw, gl_file.filename, folder="uploads", country="UAE")
+            upload_to_s3(b_raw, bank_file.filename, folder="uploads", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
         gl_df = eng.parse_gl(g_raw, gl_file.filename)
         bank_df = eng.parse_bank(b_raw, bank_file.filename)
     except Exception as e:
@@ -59,6 +65,11 @@ async def start_recon(
     if subledger_file and subledger_file.filename:
         try:
             s_raw = await subledger_file.read()
+            try:
+                from app.core.aws_config import upload_to_s3
+                upload_to_s3(s_raw, subledger_file.filename, folder="uploads", country="UAE")
+            except Exception:
+                pass  # S3 save is non-critical — processing continues from memory
             sub_df = eng.parse_subledger(s_raw, subledger_file.filename)
             sub_records = [
                 {

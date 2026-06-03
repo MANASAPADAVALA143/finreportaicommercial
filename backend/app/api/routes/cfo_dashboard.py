@@ -626,7 +626,12 @@ async def upload_trial_balance(file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
-        
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
+
         # Calculate metrics from uploaded trial balance
         parser = TrialBalanceParser(temp_path)
         metrics = parser.calculate_dashboard_metrics()
@@ -673,7 +678,12 @@ async def upload_journal_entries(file: UploadFile = File(...)):
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
-        
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
+
         # Calculate metrics from uploaded file
         calculator = CFOMetricsCalculator(temp_path)
         metrics = calculator.calculate_all_metrics(time_range="month")
@@ -707,7 +717,12 @@ async def upload_financial_summary(file: UploadFile = File(...)):
     
     try:
         content = await file.read()
-        
+        try:
+            from app.core.aws_config import upload_to_s3
+            upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+        except Exception:
+            pass  # S3 save is non-critical — processing continues from memory
+
         if file.filename.endswith('.json'):
             # Parse JSON directly
             data = json.loads(content)

@@ -353,6 +353,11 @@ async def trial_balance_upload(
     db: Session = Depends(get_db),
 ):
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 

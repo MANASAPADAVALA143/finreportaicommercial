@@ -372,6 +372,11 @@ async def upload_variance(file: UploadFile = File(...)):
 
     contents = await file.read()
     try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(contents, file.filename, folder="uploads", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
+    try:
         if ext == "csv":
             df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
         else:

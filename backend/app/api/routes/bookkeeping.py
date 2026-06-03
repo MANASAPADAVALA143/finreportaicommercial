@@ -114,6 +114,11 @@ async def upload_transactions(
 ):
     raw = await file.read()
     try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(raw, file.filename, folder="uploads", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
+    try:
         rows = parse_bank_file(raw, file.filename or "upload.csv")
     except ValueError as e:
         raise HTTPException(400, str(e))

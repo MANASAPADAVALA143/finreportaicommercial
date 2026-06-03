@@ -32,3 +32,4 @@ apscheduler==3.10.4
 xlrd==2.0.1
 # supabase 2.3.x pins httpx<0.25; anthropic>=0.40 needs httpx>=0.25 — upgrade supabase and drop explicit postgrest.
 supabase==2.10.0
+boto3>=1.34.0

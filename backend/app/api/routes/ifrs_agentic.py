@@ -101,6 +101,11 @@ async def post_upload_multi_year(
     Map each TB in Week 1 UI, then start agentic on the latest year with prior_trial_balance_id if needed.
     """
     content = await file.read()
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
+    except Exception:
+        pass  # S3 save is non-critical — processing continues from memory
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
     from app.services.ifrs_multi_year_upload import upload_multi_year_trial_balance

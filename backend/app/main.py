@@ -261,6 +261,20 @@ async def health():
     }
 
 
+@app.get("/api/test-aws", tags=["AWS"])
+async def test_aws():
+    """Test connectivity to both S3 buckets (UAE + India)."""
+    from app.core.aws_config import test_aws_connection
+    return test_aws_connection()
+
+
+@app.post("/api/setup-aws", tags=["AWS"])
+async def setup_aws():
+    """Create standard folder structure in both S3 buckets (idempotent)."""
+    from app.core.aws_config import create_bucket_folders
+    return create_bucket_folders()
+
+
 class RunAgentCompatBody(BaseModel):
     agent_name: str = Field(..., min_length=1)
     test_mode: bool = False
@@ -830,6 +844,15 @@ async def excel_addin_export(body: ExcelAddinExportBody):
 
     output = io.BytesIO()
     wb.save(output)
+    output.seek(0)
+
+    # Task 6 — save Excel report to S3
+    try:
+        from app.core.aws_config import upload_to_s3
+        upload_to_s3(output.getvalue(), "finreportai_output.xlsx", folder="reports", country="UAE")
+    except Exception:
+        pass  # S3 save non-critical
+
     output.seek(0)
     return StreamingResponse(
         output,
