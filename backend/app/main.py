@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
 from app.core.database import get_db
 from app.routers import month_end_close as month_end_close_router
+from app.routers import ar_collections_enhanced as ar_enhanced
 from app.routers import earnings_review as earnings_review_router
 from app.routers import gl_reconciliation as gl_reconciliation_router
 from app.routers import model_builder as model_builder_router
@@ -190,6 +191,7 @@ app.include_router(audit_intelligence.router)
 app.include_router(history_router.router, prefix="/api/v2", tags=["History"])
 app.include_router(historical_analysis.router, prefix="/api/v2", tags=["History"])
 app.include_router(month_end_close_router.router)
+app.include_router(ar_enhanced.router, prefix="/api/ar", tags=["AR Enhanced"])
 app.include_router(earnings_review_router.router)
 app.include_router(gl_reconciliation_router.router)
 app.include_router(model_builder_router.router)

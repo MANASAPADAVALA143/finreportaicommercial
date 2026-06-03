@@ -175,7 +175,7 @@ const CFOServices = safeLazy(() => import('./pages/cfo/CFOServices.tsx'));
 const EntityHealth = safeLazy(() => import('./pages/cfo/EntityHealth'));
 const PaymentCalendar = safeLazy(() => import('./pages/cfo/PaymentCalendar'));
 const CovenantTracker = safeLazy(() => import('./pages/cfo/CovenantTracker'));
-const ARCollections = safeLazy(() => import('./pages/cfo/ARCollections'));
+const ARCollections = safeLazy(() => import('./pages/cfo/ARCollectionsEnhanced'));
 const CFODecisionIntelligence = safeLazy(() => import('./pages/CFODecisionIntelligence'));
 const BookkeepingLayout = safeLazy(() =>
   import('./pages/bookkeeping/BookkeepingLayout').then((m) => ({ default: m.BookkeepingLayout }))
