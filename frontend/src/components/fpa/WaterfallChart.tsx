@@ -9,7 +9,7 @@ interface Props {
   title?: string;
 }
 
-export const WaterfallChart = ({ data, currency = "INR", title = "Variance Waterfall: Budget to Actual" }: Props) => {
+export const WaterfallChart = ({ data, currency = "AED", title = "Variance Waterfall: Budget to Actual" }: Props) => {
   // Calculate cumulative values for waterfall effect
   const chartData = data.map((item, index) => {
     if (item.type === "start") {

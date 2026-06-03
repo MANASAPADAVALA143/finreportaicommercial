@@ -137,7 +137,7 @@ export default function JournalEntries() {
         }
       }
       setImportErrors(errs);
-      setImportMsg(`✅ Imported ${saved} journal entries (${lines ? 0 : skipped} skipped). ${errs.length > 0 ? `${errs.length} errors.` : ''} Now click "Run Anomaly Detection" to flag suspicious entries.`);
+      setImportMsg(`✅ Imported ${saved} journal entries${skipped > 0 ? ` (${skipped} skipped — no lines)` : ''}. ${errs.length > 0 ? `${errs.length} errors — see below.` : ''} Click "Run Anomaly Detection" to flag suspicious entries.`);
       load();
     } catch (e: any) {
       setImportErrors([e.message]);

@@ -663,7 +663,8 @@ Write concise CFO commentary and 3 numeric action items.`;
       .sort((a, b) => Math.abs(b.variance ?? 0) - Math.abs(a.variance ?? 0));
     costOverruns.slice(0, 8).forEach((i) => items.push({ name: i.account, value: i.variance ?? 0, type: 'cost-overrun', fill: colors.unfavorable }));
     favorable.slice(0, 8).forEach((i) => items.push({ name: i.account, value: Math.abs(i.variance ?? 0), type: 'favorable', fill: colors.favorable }));
-    items.push({ name: 'Net Actual', value: analysis.total_actual, type: 'end', fill: colors.actualBar });
+    const netActualLabel = analysis.total_actual < 0 ? 'Net Actual (Loss)' : 'Net Actual';
+    items.push({ name: netActualLabel, value: analysis.total_actual, type: 'end', fill: analysis.total_actual < 0 ? '#ef4444' : colors.actualBar });
     return items;
   }, [analysis]);
 

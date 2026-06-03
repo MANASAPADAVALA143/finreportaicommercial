@@ -49,7 +49,7 @@ class TrialBalanceParser:
         
         # Calculate monthly expenses for runway
         expense_accounts = self.df[
-            self.df['account_type'].str.contains('Expense', case=False, na=False)
+            self.df['account_type'].str.contains('Expense|EXPENSE|COGS|Cost of Revenue|Operating Expenses|Income Tax|Opex', case=False, na=False, regex=True)
         ]
         monthly_expenses = expense_accounts['debit'].sum() - expense_accounts['credit'].sum()
         
@@ -82,7 +82,7 @@ class TrialBalanceParser:
         
         # Find revenue accounts
         revenue_accounts = self.df[
-            self.df['account_type'].str.contains('Revenue', case=False, na=False)
+            self.df['account_type'].str.contains('Revenue|Income|REVENUE|INCOME', case=False, na=False, regex=True)
         ]
         
         # Revenue is credit balance
@@ -116,7 +116,7 @@ class TrialBalanceParser:
         
         # Find expense accounts
         expense_accounts = self.df[
-            self.df['account_type'].str.contains('Expense', case=False, na=False)
+            self.df['account_type'].str.contains('Expense|EXPENSE|COGS|Cost of Revenue|Operating Expenses|Income Tax|Opex', case=False, na=False, regex=True)
         ]
         
         # Expenses are debit balance
@@ -212,8 +212,8 @@ class TrialBalanceParser:
         assets = self.df[self.df['account_type'].str.contains('Asset', case=False, na=False)]
         liabilities = self.df[self.df['account_type'].str.contains('Liability', case=False, na=False)]
         equity = self.df[self.df['account_type'].str.contains('Equity', case=False, na=False)]
-        revenue = self.df[self.df['account_type'].str.contains('Revenue', case=False, na=False)]
-        expenses = self.df[self.df['account_type'].str.contains('Expense', case=False, na=False)]
+        revenue = self.df[self.df['account_type'].str.contains('Revenue|Income|REVENUE|INCOME', case=False, na=False, regex=True)]
+        expenses = self.df[self.df['account_type'].str.contains('Expense|EXPENSE|COGS|Cost of Revenue|Operating Expenses|Income Tax|Opex', case=False, na=False, regex=True)]
         
         total_assets = assets['debit'].sum() - assets['credit'].sum()
         total_liabilities = liabilities['credit'].sum() - liabilities['debit'].sum()

@@ -188,7 +188,7 @@ def _parse_df(df: pd.DataFrame, company_id: str, upload_id: str) -> list[FpaMast
             elif any(k in atype for k in ["arr", "mrr", "churn"]):
                 section = "ARR"
             else:
-                section = "PL"
+                section = "PL"  # income, revenue, expense, cogs, opex, operating expenses → PL
 
         currency = str(row_d.get(cur_col, "AED") or "AED").strip().upper() if cur_col else "AED"
         fiscal_year = str(row_d.get(fy_col, "FY2025") or "FY2025").strip() if fy_col else "FY2025"
@@ -326,10 +326,13 @@ def get_master_data(
 
     # Build summary for PL section
     if section and section.upper() == "PL":
-        income = [r for r in rows if (r.account_type or "").lower() in ("income", "revenue") or
-                  any(k in (r.account_name or "").lower() for k in ("revenue", "income", "sales", "license", "service"))]
-        expense = [r for r in rows if (r.account_type or "").lower() in ("expense", "cost") or
-                   any(k in (r.account_name or "").lower() for k in ("cost", "expense", "salary", "cloud", "marketing"))]
+        INCOME_TYPES  = {"income", "revenue", "income tax exempt", "other income"}
+        EXPENSE_TYPES = {"expense", "expenses", "cogs", "cost of revenue", "cost of goods sold",
+                         "operating expenses", "opex", "income tax", "finance costs", "cost"}
+        income = [r for r in rows if (r.account_type or "").strip().lower() in INCOME_TYPES
+                  or any(k in (r.account_name or "").lower() for k in ("revenue", "income", "sales", "license", "service", "subscription"))]
+        expense = [r for r in rows if (r.account_type or "").strip().lower() in EXPENSE_TYPES
+                   or any(k in (r.account_name or "").lower() for k in ("cost", "expense", "salary", "cloud", "infra", "marketing", "admin", "depreciation", "staff", "overhead"))]
         total_rev  = sum(r.annual_actual for r in income)
         total_exp  = sum(r.annual_actual for r in expense)
         budget_rev = sum(r.annual_budget for r in income)
