@@ -236,6 +236,8 @@ export function VarianceAnalysisPage() {
   const [tableStatus, setTableStatus] = useState('all');
   const [tableDirection, setTableDirection] = useState<'all' | 'over' | 'under' | 'material'>('all');
   const [materialityPct, setMaterialityPct] = useState(0);
+  const [syncActualsLoading, setSyncActualsLoading] = useState(false);
+  const [syncActualsMsg, setSyncActualsMsg] = useState('');
   const [aiMode, setAiMode] = useState<'cfo' | 'board' | 'investor'>('cfo');
   const [showAiModeMenu, setShowAiModeMenu] = useState(false);
   const [currency, setCurrency] = useState<CurrencyType>(() => {
@@ -605,6 +607,26 @@ Write concise CFO commentary and 3 numeric action items.`;
     }
   };
 
+  const syncActualsFromGL = async () => {
+    setSyncActualsLoading(true);
+    setSyncActualsMsg('');
+    try {
+      const period = new Date().toISOString().slice(0, 7);
+      const res = await fetch(`${API_BASE}/api/fpa/sync-actuals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period, source: 'ifrs_statements' }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { actuals: { revenue: number; expenses: number }; period: string };
+      setSyncActualsMsg(`Synced actuals for ${data.period}: Revenue AED ${data.actuals.revenue.toLocaleString()}, Expenses AED ${data.actuals.expenses.toLocaleString()}`);
+    } catch (e) {
+      setSyncActualsMsg(`Sync failed: ${String(e)}`);
+    } finally {
+      setSyncActualsLoading(false);
+    }
+  };
+
   const filteredTableRows = useMemo(() => {
     if (!analysis) return [];
     let rows = analysis.line_items;
@@ -747,6 +769,16 @@ Write concise CFO commentary and 3 numeric action items.`;
               >
                 <Upload className="w-4 h-4" />
                 Upload Data
+              </button>
+              <button
+                onClick={syncActualsFromGL}
+                disabled={syncActualsLoading}
+                className="px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition disabled:opacity-50"
+                style={{ background: '#0F766E', color: '#fff' }}
+                title={syncActualsMsg || 'Sync actuals from posted GL entries'}
+              >
+                {syncActualsLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
+                Sync Actuals from Accounting
               </button>
               <button
                 onClick={downloadReport}

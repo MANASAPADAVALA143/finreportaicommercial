@@ -4,7 +4,20 @@ from typing import Any
 
 import anthropic
 
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# Lazy client — do NOT instantiate at module level so the app starts even if
+# ANTHROPIC_API_KEY is not yet set (Railway deploy, staging envs, etc.)
+_client: anthropic.Anthropic | None = None
+
+def _get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set. Add it to Railway environment variables."
+            )
+        _client = anthropic.Anthropic(api_key=key)
+    return _client
 
 
 def _clean_json_block(text: str) -> str:
@@ -55,7 +68,7 @@ green = on track no action
 
 Respond ONLY with JSON. No other text."""
 
-        response = client.messages.create(
+        response = _get_client().messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
@@ -111,7 +124,7 @@ Generate board pack in JSON:
 Professional CFO language only.
 Respond ONLY with JSON."""
 
-        response = client.messages.create(
+        response = _get_client().messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],

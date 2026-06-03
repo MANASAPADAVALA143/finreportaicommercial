@@ -80,6 +80,7 @@ from app.api.routes import (
     uae_accounting,
     uae_full_routes,
     india_routes,
+    pipeline as pipeline_router,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -207,6 +208,7 @@ app.include_router(ifrs_export.router, prefix="/api/ifrs")
 app.include_router(uae_accounting.router)
 app.include_router(uae_full_routes.router)
 app.include_router(india_routes.router)
+app.include_router(pipeline_router.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:

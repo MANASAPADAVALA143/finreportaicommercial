@@ -50,8 +50,9 @@ export const UAE_NAV: NavEntry[] = [
   { label: 'Bank Recon',         path: '/uae-full/bank-recon',   icon: 'landmark' },
   { label: 'Accruals',           path: '/uae-full/accruals',     icon: 'clock' },
   { label: 'Fixed Assets',       path: '/uae-full/fixed-assets', icon: 'building-2' },
-  { label: 'Period-End Close',   path: '/uae-full/period-close', icon: 'lock' },
-  { label: 'Management Accounts',path: '/uae-full/management',   icon: 'bar-chart-2' },
+  { label: 'Period-End Close',   path: '/uae-full/period-close',       icon: 'lock' },
+  { label: 'Close Status',       path: '/accounting/close-status',     icon: 'activity', badge: 'NEW' },
+  { label: 'Management Accounts',path: '/uae-full/management',         icon: 'bar-chart-2' },
   {
     section: 'UAE Compliance',
     items: [
@@ -89,7 +90,8 @@ export const FPA_NAV: NavEntry[] = [
       { label: 'Variance Analysis', path: '/fpa/variance',          icon: 'bar-chart-2' },
       { label: 'Cash Flow',         path: '/cfo/payment-calendar',  icon: 'banknote' },
       { label: 'KPI Monitoring',    path: '/fpa/kpi',               icon: 'activity' },
-      { label: 'TB Variance',       path: '/tb-variance',           icon: 'table' },
+      { label: 'TB Variance',       path: '/tb-variance',               icon: 'table' },
+      { label: 'Close Status',     path: '/accounting/close-status',   icon: 'lock', badge: 'NEW' },
     ],
   },
   {

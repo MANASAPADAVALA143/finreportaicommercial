@@ -12,6 +12,8 @@ function fmtAED(n: number) {
 
 type TabKey = 'pending' | 'approved' | 'rejected';
 
+const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
+
 function MatchLine({ inv }: { inv: APInvoice }) {
   const po  = inv.po_number ? '✅ PO linked' : '❌ No PO';
   const grn = inv.match_status === 'three_way_matched' ? '✅ GRN matched' : inv.match_status === 'matched' ? '✅ Matched' : '⚠️ Not matched';
@@ -43,8 +45,35 @@ export default function APApprovals() {
   const [loading, setLoading]   = useState(true);
   const [acting, setActing]     = useState('');
   const [toast, setToast]       = useState('');
+  const [jeMap, setJeMap]       = useState<Record<string, string>>({});
+  const [jeLoading, setJeLoading] = useState('');
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500); };
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000); };
+
+  const postToGL = async (inv: APInvoice) => {
+    setJeLoading(inv.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/accounting/invoice-to-je`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoice_id: inv.invoice_number || inv.id,
+          invoice_type: 'AP',
+          amount: inv.total_amount,
+          vendor: inv.vendor_name,
+          expense_category: inv.ifrs_category || 'general',
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { je_id: string };
+      setJeMap(prev => ({ ...prev, [inv.id]: data.je_id }));
+      showToast(`JE Created ${data.je_id}`);
+    } catch (e) {
+      showToast(`GL post failed: ${String(e)}`);
+    } finally {
+      setJeLoading('');
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -199,6 +228,29 @@ export default function APApprovals() {
                       >
                         <X size={13} /> Reject
                       </button>
+                    </div>
+                  )}
+                  {/* Post to GL button (approved tab) */}
+                  {tab === 'approved' && (
+                    <div className="flex flex-col gap-2 shrink-0">
+                      {jeMap[inv.id] ? (
+                        <span className="text-[11px] bg-green-900/40 text-green-300 border border-green-700/40 rounded-lg px-3 py-2 font-mono">
+                          JE {jeMap[inv.id]}
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => postToGL(inv)}
+                          disabled={jeLoading === inv.id}
+                          className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs px-3 py-2 rounded-lg font-medium"
+                        >
+                          {jeLoading === inv.id ? (
+                            <RefreshCw size={12} className="animate-spin" />
+                          ) : (
+                            <CheckCircle2 size={13} />
+                          )}
+                          Post to GL
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

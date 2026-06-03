@@ -254,6 +254,9 @@ const APGLAccounts      = safeLazy(() => import('./pages/ap-invoices/APGLAccount
 const APIntegrations    = safeLazy(() => import('./pages/ap-invoices/APIntegrations'));
 const APSettings        = safeLazy(() => import('./pages/ap-invoices/APSettings'));
 
+// ── Accounting Pipeline ────────────────────────────────────────────────────
+const CloseStatusPage = safeLazy(() => import('./pages/accounting/CloseStatus'));
+
 // ── India Accounting ───────────────────────────────────────────────────────
 const IndiaAccountingOverview = safeLazy(() => import('./pages/india-accounting/IndiaAccountingOverview'));
 const IndiaChartOfAccounts    = safeLazy(() => import('./pages/india-accounting/IndiaChartOfAccounts'));
@@ -475,6 +478,8 @@ function App() {
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs/agentic"            element={<AgenticGenerator />} />
                 <Route path="/erp/tally"               element={<TallyIntegrationPage />} />
+                {/* Accounting Pipeline */}
+                <Route path="/accounting/close-status" element={<CloseStatusPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />

@@ -296,10 +296,15 @@ function displayAccountLabel(
   return { code, label };
 }
 
+const API_BASE_TB = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
+
 export function TBVariancePage() {
   const navigate = useNavigate();
   const { activeClient } = useClient();
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [glPeriod, setGLPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [glLoading, setGLLoading] = useState(false);
+  const [glMsg, setGLMsg]       = useState('');
   const [priorFile, setPriorFile] = useState<File | null>(null);
   const [materiality, setMateriality] = useState(10000);
   const [materialityPct, setMaterialityPct] = useState(10);
@@ -516,6 +521,39 @@ export function TBVariancePage() {
     return `${s}${body}`;
   };
 
+  const loadFromGL = async () => {
+    setGLLoading(true);
+    setGLMsg('');
+    try {
+      const res = await fetch(`${API_BASE_TB}/api/accounting/trial-balance/${glPeriod}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as {
+        rows: { account_code: string; account_name: string; total_debit: number; total_credit: number; net: number }[];
+        balanced: boolean;
+        demo_data: boolean;
+      };
+      const mapped: TBRow[] = data.rows.map(r => ({
+        account:       r.account_name || r.account_code,
+        accountCode:   r.account_code,
+        currentPeriod: r.total_debit - r.total_credit,
+        priorPeriod:   0,
+        variance:      r.total_debit - r.total_credit,
+        variancePct:   null,
+        isMaterial:    Math.abs(r.total_debit - r.total_credit) > 0,
+        impact:        varianceImpact(r.account_name || r.account_code, r.total_debit - r.total_credit),
+      }));
+      setResults(mapped);
+      setGLMsg(data.demo_data
+        ? `Loaded ${mapped.length} demo accounts for ${glPeriod}`
+        : `Loaded ${mapped.length} accounts from GL for ${glPeriod} (${data.balanced ? 'Balanced' : 'Unbalanced'})`
+      );
+    } catch (e) {
+      setGLMsg(`Failed: ${String(e)}`);
+    } finally {
+      setGLLoading(false);
+    }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto', minHeight: '100vh', background: '#F8FAFC' }}>
       <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -533,6 +571,25 @@ export function TBVariancePage() {
             without numeric account codes.
           </p>
         </div>
+      </div>
+
+      {/* GL Pipeline Button */}
+      <div style={{ marginBottom: 16, padding: '12px 16px', background: '#EFF6FF', borderRadius: 10, border: '1px solid #BFDBFE', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#1D4ED8' }}>Generate from Posted GL Entries:</span>
+        <input
+          type="month"
+          value={glPeriod}
+          onChange={e => setGLPeriod(e.target.value)}
+          style={{ padding: '6px 10px', border: '1px solid #BFDBFE', borderRadius: 6, fontSize: 13, background: 'white' }}
+        />
+        <button
+          onClick={loadFromGL}
+          disabled={glLoading}
+          style={{ padding: '7px 16px', background: '#1D4ED8', color: 'white', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: glLoading ? 0.6 : 1 }}
+        >
+          {glLoading ? 'Loading…' : 'Generate from Posted Entries'}
+        </button>
+        {glMsg && <span style={{ fontSize: 12, color: glMsg.startsWith('Failed') ? '#DC2626' : '#15803D' }}>{glMsg}</span>}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
