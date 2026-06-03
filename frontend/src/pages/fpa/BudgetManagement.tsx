@@ -90,19 +90,18 @@ const BudgetManagement: React.FC = () => {
   const [priorYearData, setPriorYearData] = useState<any>(null);
 
   useEffect(() => {
-    if (dataCheck.available) {
-      const budget = loadFPABudget();
-      const prior = loadFPAPriorYear();
-      setBudgetDataFromStorage(budget);
-      setPriorYearData(prior);
-      
-      // Convert budget data to line items
-      if (budget) {
-        const converted = convertBudgetToLineItems(budget) as BudgetLineItem[];
-        setBudgetData(converted);
-      }
+    // Read from fpa_budget (master upload) or fpa_actual as fallback
+    const budget = loadFPABudget() || loadFPAActual();
+    const prior  = loadFPAPriorYear();
+    if (!budget) return;
+    setBudgetDataFromStorage(budget);
+    setPriorYearData(prior);
+    // convertBudgetToLineItems now has a fast path for lineItems arrays
+    const converted = convertBudgetToLineItems(budget) as BudgetLineItem[];
+    if (converted.length > 0) {
+      setBudgetData(converted);
     }
-  }, [dataCheck.available]);
+  }, []);
   
   const [budgetData, setBudgetData] = useState<BudgetLineItem[]>([]);
   const [currentStatus, setCurrentStatus] = useState<BudgetStatus>('Approved');
@@ -147,15 +146,24 @@ const BudgetManagement: React.FC = () => {
   // Compute summary cards from budgetData when we have line items; otherwise use mock
   const computedSummary = React.useMemo(() => {
     if (!budgetData || budgetData.length === 0) return null;
-    const isRevenueRow = (item: BudgetLineItem) =>
-      !item.isHeader &&
-      (
-        /revenue|sales|income/i.test(item.category) ||
-        /revenue|sales|income/i.test((item as BudgetLineItem & { lineItem?: string }).lineItem || '')
-      ) &&
-      !/cost of sales|cos|cogs/i.test(item.category);
-    const isExpenseRow = (item: BudgetLineItem) =>
-      !item.isHeader && (/expense|cost|cogs|payroll|marketing|admin|depreciation|operating/i.test(item.category));
+    const isRevenueRow = (item: BudgetLineItem) => {
+      if (item.isHeader) return false;
+      const accType = String((item as any).accountType || '').toLowerCase();
+      if (accType === 'income' || accType === 'revenue') return true;
+      if (accType === 'expense' || accType === 'cost') return false;
+      const name = String(item.category || (item as any).lineItem || '').toLowerCase();
+      return (/^(total\s+)?(revenue|income|sales|license|service|subscri|maintenance|support.*rev)/i.test(name)
+        && !/cost|expense|salary|commission/i.test(name));
+    };
+    const isExpenseRow = (item: BudgetLineItem) => {
+      if (item.isHeader) return false;
+      const accType = String((item as any).accountType || '').toLowerCase();
+      if (accType === 'expense' || accType === 'cost') return true;
+      if (accType === 'income' || accType === 'revenue') return false;
+      const name = String(item.category || (item as any).lineItem || '').toLowerCase();
+      // Broad match: cost/expense items, cloud, infra, staff, etc.
+      return /expense|cost|cogs|payroll|marketing|admin|depreciation|operating|salary|salaries|cloud|infra|staff|overhead|interest|support.staff|implementation.staff/i.test(name);
+    };
     const sumMonthly = (item: BudgetLineItem) =>
       Object.values(item.monthly || {}).reduce((s, v) => s + (Number(v) || 0), 0);
     const totalRevenue = budgetData.filter(isRevenueRow).reduce((s, r) => s + sumMonthly(r), 0);
@@ -269,78 +277,148 @@ const BudgetManagement: React.FC = () => {
   };
 
   const handleFileUpload = async () => {
-    if (!uploadedFile) {
-      alert('⚠️ Please select a file first');
-      return;
-    }
-
-    const monthColToKey: Record<string, keyof MonthlyBudget> = {
-      'Jan': 'jan', 'Feb': 'feb', 'Mar': 'mar', 'Apr': 'apr', 'May': 'may', 'Jun': 'jun',
-      'Jul': 'jul', 'Aug': 'aug', 'Sep': 'sep', 'Oct': 'oct', 'Nov': 'nov', 'Dec': 'dec'
-    };
+    if (!uploadedFile) { alert('⚠️ Please select a file first'); return; }
 
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const sheetName = workbook.SheetNames.find(n => /budget|monthly/i.test(n)) || workbook.SheetNames[0];
+        const sheetName = workbook.SheetNames.find(n => /budget|monthly|upload/i.test(n)) || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const rows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[];
-        if (rows.length < 2) {
-          alert('❌ File must have a header row and at least one data row.');
-          return;
+
+        // Smart header detection — skip title/instruction rows (same as variance parser)
+        const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+        const HDR_RE = /^(line.?item|category|account|name|description|q1|q2|q3|q4|jan|feb|mar|annual|budget)/i;
+        let headerRowIdx = 0;
+        for (let i = 0; i < Math.min(5, rawAll.length); i++) {
+          const vals = rawAll[i].map((v: any) => String(v ?? '').trim());
+          if (vals.filter((v: string) => HDR_RE.test(v)).length >= 2) { headerRowIdx = i; break; }
         }
-        const header = (rows[0] || []).map((h: any) => String(h || '').trim());
-        const categoryCol = header.findIndex((h: string) => /category|line item|item/i.test(h));
-        if (categoryCol < 0) {
-          alert('❌ Could not find a "Category" or "Line Item" column.');
-          return;
-        }
+        const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '', range: headerRowIdx });
+        if (rows.length === 0) { alert('❌ No data rows found.'); return; }
+
+        const header = Object.keys(rows[0]);
+
+        // Find key columns
+        const findCol = (re: RegExp) => header.find(h => re.test(h.trim())) ?? null;
+        const categoryCol = findCol(/^(line.?item|category|account|name|description)/i);
+        const deptCol     = findCol(/^department|dept/i);
+        const ownerCol    = findCol(/^owner|responsible/i);
+        const annualCol   = findCol(/annual.?budget|fy.*total|total.*budget|annual/i);
+        const priorCol    = findCol(/fy.*actual|prior.*year|last.*year|actual.*fy/i);
+
+        if (!categoryCol) { alert(`❌ Could not find a "Line Item" or "Category" column.\nFound: ${header.join(', ')}`); return; }
+
         const parseNum = (val: any): number => {
           if (val == null || val === '') return 0;
           const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, ''));
           return isNaN(n) ? 0 : n;
         };
-        // If values are small (e.g. 2.8, 3.1), assume Crores; else use as-is (already in rupees)
-        const scale = (v: number): number => {
-          if (v === 0) return 0;
-          if (Math.abs(v) < 10000 && Math.abs(v) >= 0.01) return v * 10000000; // Crores → rupees
-          return v;
+
+        // Quarterly columns → expand to monthly (3 months each)
+        const monthColToKey: Record<string, (keyof MonthlyBudget)[]> = {
+          'jan': ['jan'], 'feb': ['feb'], 'mar': ['mar'], 'apr': ['apr'],
+          'may': ['may'], 'jun': ['jun'], 'jul': ['jul'], 'aug': ['aug'],
+          'sep': ['sep'], 'oct': ['oct'], 'nov': ['nov'], 'dec': ['dec'],
         };
+        // Q1-Q4 mapping depends on whether calendar year (Q1=Jan-Mar) or fiscal year (Q1=Apr-Jun)
+        // Default to calendar year; detect from column names
+        const isCalendarYear = !header.some(h => /q1.*apr|apr.*q1/i.test(h));
+        const qToMonths: Record<string, (keyof MonthlyBudget)[]> = isCalendarYear
+          ? { q1: ['jan','feb','mar'], q2: ['apr','may','jun'], q3: ['jul','aug','sep'], q4: ['oct','nov','dec'] }
+          : { q1: ['apr','may','jun'], q2: ['jul','aug','sep'], q3: ['oct','nov','dec'], q4: ['jan','feb','mar'] };
+
         const lineItems: BudgetLineItem[] = [];
-        for (let i = 1; i < rows.length; i++) {
-          const row = rows[i] || [];
-          const category = String(row[categoryCol] ?? '').trim();
-          if (!category) continue;
-          const monthly: MonthlyBudget = {
-            jan: 0, feb: 0, mar: 0, apr: 0, may: 0, jun: 0,
-            jul: 0, aug: 0, sep: 0, oct: 0, nov: 0, dec: 0
-          };
-          header.forEach((h: string, col: number) => {
-            const key = monthColToKey[h];
-            if (key && row[col] !== undefined && row[col] !== null && row[col] !== '') {
-              monthly[key] = scale(parseNum(row[col]));
+        let totalRevenue = 0, totalExpenses = 0, totalPriorRevenue = 0;
+
+        for (const row of rows) {
+          const category = String((row as any)[categoryCol] ?? '').trim();
+          if (!category || /^(line item|category|account)/i.test(category)) continue;
+
+          const monthly: MonthlyBudget = { jan:0,feb:0,mar:0,apr:0,may:0,jun:0,jul:0,aug:0,sep:0,oct:0,nov:0,dec:0 };
+          let annualBudget = annualCol ? parseNum((row as any)[annualCol]) : 0;
+          const priorActual = priorCol ? parseNum((row as any)[priorCol]) : 0;
+
+          // Map monthly columns
+          header.forEach(h => {
+            const norm = h.trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+            const monthKeys = monthColToKey[norm] || qToMonths[norm.replace(/budget|q/g,'').replace(/^\s+/,'').replace(/q(\d)/,'q$1')]
+              || qToMonths[norm.match(/q[1-4]/)?.[0] ?? ''];
+            if (monthKeys) {
+              const val = parseNum((row as any)[h]) / (monthKeys.length || 1);
+              monthKeys.forEach(mk => { monthly[mk] = val; });
             }
           });
+
+          // If we have annual budget but no monthly, distribute evenly
+          if (annualBudget > 0 && Object.values(monthly).every(v => v === 0)) {
+            const perMonth = annualBudget / 12;
+            (Object.keys(monthly) as (keyof MonthlyBudget)[]).forEach(k => { monthly[k] = perMonth; });
+          }
+          if (annualBudget === 0) {
+            annualBudget = Object.values(monthly).reduce((s, v) => s + v, 0);
+          }
+
+          const isRevenue = /revenue|sales|income|subscri|implement|support.*maint/i.test(category)
+            && !/cost|expense|salary|commission/i.test(category);
+          const isExpense = /cost|expense|salary|salaries|cloud|infra|marketing|admin|overhead|payroll/i.test(category);
+          if (isRevenue) { totalRevenue += annualBudget; totalPriorRevenue += priorActual; }
+          if (isExpense) totalExpenses += annualBudget;
+
           lineItems.push({
-            id: `upload-${i}-${category.slice(0, 20).replace(/\s/g, '-')}`,
+            id: `upload-${lineItems.length}-${category.slice(0,20).replace(/\s/g,'-')}`,
             category,
-            isHeader: /total|revenue|expenses|profit|gross|operating/i.test(category) && category.length < 25,
+            isHeader: /^(revenue|cost of revenue|operating exp|gross profit|ebitda|total)/i.test(category) && annualBudget === 0,
             isEditable: true,
             monthly,
-            priorYearActual: 0,
-            indent: 0
-          });
+            priorYearActual: priorActual,
+            indent: 0,
+            ...(deptCol  ? { department: String((row as any)[deptCol]  ?? '') } : {}),
+            ...(ownerCol ? { owner:      String((row as any)[ownerCol] ?? '') } : {}),
+          } as BudgetLineItem);
         }
-        if (lineItems.length === 0) {
-          alert('❌ No valid rows found. Ensure columns include Category and month names (Jan–Dec).');
-          return;
+
+        if (lineItems.length === 0) { alert('❌ No valid rows found. Check your file format.'); return; }
+
+        // Save to localStorage — include FULL monthly data so Forecasting + Budget modules work
+        const budgetPayload = {
+          totalRevenue,
+          totalExpenses,
+          netProfit: totalRevenue - totalExpenses,
+          ebitda: (totalRevenue - totalExpenses) * 1.15,
+          priorYearRevenue: totalPriorRevenue,
+          rowCount: lineItems.length,
+          lineItems: lineItems.map(r => ({
+            account: r.category,
+            category: r.category,
+            budget: Object.values(r.monthly).reduce((s, v) => s + v, 0),
+            monthly: r.monthly,            // ← full monthly breakdown
+            monthlyBudgets: Object.values(r.monthly),
+            accountType: isRevenue(r.category) ? 'income' : isExpense(r.category) ? 'expense' : 'other',
+            department: (r as any).department || 'All Depts',
+            owner: (r as any).owner || 'CFO',
+            priorYearActual: r.priorYearActual || 0,
+          })),
+          uploadedAt: new Date().toISOString(),
+          fileName: uploadedFile!.name,
+        };
+
+        function isRevenue(cat: string) {
+          return /^(total\s+)?(revenue|income|sales|license|service|subscri|maintenance|support.*rev)/i.test(cat)
+            && !/cost|expense|salary|commission/i.test(cat);
         }
+        function isExpense(cat: string) {
+          return /cost|expense|salary|salaries|cloud|infra|marketing|admin|overhead|payroll|depreciation|interest|staff/i.test(cat);
+        }
+        localStorage.setItem('fpa_budget', JSON.stringify(budgetPayload));
+        localStorage.setItem('fpa_budget_tb', JSON.stringify(budgetPayload));
+        localStorage.setItem('fpa_currency', 'AED');
+
         setBudgetData(lineItems);
         setShowUploadModal(false);
         setUploadedFile(null);
-        alert(`✅ Loaded ${lineItems.length} budget line items from "${uploadedFile.name}". Cards will update from this data.`);
+        alert(`✅ Loaded ${lineItems.length} budget line items from "${uploadedFile!.name}".\n\nRevenue: AED ${(totalRevenue/1000000).toFixed(1)}M | Expenses: AED ${(totalExpenses/1000000).toFixed(1)}M\n\nData saved — Forecasting Engine will now use these figures.`);
       } catch (error: any) {
         alert('❌ Failed to parse file: ' + (error?.message || String(error)));
       }
@@ -351,22 +429,27 @@ const BudgetManagement: React.FC = () => {
   const handleAISuggestion = async () => {
     setAiSuggesting(true);
     try {
+      const totalRevActual  = budgetData.filter((r: any) => /revenue|income/i.test(r.category || r.name || '')).reduce((s: number, r: any) => s + (r.annual || 0), 0) || 42000000;
+      const totalExpActual  = budgetData.filter((r: any) => /cost|expense|salary|salaries/i.test(r.category || r.name || '')).reduce((s: number, r: any) => s + (r.annual || 0), 0) || 35000000;
+      const netProfit       = totalRevActual - totalExpActual;
       const prompt = `
-You are a financial planning expert. Based on FY2024 actuals, suggest a budget for FY2025.
+You are a financial planning expert for ${displayCurrency === 'AED' ? 'a UAE technology company (Al Futtaim Digital Services LLC)' : 'a technology company'}.
+Based on FY2025 actuals, suggest a budget for FY2026. All amounts in ${displayCurrency}.
 
-FY2024 Actuals:
-- Total Revenue: ₹338 Cr
-- Total Expenses: ₹270 Cr
-- Net Profit: ₹45.08 Cr
-- EBITDA: ₹74 Cr
+FY2025 Actuals:
+- Total Revenue: ${formatCurrency(totalRevActual)}
+- Total Expenses: ${formatCurrency(totalExpActual)}
+- Net Profit: ${formatCurrency(netProfit)}
+- EBITDA (est.): ${formatCurrency(netProfit * 1.15)}
+${displayCurrency === 'AED' ? '- Key clients: ADNOC Digital, Emirates NBD, Emaar Properties, DEWA\n- UAE VAT rate: 5%' : ''}
 
-Provide budget recommendations for FY2025 with:
-1. Revenue growth % (consider market trends, inflation)
-2. Cost optimization areas
+Provide budget recommendations for FY2026 with:
+1. Revenue growth % (consider UAE/regional market trends)
+2. Cost optimisation areas (headcount, cloud, marketing)
 3. Department-wise allocation suggestions
-4. Key assumptions
+4. Key risks and assumptions
 
-Format as a structured commentary.
+Format as a structured commentary using ${displayCurrency} currency.
 `;
 
       const aiResponse = await callAI(prompt);

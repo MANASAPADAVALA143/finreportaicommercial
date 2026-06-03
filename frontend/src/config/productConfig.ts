@@ -30,7 +30,25 @@ export interface NavSection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// InvoiceFlow items — AP Automation
+// AP Invoices — EMBEDDED natively inside FinReportAI (same dark design)
+// Data comes from InvoiceFlow's Supabase project (VITE_AP_SUPABASE_URL).
+// No redirect — these are real React pages inside FinReportAI.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const apInvoiceSection: NavSection = {
+  heading:      'AP Invoices',
+  headingColor: 'text-blue-400',
+  items: [
+    { label: 'AP Dashboard',    path: '/ap-invoices',            icon: 'LayoutDashboard' },
+    { label: 'All Invoices',    path: '/ap-invoices/list',       icon: 'FileText' },
+    { label: 'Upload Invoice',  path: '/ap-invoices/upload',     icon: 'Upload' },
+    { label: 'Approvals',       path: '/ap-invoices/approvals',  icon: 'CheckCircle' },
+    { label: 'Vendors',         path: '/ap-invoices/vendors',    icon: 'Users' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// InvoiceFlow items — AP Automation (legacy external links — kept for reference)
 // These open InvoiceFlow (separate app) in a new tab.
 // In local dev InvoiceFlow runs on port 5175; in production it's on Railway.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +130,42 @@ const finreportaiSections: NavSection[] = [
       { label: 'Audit Intelligence',path: '/audit',               icon: 'ShieldAlert' },
     ],
   },
+  {
+    heading:      'UAE Accounting',
+    headingColor: 'text-green-500',
+    items: [
+      { label: 'UAE Overview',        path: '/uae-full',                      icon: 'Globe' },
+      { label: 'Chart of Accounts',   path: '/uae-full/coa',                  icon: 'BookOpen' },
+      { label: 'Journal Entries',     path: '/uae-full/journals',             icon: 'FileText' },
+      { label: 'Sales Invoices',      path: '/uae-full/invoices',             icon: 'Receipt' },
+      { label: 'Bank Reconciliation', path: '/uae-full/bank-recon',           icon: 'Landmark' },
+      { label: 'Fixed Assets',        path: '/uae-full/fixed-assets',         icon: 'Building2' },
+      { label: 'Accruals',            path: '/uae-full/accruals',             icon: 'AlertCircle' },
+      { label: 'Period-End Close',    path: '/uae-full/period-close',         icon: 'Lock' },
+      { label: 'Management Accounts', path: '/uae-full/management',           icon: 'TrendingUp' },
+      { label: '— Zoho/QBO Sync',    path: '/uae-accounting',                icon: 'Plug' },
+      { label: 'Connected Accounts',  path: '/uae-accounting/accounts',       icon: 'Link' },
+      { label: 'Trial Balances',      path: '/uae-accounting/trial-balances', icon: 'TableProperties' },
+    ],
+  },
+  {
+    id: 'india-accounting',
+    label: 'India Accounting',
+    icon: 'IndianRupee',
+    items: [
+      { label: 'India Overview',       path: '/india-full',               icon: 'IndianRupee' },
+      { label: 'Chart of Accounts',    path: '/india-full/coa',           icon: 'BookOpen' },
+      { label: 'Journal Entries',      path: '/india-full/journals',      icon: 'FileText' },
+      { label: 'Sales Invoices (GST)', path: '/india-full/sales',         icon: 'Receipt' },
+      { label: 'Purchase + ITC',       path: '/india-full/purchases',     icon: 'ShoppingCart' },
+      { label: 'TDS Management',       path: '/india-full/tds',           icon: 'Calculator' },
+      { label: 'GST Returns',          path: '/india-full/gst',           icon: 'Landmark' },
+      { label: 'Payroll (PF/ESI/PT)',  path: '/india-full/payroll',       icon: 'Users' },
+      { label: 'Fixed Assets (Ind AS)',path: '/india-full/assets',        icon: 'TrendingUp' },
+      { label: 'Period-End Close',     path: '/india-full/close',         icon: 'Lock' },
+      { label: 'Management Accounts',  path: '/india-full/management',    icon: 'BarChart2' },
+    ],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +187,7 @@ const caFirmSection: NavSection = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const combinedSections: NavSection[] = [
+  apInvoiceSection,
   ...invoiceflowSections,
   ...finreportaiSections,
   caFirmSection,
@@ -143,8 +198,8 @@ const combinedSections: NavSection[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const sidebarConfig: Record<ProductKey, NavSection[]> = {
-  invoiceflow: invoiceflowSections,
-  finreportai: [...finreportaiSections, caFirmSection],
+  invoiceflow: [apInvoiceSection, ...invoiceflowSections],
+  finreportai: [apInvoiceSection, ...finreportaiSections, caFirmSection],
   combined:    combinedSections,
 };
 

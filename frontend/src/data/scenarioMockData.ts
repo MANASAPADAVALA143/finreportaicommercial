@@ -112,6 +112,117 @@ export const scenarios: Scenario[] = [
     createdAt: "2025-11-01",
     isLocked: false,
     isActive: false
+  },
+
+  // ── UAE Al Futtaim Digital Services scenarios (AED 42M company) ─────────────
+
+  {
+    id: "uae-adnoc-lost",
+    name: "🇦🇪 ADNOC Contract Lost",
+    type: "worst",
+    description: "ADNOC Digital (AED 2.1M) contract lost — key revenue risk for Q4 2025",
+    color: "#DC2626",
+    assumptions: [
+      { id: "rev", category: "Revenue", variable: "Software Licenses Revenue", baseValue: 42000000, scenarioValue: 39900000, changePercent: -5, unit: "currency", impact: "high" },
+      { id: "sales", category: "Costs", variable: "Sales & Marketing (retention)", baseValue: 4200000, scenarioValue: 4620000, changePercent: 10, unit: "currency", impact: "medium" },
+      { id: "hc", category: "Headcount", variable: "Headcount (backfill risk)", baseValue: 85, scenarioValue: 82, changePercent: -3.5, unit: "number", impact: "low" },
+    ],
+    results: {
+      revenue: 39900000,
+      grossProfit: 27930000,
+      grossMargin: 70.0,
+      ebitda: 2900000,
+      ebitdaMargin: 7.3,
+      netProfit: 1800000,
+      netMargin: 4.5,
+      cashPosition: 5100000,
+      breakEvenMonth: "Jan 26",
+      runway: 4.9
+    },
+    createdAt: "2025-11-01",
+    isLocked: false,
+    isActive: false
+  },
+  {
+    id: "uae-hiring-freeze",
+    name: "🇦🇪 Hiring Freeze",
+    type: "base",
+    description: "Freeze all open roles — saves AED 1.8M in H2 salaries + visa costs",
+    color: "#F59E0B",
+    assumptions: [
+      { id: "rev", category: "Revenue", variable: "Revenue (unchanged)", baseValue: 42000000, scenarioValue: 42000000, changePercent: 0, unit: "currency", impact: "low" },
+      { id: "sal", category: "Costs", variable: "Salaries & Benefits", baseValue: 18500000, scenarioValue: 16700000, changePercent: -9.7, unit: "currency", impact: "high" },
+      { id: "visa", category: "Costs", variable: "Visa & Onboarding Costs", baseValue: 510000, scenarioValue: 85000, changePercent: -83, unit: "currency", impact: "medium" },
+    ],
+    results: {
+      revenue: 42000000,
+      grossProfit: 30660000,
+      grossMargin: 73.0,
+      ebitda: 5800000,
+      ebitdaMargin: 13.8,
+      netProfit: 4200000,
+      netMargin: 10.0,
+      cashPosition: 8400000,
+      breakEvenMonth: "N/A",
+      runway: 8.0
+    },
+    createdAt: "2025-11-01",
+    isLocked: false,
+    isActive: false
+  },
+  {
+    id: "uae-govt-push",
+    name: "🇦🇪 Government Digital Push",
+    type: "best",
+    description: "UAE Vision 2031 digital contracts — AED 3.5M upside from MOCCAE + DEWA tenders",
+    color: "#059669",
+    assumptions: [
+      { id: "rev", category: "Revenue", variable: "Govt Software Licenses Revenue", baseValue: 42000000, scenarioValue: 45500000, changePercent: 8.3, unit: "currency", impact: "high" },
+      { id: "impl", category: "Revenue", variable: "Implementation Revenue", baseValue: 10500000, scenarioValue: 12600000, changePercent: 20, unit: "currency", impact: "high" },
+      { id: "hc", category: "Headcount", variable: "Delivery Headcount Needed", baseValue: 85, scenarioValue: 92, changePercent: 8.2, unit: "number", impact: "medium" },
+    ],
+    results: {
+      revenue: 44200000,
+      grossProfit: 33150000,
+      grossMargin: 75.0,
+      ebitda: 6100000,
+      ebitdaMargin: 13.8,
+      netProfit: 4600000,
+      netMargin: 10.4,
+      cashPosition: 9200000,
+      breakEvenMonth: "N/A",
+      runway: 8.8
+    },
+    createdAt: "2025-11-01",
+    isLocked: false,
+    isActive: false
+  },
+  {
+    id: "uae-new-difc",
+    name: "🇦🇪 New DIFC Office",
+    type: "worst",
+    description: "Open DIFC branch office — AED 900K additional costs (rent + setup + staff)",
+    color: "#7C3AED",
+    assumptions: [
+      { id: "rev", category: "Revenue", variable: "Revenue (DIFC client access)", baseValue: 42000000, scenarioValue: 43260000, changePercent: 3, unit: "currency", impact: "medium" },
+      { id: "rent", category: "Costs", variable: "DIFC Office Rent + Fit-out", baseValue: 0, scenarioValue: 540000, changePercent: 100, unit: "currency", impact: "high" },
+      { id: "staff", category: "Costs", variable: "Additional Headcount (3 FTE)", baseValue: 0, scenarioValue: 360000, changePercent: 100, unit: "currency", impact: "medium" },
+    ],
+    results: {
+      revenue: 43260000,
+      grossProfit: 31570000,
+      grossMargin: 73.0,
+      ebitda: 3800000,
+      ebitdaMargin: 8.8,
+      netProfit: 2600000,
+      netMargin: 6.0,
+      cashPosition: 5800000,
+      breakEvenMonth: "Jul 26",
+      runway: 5.6
+    },
+    createdAt: "2025-11-01",
+    isLocked: false,
+    isActive: false
   }
 ];
 

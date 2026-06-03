@@ -13,7 +13,10 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# Load .env with override=True so a fresh start always picks up the latest keys.
+# Also try explicit path so it works regardless of which directory uvicorn was launched from.
+_env_file = Path(__file__).resolve().parent.parent / ".env"  # backend/.env
+load_dotenv(dotenv_path=_env_file if _env_file.exists() else None, override=True)
 
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +35,7 @@ from app.routers import model_builder as model_builder_router
 from app.routers import auth as rbac_auth_router
 from app.routers import users as rbac_users_router
 from app.api.routes import (
+    fpa_master_upload,
     upload_routes,
     auth_routes,
     cfo_dashboard,
@@ -71,6 +75,10 @@ from app.api.routes import (
     ar_collections,
     ca_bank_router,
     tally_push,
+    ifrs_export,
+    uae_accounting,
+    uae_full_routes,
+    india_routes,
 )
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
@@ -147,6 +155,7 @@ add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 # Routes
 app.include_router(auth_routes.router)
+app.include_router(fpa_master_upload.router)
 app.include_router(upload_routes.router)
 app.include_router(cfo_dashboard.router)
 app.include_router(ifrs_statements.router)
@@ -192,6 +201,10 @@ app.include_router(covenant_tracker.router)
 app.include_router(ar_collections.router)
 app.include_router(ca_bank_router.router)
 app.include_router(tally_push.router)
+app.include_router(ifrs_export.router, prefix="/api/ifrs")
+app.include_router(uae_accounting.router)
+app.include_router(uae_full_routes.router)
+app.include_router(india_routes.router)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:
@@ -231,7 +244,19 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    import os as _os
+    from pathlib import Path as _Path
+    _k = _os.environ.get("ANTHROPIC_API_KEY", "")
+    _env = _Path(__file__).resolve().parent.parent / ".env"
+    return {
+        "status": "healthy",
+        "ai_key_set": bool(_k),
+        "ai_key_prefix": _k[:12] if _k else "EMPTY",
+        "cwd": _os.getcwd(),
+        "env_file_path": str(_env),
+        "env_file_exists": _env.exists(),
+        "file": __file__,
+    }
 
 
 class RunAgentCompatBody(BaseModel):
@@ -1025,3 +1050,18 @@ if __name__ == "__main__":
         limit_max_requests=100,
         timeout_keep_alive=5,
     )
+
+@app.get("/debug-env")
+async def debug_env():
+    import os
+    from pathlib import Path
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    cwd = os.getcwd()
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    return {
+        "key_set": bool(key),
+        "key_prefix": key[:15] if key else "EMPTY",
+        "cwd": cwd,
+        "env_path": str(env_path),
+        "env_exists": env_path.exists()
+    }

@@ -474,6 +474,53 @@ export const calculateRealKPIs = (actualData: any, budgetData: any) => {
 export const convertBudgetToLineItems = (budgetData: any) => {
   if (!budgetData) return [];
 
+  // ── Fast path: use real uploaded lineItems when available ──────────────────
+  // These are stored by BudgetManagement.handleFileUpload or master upload.
+  if (budgetData.lineItems && Array.isArray(budgetData.lineItems) && budgetData.lineItems.length > 0) {
+    const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    return budgetData.lineItems.map((item: any, idx: number) => {
+      // Reconstruct monthly object — prefer stored monthly array, else spread annual evenly
+      let monthly: Record<string, number> = { jan:0,feb:0,mar:0,apr:0,may:0,jun:0,jul:0,aug:0,sep:0,oct:0,nov:0,dec:0 };
+      if (item.monthly && typeof item.monthly === 'object') {
+        monthly = { ...monthly, ...item.monthly };
+      } else if (Array.isArray(item.monthlyBudgets) && item.monthlyBudgets.length === 12) {
+        MONTH_KEYS.forEach((k, i) => { monthly[k] = Number(item.monthlyBudgets[i]) || 0; });
+      } else {
+        // Spread annual evenly
+        const annual = Number(item.budget || item.annual_budget || 0);
+        MONTH_KEYS.forEach(k => { monthly[k] = annual / 12; });
+      }
+      const annualBudget = MONTH_KEYS.reduce((s, k) => s + (monthly[k] || 0), 0);
+
+      // Determine category (income / expense / other) — check accountType first then keywords
+      const accType = String(item.accountType || item.account_type || '').toLowerCase();
+      const name    = String(item.account || item.account_name || item.category || item.lineItem || '').toLowerCase();
+      const isExpenseItem = accType.includes('expense') || accType.includes('cost')
+        || /cost|expense|salary|salaries|cloud|infra|marketing|admin|overhead|payroll|depreciation|interest|support.staff|implementation.staff/.test(name);
+      const isIncomeItem  = accType.includes('income') || accType.includes('revenue')
+        || /^(total\s+)?(revenue|income|sales|license|service|subscription|maintenance)/.test(name);
+
+      return {
+        id: `budget-item-${idx}`,
+        category: isIncomeItem ? 'Revenue' : isExpenseItem ? 'Operating Expenses' : 'Other',
+        lineItem: String(item.account || item.account_name || item.category || item.lineItem || `Item ${idx+1}`),
+        department: String(item.department || 'All Depts'),
+        owner: String(item.owner || 'CFO'),
+        monthly,
+        fy2025Budget: annualBudget,
+        fy2024Actual: Number(item.priorYearActual || item.fy_prior_actual || annualBudget * 0.92),
+        accountType: isIncomeItem ? 'income' : isExpenseItem ? 'expense' : 'other',
+        variance: 0,
+        variancePct: 0,
+        status: 'On Track' as const,
+        isEditable: true,
+        isHeader: false,
+        priorYearActual: Number(item.priorYearActual || item.fy_prior_actual || 0),
+        indent: 0,
+      };
+    });
+  }
+
   const budget = budgetData;
   const totalRevenue = Number(budget.totalRevenue || 0) || 0;
   // Some client TBs provide only totalRevenue; split conservatively so Budget Management still works.
@@ -662,34 +709,84 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
   if (!actualData || !budgetData) return { revenue: [], expenses: [] };
 
   const budget = budgetData;
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  
+  const actual = actualData;
+  const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const months    = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  // ── Extract real monthly actuals from lineItems if available ─────────────
+  // Check actual lineItems for monthly arrays
+  const getMonthlyArray = (data: any, type: 'actual' | 'budget'): number[] => {
+    if (!data?.lineItems?.length) return new Array(12).fill(0);
+    const incomeItems = data.lineItems.filter((r: any) => {
+      const accType = String(r.accountType || r.account_type || '').toLowerCase();
+      const name = String(r.account || r.account_name || r.category || '').toLowerCase();
+      return accType === 'income' || accType === 'revenue'
+        || (/^(total\s+)?(revenue|income|sales|license|service|subscri|maintenance)/i.test(name)
+            && !/cost|expense|salary/i.test(name));
+    });
+    const monthly = new Array(12).fill(0);
+    incomeItems.forEach((item: any) => {
+      const arr = type === 'actual'
+        ? (item.monthlyActuals || (item.monthly && Object.values(item.monthly)))
+        : (item.monthlyBudgets || (item.monthly && Object.values(item.monthly)));
+      if (arr && arr.length === 12) {
+        arr.forEach((v: any, i: number) => { monthly[i] += Number(v) || 0; });
+      }
+    });
+    return monthly;
+  };
+
+  const monthlyActuals = getMonthlyArray(actual, 'actual');
+  const monthlyBudgets = getMonthlyArray(budget, 'budget');
+
+  // Detect how many months have real actuals (non-zero)
+  const lastActualIdx = monthlyActuals.reduce((last, v, i) => (v > 0 ? i : last), -1);
+  const numActualMonths = lastActualIdx + 1 || 10; // default Oct = 10 months
+
+  // Linear regression on actuals to forecast remaining months
+  const actualValues = monthlyActuals.slice(0, numActualMonths).filter(v => v > 0);
+  let growthRate = 0.02; // 2% monthly default
+  if (actualValues.length >= 3) {
+    const n = actualValues.length;
+    const avgX = (n - 1) / 2;
+    const avgY = actualValues.reduce((s, v) => s + v, 0) / n;
+    const slope = actualValues.reduce((s, v, i) => s + (i - avgX) * (v - avgY), 0)
+      / actualValues.reduce((s, _, i) => s + Math.pow(i - avgX, 2), 0);
+    growthRate = avgY > 0 ? slope / avgY : 0.02;
+    growthRate = Math.max(-0.05, Math.min(0.15, growthRate)); // clamp to ±15% monthly
+  }
+
+  const lastActualVal = actualValues[actualValues.length - 1] || (actual.totalRevenue || 0) / 12;
+  const fallbackBudgetMonthly = (budget.totalRevenue || actual.totalRevenue || 0) / 12;
+
   // Revenue Forecast
   const revenueForecast = months.map((month, idx) => {
-    const isActual = idx < 10; // Oct = index 9, so Jan-Oct are actuals
-    
-    // If we have monthly revenue data, use it
-    let actualRevenue = 0;
-    let forecastRevenue = 0;
-    
-    if (monthlyData && monthlyData.months && monthlyData.months[idx]) {
-      actualRevenue = (monthlyData.domesticRevenue[idx] || 0) + 
-                     (monthlyData.exportRevenue[idx] || 0) + 
-                     (monthlyData.serviceRevenue[idx] || 0);
+    const isActual = idx < numActualMonths && monthlyActuals[idx] > 0;
+    const hasMonthlyData = monthlyActuals.some(v => v > 0);
+
+    let actualRevenue: number;
+    let forecastRevenue: number;
+
+    if (isActual && hasMonthlyData) {
+      actualRevenue  = monthlyActuals[idx];
       forecastRevenue = actualRevenue;
+    } else if (hasMonthlyData) {
+      // Project from last actual using growth rate
+      const monthsAhead = idx - lastActualIdx;
+      actualRevenue  = 0;
+      forecastRevenue = lastActualVal * Math.pow(1 + growthRate, monthsAhead);
     } else {
-      // Estimate monthly from annual
-      actualRevenue = (actualData.totalRevenue || 0) / 12;
-      // Forecast grows by 8% for future months
-      forecastRevenue = isActual ? actualRevenue : actualRevenue * 1.08;
+      // No monthly data — use annual total spread
+      actualRevenue  = isActual ? (actual.totalRevenue || 0) / 12 : 0;
+      forecastRevenue = isActual ? actualRevenue : ((actual.totalRevenue || 0) / 12) * 1.05;
     }
-    
-    const budgetMonthly = (budget.totalRevenue || 0) / 12;
-    const lastYearMonthly = budgetMonthly * 0.92; // Estimate 92% of budget as prior year
+
+    const budgetMonthly = (monthlyBudgets[idx] > 0 ? monthlyBudgets[idx] : fallbackBudgetMonthly);
+    const lastYearMonthly = budgetMonthly * 0.90;
     const variance = forecastRevenue - budgetMonthly;
     const variancePct = budgetMonthly > 0 ? (variance / budgetMonthly) * 100 : 0;
     const varianceVsLY = lastYearMonthly > 0 ? ((forecastRevenue - lastYearMonthly) / lastYearMonthly) * 100 : 0;
-    
+
     return {
       month: `${month} 26`,
       actual: isActual ? Math.round(actualRevenue) : null,
@@ -699,8 +796,8 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
       variance_vs_budget: variancePct,
       variance_vs_ly: varianceVsLY,
       isActual,
-      confidence: isActual ? 100 : (idx < 12 ? 85 - (idx - 9) * 5 : 70),
-      method: isActual ? 'Actual' : 'AI Forecast'
+      confidence: isActual ? 100 : Math.max(60, 90 - (idx - lastActualIdx) * 5),
+      method: isActual ? 'Actual' : (idx === lastActualIdx + 1 ? 'AI Forecast' : 'Trend'),
     };
   });
 

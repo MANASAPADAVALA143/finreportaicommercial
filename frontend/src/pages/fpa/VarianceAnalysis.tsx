@@ -1,7 +1,7 @@
 // FP&A Variance Analysis - Main Page
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw, AlertTriangle, CheckCircle2, ArrowRight, TrendingDown, TrendingUp, Info } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { VarianceSummaryCards } from '../../components/fpa/VarianceSummaryCards';
 import { VarianceTable } from '../../components/fpa/VarianceTable';
@@ -51,6 +51,168 @@ const scoreMateriality = (variance: number, variancePct: number, totalBudget: nu
   const absFactor = totalBudget > 0 ? Math.abs(variance) / totalBudget : 0;
   return pctFactor * 0.5 + absFactor * 0.5;
 };
+
+// ── Al Futtaim Digital Services sample data ───────────────────────────────────
+
+const AF_RAW: Array<{ cat: string; actual: number; budget: number; ytdA: number; ytdB: number; prior: number; type: 'income' | 'expense' | 'header' | 'subtotal'; section: string }> = [
+  { cat: 'Software Licenses',      actual:1850000,budget:2100000,ytdA:16200000,ytdB:17500000,prior:14800000, type:'income',   section:'REVENUE' },
+  { cat: 'Implementation Services',actual: 920000,budget: 900000,ytdA: 7800000,ytdB: 7200000,prior: 6500000, type:'income',   section:'REVENUE' },
+  { cat: 'Support & Maintenance',  actual: 580000,budget: 560000,ytdA: 4900000,ytdB: 4700000,prior: 4200000, type:'income',   section:'REVENUE' },
+  { cat: 'TOTAL REVENUE',          actual:3350000,budget:3560000,ytdA:28900000,ytdB:29400000,prior:25500000, type:'subtotal', section:'REVENUE' },
+  { cat: 'Cloud Infrastructure',   actual: 420000,budget: 380000,ytdA: 3600000,ytdB: 3200000,prior: 3100000, type:'expense',  section:'COST OF REVENUE' },
+  { cat: 'Implementation Staff',   actual: 310000,budget: 290000,ytdA: 2600000,ytdB: 2400000,prior: 2200000, type:'expense',  section:'COST OF REVENUE' },
+  { cat: 'Support Staff',          actual: 145000,budget: 140000,ytdA: 1200000,ytdB: 1150000,prior: 1050000, type:'expense',  section:'COST OF REVENUE' },
+  { cat: 'GROSS PROFIT',           actual:2475000,budget:2750000,ytdA:21500000,ytdB:22650000,prior:19150000, type:'subtotal', section:'GROSS PROFIT' },
+  { cat: 'Salaries & Benefits',    actual:1420000,budget:1350000,ytdA:12100000,ytdB:11800000,prior:10200000, type:'expense',  section:'OPERATING EXPENSES' },
+  { cat: 'Sales & Marketing',      actual: 380000,budget: 420000,ytdA: 3200000,ytdB: 3400000,prior: 2800000, type:'expense',  section:'OPERATING EXPENSES' },
+  { cat: 'Admin & Overheads',      actual: 185000,budget: 180000,ytdA: 1580000,ytdB: 1480000,prior: 1350000, type:'expense',  section:'OPERATING EXPENSES' },
+  { cat: 'EBITDA',                 actual: 490000,budget: 800000,ytdA: 4620000,ytdB: 5970000,prior: 4800000, type:'subtotal', section:'EBITDA' },
+];
+
+function buildAlFuttaimRows(): any[] {
+  return AF_RAW.map((r, i) => {
+    const variance = r.actual - r.budget;
+    const variancePct = r.budget !== 0 ? (variance / r.budget) * 100 : 0;
+    const ytdVariance = r.ytdA - r.ytdB;
+    const ytdVariancePct = r.ytdB !== 0 ? (ytdVariance / r.ytdB) * 100 : 0;
+    const favorable = r.type === 'income' || r.type === 'subtotal' ? variance > 0 : variance < 0;
+    const absVarPct = Math.abs(variancePct);
+    return {
+      id: `af-${i}`,
+      category: r.cat,
+      isHeader: false,
+      actual: r.actual,
+      budget: r.budget,
+      variance,
+      variancePct,
+      favorable,
+      ytdActual: r.ytdA,
+      ytdBudget: r.ytdB,
+      ytdVariance,
+      ytdVariancePct,
+      priorYear: r.prior,
+      priorYearVariancePct: r.prior !== 0 ? ((r.actual - r.prior) / r.prior) * 100 : 0,
+      hasChildren: false,
+      isExpanded: false,
+      threshold: absVarPct > 10 ? 'critical' : absVarPct > 5 ? 'warning' : 'ok',
+      level: 0,
+      department: 'All Depts',
+      owner: r.type === 'expense' && /salari/i.test(r.cat) ? 'Fatima Al Zaabi' : r.type === 'income' ? 'Sarah Johnson' : 'CFO',
+      trend: buildFallbackTrend(variancePct),
+      decomposition: { volume: variance * 0.6, price: variance * 0.3, mix: variance * 0.1, note: 'Proxy decomposition' },
+      accountType: r.type === 'subtotal' ? 'income' : r.type,
+      materialityScore: scoreMateriality(variance, variancePct, 3560000),
+      materialityBand: absVarPct > 10 ? 'critical' : absVarPct >= 5 ? 'monitor' : 'low',
+    };
+  });
+}
+
+// ── WHY Panel: decision-useful commentary for large variances ─────────────────
+
+const WHY_MAP: Record<string, { why: string; action: string; owner: string; priority: 'critical' | 'warning' | 'info' }> = {
+  'Software Licenses':      { why: 'ADNOC Digital contract (AED 250K) delayed to November. Emirates NBD renewal pending.', action: 'Update November forecast upward. Chase ADNOC Digital for signed PO.', owner: 'Sarah Johnson (Sales)', priority: 'critical' },
+  'Cloud Infrastructure':   { why: 'AWS and Azure usage surged 10.5% above budget due to UAT environment for DEWA project.', action: 'CTO to review cloud spend. Shut down idle dev environments by 15 Nov.', owner: 'Raj Kumar (Technology)', priority: 'warning' },
+  'Salaries & Benefits':    { why: 'Q4 headcount additions (3 engineers) onboarded ahead of revenue targets.', action: 'Freeze further hiring until Software Licenses revenue recovers in Nov.', owner: 'Fatima Al Zaabi (HR)', priority: 'warning' },
+  'Sales & Marketing':      { why: 'GITEX spend AED 40K below plan — team deferred campaign to Q1 2026.', action: 'No action required. Favorable variance — reallocate to digital campaigns.', owner: 'Sarah Johnson (Sales)', priority: 'info' },
+  'EBITDA':                 { why: 'Revenue miss on Software Licenses (AED -250K) combined with salary over-run (AED +70K) compressed EBITDA by AED 310K vs budget.', action: 'Prioritise ADNOC contract close. If not closed by 15 Nov, trigger cost reduction plan.', owner: 'CFO', priority: 'critical' },
+  'GROSS PROFIT':           { why: 'Cloud and staff costs scaling faster than revenue growth rate.', action: 'Review pricing on DEWA implementation — recover infrastructure costs in client billing.', owner: 'Ahmed Al Rashidi (Delivery)', priority: 'warning' },
+};
+
+function getWhyForRow(category: string, variancePct: number): typeof WHY_MAP[string] | null {
+  const key = Object.keys(WHY_MAP).find(k => category.toLowerCase().includes(k.toLowerCase()));
+  if (key) return WHY_MAP[key];
+  if (Math.abs(variancePct) > 10) {
+    const isOver = variancePct > 0;
+    return {
+      why: `${category} is ${Math.abs(variancePct).toFixed(1)}% ${isOver ? 'above' : 'below'} budget. Detailed investigation required.`,
+      action: isOver ? 'Review cost approval process for this line.' : 'Review sales pipeline and client status for revenue lines.',
+      owner: 'CFO',
+      priority: Math.abs(variancePct) > 15 ? 'critical' : 'warning',
+    };
+  }
+  return null;
+}
+
+// ── WHY Panel component ───────────────────────────────────────────────────────
+
+function WhyPanel({ data, currency, currencyFormat }: { data: any[]; currency: string; currencyFormat: string }) {
+  const flagged = data.filter(r => !r.isHeader && Math.abs(r.variancePct) > 5).slice(0, 8);
+  if (!flagged.length) return null;
+
+  const fmt = (n: number) => {
+    const abs = Math.abs(n);
+    if (abs >= 1000000) return `${currency} ${(n / 1000000).toFixed(2)}M`;
+    if (abs >= 1000) return `${currency} ${Math.round(n).toLocaleString()}`;
+    return `${currency} ${n.toFixed(0)}`;
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <AlertTriangle className="w-5 h-5 text-amber-500" />
+        <h3 className="text-base font-bold text-gray-900">CFO Action Required — Variance Investigation</h3>
+        <span className="ml-auto text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">{flagged.filter(r => Math.abs(r.variancePct) > 10).length} Critical · {flagged.filter(r => r.variancePct > 5 && r.variancePct <= 10).length} Watch</span>
+      </div>
+      <div className="space-y-3">
+        {flagged.map(r => {
+          const why = getWhyForRow(r.category, r.variancePct);
+          const priority = why?.priority || (Math.abs(r.variancePct) > 10 ? 'critical' : 'warning');
+          const borderColor = priority === 'critical' ? 'border-red-200 bg-red-50' : priority === 'warning' ? 'border-amber-200 bg-amber-50' : 'border-blue-200 bg-blue-50';
+          const badgeColor = priority === 'critical' ? 'bg-red-100 text-red-700' : priority === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700';
+          const Icon = priority === 'critical' ? TrendingDown : priority === 'warning' ? AlertTriangle : Info;
+          return (
+            <div key={r.id} className={`border rounded-lg p-4 ${borderColor}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span className="font-semibold text-gray-900 text-sm truncate">{r.category}</span>
+                  <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold shrink-0 ${badgeColor}`}>{priority.toUpperCase()}</span>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className={`text-sm font-bold ${r.favorable ? 'text-green-600' : 'text-red-600'}`}>
+                    {r.variance > 0 ? '+' : ''}{fmt(r.variance)}
+                  </p>
+                  <p className="text-xs text-gray-500">{r.variancePct > 0 ? '+' : ''}{r.variancePct.toFixed(1)}% vs budget</p>
+                </div>
+              </div>
+              {why && (
+                <>
+                  <p className="text-xs text-gray-700 mt-2"><strong>Why:</strong> {why.why}</p>
+                  <div className="mt-2 flex items-start gap-2">
+                    <ArrowRight className="w-3.5 h-3.5 text-blue-600 mt-0.5 shrink-0" />
+                    <p className="text-xs text-blue-700 font-medium">{why.action}</p>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">Owner: {why.owner}</p>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Decision Panel */}
+      <div className="mt-5 bg-gray-50 border border-gray-200 rounded-lg p-4">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">📋 Based on this analysis — Recommended Actions</p>
+        <div className="space-y-2">
+          {[
+            { n: 1, action: 'Chase ADNOC Digital for signed PO by 15 Nov', owner: 'Sarah Johnson', deadline: '15 Nov 2025', badge: 'REVENUE RISK', color: 'text-red-600' },
+            { n: 2, action: 'CTO review of cloud spend — shut down idle environments', owner: 'Raj Kumar', deadline: '10 Nov 2025', badge: 'COST CONTROL', color: 'text-amber-600' },
+            { n: 3, action: 'If ADNOC not closed by 15 Nov, trigger hiring freeze', owner: 'CFO', deadline: '15 Nov 2025', badge: 'CONTINGENCY', color: 'text-blue-600' },
+          ].map(a => (
+            <div key={a.n} className="flex items-start gap-3 text-sm">
+              <span className="w-5 h-5 rounded-full bg-white border border-gray-300 flex items-center justify-center text-[11px] font-bold text-gray-600 shrink-0 mt-0.5">{a.n}</span>
+              <div className="flex-1">
+                <span className={`text-[10px] font-bold ${a.color} mr-2`}>[{a.badge}]</span>
+                <span className="text-gray-800">{a.action}</span>
+                <span className="text-gray-400 text-xs ml-2">— {a.owner} · {a.deadline}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
@@ -135,7 +297,46 @@ export const VarianceAnalysis = () => {
       const workbook = XLSX.read(data, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
-      const rows: any[] = XLSX.utils.sheet_to_json(sheet);
+
+      // Smart header row detection: scan rows 0–4 for the row containing
+      // "Category" (or similar) as a cell value — use that row as the header.
+      // This handles files with 0, 1, or 2 title/instruction rows above the headers.
+      const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+      const HEADER_KEYWORDS = /^(category|line.?item|account|actual|budget|metric|description)/i;
+      let headerRowIdx = 0;
+      for (let i = 0; i < Math.min(5, rawAll.length); i++) {
+        const rowValues = rawAll[i].map((v: any) => String(v ?? '').trim());
+        const matchCount = rowValues.filter((v: string) => HEADER_KEYWORDS.test(v)).length;
+        if (matchCount >= 2) { headerRowIdx = i; break; }
+      }
+      let rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '', range: headerRowIdx });
+
+      // Normalise column names: strip whitespace + build canonical aliases
+      if (rows.length > 0) {
+        const keyMap: Record<string, string> = {};
+        Object.keys(rows[0]).forEach(k => {
+          const norm = k.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+          // Account Type must be checked FIRST (more specific) before the generic 'account' catch
+          if (/^account_?type$|^type$/.test(norm))               keyMap[k] = 'Account Type';
+          else if (/^is_?header$/.test(norm))                    keyMap[k] = 'Is Header';
+          else if (/^(category|line_item|account|account_name|account_code|name|description|metric)$/.test(norm)) keyMap[k] = 'Category';
+          else if (/^actual($|_(?!units|price))/.test(norm) && !/ytd|prior/.test(norm))  keyMap[k] = 'Actual';
+          else if (/^budget($|_(?!units|price))/.test(norm) && !/ytd/.test(norm))        keyMap[k] = 'Budget';
+          else if (/ytd.*actual|actual.*ytd/.test(norm))         keyMap[k] = 'YTD Actual';
+          else if (/ytd.*budget|budget.*ytd/.test(norm))         keyMap[k] = 'YTD Budget';
+          else if (/prior|last.*year/.test(norm))                keyMap[k] = 'Prior Year';
+          else if (/owner|responsible/.test(norm))               keyMap[k] = 'Owner';
+        });
+        rows = rows.map(r => {
+          const out: any = {};
+          Object.entries(r).forEach(([k, v]) => { out[keyMap[k] ?? k] = v; });
+          return out;
+        });
+      }
+
+      // NOTE: keep Is Header=TRUE rows in the array — we use them below
+      // to track section context (REVENUE / COST OF REVENUE / OPEX …)
+      // and then skip them after updating context.
 
       // Helper: parse number from cell (handles commas and string numbers)
       const parseNum = (val: unknown): number => {
@@ -159,7 +360,15 @@ export const VarianceAnalysis = () => {
 
       // Map uploaded data to VarianceRow format
       // Expected columns: Category, Actual, Budget, YTDActual, YTDBudget
+      let currentSection = ''; // tracks REVENUE / COST OF REVENUE / OPERATING EXPENSES …
       const baseMappedData = rows.flatMap((row, index) => {
+        // Section header rows (Is Header = TRUE): update context, don't emit a row
+        const isHeaderFlag = String(row['Is Header'] ?? row['is_header'] ?? '').toLowerCase();
+        if (isHeaderFlag === 'true') {
+          currentSection = String(row['Category'] || row['category'] || '').toUpperCase();
+          return [];
+        }
+
         let actual = parseNum(row['Actual'] ?? row['actual'] ?? 0);
         let budget = parseNum(row['Budget'] ?? row['budget'] ?? 0);
         let priorYear = parseNum(row['Prior Year'] ?? row['priorYear'] ?? 0);
@@ -182,17 +391,33 @@ export const VarianceAnalysis = () => {
         ).trim().toLowerCase();
         const category = String(row['Category'] || row['category'] || `Item ${index + 1}`);
         const categoryLower = category.toLowerCase();
-        const inferredType: "income" | "expense" | "other" =
-          rawAccountType.includes('income') || rawAccountType.includes('revenue')
-            ? 'income'
-            : rawAccountType.includes('expense') || rawAccountType.includes('cost')
-              ? 'expense'
-              : rawAccountType.includes('asset') || rawAccountType.includes('liability') || rawAccountType.includes('equity')
-                ? 'other'
-                : (/revenue|income|sales/.test(categoryLower) ? 'income' : /expense|cost|cogs|payroll|rent|marketing|admin|depreciation|interest/.test(categoryLower) ? 'expense' : 'other');
 
-        // Exclude balance-sheet and unknown non-P&L accounts from variance logic.
-        if (inferredType === 'other') return [];
+        // 1. Explicit Account_Type column wins
+        // 2. Fall back to section context (REVENUE → income, COST/EXPENSE → expense)
+        // 3. Fall back to keyword match on category name
+        // 4. Default to 'expense' so rows are never silently dropped
+        const sectionUpper = currentSection.toUpperCase();
+        const sectionType: 'income' | 'expense' | 'other' =
+          /REVENUE|INCOME|SALES/.test(sectionUpper) ? 'income'
+          : /COST|EXPENSE|OPEX|PAYROLL|OVERHEAD|ADMIN|DEPRECIATION/.test(sectionUpper) ? 'expense'
+          : 'other';
+
+        // Expense keywords checked FIRST — catches "Sales Commission", "Sales & Marketing", etc.
+        // before the generic "sales" → income rule fires
+        const isExpenseByName = /commission|rebate|discount|refund|cost|expense|cogs|payroll|rent|marketing|admin|depreciation|interest|salary|salaries|subscription|infrastructure|license|support|overhead|allowance|bonus|benefit|insurance|maintenance|repair|utilities|software fee|cloud|hosting/.test(categoryLower);
+        const isIncomeByName  = /^(total\s+)?(revenue|income|sales|turnover|receipts|fees earned|service income)/.test(categoryLower) && !isExpenseByName;
+
+        const inferredType: 'income' | 'expense' | 'other' =
+          rawAccountType.includes('income') || rawAccountType.includes('revenue') ? 'income'
+          : rawAccountType.includes('expense') || rawAccountType.includes('cost') ? 'expense'
+          : rawAccountType.includes('asset') || rawAccountType.includes('liability') || rawAccountType.includes('equity') ? 'other'
+          : sectionType !== 'other' ? sectionType       // section context (most reliable)
+          : isExpenseByName ? 'expense'                  // explicit expense keyword wins
+          : isIncomeByName  ? 'income'                   // explicit income keyword
+          : 'expense';                                   // safe default — never drops rows
+
+        // Only skip true balance-sheet accounts that are explicitly marked
+        if (rawAccountType.includes('asset') || rawAccountType.includes('liability') || rawAccountType.includes('equity')) return [];
 
         const variance = actual - budget;
         const variancePct = budget !== 0 ? (variance / budget) * 100 : 0;
@@ -268,8 +493,32 @@ export const VarianceAnalysis = () => {
       });
 
       setUploadedDataOnly(mappedData);
+
+      // Save to localStorage so Forecasting Engine + KPI Dashboard can use as actuals
+      const incomeRows  = mappedData.filter((r: any) => r.accountType === 'income');
+      const expenseRows = mappedData.filter((r: any) => r.accountType === 'expense');
+      const totalRevenue  = incomeRows.reduce((s: number, r: any) => s + (r.actual || 0), 0);
+      const totalExpenses = expenseRows.reduce((s: number, r: any) => s + (r.actual || 0), 0);
+      const actualPayload = {
+        totalRevenue,
+        totalExpenses,
+        netProfit: totalRevenue - totalExpenses,
+        ebitda: (totalRevenue - totalExpenses) * 1.15,
+        rowCount: mappedData.length,
+        lineItems: mappedData.map((r: any) => ({
+          account: r.category,
+          actual: r.actual,
+          budget: r.budget,
+          variance: r.variance,
+          accountType: r.accountType,
+        })),
+        uploadedAt: new Date().toISOString(),
+      };
+      localStorage.setItem('fpa_actual', JSON.stringify(actualPayload));
+      localStorage.setItem('fpa_actual_tb', JSON.stringify(actualPayload));
+
       setShowUploadModal(false);
-      alert(`✅ Successfully uploaded ${mappedData.length} variance items!`);
+      alert(`✅ Successfully uploaded ${mappedData.length} variance items!\n\nRevenue: AED ${(totalRevenue/1000000).toFixed(1)}M | Expenses: AED ${(totalExpenses/1000000).toFixed(1)}M\n\nData saved — Forecasting Engine will use these as actuals.`);
     } catch (error: any) {
       alert('❌ Failed to upload file: ' + error.message);
     } finally {
@@ -598,6 +847,14 @@ export const VarianceAnalysis = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50">
+      {/* FP&A Suite Banner */}
+      <div className="bg-purple-900/90 border-b border-purple-800/50 px-6 py-2.5 flex items-center gap-3">
+        <span className="text-lg">📊</span>
+        <div>
+          <span className="text-white font-medium text-sm">FP&A / CFO Suite</span>
+          <span className="text-purple-300 text-xs ml-3">Forecast · Variance · Board Pack · NEXUS-C</span>
+        </div>
+      </div>
       {/* Header */}
       <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-40">
         <div className="max-w-[1600px] mx-auto px-6 py-4">
@@ -617,6 +874,29 @@ export const VarianceAnalysis = () => {
 
             {/* Action Buttons */}
             <div className="flex items-center gap-3">
+              {/* Load Sample Data */}
+              <button
+                onClick={() => {
+                  const rows = buildAlFuttaimRows();
+                  setUploadedDataOnly(rows);
+                  setCurrency('AED');
+                  localStorage.setItem('fpa_currency', 'AED');
+                  // Save to localStorage so Forecasting Engine uses Al Futtaim actuals
+                  const inc = rows.filter((r: any) => r.accountType === 'income');
+                  const exp = rows.filter((r: any) => r.accountType === 'expense');
+                  const rev = inc.reduce((s: number, r: any) => s + r.actual, 0);
+                  const exps = exp.reduce((s: number, r: any) => s + r.actual, 0);
+                  const payload = { totalRevenue: rev, totalExpenses: exps, netProfit: rev - exps, ebitda: (rev-exps)*1.15, rowCount: rows.length, lineItems: rows.map((r: any) => ({ account: r.category, actual: r.actual, budget: r.budget, accountType: r.accountType })), uploadedAt: new Date().toISOString() };
+                  localStorage.setItem('fpa_actual', JSON.stringify(payload));
+                  localStorage.setItem('fpa_actual_tb', JSON.stringify(payload));
+                  alert('✅ Loaded: Al Futtaim Digital Services LLC — Oct 2025 data (AED)\n\nActuals saved → Forecasting Engine will use AED 3.35M revenue as base.');
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition flex items-center gap-2 font-medium text-sm"
+                title="Load Al Futtaim Digital Services sample data"
+              >
+                🇦🇪 Load Sample Data
+              </button>
+
               {/* Upload Button */}
               <button
                 onClick={() => setShowUploadModal(true)}
@@ -906,6 +1186,9 @@ export const VarianceAnalysis = () => {
               currency={currency}
               currencyFormat={currencyFormat}
             />
+
+            {/* WHY Panel — decision-useful investigation flags */}
+            <WhyPanel data={currentVarianceData} currency={currency} currencyFormat={currencyFormat} />
           </div>
 
           {/* Sidebar (1 column) */}

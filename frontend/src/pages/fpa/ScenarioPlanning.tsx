@@ -72,11 +72,56 @@ const ScenarioPlanning: React.FC = () => {
   const [showNewScenarioModal, setShowNewScenarioModal] = useState(false);
 
   // Load data from localStorage on mount
+  // Priority: finreportai_fpa_data (direct upload) → fpa_actual (master/budget upload)
   useEffect(() => {
-    const storedData = loadFPAData();
+    let storedData = loadFPAData();
+
+    if (!storedData) {
+      // Fall back to fpa_actual / fpa_budget from master upload or Budget Management
+      try {
+        const keys = ['fpa_actual', 'fpa_actual_tb', 'fpa_india_actual'];
+        for (const k of keys) {
+          const raw = localStorage.getItem(k);
+          if (!raw) continue;
+          const d = JSON.parse(raw);
+          if (d?.totalRevenue > 0) {
+            const bRaw = localStorage.getItem(k.replace('actual', 'budget')) || raw;
+            const b = JSON.parse(bRaw);
+            const openingCash = d.cashAndEquivalents || d.opening_cash || 0;
+            // Build UploadedFinancialData-compatible object
+            storedData = {
+              totalRevenue: d.totalRevenue || 0,
+              domesticRevenue: d.totalRevenue * 0.7,
+              exportRevenue: d.totalRevenue * 0.2,
+              serviceRevenue: d.totalRevenue * 0.1,
+              costOfGoodsSold: d.totalExpenses ? d.totalExpenses * 0.35 : 0,
+              payroll: d.totalExpenses ? d.totalExpenses * 0.40 : 0,
+              adminExpenses: d.totalExpenses ? d.totalExpenses * 0.10 : 0,
+              distributionCosts: 0, marketingCosts: d.totalExpenses ? d.totalExpenses * 0.08 : 0,
+              rentExpense: 0, depreciation: 0, interestExpense: 0, otherExpenses: 0,
+              totalOperatingExpenses: d.totalExpenses || 0,
+              cashAndEquivalents: openingCash,
+              totalCurrentAssets: openingCash * 2.5,
+              totalAssets: openingCash * 5,
+              totalCurrentLiabilities: (d.totalExpenses || 0) * 0.15,
+              totalLiabilities: (d.totalExpenses || 0) * 0.3,
+              totalEquity: openingCash * 3,
+              fileName: d.fileName || 'uploaded data',
+              uploadedAt: d.uploadedAt || new Date().toISOString(),
+            } as any;
+            break;
+          }
+        }
+      } catch (_e) { /* ignore */ }
+    }
+
     if (storedData) {
       setUploadedData(storedData);
-      toast.success(`📊 Loaded data from ${storedData.fileName}`);
+      const cur = localStorage.getItem('fpa_currency') || 'AED';
+      const sym = cur === 'INR' ? '₹' : 'AED ';
+      const rev = storedData.totalRevenue;
+      const revFmt = cur === 'INR' ? `₹${(rev/10000000).toFixed(1)} Cr` : `AED ${(rev/1000000).toFixed(1)}M`;
+      toast.success(`📊 Scenarios loaded — Base revenue: ${revFmt}`);
     }
   }, []);
 

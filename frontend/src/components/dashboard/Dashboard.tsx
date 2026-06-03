@@ -1,13 +1,15 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  BarChart3, 
+import {
+  BarChart3,
   Zap,
   Target,
   Brain,
   LayoutGrid,
   FileSpreadsheet,
-  ShieldCheck
+  ShieldCheck,
+  Globe,
+  IndianRupee
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
@@ -123,7 +125,23 @@ export const Dashboard: React.FC = () => {
       link: '/audit',
       bgColor: 'bg-amber-500/5',
       badge: 'New'
-    }
+    },
+    {
+      icon: <Globe className="w-16 h-16 text-blue-400" />,
+      title: '🇦🇪 UAE Accounting',
+      description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
+      link: '/uae-full',
+      bgColor: 'bg-blue-500/10',
+      badge: 'UAE'
+    },
+    {
+      icon: <IndianRupee className="w-16 h-16 text-orange-400" />,
+      title: '🇮🇳 India Accounting',
+      description: 'Complete India accounting — GST (CGST/SGST/IGST), TDS (194A/C/H/I/J), GSTR-1/3B, Payroll (PF/ESI/PT/Gratuity), Ind AS 16 fixed assets, period close',
+      link: '/india-full',
+      bgColor: 'bg-orange-500/10',
+      badge: 'India'
+    },
   ];
 
   return (
@@ -199,8 +217,12 @@ export const Dashboard: React.FC = () => {
               className="bg-slate-800/40 backdrop-blur-sm rounded-2xl p-8 hover:bg-slate-800/60 transition-all duration-300 border border-slate-700 hover:border-slate-600 group relative"
             >
               {module.badge && (
-                <span className="absolute top-4 right-4 px-3 py-1 bg-amber-500 text-white text-xs font-bold rounded-full">
-                  {module.badge} ⭐
+                <span className={`absolute top-4 right-4 px-3 py-1 text-white text-xs font-bold rounded-full ${
+                  module.badge === 'UAE'   ? 'bg-blue-600' :
+                  module.badge === 'India' ? 'bg-orange-600' :
+                  'bg-amber-500'
+                }`}>
+                  {module.badge === 'UAE' ? '🇦🇪 UAE' : module.badge === 'India' ? '🇮🇳 India' : `${module.badge} ⭐`}
                 </span>
               )}
               <div className={`${module.bgColor} w-20 h-20 rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>

@@ -105,6 +105,9 @@ export type VarianceLineItem = {
   status?: string;
   favorable?: boolean;
   material?: boolean;
+  ytdActual?: number;
+  ytdBudget?: number;
+  priorYear?: number;
 };
 
 function inferAccountType(account: string, accountType?: string): 'income' | 'expense' | 'other' {
@@ -113,9 +116,12 @@ function inferAccountType(account: string, accountType?: string): 'income' | 'ex
   if (explicit.includes('expense') || explicit.includes('cost')) return 'expense';
   if (explicit.includes('asset') || explicit.includes('liability') || explicit.includes('equity')) return 'other';
   const name = String(account || '').toLowerCase();
-  if (/revenue|income|sales/.test(name) && !/cogs|cost of sales|cost of goods/.test(name)) return 'income';
-  if (/expense|cost|cogs|depreciation|interest|payroll|rent|marketing|admin/.test(name)) return 'expense';
-  return 'other';
+  // Expense keywords checked FIRST — catches "Sales Commission", "Sales & Marketing" etc.
+  if (/commission|rebate|discount|refund|cost|expense|cogs|payroll|rent|marketing|admin|depreciation|interest|salary|salaries|subscription|infrastructure|license|support|overhead|allowance|bonus|benefit|insurance|maintenance|repair|utilities|cloud|hosting/.test(name)) return 'expense';
+  // Income: must start with or be purely a revenue concept — not expense items that contain "sales"
+  if (/^(total\s+)?(revenue|income|turnover|receipts|fees earned|service income)/.test(name)) return 'income';
+  if (/\bsales\b/.test(name) && !/commission|marketing|cost/.test(name)) return 'income';
+  return 'expense'; // default to expense — safer than 'other' which drops rows
 }
 
 function getStatus(variance_pct: number, accountType: 'income' | 'expense' | 'other'): string {
@@ -251,13 +257,43 @@ export function VarianceAnalysisPage() {
   }, [currencyFormat]);
 
   useEffect(() => {
-    // Auto-load data uploaded from FP&A Suite modal (fpa_actual + fpa_budget).
+    if (rawItems.length > 0) return;
     const actualData = loadFPAActual();
     const budgetData = loadFPABudget();
-    if (!actualData || !budgetData) return;
-    if (rawItems.length > 0) return;
+    if (!actualData) return;
 
-    const rows = convertToVarianceData(actualData, budgetData)
+    // ── Fast path: use lineItems array from master/budget upload ─────────────
+    const srcItems = actualData.lineItems || budgetData?.lineItems || [];
+    if (srcItems.length > 0) {
+      const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+      const rows: VarianceLineItem[] = srcItems.map((item: any, idx: number) => {
+        const actArr: number[] = item.monthlyActuals || (item.monthly ? MONTHS.map((k: string) => Number(item.monthly[k]) || 0) : []);
+        const budArr: number[] = item.monthlyBudgets || (item.monthly ? MONTHS.map((k: string) => Number((budgetData?.lineItems?.[idx] as any)?.monthly?.[k] || item.monthly[k]) || 0) : []);
+        // YTD = sum only months where actuals exist
+        const ytdM = actArr.reduce((last, v, i) => (v > 0 ? i + 1 : last), 0) || MONTHS.length;
+        const actual  = actArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.actual || 0);
+        const budget  = budArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.budget || 0);
+        const accType = String(item.accountType || item.account_type || '').toLowerCase();
+        const name    = String(item.account || item.account_name || item.category || '');
+        return {
+          account:     name,
+          department:  String(item.department || 'All Depts'),
+          budget, actual,
+          accountType: (accType === 'income' || accType === 'revenue' ? 'income' : accType === 'expense' || accType === 'cost' ? 'expense' : 'other') as any,
+        };
+      }).filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
+
+      if (rows.length) {
+        setRawItems(rows);
+        const cur = localStorage.getItem('fpa_currency') || 'AED';
+        setLoadBanner(`✅ ${rows.length} lines loaded from master upload (${cur})`);
+        window.setTimeout(() => setLoadBanner(null), 6000);
+        return;
+      }
+    }
+
+    // ── Fallback: convert from generic actual/budget totals ───────────────────
+    const rows = convertToVarianceData(actualData, budgetData || actualData)
       .filter((r: any) => !r.isHeader)
       .map((r: any) => ({
         account: String(r.category ?? ''),
@@ -269,7 +305,7 @@ export function VarianceAnalysisPage() {
 
     if (!rows.length) return;
     setRawItems(rows);
-    setLoadBanner(`Data loaded from FP&A Suite upload: ${rows.length} variance lines`);
+    setLoadBanner(`Data loaded: ${rows.length} variance lines`);
     window.setTimeout(() => setLoadBanner(null), 5000);
   }, [rawItems.length]);
 
@@ -285,49 +321,123 @@ export function VarianceAnalysisPage() {
     if (!uploadFile) return;
     setUploading(true);
     try {
-      if (API_BASE) {
-        const form = new FormData();
-        form.append('file', uploadFile);
-        const res = await fetch(`${API_BASE}/api/fpa/variance/upload`, { method: 'POST', body: form });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        setRawItems(data.line_items || []);
-        const n = (data.line_items || []).length;
-        const d = (data.departments || []).length;
-        setLoadBanner(`Data loaded: ${n} line items across ${d} departments`);
-      } else {
-        const buf = await uploadFile.arrayBuffer();
-        const wb = XLSX.read(buf, { type: 'array' });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const rows: any[] = XLSX.utils.sheet_to_json(sheet);
-        const parseNum = (v: any) => {
-          if (v == null || v === '') return 0;
-          if (typeof v === 'number') return v;
-          return parseFloat(String(v).replace(/,/g, '')) || 0;
-        };
-        const accCol = rows[0] && Object.keys(rows[0]).find((k) => /account|category|name/i.test(k)) || Object.keys(rows[0] || {})[0];
-        const deptCol = rows[0] && Object.keys(rows[0]).find((k) => /department|dept/i.test(k));
-        const budgetCol = rows[0] && Object.keys(rows[0]).find((k) => /budget/i.test(k) && !/actual/i.test(k));
-        const actualCol = rows[0] && Object.keys(rows[0]).find((k) => /actual/i.test(k));
-        if (!budgetCol || !actualCol) throw new Error('Need Budget and Actual columns');
-        const items: VarianceLineItem[] = rows
-          .filter((r) => parseNum(r[budgetCol]) !== 0 || parseNum(r[actualCol]) !== 0)
-          .map((r) => ({
-            account: String(r[accCol] ?? ''),
-            department: deptCol ? String(r[deptCol] ?? '') : 'All Depts',
-            budget: parseNum(r[budgetCol]),
-            actual: parseNum(r[actualCol]),
+      // Always parse client-side — no backend dependency for uploads
+      const buf = await uploadFile.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+
+      // Smart header detection: scan rows 0-4 for ≥2 header keywords.
+      // Works for files with 0, 1, or 2 title rows above the real column headers.
+      const rawAll: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+      const HDR_RE = /^(category|line.?item|account|actual|budget|metric|description)/i;
+      let headerRowIdx = 0;
+      for (let i = 0; i < Math.min(5, rawAll.length); i++) {
+        const vals = rawAll[i].map((v: any) => String(v ?? '').trim());
+        if (vals.filter((v: string) => HDR_RE.test(v)).length >= 2) { headerRowIdx = i; break; }
+      }
+      let rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '', range: headerRowIdx });
+      // Normalise column names to canonical form
+      if (rows.length > 0) {
+        const keyMap: Record<string, string> = {};
+        Object.keys(rows[0]).forEach(k => {
+          const n = k.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+          // Account Type must be matched first (specific) before generic 'account'
+          if (/^account_?type$|^type$/.test(n))                  keyMap[k] = 'Account Type';
+          else if (/^is_?header$/.test(n))                       keyMap[k] = 'Is Header';
+          else if (/^(category|line_item|account|account_name|account_code|name|description|metric)$/.test(n)) keyMap[k] = 'Category';
+          else if (/^actual($|_(?!units|price))/.test(n) && !/ytd|prior/.test(n)) keyMap[k] = 'Actual';
+          else if (/^budget($|_(?!units|price))/.test(n) && !/ytd/.test(n))       keyMap[k] = 'Budget';
+          else if (/ytd.*actual|actual.*ytd/.test(n))            keyMap[k] = 'YTD Actual';
+          else if (/ytd.*budget|budget.*ytd/.test(n))            keyMap[k] = 'YTD Budget';
+          else if (/prior|last.*year/.test(n))                   keyMap[k] = 'Prior Year';
+        });
+        rows = rows.map(r => { const o: any = {}; Object.entries(r).forEach(([k,v]) => { o[keyMap[k]??k]=v; }); return o; });
+      }
+
+      const parseNum = (v: any): number => {
+        if (v == null || v === '') return 0;
+        if (typeof v === 'number') return v;
+        return parseFloat(String(v).replace(/,/g, '')) || 0;
+      };
+
+      if (!rows.length) throw new Error('File appears empty — check the sheet has data rows.');
+
+      const keys = Object.keys(rows[0]);
+      const accCol    = keys.find((k) => /^(account|category|line.?item|name|metric)/i.test(k)) ?? keys[0];
+      const deptCol   = keys.find((k) => /^(department|dept)$/i.test(k));
+      const ownerCol  = keys.find((k) => /^(owner|responsible|manager)$/i.test(k));
+      const actualCol = keys.find((k) => /^actual$/i.test(k))  ?? keys.find((k) => /actual/i.test(k) && !/ytd|prior/i.test(k));
+      const budgetCol = keys.find((k) => /^budget$/i.test(k))  ?? keys.find((k) => /budget/i.test(k) && !/ytd/i.test(k));
+      const ytdActCol = keys.find((k) => /ytd.?actual|actual.?ytd/i.test(k));
+      const ytdBudCol = keys.find((k) => /ytd.?budget|budget.?ytd/i.test(k));
+      const priorCol  = keys.find((k) => /prior.?year|last.?year/i.test(k));
+      const headerCol = keys.find((k) => /is.?header|header/i.test(k));
+
+      // Detect monthly columns for YTD period matching
+      const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+      const monthActCols = MONTHS.map(m => keys.find(k => new RegExp(`^${m}[_.]?act`, 'i').test(k) || new RegExp(`^${m}[_.]?actual`, 'i').test(k)));
+      const monthBudCols = MONTHS.map(m => keys.find(k => new RegExp(`^${m}[_.]?bud`, 'i').test(k) || new RegExp(`^${m}[_.]?budget`, 'i').test(k)));
+      const hasMonthlyActuals = monthActCols.some(c => c != null);
+      const hasMonthlyBudgets = monthBudCols.some(c => c != null);
+
+      if (!budgetCol && !actualCol && !hasMonthlyActuals) {
+        throw new Error(
+          `Could not find Budget/Actual columns.\nFound: ${keys.join(', ')}\n\nExpected: Category + (Actual & Budget) OR (jan_act..dec_act & jan_bud..dec_bud)`
+        );
+      }
+
+      const items: VarianceLineItem[] = rows
+        .filter((r) => {
+          if (headerCol && (r[headerCol] === true || String(r[headerCol]).toLowerCase() === 'true')) return false;
+          const hasValue = hasMonthlyActuals
+            ? monthActCols.some(c => c && parseNum(r[c]) !== 0)
+            : (budgetCol && parseNum(r[budgetCol]) !== 0) || (actualCol && parseNum(r[actualCol]) !== 0);
+          return hasValue;
+        })
+        .map((r) => {
+          let actual: number, budget: number, ytdActual: number, ytdBudget: number;
+
+          if (hasMonthlyActuals) {
+            // Sum actuals for months with data (YTD); sum budget for same months (YTD period matching)
+            const actArr = monthActCols.map(c => c ? parseNum(r[c]) : 0);
+            const budArr = monthBudCols.map(c => c ? parseNum(r[c]) : 0);
+            // YTD = months where actuals exist
+            const ytdMonths = actArr.reduce((last, v, i) => (v !== 0 ? i + 1 : last), 0);
+            actual    = actArr.slice(0, ytdMonths).reduce((s, v) => s + v, 0);
+            budget    = budArr.slice(0, ytdMonths).reduce((s, v) => s + v, 0); // YTD budget — same period!
+            ytdActual = actual;
+            ytdBudget = budget;
+          } else {
+            actual    = actualCol ? parseNum(r[actualCol]) : 0;
+            budget    = budgetCol ? parseNum(r[budgetCol]) : 0;
+            ytdActual = ytdActCol ? parseNum(r[ytdActCol]) : actual;
+            ytdBudget = ytdBudCol ? parseNum(r[ytdBudCol]) : budget;
+          }
+
+          const priorYear = priorCol  ? parseNum(r[priorCol])  : actual * 0.85;
+          return {
+            account:     String(r[accCol] ?? ''),
+            department:  deptCol  ? String(r[deptCol]  ?? '').trim() || 'All Depts' : 'All Depts',
+            owner:       ownerCol ? String(r[ownerCol] ?? '').trim() || 'CFO'        : 'CFO',
+            budget,
+            actual,
+            ytdActual,
+            ytdBudget,
+            priorYear,
             accountType: inferAccountType(
               String(r[accCol] ?? ''),
               String(r['Account_Type'] ?? r['Account Type'] ?? r['account_type'] ?? r['accountType'] ?? '')
             ),
-          }));
-        setRawItems(items);
-        setLoadBanner(`Data loaded: ${items.length} line items across ${new Set(items.map((i) => i.department)).size} departments`);
-      }
+          };
+        });
+
+      if (!items.length) throw new Error('No data rows found after parsing. Check the file format.');
+
+      setRawItems(items);
+      setLoadBanner(`✅ Loaded ${items.length} line items from "${uploadFile.name}"`);
       setUploadModal(false);
       setUploadFile(null);
-      setTimeout(() => setLoadBanner(null), 5000);
+      setTimeout(() => setLoadBanner(null), 6000);
     } catch (e: any) {
       alert('Upload failed: ' + (e.message || e));
     } finally {

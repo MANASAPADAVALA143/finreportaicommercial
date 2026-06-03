@@ -108,6 +108,58 @@ async def post_build_baseline(
     }
 
 
+@router.post("/upload-history")
+async def upload_history(
+    client_id: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    Upload 3–12 months of historical journal entries to build per-account
+    statistical baselines for this client.
+
+    Does NOT score entries — only stores baselines in AccountBaseline table.
+    After this, upload current data for anomaly scoring: flagging will
+    be suppressed for patterns that are normal for this client (e.g. high
+    weekend posting rate, known users).
+
+    Required columns (flexible matching): amount, account, posting_date, user_id
+    """
+    from app.services.baseline_builder import build_and_store_baseline
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    try:
+        fname = (file.filename or "").lower()
+        if fname.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(raw), engine="openpyxl")
+        else:
+            df = pd.read_csv(io.BytesIO(raw))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read file: {e}") from e
+
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="No rows in file")
+
+    try:
+        result = build_and_store_baseline(client_id.strip(), df, db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return {
+        "status": "baseline_stored",
+        **result,
+        "message": (
+            f"Baseline built from {result['total_rows']} rows across "
+            f"{result['months_covered']} months ({result['accounts_baselined']} accounts). "
+            "Upload current data to score against this baseline — weekend and known-user "
+            "flags will be suppressed automatically."
+        ),
+    }
+
+
 @router.get("/learning-progress/{client_id}")
 def get_learning_progress(client_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     return _engine.get_learning_progress(client_id.strip(), db)

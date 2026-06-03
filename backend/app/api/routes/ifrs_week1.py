@@ -15,6 +15,7 @@ import pandas as pd
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     File,
     Form,
@@ -205,6 +206,35 @@ def _harness_tier(m: GLMapping) -> str:
     return "needs_review"
 
 
+def _prune_duplicate_gl_mappings(db: Session, trial_balance_id: int, tenant_id: str) -> None:
+    """Keep only the highest-confidence mapping per GL code for this trial balance."""
+    all_maps = (
+        db.query(GLMapping)
+        .filter(
+            GLMapping.trial_balance_id == trial_balance_id,
+            GLMapping.tenant_id == tenant_id,
+        )
+        .order_by(GLMapping.ai_confidence_score.desc())
+        .all()
+    )
+    seen: set[str] = set()
+    dup_ids: list[int] = []
+    for m in all_maps:
+        key = (m.gl_code or "").strip().lower()
+        if key in seen:
+            dup_ids.append(m.id)
+        else:
+            seen.add(key)
+    if dup_ids:
+        db.query(GLMapping).filter(GLMapping.id.in_(dup_ids)).delete(synchronize_session=False)
+        db.commit()
+        logger.info(
+            "Pruned %d duplicate GL mappings for trial_balance_id=%s",
+            len(dup_ids),
+            trial_balance_id,
+        )
+
+
 def run_ai_mapping_job(
     trial_balance_id: int, tenant_id: str, *, allow_remapping: bool = False
 ) -> None:
@@ -271,6 +301,19 @@ def run_ai_mapping_job(
         if tb:
             tb.status = TBStatus.mapped
             db.commit()
+        # Debug: log confidence scores so we can confirm AI mapping completed
+        mappings = (
+            db.query(GLMapping)
+            .filter(GLMapping.trial_balance_id == trial_balance_id)
+            .all()
+        )
+        scores = [round(m.ai_confidence_score or 0, 2) for m in mappings]
+        logger.info(
+            "Mapped %d GLs for trial_balance_id=%s — confidence scores: %s",
+            len(mappings),
+            trial_balance_id,
+            scores,
+        )
         # CFO AI Harness: rule validator + routing (separate from Claude mapping).
         validate_mappings(trial_balance_id, db, apply_routing=True, apply_fixes=True)
     except Exception:
@@ -689,6 +732,65 @@ def bulk_confirm(body: BulkConfirmBody, tenant_id: str = Depends(tenant_id_heade
         m.locked = True
     db.commit()
     return {"updated": len(q)}
+
+
+class ConfirmHighConfidenceBody(BaseModel):
+    threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+
+
+@router.post("/trial-balance/{trial_balance_id}/confirm-high-confidence")
+def confirm_high_confidence(
+    trial_balance_id: int,
+    body: ConfirmHighConfidenceBody = Body(default=ConfirmHighConfidenceBody()),
+    tenant_id: str = Depends(tenant_id_header),
+    db: Session = Depends(get_db),
+):
+    """Bulk-confirm all AI-suggested mappings whose confidence ≥ threshold and have no critical/error issues."""
+    now = datetime.utcnow()
+    candidates = (
+        db.query(GLMapping)
+        .filter(
+            GLMapping.trial_balance_id == trial_balance_id,
+            GLMapping.tenant_id == tenant_id,
+            GLMapping.is_confirmed == False,  # noqa: E712
+            GLMapping.mapping_source == MappingSourceEnum.ai_suggested,
+            GLMapping.ai_confidence_score >= body.threshold,
+        )
+        .all()
+    )
+    confirmed_ids: list[int] = []
+    skipped: int = 0
+    for m in candidates:
+        # Skip if any critical or error validator issue exists
+        issues = m.validator_issues or []
+        has_blocking = any(
+            isinstance(i, dict) and i.get("severity") in ("critical", "error")
+            for i in issues
+        )
+        if has_blocking:
+            skipped += 1
+            continue
+        m.is_confirmed = True
+        m.needs_review = False
+        m.mapping_source = MappingSourceEnum.user_confirmed
+        m.confirmed_at = now
+        m.confirmed_by = "bulk_high_confidence"
+        m.locked = True
+        confirmed_ids.append(m.id)
+    db.commit()
+    logger.info(
+        "confirm-high-confidence: confirmed=%d skipped=%d threshold=%.2f trial_balance_id=%s",
+        len(confirmed_ids),
+        skipped,
+        body.threshold,
+        trial_balance_id,
+    )
+    return {
+        "confirmed": len(confirmed_ids),
+        "skipped_blocked": skipped,
+        "threshold": body.threshold,
+        "confirmed_ids": confirmed_ids,
+    }
 
 
 class TemplateCreateBody(BaseModel):

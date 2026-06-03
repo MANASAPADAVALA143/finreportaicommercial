@@ -4,8 +4,10 @@ import json
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.services.r2r_pattern_engine import R2RPatternEngine
 
 router = APIRouter(prefix="/api/r2r", tags=["r2r-pattern"])
@@ -29,6 +31,8 @@ def _run_engine(
     custom_threshold: str | None,
     materiality_amount: str | None,
     materiality_pct: str | None,
+    client_id: str | None = None,
+    db: Session | None = None,
 ) -> dict[str, Any]:
     engine = R2RPatternEngine()
     s = (sensitivity or "balanced").strip().lower()
@@ -61,6 +65,8 @@ def _run_engine(
         sensitivity=s,
         materiality_amount=mat_amt,
         materiality_pct=mat_pct,
+        client_id=client_id or "",
+        db=db,
     )
     if isinstance(result, dict) and result.get("error"):
         raise HTTPException(status_code=400, detail=str(result["error"]))
@@ -71,22 +77,24 @@ def _run_engine(
         "high_threshold": engine.HIGH_THRESHOLD,
         "medium_threshold": engine.MEDIUM_THRESHOLD,
         "custom_threshold_applied": bool(ct_raw),
+        "client_baseline_loaded": bool(client_id),
     }
     return result
 
 
 @router.post("/pattern/analyse")
-async def analyse_pattern(request: Request) -> dict[str, Any]:
+async def analyse_pattern(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """
     Accept either:
-    - `Content-Type: application/json` with keys: rows (array), sensitivity, custom_threshold, materiality_*
-    - multipart/form-data (legacy): rows_json, file, sensitivity, ...
+    - `Content-Type: application/json` with keys: rows (array), sensitivity, custom_threshold, materiality_*, client_id
+    - multipart/form-data (legacy): rows_json, file, sensitivity, client_id, ...
     """
     df: pd.DataFrame | None = None
     sensitivity = "balanced"
     custom_threshold: str | None = None
     materiality_amount: str | None = None
     materiality_pct: str | None = None
+    client_id: str | None = None
 
     ct = (request.headers.get("content-type") or "").lower()
 
@@ -111,10 +119,12 @@ async def analyse_pattern(request: Request) -> dict[str, Any]:
         materiality_amount = str(ma).strip() if ma is not None and str(ma).strip() else None
         mp = payload.get("materiality_pct")
         materiality_pct = str(mp).strip() if mp is not None and str(mp).strip() else None
+        cid = payload.get("client_id")
+        client_id = str(cid).strip() if cid and str(cid).strip() else None
     else:
         form = await request.form()
-        # reserved for persistence / history
-        _ = form.get("client_id")
+        cid = form.get("client_id")
+        client_id = str(cid).strip() if cid and str(cid).strip() else None
 
         file = form.get("file")
         rows_json = form.get("rows_json")
@@ -152,7 +162,8 @@ async def analyse_pattern(request: Request) -> dict[str, Any]:
             detail="Provide JSON { rows: [...] } or multipart rows_json / file",
         )
 
-    result = _run_engine(df, sensitivity, custom_threshold, materiality_amount, materiality_pct)
+    result = _run_engine(df, sensitivity, custom_threshold, materiality_amount, materiality_pct,
+                         client_id=client_id, db=db)
     try:
         from app.agents.intelligence import generate_insight
         from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory

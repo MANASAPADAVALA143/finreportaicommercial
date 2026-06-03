@@ -273,7 +273,7 @@ export default function IFRSStatementPage() {
                 </button>
               </div>
             </div>
-            <StatementViewer statements={statements} />
+            <StatementViewer statements={statements} tbId={tbId ?? undefined} />
 
             {hasProfitLossStatement && (
               <div className="mt-6 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-blue-50/50 p-6 shadow-sm">

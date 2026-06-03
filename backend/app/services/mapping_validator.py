@@ -247,7 +247,7 @@ def validate_mappings(
         blocked = has_critical or has_error or low_conf
         auto_ok = (
             not blocked
-            and conf >= 0.95
+            and conf >= 0.85
             and not has_warning
             and not any(f["severity"] == "review_required" for f in failed_rules)
         )

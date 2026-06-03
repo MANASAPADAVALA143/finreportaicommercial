@@ -22,6 +22,9 @@ def init_db():
     import app.models.gl_reconciliation  # noqa: F401 - GL Reconciler
     import app.models.financial_model  # noqa: F401 - FP&A Model Builder
     import app.models.users  # noqa: F401 - RBAC users/companies/audit
+    import app.models.uae_accounting  # noqa: F401 - UAE Accounting (Zoho/QBO integration)
+    import app.models.uae_accounting_full  # noqa: F401 - UAE Full Accounting Suite
+    import app.models.fpa_master  # noqa: F401 - FP&A Master Upload (one file → all modules)
     Base.metadata.create_all(bind=engine)
 
     # ── Safe column / table additions for SQLite (create_all skips existing tables)

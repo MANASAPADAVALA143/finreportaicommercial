@@ -309,6 +309,94 @@ export const ifrsService = {
     window.open(url, "_blank", "noopener,noreferrer");
   },
 
+  // ── UAE CT Bridge ──────────────────────────────────────────────────────────
+
+  async generateCTBridge(
+    tbId: number,
+    inputs: {
+      entertainment_expense?: number;
+      fines_penalties?: number;
+      non_business_expenses?: number;
+      non_qualifying_depreciation?: number;
+      dividend_income_uae_sub?: number;
+      qualifying_capital_gains?: number;
+      qualifying_free_zone_income?: number;
+      is_free_zone_person?: boolean;
+      qualifying_income_pct?: number;
+      revenue_override?: number;
+    } = {}
+  ) {
+    const { data } = await axios.post(
+      `${BASE_URL}/trial-balance/${tbId}/ct-bridge`,
+      inputs,
+      { headers: headers() }
+    );
+    return data as {
+      trial_balance_id: number;
+      company_name: string;
+      period_end: string;
+      currency: string;
+      ifrs_pbt: number;
+      revenue: number;
+      adjustments: {
+        description: string;
+        amount: number;
+        add_back: boolean;
+        note: string;
+        ifrs_reference?: string;
+      }[];
+      total_add_backs: number;
+      total_deductions: number;
+      taxable_income: number;
+      ct_rate: number;
+      ct_rate_pct: number;
+      ct_liability: number;
+      effective_rate_pct: number;
+      small_business_relief: boolean;
+      sbr_threshold: number;
+      free_zone_eligible: boolean;
+      free_zone_note: string;
+      rate_note: string;
+    };
+  },
+
+  async getCTBridge(tbId: number) {
+    const { data } = await axios.get(
+      `${BASE_URL}/trial-balance/${tbId}/ct-bridge`,
+      { headers: headers() }
+    );
+    return data as {
+      trial_balance_id: number;
+      company_name: string;
+      period_end: string;
+      currency: string;
+      ifrs_pbt: number;
+      adjustments: { description: string; amount: number; add_back: boolean; note: string }[];
+      taxable_income: number;
+      ct_rate: number;
+      ct_rate_pct: number;
+      ct_liability: number;
+      small_business_relief: boolean;
+      free_zone_eligible: boolean;
+      inputs: Record<string, unknown>;
+      calculated_at: string;
+    };
+  },
+
+  // ── Export Downloads ───────────────────────────────────────────────────────
+
+  downloadExport(tbId: number, format: "excel" | "pdf" | "word"): void {
+    const ext = format === "excel" ? "excel" : format;
+    const url = `${BASE_URL}/trial-balance/${tbId}/export/${ext}`;
+    // Create a hidden anchor and click it — preserves auth headers via same-origin
+    const a = document.createElement("a");
+    a.href = url;
+    a.setAttribute("download", "");
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  },
+
   async finalizeBoardPack(boardPackId: number, reviewedBy = "board") {
     const { data } = await axios.post(
       `${BOARD_PACK_BASE}/${boardPackId}/finalize`,

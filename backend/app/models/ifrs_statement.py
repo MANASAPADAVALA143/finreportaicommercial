@@ -447,6 +447,27 @@ class RiskFlag(Base):
     trial_balance = relationship("TrialBalance", back_populates="risk_flags")
 
 
+class CTBridgeResult(Base):
+    """UAE Corporate Tax bridge: IFRS PBT → Taxable Income → CT Liability."""
+
+    __tablename__ = "ct_bridge_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
+    trial_balance_id = Column(Integer, ForeignKey("trial_balances.id"), nullable=False, index=True)
+    ifrs_pbt = Column(Numeric(18, 2), nullable=False, default=0)
+    adjustments_json = Column(_json_type, nullable=True)  # list of {description, amount, add_back, note}
+    taxable_income = Column(Numeric(18, 2), nullable=False, default=0)
+    ct_rate = Column(Numeric(6, 4), nullable=False, default=0.09)
+    ct_liability = Column(Numeric(18, 2), nullable=False, default=0)
+    free_zone_eligible = Column(Boolean, nullable=False, default=False)
+    small_business_relief = Column(Boolean, nullable=False, default=False)
+    inputs_json = Column(_json_type, nullable=True)  # raw user inputs preserved
+    calculated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    trial_balance = relationship("TrialBalance")
+
+
 class BoardPack(Base):
     __tablename__ = "board_packs"
 

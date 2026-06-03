@@ -57,18 +57,23 @@ const ForecastingEngine: React.FC = () => {
   const [realForecastData, setRealForecastData] = useState<any>(null);
 
   useEffect(() => {
-    const actual = loadFPAActual();
-    const budget = loadFPABudget();
+    // Read from master upload (fpa_actual/fpa_budget) or fallback
+    const actual  = loadFPAActual();
+    const budget  = loadFPABudget() || actual; // use actual as budget if no separate budget
     const monthly = loadFPAForecast();
     setActualData(actual);
     setBudgetData(budget);
     setForecastMonthlyData(monthly);
-    
-    // Generate forecast from real data
-    if (actual && budget) {
-      const generated = generateForecastFromReal(actual, budget, monthly);
-      setRealForecastData(generated);
+
+    if (actual || budget) {
+      const generated = generateForecastFromReal(actual || budget, budget || actual, monthly);
+      if (generated.revenue?.length > 0 || generated.expenses?.length > 0) {
+        setRealForecastData(generated);
+      }
     }
+
+    // Ensure currency is set
+    if (!localStorage.getItem('fpa_currency')) localStorage.setItem('fpa_currency', 'AED');
   }, []);
   
   const [activeTab, setActiveTab] = useState<'revenue' | 'expense' | 'cashflow'>('revenue');
@@ -103,31 +108,66 @@ const ForecastingEngine: React.FC = () => {
     }));
   }, [scenario, multiplier, baseExpenseData]);
 
+  // Read currency from localStorage (set by Variance Analysis page or global switcher)
+  const activeCurrency = (localStorage.getItem('fpa_currency') || 'AED').toUpperCase();
+  const CURRENCY_SYMBOLS: Record<string, string> = { AED: 'AED ', INR: '₹', USD: '$', EUR: '€', GBP: '£' };
+  const curSym = CURRENCY_SYMBOLS[activeCurrency] || activeCurrency + ' ';
+
   const formatCurrency = (value: number): string => {
-    const crore = value / 10000000;
-    const lakh = value / 100000;
-    if (Math.abs(crore) >= 1) return `₹${crore.toFixed(2)}Cr`;
-    return `₹${lakh.toFixed(2)}L`;
+    const abs = Math.abs(value);
+    if (activeCurrency === 'INR') {
+      // Indian format: Crores / Lakhs
+      if (abs >= 10_000_000) return `₹${(value / 10_000_000).toFixed(2)}Cr`;
+      return `₹${(value / 100_000).toFixed(2)}L`;
+    }
+    // AED / USD / EUR / GBP — use M/K
+    if (abs >= 1_000_000) return `${curSym}${(value / 1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000)     return `${curSym}${(value / 1_000).toFixed(0)}K`;
+    return `${curSym}${value.toFixed(0)}`;
   };
 
   const generateAIForecast = async () => {
     setAiGenerating(true);
     try {
-      const prompt = `You are a financial forecasting expert. Provide insights for the ${scenario} case scenario.
+      // Use real uploaded data when available
+      const realBudget = budgetData as any;
+      const realActual = actualData as any;
+      const hasRealData = realBudget?.totalRevenue > 0 || realActual?.totalRevenue > 0;
 
-Current scenario: ${scenario.toUpperCase()} CASE
-- Revenue multiplier: ${(multiplier.revenue * 100).toFixed(0)}%
-- Expense multiplier: ${(multiplier.expenses * 100).toFixed(0)}%
+      const baseRevenue   = realBudget?.totalRevenue || realActual?.totalRevenue
+        || adjustedRevenueData.reduce((s: number, r: any) => s + (r.budget || r.forecast || 0), 0);
+      const baseExpenses  = realBudget?.totalExpenses || realActual?.totalExpenses
+        || adjustedExpenseData.reduce((s: number, r: any) => s + (r.budget || r.fy26 || 0), 0);
+      const baseEbitda    = realBudget?.ebitda || (baseRevenue - baseExpenses);
+      const priorRevenue  = realBudget?.priorYearRevenue || baseRevenue * 0.9;
 
-KEY METRICS:
-- FY2026 Revenue Forecast: ${formatCurrency(adjustedRevenueData.reduce((sum: number, row: any) => sum + row.forecast, 0))}
-- FY2026 Expense Forecast: ${formatCurrency(adjustedExpenseData.reduce((sum: number, row: any) => sum + row.fy26, 0))}
-- 13-Week Cash: Opens ₹2.5Cr, closes ₹3.4Cr
+      const revForecast   = Math.round(baseRevenue  * multiplier.revenue);
+      const expForecast   = Math.round(baseExpenses * multiplier.expenses);
+      const ebitdaForecast = revForecast - expForecast;
+      const ebitdaMargin  = revForecast > 0 ? (ebitdaForecast / revForecast * 100).toFixed(1) : '0';
 
-Provide brief insights (max 150 words):
-1. Key assumptions for this scenario
-2. Main risks to watch
-3. One action recommendation`;
+      const prompt = `You are a financial forecasting expert for Al Futtaim Digital Services LLC (UAE technology company).
+All figures in AED. Provide insights for the ${scenario.toUpperCase()} case FY2026 forecast.
+
+${hasRealData ? '✅ Using REAL uploaded data from the budget file.' : '⚠️ Using estimated data — upload Budget file for accurate forecast.'}
+
+BASE DATA (from ${hasRealData ? 'uploaded budget' : 'sample data'}):
+- Prior Year Revenue: ${formatCurrency(priorRevenue)}
+- Budget Revenue: ${formatCurrency(baseRevenue)}
+- Budget Expenses: ${formatCurrency(baseExpenses)}
+- Budget EBITDA: ${formatCurrency(baseEbitda)}
+
+FY2026 ${scenario.toUpperCase()} CASE FORECAST:
+- Revenue: ${formatCurrency(revForecast)} (${((revForecast/baseRevenue - 1)*100).toFixed(1)}% vs budget)
+- Expenses: ${formatCurrency(expForecast)}
+- EBITDA: ${formatCurrency(ebitdaForecast)} (${ebitdaMargin}% margin)
+- Revenue multiplier applied: ${(multiplier.revenue * 100).toFixed(0)}%
+
+Provide CFO-level insights (max 200 words):
+1. Key assumptions driving this ${scenario} case
+2. Top 2 risks to the forecast
+3. One specific action to improve EBITDA margin
+4. Confidence level (High/Medium/Low) and why`;
 
       const response = await callAI(prompt);
       setAiInsights(response);
@@ -356,10 +396,10 @@ Provide brief insights (max 150 words):
               <span className="text-sm font-medium text-gray-600">Week 13 Cash</span>
             </div>
             <div className="text-3xl font-bold text-gray-900 mb-1">
-              ₹3.4Cr
+              {formatCurrency(3400000)}
             </div>
             <div className="text-sm text-green-600">
-              +₹0.9Cr from today
+              +{formatCurrency(900000)} from today
             </div>
           </div>
         </div>
@@ -489,7 +529,7 @@ Provide brief insights (max 150 words):
                 <ComposedChart data={adjustedRevenueData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tickFormatter={(val) => `₹${(val / 10000000).toFixed(0)}Cr`} tick={{ fontSize: 12 }} />
+                  <YAxis tickFormatter={(val) => formatCurrency(val)} tick={{ fontSize: 12 }} />
                   <Tooltip
                     formatter={(value: any) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px' }}
@@ -679,7 +719,7 @@ Provide brief insights (max 150 words):
                 <ComposedChart data={cashFlowForecastData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="weekLabel" tick={{ fontSize: 11 }} angle={-45} textAnchor="end" height={80} />
-                  <YAxis tickFormatter={(val) => `₹${(val / 10000000).toFixed(1)}Cr`} tick={{ fontSize: 12 }} />
+                  <YAxis tickFormatter={(val) => formatCurrency(val)} tick={{ fontSize: 12 }} />
                   <Tooltip
                     formatter={(value: any) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: '#fff', border: '1px solid #E5E7EB', borderRadius: '8px' }}
@@ -737,11 +777,11 @@ Provide brief insights (max 150 words):
                   </div>
                   <div className="flex justify-between items-center py-2 border-b border-gray-200">
                     <span className="text-sm text-gray-600">Payroll (Week 4)</span>
-                    <span className="font-bold text-red-600">₹3.2Cr</span>
+                    <span className="font-bold text-red-600">{formatCurrency(3200000)}</span>
                   </div>
                   <div className="flex justify-between items-center py-2">
                     <span className="text-sm text-gray-600">Tax payment (Week 6)</span>
-                    <span className="font-bold text-red-600">₹1.7Cr</span>
+                    <span className="font-bold text-red-600">{formatCurrency(1700000)}</span>
                   </div>
                 </div>
               </div>

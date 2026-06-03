@@ -4,9 +4,12 @@ import { Toaster } from 'react-hot-toast';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
 import { AuthProvider } from './context/AuthContext';
+import { SuiteProvider } from './context/SuiteContext';
 import { LandingPage } from './components/landing/LandingPage';
 import PrivateRoute from './components/PrivateRoute';
 import Sidebar from './components/layout/Sidebar';
+import { SuiteSidebar } from './components/SuiteSidebar';
+import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
 
 /** Cross-app navigation banner — links to InvoiceFlow (AP Automation) */
 function GnanovaBanner() {
@@ -30,9 +33,7 @@ function GnanovaBanner() {
     >
       <span style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Gnanova Finance OS</span>
       <a
-        href="https://apinvoice-production.up.railway.app"
-        target="_blank"
-        rel="noopener noreferrer"
+        href="/ap-invoices"
         style={{
           color: '#93c5fd',
           textDecoration: 'none',
@@ -217,6 +218,54 @@ const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntellig
 const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
 const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
 const CABankRecon = safeLazy(() => import('./pages/ca-firm/CABankRecon'));
+// UAE Accounting
+const UAEAccountingDashboard = safeLazy(() => import('./pages/uae-accounting/UAEAccountingDashboard'));
+const UAEConnectedAccounts   = safeLazy(() => import('./pages/uae-accounting/ConnectedAccounts'));
+const UAEZohoConnect         = safeLazy(() => import('./pages/uae-accounting/ZohoConnect'));
+const UAEQBOConnect          = safeLazy(() => import('./pages/uae-accounting/QBOConnect'));
+const UAETrialBalanceList    = safeLazy(() => import('./pages/uae-accounting/TrialBalanceList'));
+const UAETrialBalanceViewer  = safeLazy(() => import('./pages/uae-accounting/TrialBalanceViewer'));
+// UAE Full Accounting Suite (Phase C)
+const UAEAccountingOverview  = safeLazy(() => import('./pages/uae-accounting/UAEAccountingOverview'));
+const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/ChartOfAccounts'));
+const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
+const UAESalesInvoices       = safeLazy(() => import('./pages/uae-accounting/SalesInvoices'));
+const UAEBankReconciliation  = safeLazy(() => import('./pages/uae-accounting/BankReconciliation'));
+const UAEFixedAssets         = safeLazy(() => import('./pages/uae-accounting/FixedAssets'));
+const UAEAccruals            = safeLazy(() => import('./pages/uae-accounting/Accruals'));
+const UAEPeriodEndClose      = safeLazy(() => import('./pages/uae-accounting/PeriodEndClose'));
+const UAEManagementAccounts  = safeLazy(() => import('./pages/uae-accounting/ManagementAccounts'));
+
+// ── AP InvoiceFlow (embedded) ──────────────────────────────────────────────
+const APInvoicesLayout  = safeLazy(() => import('./pages/ap-invoices/APInvoicesLayout'));
+const APDashboard       = safeLazy(() => import('./pages/ap-invoices/APDashboard'));
+const APInvoiceList     = safeLazy(() => import('./pages/ap-invoices/APInvoiceList'));
+const APInvoiceUpload   = safeLazy(() => import('./pages/ap-invoices/APInvoiceUpload'));
+const APApprovals       = safeLazy(() => import('./pages/ap-invoices/APApprovals'));
+const APVendors         = safeLazy(() => import('./pages/ap-invoices/APVendors'));
+const APPurchaseOrders  = safeLazy(() => import('./pages/ap-invoices/APPurchaseOrders'));
+const APGoodsReceipts   = safeLazy(() => import('./pages/ap-invoices/APGoodsReceipts'));
+const APActionQueue     = safeLazy(() => import('./pages/ap-invoices/APActionQueue'));
+const APAgingReport     = safeLazy(() => import('./pages/ap-invoices/APAgingReport'));
+const APBankRecon       = safeLazy(() => import('./pages/ap-invoices/APBankRecon'));
+const APGSTRecon        = safeLazy(() => import('./pages/ap-invoices/APGSTRecon'));
+const APCalendar        = safeLazy(() => import('./pages/ap-invoices/APCalendar'));
+const APGLAccounts      = safeLazy(() => import('./pages/ap-invoices/APGLAccounts'));
+const APIntegrations    = safeLazy(() => import('./pages/ap-invoices/APIntegrations'));
+const APSettings        = safeLazy(() => import('./pages/ap-invoices/APSettings'));
+
+// ── India Accounting ───────────────────────────────────────────────────────
+const IndiaAccountingOverview = safeLazy(() => import('./pages/india-accounting/IndiaAccountingOverview'));
+const IndiaChartOfAccounts    = safeLazy(() => import('./pages/india-accounting/IndiaChartOfAccounts'));
+const IndiaJournalEntries     = safeLazy(() => import('./pages/india-accounting/IndiaJournalEntries'));
+const IndiaSalesInvoices      = safeLazy(() => import('./pages/india-accounting/IndiaSalesInvoices'));
+const IndiaPurchaseInvoices   = safeLazy(() => import('./pages/india-accounting/IndiaPurchaseInvoices'));
+const IndiaTDS                = safeLazy(() => import('./pages/india-accounting/IndiaTDS'));
+const IndiaGSTReturns         = safeLazy(() => import('./pages/india-accounting/IndiaGSTReturns'));
+const IndiaPayroll            = safeLazy(() => import('./pages/india-accounting/IndiaPayroll'));
+const IndiaFixedAssets        = safeLazy(() => import('./pages/india-accounting/IndiaFixedAssets'));
+const IndiaPeriodClose        = safeLazy(() => import('./pages/india-accounting/IndiaPeriodClose'));
+const IndiaManagementAccounts = safeLazy(() => import('./pages/india-accounting/IndiaManagementAccounts'));
 
 /** Matches Vite `base` (root vs GitHub Pages subpath). */
 const normalizedBase = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '') || '/';
@@ -241,6 +290,7 @@ function RouteFallback() {
   );
 }
 
+/** Legacy R2R shell — keeps Sidebar for R2R-specific routes (unchanged) */
 function R2rShell() {
   return (
     <div className="flex min-h-screen w-full">
@@ -252,11 +302,31 @@ function R2rShell() {
   );
 }
 
+/** Suite shell — SuiteSidebar for UAE / India / FP&A routes */
+function SuiteShell() {
+  useAutoSuiteSwitcher();
+  return (
+    <div className="flex h-screen overflow-hidden w-full">
+      <SuiteSidebar />
+      <main className="flex-1 min-w-0 overflow-y-auto">
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+
+/** Auto-switcher only — no extra layout, used inside nested layouts that have their own sidebar */
+function AutoSwitchOnly() {
+  useAutoSuiteSwitcher();
+  return <Outlet />;
+}
+
 function App() {
   return (
     <AgentActivityProvider>
       <ClientProvider>
         <AuthProvider>
+        <SuiteProvider>
         <BrowserRouter
           basename={routerBasename}
           future={{
@@ -276,14 +346,14 @@ function App() {
                 <Route path="/command-center" element={<CommandCenter />} />
                 <Route path="/agent-status" element={<AgentStatus />} />
                 <Route path="/audit" element={<AuditIntelligencePage />} />
+                {/* Non-suite pages (no SuiteSidebar) */}
                 <Route path="/cfo-dashboard" element={<CFODashboard />} />
                 <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
-                <Route path="/ifrs-statement" element={<IFRSStatementPage />} />
-                <Route path="/ifrs/agentic" element={<AgenticGenerator />} />
                 <Route path="/board-pack" element={<IFRSStatementPage />} />
-                <Route path="/erp/tally" element={<TallyIntegrationPage />} />
                 <Route path="/connections" element={<ConnectionsPage />} />
                 <Route path="/connections/zoho/callback" element={<ZohoCallback />} />
+                <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
+                {/* R2R shell — legacy sidebar for R2R tools */}
                 <Route element={<R2rShell />}>
                   <Route path="/r2r" element={<R2RModule />} />
                   <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
@@ -296,41 +366,13 @@ function App() {
                   <Route path="/recon/gl" element={<GLReconciler />} />
                   <Route path="/model" element={<ModelBuilder />} />
                 </Route>
-                <Route path="/tb-variance" element={<TBVariancePage />} />
                 <Route path="/bank-recon" element={<BankReconciliationPage />} />
                 <Route path="/bank-recon/analytics" element={<BankReconciliationPage />} />
                 <Route path="/bank-recon/workspace/:workspaceId" element={<BankReconciliationPage />} />
                 <Route path="/close-tracker" element={<CloseTrackerPage />} />
                 <Route path="/nova" element={<NovaAssistant />} />
-                <Route path="/fpa" element={<FPASuite />} />
                 <Route path="/excel-suite" element={<ExcelSuite />} />
                 <Route path="/excel-suite/:slug" element={<ExcelSuiteToolPage />} />
-                <Route path="/fpa/variance" element={<VarianceAnalysis />} />
-                <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-                <Route path="/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
-                <Route path="/fpa/budget" element={<BudgetManagement />} />
-                <Route path="/fpa/kpi" element={<KPIDashboard />} />
-                <Route path="/fpa/forecast" element={<ForecastingEngine />} />
-                <Route path="/fpa/scenario" element={<ScenarioEngine />} />
-                <Route path="/fpa/scenarios" element={<ScenarioEngine />} />
-                <Route path="/fpa/reports" element={<ManagementReporting />} />
-                <Route path="/fpa/pvm" element={<PVMAnalysis />} />
-                <Route path="/fpa/three-statement" element={<ThreeStatement />} />
-                <Route path="/fpa/monte-carlo" element={<MonteCarlo />} />
-                <Route path="/fpa/arr-dashboard" element={<ARRDashboard />} />
-                <Route path="/fpa/headcount" element={<HeadcountPlanning />} />
-                <Route path="/fpa/sensitivity" element={<SensitivityAnalysis />} />
-                <Route path="/reports/board-pack" element={<BoardPack />} />
-                <Route path="/cfo" element={<CFOServices />} />
-                <Route path="/cfo/assistant" element={<CFOServices defaultTab="assistant" />} />
-                <Route path="/cfo/insights" element={<CFOServices defaultTab="insights" />} />
-                <Route path="/cfo/monitor" element={<CFOServices defaultTab="monitor" />} />
-                <Route path="/cfo/health" element={<CFOServices defaultTab="health" />} />
-                <Route path="/cfo/entity-health" element={<EntityHealth />} />
-                <Route path="/cfo/payment-calendar" element={<PaymentCalendar />} />
-                <Route path="/cfo/covenant-tracker" element={<CovenantTracker />} />
-                <Route path="/cfo/ar-collections" element={<ARCollections />} />
-                <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
                 <Route path="/users" element={<PrivateRoute roles={['super_admin']}><UserManagement /></PrivateRoute>} />
                 <Route path="/bookkeeping" element={<BookkeepingLayout />}>
                   <Route index element={<Navigate to="/bookkeeping/upload" replace />} />
@@ -342,14 +384,104 @@ function App() {
                   <Route path="monthly" element={<BookkeepingMonthlyPage />} />
                 </Route>
               </Route>
-              {/* CA Firm Tools */}
-              <Route path="/ca-firm/bank-processor" element={<BankStatementProcessor />} />
-              <Route path="/ca-firm/tb-financials"  element={<TBToFinancials />} />
-              <Route path="/ca-firm/bank-recon"     element={<CABankRecon />} />
+              {/* AP InvoiceFlow — has its own sidebar, auto-switch suite only */}
+              <Route element={<AutoSwitchOnly />}>
+                <Route path="/ap-invoices" element={<APInvoicesLayout />}>
+                  <Route index               element={<APDashboard />} />
+                  <Route path="action-queue" element={<APActionQueue />} />
+                  <Route path="list"         element={<APInvoiceList />} />
+                  <Route path="upload"       element={<APInvoiceUpload />} />
+                  <Route path="approvals"    element={<APApprovals />} />
+                  <Route path="po"           element={<APPurchaseOrders />} />
+                  <Route path="grn"          element={<APGoodsReceipts />} />
+                  <Route path="vendors"      element={<APVendors />} />
+                  <Route path="aging"        element={<APAgingReport />} />
+                  <Route path="bank-recon"   element={<APBankRecon />} />
+                  <Route path="gst-recon"    element={<APGSTRecon />} />
+                  <Route path="calendar"     element={<APCalendar />} />
+                  <Route path="gl-accounts"  element={<APGLAccounts />} />
+                  <Route path="integrations" element={<APIntegrations />} />
+                  <Route path="settings"     element={<APSettings />} />
+                </Route>
+              </Route>
+
+              {/* ── Suite Shell — UAE / India / FP&A / CFO / CA Firm ── */}
+              <Route element={<SuiteShell />}>
+                {/* CA Firm Tools */}
+                <Route path="/ca-firm/bank-processor" element={<BankStatementProcessor />} />
+                <Route path="/ca-firm/tb-financials"  element={<TBToFinancials />} />
+                <Route path="/ca-firm/bank-recon"     element={<CABankRecon />} />
+                {/* UAE Accounting (legacy) */}
+                <Route path="/uae-accounting"                              element={<UAEAccountingDashboard />} />
+                <Route path="/uae-accounting/accounts"                     element={<UAEConnectedAccounts />} />
+                <Route path="/uae-accounting/connect/zoho"                 element={<UAEZohoConnect />} />
+                <Route path="/uae-accounting/connect/qbo"                  element={<UAEQBOConnect />} />
+                <Route path="/uae-accounting/trial-balances"               element={<UAETrialBalanceList />} />
+                <Route path="/uae-accounting/trial-balances/:id"           element={<UAETrialBalanceViewer />} />
+                {/* UAE Full Accounting Suite */}
+                <Route path="/uae-full"                                    element={<UAEAccountingOverview />} />
+                <Route path="/uae-full/coa"                                element={<UAEChartOfAccounts />} />
+                <Route path="/uae-full/journals"                           element={<UAEJournalEntries />} />
+                <Route path="/uae-full/invoices"                           element={<UAESalesInvoices />} />
+                <Route path="/uae-full/bank-recon"                        element={<UAEBankReconciliation />} />
+                <Route path="/uae-full/fixed-assets"                      element={<UAEFixedAssets />} />
+                <Route path="/uae-full/accruals"                          element={<UAEAccruals />} />
+                <Route path="/uae-full/period-close"                      element={<UAEPeriodEndClose />} />
+                <Route path="/uae-full/management"                        element={<UAEManagementAccounts />} />
+                {/* India Accounting */}
+                <Route path="/india-full"                                 element={<IndiaAccountingOverview />} />
+                <Route path="/india-full/coa"                             element={<IndiaChartOfAccounts />} />
+                <Route path="/india-full/journals"                        element={<IndiaJournalEntries />} />
+                <Route path="/india-full/sales"                           element={<IndiaSalesInvoices />} />
+                <Route path="/india-full/purchases"                       element={<IndiaPurchaseInvoices />} />
+                <Route path="/india-full/tds"                             element={<IndiaTDS />} />
+                <Route path="/india-full/gst"                             element={<IndiaGSTReturns />} />
+                <Route path="/india-full/payroll"                         element={<IndiaPayroll />} />
+                <Route path="/india-full/assets"                          element={<IndiaFixedAssets />} />
+                <Route path="/india-full/close"                           element={<IndiaPeriodClose />} />
+                <Route path="/india-full/management"                      element={<IndiaManagementAccounts />} />
+                {/* FP&A Suite */}
+                <Route path="/fpa"                     element={<FPASuite />} />
+                <Route path="/fpa/variance"            element={<VarianceAnalysis />} />
+                <Route path="/fpa/variance-analysis"   element={<VarianceAnalysisPage />} />
+                <Route path="/dashboard/fpa/variance-analysis" element={<VarianceAnalysisPage />} />
+                <Route path="/fpa/budget"              element={<BudgetManagement />} />
+                <Route path="/fpa/kpi"                 element={<KPIDashboard />} />
+                <Route path="/fpa/forecast"            element={<ForecastingEngine />} />
+                <Route path="/fpa/scenario"            element={<ScenarioEngine />} />
+                <Route path="/fpa/scenarios"           element={<ScenarioEngine />} />
+                <Route path="/fpa/reports"             element={<ManagementReporting />} />
+                <Route path="/fpa/pvm"                 element={<PVMAnalysis />} />
+                <Route path="/fpa/three-statement"     element={<ThreeStatement />} />
+                <Route path="/fpa/monte-carlo"         element={<MonteCarlo />} />
+                <Route path="/fpa/arr-dashboard"       element={<ARRDashboard />} />
+                <Route path="/fpa/headcount"           element={<HeadcountPlanning />} />
+                <Route path="/fpa/sensitivity"         element={<SensitivityAnalysis />} />
+                {/* CFO Suite */}
+                <Route path="/cfo"                     element={<CFOServices />} />
+                <Route path="/cfo/assistant"           element={<CFOServices defaultTab="assistant" />} />
+                <Route path="/cfo/insights"            element={<CFOServices defaultTab="insights" />} />
+                <Route path="/cfo/monitor"             element={<CFOServices defaultTab="monitor" />} />
+                <Route path="/cfo/health"              element={<CFOServices defaultTab="health" />} />
+                <Route path="/cfo/entity-health"       element={<EntityHealth />} />
+                <Route path="/cfo/payment-calendar"    element={<PaymentCalendar />} />
+                <Route path="/cfo/covenant-tracker"    element={<CovenantTracker />} />
+                <Route path="/cfo/ar-collections"      element={<ARCollections />} />
+                {/* Reports */}
+                <Route path="/reports/board-pack"      element={<BoardPack />} />
+                {/* Other shared pages */}
+                <Route path="/tb-variance"             element={<TBVariancePage />} />
+                <Route path="/audit"                   element={<AuditIntelligencePage />} />
+                <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
+                <Route path="/ifrs/agentic"            element={<AgenticGenerator />} />
+                <Route path="/erp/tally"               element={<TallyIntegrationPage />} />
+              </Route>
+
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </BrowserRouter>
+        </SuiteProvider>
         </AuthProvider>
         <Toaster position="top-right" />
       </ClientProvider>
