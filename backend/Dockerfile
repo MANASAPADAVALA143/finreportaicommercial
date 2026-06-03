@@ -36,6 +36,7 @@ COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
 COPY app /app/app
+COPY excel_addin /app/excel_addin
 
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app

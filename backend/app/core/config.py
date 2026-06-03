@@ -30,6 +30,8 @@ class Settings(BaseSettings):
         "http://localhost:3007",
         "http://localhost:5173",
         "https://finreportai.railway.app",
+        "https://finreportaicommercial-production-8907.up.railway.app",
+        "https://finreportaicommercial.up.railway.app",
     ]
 
     # Expose FastAPI routes as MCP tools at /mcp (requires `fastapi-mcp` package)

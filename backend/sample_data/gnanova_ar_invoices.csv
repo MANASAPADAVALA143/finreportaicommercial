@@ -1,0 +1,16 @@
+invoice_id,customer_name,due_date,outstanding_aed,days_overdue,aging_bucket,payment_probability,credit_limit_aed,credit_utilisation_pct,paid_amount_aed,account_manager,contact_email
+INV-2024-001,ADNOC,2024-10-01,250000,63,61-90 days,45,1500000,61.7,0,Ahmed Al Mansoori,finance@adnoc.ae
+INV-2024-002,ADNOC,2024-10-15,675000,48,31-60 days,55,1500000,61.7,0,Ahmed Al Mansoori,finance@adnoc.ae
+INV-2024-003,DEWA,2024-10-01,483000,63,61-90 days,50,800000,60.4,0,Sara Hassan,accounts@dewa.gov.ae
+INV-2024-004,Dubai Police,2024-09-15,580000,79,61-90 days,40,900000,64.4,0,Mohammed Al Rashid,procurement@dubaipolice.gov.ae
+INV-2024-005,Emaar Properties,2024-08-30,450000,94,90+ days,25,600000,75.0,0,Layla Ibrahim,ap@emaar.ae
+INV-2024-006,Emaar Properties,2024-09-01,120000,92,90+ days,20,600000,75.0,0,Layla Ibrahim,ap@emaar.ae
+INV-2024-007,RTA Dubai,2024-10-20,310000,43,31-60 days,60,700000,44.3,0,Khalid Bin Sulayem,finance@rta.ae
+INV-2024-008,Abu Dhabi Government,2024-11-01,195000,31,31-60 days,65,1000000,19.5,0,Fatima Al Zaabi,ap@abudhabi.gov.ae
+INV-2024-009,Majid Al Futtaim,2024-10-10,88000,53,31-60 days,58,400000,22.0,0,Hassan Al Marzouqi,finance@maf.ae
+INV-2024-010,DP World,2024-11-15,420000,16,1-30 days,78,800000,52.5,0,Tariq Al Hashimi,ap@dpworld.com
+INV-2024-011,Etihad Airways,2024-11-20,167000,11,1-30 days,82,500000,33.4,0,Noor Al Darmaki,procurement@etihad.ae
+INV-2024-012,Aldar Properties,2024-12-01,95000,0,Current,92,300000,31.7,95000,Reem Al Falasi,ap@aldar.com
+INV-2024-013,ENOC,2024-11-28,73000,4,1-30 days,88,250000,29.2,0,Saeed Al Maktoum,finance@enoc.ae
+INV-2024-014,Dubai Holding,2024-08-01,320000,121,90+ days,15,500000,64.0,0,Mariam Al Qasimi,accounts@dubaiholding.ae
+INV-2024-015,Nakheel,2024-09-10,185000,82,61-90 days,35,400000,46.3,185000,Ibrahim Al Jaber,finance@nakheel.com

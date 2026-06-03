@@ -5,7 +5,7 @@
  * Reads X-Tenant-ID from localStorage (same pattern as the rest of the app).
  */
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 function tenantHeaders(): Record<string, string> {
   const tenantId = localStorage.getItem('tenantId') ?? 'default';
