@@ -55,10 +55,11 @@ function GulfTaxWidget() {
   const [loading, setLoading] = useState(true);
 
   const poll = () => {
-    fetch(`${GULFTAX_API}/api/uae/ap/gulftax-status`)
+    // GulfTax is now embedded — call the built-in status endpoint
+    fetch(`/api/gulftax/status`)
       .then(r => r.json())
       .then((d: GulfTaxStatus) => setStatus(d))
-      .catch(() => setStatus({ online: false, error: 'FinReportAI backend offline' }))
+      .catch(() => setStatus({ online: false, error: 'Backend offline' }))
       .finally(() => setLoading(false));
   };
 
@@ -95,7 +96,7 @@ function GulfTaxWidget() {
       <p className="text-[10px] text-gray-500 mb-2 leading-tight">
         {online
           ? 'UAE VAT classification active. Invoices auto-classified on upload.'
-          : 'Start GulfTax: cd uaetax && uvicorn main:app --port 8000'}
+          : 'UAE VAT classifier — restart FinReportAI backend to activate.'}
       </p>
 
       {/* Quick stats row */}

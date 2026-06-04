@@ -210,6 +210,10 @@ app.include_router(uae_full_routes.router)
 app.include_router(india_routes.router)
 app.include_router(pipeline_router.router)
 
+# GulfTax AI — embedded (replaces external localhost:8000 service)
+from app.modules.gulftax.router import router as gulftax_router
+app.include_router(gulftax_router)
+
 if settings.ENABLE_FASTAPI_MCP:
     try:
         from fastapi_mcp import FastApiMCP
