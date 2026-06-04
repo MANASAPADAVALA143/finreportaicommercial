@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ComponentType } from 'react';
+﻿import { lazy, Suspense, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AgentActivityProvider } from './context/AgentActivityContext';
@@ -11,7 +11,7 @@ import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
 
-/** Cross-app navigation banner — links to InvoiceFlow (AP Automation) */
+/** Cross-app navigation banner â€” links to InvoiceFlow (AP Automation) */
 function GnanovaBanner() {
   return (
     <div
@@ -45,7 +45,7 @@ function GnanovaBanner() {
         onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#bfdbfe'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#93c5fd'; }}
       >
-        📄 AP Invoices →
+        ðŸ“„ AP Invoices â†’
       </a>
     </div>
   );
@@ -102,7 +102,7 @@ function safeLazy<T extends ComponentType<object>>(loader: () => Promise<{ defau
   );
 }
 
-// Home is eager so a failed lazy chunk can’t leave `/` blank (lazy rejections bypass Error Boundaries).
+// Home is eager so a failed lazy chunk canâ€™t leave `/` blank (lazy rejections bypass Error Boundaries).
 const Dashboard = safeLazy(() =>
   import('./components/dashboard/Dashboard').then((m) => ({ default: m.Dashboard }))
 );
@@ -236,29 +236,29 @@ const UAEAccruals            = safeLazy(() => import('./pages/uae-accounting/Acc
 const UAEPeriodEndClose      = safeLazy(() => import('./pages/uae-accounting/PeriodEndClose'));
 const UAEManagementAccounts  = safeLazy(() => import('./pages/uae-accounting/ManagementAccounts'));
 
-// ── AP InvoiceFlow (embedded) ──────────────────────────────────────────────
+// â”€â”€ AP InvoiceFlow (embedded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const APInvoicesLayout  = safeLazy(() => import('./pages/ap-invoices/APInvoicesLayout'));
-const APDashboard       = safeLazy(() => import('./pages/ap-invoices/APDashboard'));
-const APInvoiceList     = safeLazy(() => import('./pages/ap-invoices/APInvoiceList'));
-const APInvoiceUpload   = safeLazy(() => import('./pages/ap-invoices/APInvoiceUpload'));
-const APApprovals       = safeLazy(() => import('./pages/ap-invoices/APApprovals'));
-const APVendors         = safeLazy(() => import('./pages/ap-invoices/APVendors'));
-const APPurchaseOrders  = safeLazy(() => import('./pages/ap-invoices/APPurchaseOrders'));
-const APGoodsReceipts   = safeLazy(() => import('./pages/ap-invoices/APGoodsReceipts'));
-const APActionQueue     = safeLazy(() => import('./pages/ap-invoices/APActionQueue'));
-const APAgingReport     = safeLazy(() => import('./pages/ap-invoices/APAgingReport'));
-const APBankRecon       = safeLazy(() => import('./pages/ap-invoices/APBankRecon'));
-const APGSTRecon        = safeLazy(() => import('./pages/ap-invoices/APGSTRecon'));
-const APCalendar        = safeLazy(() => import('./pages/ap-invoices/APCalendar'));
-const APGLAccounts      = safeLazy(() => import('./pages/ap-invoices/APGLAccounts'));
+const APDashboard       = safeLazy(() => import('./pages/ap-invoices/Dashboard'));
+const APInvoiceList     = safeLazy(() => import('./pages/ap-invoices/InvoiceList'));
+const APInvoiceUpload   = safeLazy(() => import('./pages/ap-invoices/InvoiceUpload'));
+const APApprovals       = safeLazy(() => import('./pages/ap-invoices/MyApprovals'));
+const APVendors         = safeLazy(() => import('./pages/ap-invoices/Vendors'));
+const APPurchaseOrders  = safeLazy(() => import('./pages/ap-invoices/PurchaseOrders'));
+const APGoodsReceipts   = safeLazy(() => import('./pages/ap-invoices/GoodsReceipts'));
+const APActionQueue     = safeLazy(() => import('./pages/ap-invoices/ActionQueue'));
+const APAgingReport     = safeLazy(() => import('./pages/ap-invoices/ApAging'));
+const APBankRecon       = safeLazy(() => import('./pages/ap-invoices/BankRecon'));
+const APGSTRecon        = safeLazy(() => import('./pages/ap-invoices/GstRecon'));
+const APCalendar        = safeLazy(() => import('./pages/ap-invoices/PaymentCalendar'));
+const APGLAccounts      = safeLazy(() => import('./pages/ap-invoices/GLAccounts'));
 const APIntegrations    = safeLazy(() => import('./pages/ap-invoices/APIntegrations'));
-const APSettings        = safeLazy(() => import('./pages/ap-invoices/APSettings'));
+const APSettings        = safeLazy(() => import('./pages/ap-invoices/Settings'));
 
-// ── Accounting Pipeline ────────────────────────────────────────────────────
+// â”€â”€ Accounting Pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const CloseStatusPage = safeLazy(() => import('./pages/accounting/CloseStatus'));
 const IndiaCloseStatus = safeLazy(() => import('./pages/accounting/IndiaCloseStatus'));
 
-// ── India Accounting ───────────────────────────────────────────────────────
+// â”€â”€ India Accounting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const IndiaAccountingOverview = safeLazy(() => import('./pages/india-accounting/IndiaAccountingOverview'));
 const IndiaChartOfAccounts    = safeLazy(() => import('./pages/india-accounting/IndiaChartOfAccounts'));
 const IndiaJournalEntries     = safeLazy(() => import('./pages/india-accounting/IndiaJournalEntries'));
@@ -289,12 +289,12 @@ function RouteFallback() {
         fontSize: 14,
       }}
     >
-      Loading…
+      Loadingâ€¦
     </div>
   );
 }
 
-/** Legacy R2R shell — keeps Sidebar for R2R-specific routes (unchanged) */
+/** Legacy R2R shell â€” keeps Sidebar for R2R-specific routes (unchanged) */
 function R2rShell() {
   return (
     <div className="flex min-h-screen w-full">
@@ -306,7 +306,7 @@ function R2rShell() {
   );
 }
 
-/** Suite shell — SuiteSidebar for UAE / India / FP&A routes */
+/** Suite shell â€” SuiteSidebar for UAE / India / FP&A routes */
 function SuiteShell() {
   useAutoSuiteSwitcher();
   return (
@@ -319,7 +319,7 @@ function SuiteShell() {
   );
 }
 
-/** Auto-switcher only — no extra layout, used inside nested layouts that have their own sidebar */
+/** Auto-switcher only â€” no extra layout, used inside nested layouts that have their own sidebar */
 function AutoSwitchOnly() {
   useAutoSuiteSwitcher();
   return <Outlet />;
@@ -357,7 +357,7 @@ function App() {
                 <Route path="/connections" element={<ConnectionsPage />} />
                 <Route path="/connections/zoho/callback" element={<ZohoCallback />} />
                 <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
-                {/* R2R shell — legacy sidebar for R2R tools */}
+                {/* R2R shell â€” legacy sidebar for R2R tools */}
                 <Route element={<R2rShell />}>
                   <Route path="/r2r" element={<R2RModule />} />
                   <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
@@ -388,7 +388,7 @@ function App() {
                   <Route path="monthly" element={<BookkeepingMonthlyPage />} />
                 </Route>
               </Route>
-              {/* AP InvoiceFlow — has its own sidebar, auto-switch suite only */}
+              {/* AP InvoiceFlow â€” has its own sidebar, auto-switch suite only */}
               <Route element={<AutoSwitchOnly />}>
                 <Route path="/ap-invoices" element={<APInvoicesLayout />}>
                   <Route index               element={<APDashboard />} />
@@ -409,7 +409,7 @@ function App() {
                 </Route>
               </Route>
 
-              {/* ── Suite Shell — UAE / India / FP&A / CFO / CA Firm ── */}
+              {/* â”€â”€ Suite Shell â€” UAE / India / FP&A / CFO / CA Firm â”€â”€ */}
               <Route element={<SuiteShell />}>
                 {/* CA Firm Tools */}
                 <Route path="/ca-firm/bank-processor" element={<BankStatementProcessor />} />
@@ -497,3 +497,4 @@ function App() {
 }
 
 export default App;
+
