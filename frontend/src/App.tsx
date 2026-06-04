@@ -256,6 +256,7 @@ const APSettings        = safeLazy(() => import('./pages/ap-invoices/APSettings'
 
 // ── Accounting Pipeline ────────────────────────────────────────────────────
 const CloseStatusPage = safeLazy(() => import('./pages/accounting/CloseStatus'));
+const IndiaCloseStatus = safeLazy(() => import('./pages/accounting/IndiaCloseStatus'));
 
 // ── India Accounting ───────────────────────────────────────────────────────
 const IndiaAccountingOverview = safeLazy(() => import('./pages/india-accounting/IndiaAccountingOverview'));
@@ -480,6 +481,7 @@ function App() {
                 <Route path="/erp/tally"               element={<TallyIntegrationPage />} />
                 {/* Accounting Pipeline */}
                 <Route path="/accounting/close-status" element={<CloseStatusPage />} />
+                <Route path="/india/accounting/close-status" element={<IndiaCloseStatus />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />

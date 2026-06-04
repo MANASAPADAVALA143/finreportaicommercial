@@ -32,6 +32,8 @@ function StatCard({
   );
 }
 
+const CURRENT_MONTH = new Date().toISOString().slice(0, 7);
+
 export default function UAEAccountingDashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState<UAEStats | null>(null);
@@ -39,6 +41,7 @@ export default function UAEAccountingDashboard() {
   const [tbs, setTbs] = useState<UAETrialBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pipelineStatus, setPipelineStatus] = useState<any>(null);
 
   useEffect(() => {
     Promise.all([getUAEStats(), listConnectedAccounts(), listTrialBalances()])
@@ -49,6 +52,12 @@ export default function UAEAccountingDashboard() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+
+    // Fetch pipeline close status
+    fetch(`/api/uae/accounting/close-status/${CURRENT_MONTH}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setPipelineStatus(d); })
+      .catch(() => null);
   }, []);
 
   return (
@@ -157,6 +166,35 @@ export default function UAEAccountingDashboard() {
                 </div>
               )}
             </div>
+
+            {/* Pipeline Status */}
+            {pipelineStatus && (
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold text-white">Pipeline Status — {CURRENT_MONTH}</h2>
+                  <span className={`text-sm font-bold ${pipelineStatus.completion_pct >= 80 ? 'text-green-400' : pipelineStatus.completion_pct >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                    {pipelineStatus.completion_pct}% complete
+                  </span>
+                </div>
+                <div className="bg-slate-800 rounded-xl border border-slate-700 p-4">
+                  <div className="h-2 bg-slate-700 rounded-full mb-4 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${pipelineStatus.completion_pct >= 80 ? 'bg-green-500' : pipelineStatus.completion_pct >= 40 ? 'bg-amber-500' : 'bg-red-500'}`}
+                      style={{ width: `${pipelineStatus.completion_pct}%` }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    {(pipelineStatus.checklist ?? []).map((step: any) => (
+                      <div key={step.step} className="flex items-center gap-3 text-sm">
+                        <span>{step.status === 'complete' ? '✅' : '❌'}</span>
+                        <span className={step.status === 'complete' ? 'text-white' : 'text-slate-400'}>{step.label}</span>
+                        {step.count > 0 && <span className="text-xs text-slate-500">({step.count})</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Recent Trial Balances */}
             <div>

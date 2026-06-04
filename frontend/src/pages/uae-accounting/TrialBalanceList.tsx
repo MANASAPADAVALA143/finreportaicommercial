@@ -14,6 +14,8 @@ function fmt(n: number) {
   return n.toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+const CURRENT_PERIOD = new Date().toISOString().slice(0, 7);
+
 export default function TrialBalanceList() {
   const navigate = useNavigate();
   const [tbs, setTbs] = useState<UAETrialBalance[]>([]);
@@ -25,6 +27,10 @@ export default function TrialBalanceList() {
     from_date: new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0, 10),
     to_date: new Date().toISOString().slice(0, 10),
   });
+  const [genPeriod, setGenPeriod] = useState(CURRENT_PERIOD);
+  const [generating, setGenerating] = useState(false);
+  const [genResult, setGenResult] = useState<any>(null);
+  const [genError, setGenError] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -35,6 +41,23 @@ export default function TrialBalanceList() {
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleGenerateFromJEs = async () => {
+    setGenerating(true);
+    setGenError('');
+    setGenResult(null);
+    try {
+      const res = await fetch(`/api/uae/accounting/trial-balance/generate/${genPeriod}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setGenResult(data);
+      toast.success(`Trial balance generated — ${data.rows?.length ?? 0} accounts`);
+    } catch (e: any) {
+      setGenError(e.message);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleSync = async () => {
     if (!form.connected_account_id) {
@@ -69,6 +92,60 @@ export default function TrialBalanceList() {
         </button>
         <h1 className="text-2xl font-bold text-white mb-1">Trial Balances</h1>
         <p className="text-slate-400 text-sm mb-6">Sync and manage trial balances from Zoho Books and QuickBooks</p>
+
+        {/* Auto-generate from posted JEs banner */}
+        <div className="mb-6 p-5 bg-blue-950/60 rounded-xl border border-blue-700">
+          <h2 className="text-base font-semibold text-blue-300 mb-3">Auto-generate from posted JEs</h2>
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-slate-400 text-xs mb-1">Period (YYYY-MM)</label>
+              <input
+                type="month"
+                value={genPeriod}
+                onChange={e => setGenPeriod(e.target.value)}
+                className="bg-slate-900 border border-slate-600 text-white rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+            <button
+              onClick={handleGenerateFromJEs}
+              disabled={generating}
+              className="px-5 py-2 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg text-sm font-medium"
+            >
+              {generating ? 'Generating…' : 'Generate from Posted Entries'}
+            </button>
+          </div>
+          {genError && (
+            <div className="mt-3 text-sm text-red-400">{genError}</div>
+          )}
+          {genResult && (
+            <div className="mt-4 overflow-x-auto">
+              <p className="text-xs text-blue-400 mb-2">
+                {genResult.rows?.length ?? 0} accounts — Balanced: {genResult.balanced ? '✅' : '❌'}
+                {genResult.demo_data ? ' (demo data)' : ''}
+              </p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-400 border-b border-slate-700">
+                    <th className="text-left py-1 px-2">Account</th>
+                    <th className="text-left py-1 px-2">Name</th>
+                    <th className="text-right py-1 px-2">Debit</th>
+                    <th className="text-right py-1 px-2">Credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(genResult.rows ?? []).map((r: any) => (
+                    <tr key={r.account_code} className="border-b border-slate-800">
+                      <td className="py-1 px-2 font-mono text-blue-400">{r.account_code}</td>
+                      <td className="py-1 px-2 text-slate-300">{r.account_name}</td>
+                      <td className="py-1 px-2 text-right text-white">{r.total_debit ? r.total_debit.toLocaleString() : '—'}</td>
+                      <td className="py-1 px-2 text-right text-white">{r.total_credit ? r.total_credit.toLocaleString() : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
 
         {/* Sync Panel */}
         <div className="mb-6 p-5 bg-slate-800 rounded-xl border border-slate-700">

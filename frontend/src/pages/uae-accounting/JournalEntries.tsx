@@ -28,6 +28,8 @@ export default function JournalEntries() {
   const [error, setError]         = useState('');
   const [sendingR2R, setSendingR2R] = useState(false);
   const [r2rMsg, setR2rMsg]       = useState('');
+  const [validating, setValidating] = useState<string>('');
+  const [riskResults, setRiskResults] = useState<Record<string, { risk_score: number; risk_level: string; status: string }>>({});
 
   const load = () => {
     setLoading(true);
@@ -56,6 +58,27 @@ export default function JournalEntries() {
   const handlePost = async (id: string) => {
     await svc.postJE(id);
     load();
+  };
+
+  const handleValidateAndPost = async (e: JournalEntry) => {
+    setValidating(e.id);
+    try {
+      const res = await fetch('/api/accounting/validate-and-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          je_id: e.id,
+          lines: (e as any).lines ?? [{ account_code: '6001', account_name: 'Operating Expenses', debit: e.total_debit, credit: 0 }],
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRiskResults(prev => ({ ...prev, [e.id]: { risk_score: data.risk_score, risk_level: data.risk_level, status: data.status } }));
+    } catch (err: any) {
+      setError(`Validate failed: ${err.message}`);
+    } finally {
+      setValidating('');
+    }
   };
 
   const totalDebit = entries.reduce((s, e) => s + e.total_debit, 0);
@@ -314,6 +337,23 @@ export default function JournalEntries() {
                         className="flex items-center gap-1 text-xs bg-amber-700 hover:bg-amber-600 px-2 py-1 rounded text-white transition-colors"
                       >
                         <Clock size={12} /> Post
+                      </button>
+                    )}
+                    {riskResults[e.id] ? (
+                      <span className={`text-xs border px-2 py-0.5 rounded-full ${
+                        riskResults[e.id].risk_level === 'low'    ? 'bg-green-900/40 text-green-400 border-green-700' :
+                        riskResults[e.id].risk_level === 'medium' ? 'bg-amber-900/40 text-amber-400 border-amber-700' :
+                                                                     'bg-red-900/40 text-red-400 border-red-700'
+                      }`}>
+                        Risk {riskResults[e.id].risk_score}
+                      </span>
+                    ) : (
+                      <button
+                        onClick={ev => { ev.stopPropagation(); handleValidateAndPost(e); }}
+                        disabled={validating === e.id}
+                        className="text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 px-2 py-1 rounded text-white transition-colors whitespace-nowrap"
+                      >
+                        {validating === e.id ? '…' : 'Validate & Post'}
                       </button>
                     )}
                     <span className="text-sm font-mono text-white">

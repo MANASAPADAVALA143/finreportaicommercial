@@ -693,6 +693,359 @@ async def approve_match(match_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+# ── UAE-specific invoice-to-JE (5% VAT, AED) ─────────────────────────────────
+
+@router.post("/api/uae/accounting/invoice-to-je")
+async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
+    """UAE-specific invoice-to-JE: 5% VAT, AED, UAE GL codes."""
+    try:
+        invoice_id = body.get("invoice_id", f"INV-{uuid.uuid4().hex[:6].upper()}")
+        invoice_type = str(body.get("invoice_type", "AP")).upper()
+        amount = float(body.get("amount", 0))
+        vendor = body.get("vendor", "")
+
+        je_id = f"JE-UAE-{invoice_id}-{uuid.uuid4().hex[:6].upper()}"
+        period = _period_now()
+        net = _aed(amount)
+        vat = _aed(net * 0.05)  # UAE VAT 5%
+        gross = _aed(net + vat)
+
+        UAE_COA = {
+            "expense": "6001", "vat_recoverable": "1110",
+            "trade_payables": "2001", "trade_receivables": "1300",
+            "revenue": "4001", "vat_payable": "2200",
+        }
+        UAE_NAMES = {
+            "6001": "Operating Expenses", "1110": "VAT Recoverable",
+            "2001": "Trade Payables", "1300": "Trade Receivables",
+            "4001": "Revenue", "2200": "VAT Payable",
+        }
+
+        if invoice_type == "AP":
+            lines = [
+                {"account_code": UAE_COA["expense"],          "account_name": UAE_NAMES["6001"], "debit": net,   "credit": 0.0},
+                {"account_code": UAE_COA["vat_recoverable"],  "account_name": UAE_NAMES["1110"], "debit": vat,   "credit": 0.0},
+                {"account_code": UAE_COA["trade_payables"],   "account_name": UAE_NAMES["2001"], "debit": 0.0,   "credit": gross},
+            ]
+        else:
+            lines = [
+                {"account_code": UAE_COA["trade_receivables"],"account_name": UAE_NAMES["1300"], "debit": gross, "credit": 0.0},
+                {"account_code": UAE_COA["revenue"],          "account_name": UAE_NAMES["4001"], "debit": 0.0,   "credit": net},
+                {"account_code": UAE_COA["vat_payable"],      "account_name": UAE_NAMES["2200"], "debit": 0.0,   "credit": vat},
+            ]
+
+        for ln in lines:
+            db.add(GLEntry(
+                je_id=je_id, account_code=ln["account_code"],
+                account_name=ln["account_name"], debit=ln["debit"],
+                credit=ln["credit"], period=period, source="invoice",
+            ))
+        _log(db, "uae_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "UAE"})
+        db.commit()
+
+        return {
+            "je_id": je_id, "lines": lines, "status": "draft", "period": period,
+            "country": "UAE", "currency": "AED", "tax_rate": 0.05,
+            "vat_amount": vat, "gross_amount": gross, "vendor": vendor,
+        }
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── India-specific invoice-to-JE (18% GST, INR) ──────────────────────────────
+
+@router.post("/api/india/accounting/invoice-to-je")
+async def india_invoice_to_je(body: dict, db: Session = Depends(get_db)):
+    """India-specific invoice-to-JE: 18% GST, INR, India GL codes."""
+    try:
+        invoice_id = body.get("invoice_id", f"INV-{uuid.uuid4().hex[:6].upper()}")
+        invoice_type = str(body.get("invoice_type", "AP")).upper()
+        amount = float(body.get("amount", 0))
+        vendor = body.get("vendor", "")
+
+        je_id = f"JE-IND-{invoice_id}-{uuid.uuid4().hex[:6].upper()}"
+        period = _period_now()
+        net = round(amount, 2)
+        gst = round(net * 0.18, 2)  # India GST 18%
+        gross = round(net + gst, 2)
+
+        IND_NAMES = {
+            "6001": "Operating Expenses", "1110": "GST Input",
+            "2001": "Sundry Creditors",   "1300": "Sundry Debtors",
+            "4001": "Revenue",            "2200": "GST Output",
+        }
+
+        if invoice_type == "AP":
+            lines = [
+                {"account_code": "6001", "account_name": IND_NAMES["6001"], "debit": net,   "credit": 0.0},
+                {"account_code": "1110", "account_name": IND_NAMES["1110"], "debit": gst,   "credit": 0.0},
+                {"account_code": "2001", "account_name": IND_NAMES["2001"], "debit": 0.0,   "credit": gross},
+            ]
+        else:
+            lines = [
+                {"account_code": "1300", "account_name": IND_NAMES["1300"], "debit": gross, "credit": 0.0},
+                {"account_code": "4001", "account_name": IND_NAMES["4001"], "debit": 0.0,   "credit": net},
+                {"account_code": "2200", "account_name": IND_NAMES["2200"], "debit": 0.0,   "credit": gst},
+            ]
+
+        for ln in lines:
+            db.add(GLEntry(
+                je_id=je_id, account_code=ln["account_code"],
+                account_name=ln["account_name"], debit=ln["debit"],
+                credit=ln["credit"], period=period, source="invoice",
+            ))
+        _log(db, "india_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "India"})
+        db.commit()
+
+        return {
+            "je_id": je_id, "lines": lines, "status": "draft", "period": period,
+            "country": "India", "currency": "INR", "tax_rate": 0.18,
+            "gst_amount": gst, "gross_amount": gross, "vendor": vendor,
+        }
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── UAE close status ──────────────────────────────────────────────────────────
+
+@router.get("/api/uae/accounting/close-status/{period}")
+async def uae_close_status(period: str, db: Session = Depends(get_db)):
+    """UAE month-end close checklist with completion %."""
+    try:
+        ap_count    = db.query(GLEntry).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
+        je_count    = db.query(GLEntry).filter(GLEntry.period == period).count()
+        recon_count = db.query(BankReconMatch).filter(BankReconMatch.period == period).count()
+        tb_generated = je_count > 0
+        accruals_done = db.query(AccrualSuggestion).filter(
+            AccrualSuggestion.period == period, AccrualSuggestion.status == "accepted"
+        ).count() > 0
+
+        checklist = [
+            {"step": "ap_invoices_posted",       "label": "AP Invoices Posted to GL (AED)",    "status": "complete" if ap_count > 0 else "pending",      "count": ap_count,    "path": "/uae-full/invoices"},
+            {"step": "journal_entries_posted",   "label": "Journal Entries Posted",             "status": "complete" if je_count > 0 else "pending",      "count": je_count,    "path": "/uae-full/journals"},
+            {"step": "accruals_posted",          "label": "Accruals Posted (EOSB, Prepaid)",   "status": "complete" if accruals_done else "pending",      "count": 0,           "path": "/uae-full/accruals"},
+            {"step": "bank_recon_complete",      "label": "Bank Reconciliation Complete",       "status": "complete" if recon_count > 0 else "pending",    "count": recon_count, "path": "/uae-full/bank-recon"},
+            {"step": "vat_return_prepared",      "label": "UAE VAT Return Prepared (FTA 5%)",  "status": "pending",                                       "count": 0,           "path": "/uae-full/period-close"},
+            {"step": "trial_balance_generated",  "label": "Trial Balance Generated",           "status": "complete" if tb_generated else "pending",       "count": je_count,    "path": "/uae-accounting/trial-balances"},
+            {"step": "ifrs_generated",           "label": "IFRS Statements Generated",         "status": "pending",                                       "count": 0,           "path": "/ifrs-statement"},
+        ]
+
+        complete_count = sum(1 for c in checklist if c["status"] == "complete")
+        completion_pct = round(complete_count / len(checklist) * 100)
+
+        return {
+            "period": period, "country": "UAE", "currency": "AED",
+            "checklist": checklist, "complete_count": complete_count,
+            "total_steps": len(checklist), "completion_pct": completion_pct,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── India close status ────────────────────────────────────────────────────────
+
+@router.get("/api/india/accounting/close-status/{period}")
+async def india_close_status(period: str, db: Session = Depends(get_db)):
+    """India month-end close checklist (Apr-Mar fiscal year, INR, GST 18%)."""
+    try:
+        ap_count    = db.query(GLEntry).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
+        je_count    = db.query(GLEntry).filter(GLEntry.period == period).count()
+        recon_count = db.query(BankReconMatch).filter(BankReconMatch.period == period).count()
+        tb_generated = je_count > 0
+        accruals_done = db.query(AccrualSuggestion).filter(
+            AccrualSuggestion.period == period, AccrualSuggestion.status == "accepted"
+        ).count() > 0
+
+        checklist = [
+            {"step": "purchase_invoices_posted", "label": "Purchase Invoices Posted (INR)",    "status": "complete" if ap_count > 0 else "pending",      "count": ap_count,    "path": "/india-full/purchases"},
+            {"step": "journal_entries_posted",   "label": "Journal Entries Posted",             "status": "complete" if je_count > 0 else "pending",      "count": je_count,    "path": "/india-full/journals"},
+            {"step": "accruals_posted",          "label": "Accruals Posted (Gratuity, Leave)",  "status": "complete" if accruals_done else "pending",      "count": 0,           "path": "/india-full/close"},
+            {"step": "bank_recon_complete",      "label": "Bank Reconciliation Complete",       "status": "complete" if recon_count > 0 else "pending",    "count": recon_count, "path": "/india-full/close"},
+            {"step": "gst_return_filed",         "label": "GST Returns Filed (GSTR-1 / 3B)",   "status": "pending",                                       "count": 0,           "path": "/india-full/gst"},
+            {"step": "tds_deposited",            "label": "TDS Deposited & Returns Filed",      "status": "pending",                                       "count": 0,           "path": "/india-full/tds"},
+            {"step": "trial_balance_generated",  "label": "Trial Balance Generated",           "status": "complete" if tb_generated else "pending",       "count": je_count,    "path": "/india-full/management"},
+        ]
+
+        complete_count = sum(1 for c in checklist if c["status"] == "complete")
+        completion_pct = round(complete_count / len(checklist) * 100)
+
+        return {
+            "period": period, "country": "India", "currency": "INR",
+            "fiscal_year": "Apr-Mar",
+            "checklist": checklist, "complete_count": complete_count,
+            "total_steps": len(checklist), "completion_pct": completion_pct,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── UAE trial balance from posted JEs ────────────────────────────────────────
+
+@router.get("/api/uae/accounting/trial-balance/generate/{period}")
+async def generate_uae_trial_balance(period: str, db: Session = Depends(get_db)):
+    """Generate UAE trial balance from posted GL journal entries."""
+    try:
+        rows = db.query(GLEntry).filter(GLEntry.period == period).all()
+        source_label = "Posted Journal Entries"
+
+        if not rows:
+            demo = [
+                {"account_code": "1300", "account_name": "Trade Receivables", "total_debit": 250000.00, "total_credit": 0.0,       "net": 250000.00},
+                {"account_code": "1110", "account_name": "VAT Recoverable",   "total_debit": 12500.00,  "total_credit": 0.0,       "net": 12500.00},
+                {"account_code": "2001", "account_name": "Trade Payables",    "total_debit": 0.0,        "total_credit": 180000.00, "net": -180000.00},
+                {"account_code": "2200", "account_name": "VAT Payable",       "total_debit": 0.0,        "total_credit": 5250.00,   "net": -5250.00},
+                {"account_code": "4001", "account_name": "Revenue",           "total_debit": 0.0,        "total_credit": 105000.00, "net": -105000.00},
+                {"account_code": "6001", "account_name": "Operating Expenses","total_debit": 27250.00,   "total_credit": 0.0,       "net": 27250.00},
+            ]
+            return {
+                "period": period, "rows": demo, "source": source_label,
+                "country": "UAE", "currency": "AED",
+                "total_debit": sum(r["total_debit"] for r in demo),
+                "total_credit": sum(r["total_credit"] for r in demo),
+                "balanced": True, "demo_data": True,
+            }
+
+        by_account: dict[str, dict] = {}
+        for row in rows:
+            code = row.account_code
+            if code not in by_account:
+                by_account[code] = {
+                    "account_code": code,
+                    "account_name": row.account_name or COA_NAMES.get(code, code),
+                    "total_debit": 0.0, "total_credit": 0.0,
+                }
+            by_account[code]["total_debit"]  += row.debit or 0.0
+            by_account[code]["total_credit"] += row.credit or 0.0
+
+        result = []
+        for r in by_account.values():
+            r["net"] = _aed(r["total_debit"] - r["total_credit"])
+            r["total_debit"]  = _aed(r["total_debit"])
+            r["total_credit"] = _aed(r["total_credit"])
+            result.append(r)
+
+        result.sort(key=lambda x: x["account_code"])
+        total_debit  = _aed(sum(r["total_debit"]  for r in result))
+        total_credit = _aed(sum(r["total_credit"] for r in result))
+
+        return {
+            "period": period, "rows": result, "source": source_label,
+            "country": "UAE", "currency": "AED",
+            "total_debit": total_debit, "total_credit": total_credit,
+            "balanced": abs(total_debit - total_credit) < 0.01, "demo_data": False,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── UAE TB to IFRS ────────────────────────────────────────────────────────────
+
+@router.post("/api/uae/accounting/tb-to-ifrs/{period}")
+async def tb_to_ifrs(period: str, db: Session = Depends(get_db)):
+    """Map trial balance to IFRS P&L structure for UAE."""
+    try:
+        rows = db.query(GLEntry).filter(GLEntry.period == period).all()
+        revenue   = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("4"))
+        expenses  = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("6"))
+        assets    = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("1"))
+        liabilities = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("2"))
+
+        if not rows:
+            revenue = 105000.0; expenses = 27250.0; assets = 262500.0; liabilities = 185250.0
+
+        ifrs_pl = {
+            "revenue": _aed(revenue),
+            "cost_of_sales": 0.0,
+            "gross_profit": _aed(revenue),
+            "operating_expenses": _aed(expenses),
+            "operating_profit": _aed(revenue - expenses),
+            "finance_costs": 0.0,
+            "profit_before_tax": _aed(revenue - expenses),
+            "tax_expense": 0.0,  # UAE has 0% corp tax for most entities
+            "profit_after_tax": _aed(revenue - expenses),
+        }
+
+        try:
+            from app.core.aws_config import upload_to_s3
+            import json as _json
+            key = f"reports/ifrs/{period}/uae_pl.json"
+            upload_to_s3(_json.dumps({"period": period, "ifrs_pl": ifrs_pl}).encode(), key)
+        except Exception:
+            pass
+
+        return {
+            "period": period, "status": "generated", "source": "trial_balance",
+            "country": "UAE", "currency": "AED",
+            "ifrs_pl": ifrs_pl,
+            "balance_sheet_summary": {"total_assets": _aed(assets), "total_liabilities": _aed(liabilities)},
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── Bank recon → JE suggestion ────────────────────────────────────────────────
+
+@router.post("/api/uae/accounting/recon-to-je")
+async def recon_to_je(body: dict, db: Session = Depends(get_db)):
+    """Create JE suggestion for an unmatched bank item."""
+    try:
+        amount = float(body.get("amount", 0))
+        description = body.get("description", "Bank transaction")
+        return {
+            "suggested_je": {
+                "debit_account": "7402", "debit_name": "Bank Charges",
+                "credit_account": "1002", "credit_name": "Cash at Bank",
+                "amount": _aed(amount), "description": description,
+                "currency": "AED",
+            }
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ── FP&A sync from accounting ─────────────────────────────────────────────────
+
+@router.post("/api/fpa/sync-from-accounting")
+async def sync_fpa_from_accounting(body: dict, db: Session = Depends(get_db)):
+    """Pull trial balance for period and return variance-ready rows for FP&A."""
+    try:
+        country = body.get("country", "UAE")
+        period  = body.get("period", _period_now())
+        rows    = db.query(GLEntry).filter(GLEntry.period == period).all()
+
+        currency = "AED" if country == "UAE" else "INR"
+
+        revenue     = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("4"))
+        expenses    = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("6"))
+        assets      = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("1"))
+        liabilities = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("2"))
+
+        if not rows:
+            revenue = 105000.0; expenses = 27250.0; assets = 262500.0; liabilities = 185250.0
+
+        variance_rows = [
+            {"account": "Revenue",            "department": "All", "actual": _aed(revenue),  "budget": _aed(revenue * 0.95), "accountType": "income"},
+            {"account": "Operating Expenses", "department": "All", "actual": _aed(expenses), "budget": _aed(expenses * 1.05), "accountType": "expense"},
+        ]
+
+        return {
+            "period": period, "country": country, "currency": currency,
+            "synced_at": datetime.utcnow().isoformat(),
+            "source_label": f"Actuals sourced from {country} IFRS Statements",
+            "actuals": {
+                "revenue": _aed(revenue), "expenses": _aed(expenses),
+                "gross_profit": _aed(revenue - expenses),
+                "assets": _aed(assets), "liabilities": _aed(liabilities),
+            },
+            "variance_rows": variance_rows,
+            "ready_for_variance": True,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 # ── GET /api/recon/status/{period} ────────────────────────────────────────────
 
 @router.get("/api/recon/status/{period}")

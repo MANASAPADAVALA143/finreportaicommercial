@@ -30,6 +30,10 @@ export default function BankReconciliation() {
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState('');
   const [msg, setMsg]                 = useState('');
+  const [reconJEAmount, setReconJEAmount] = useState('');
+  const [reconJEDesc, setReconJEDesc]     = useState('');
+  const [creatingJE, setCreatingJE]       = useState(false);
+  const [suggestedJE, setSuggestedJE]     = useState<any>(null);
 
   const load = () => {
     setLoading(true);
@@ -68,6 +72,25 @@ export default function BankReconciliation() {
       setError(e.message);
     } finally {
       setImporting(false);
+    }
+  };
+
+  const handleCreateReconJE = async () => {
+    setCreatingJE(true);
+    setSuggestedJE(null);
+    try {
+      const res = await fetch('/api/uae/accounting/recon-to-je', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: parseFloat(reconJEAmount) || 0, description: reconJEDesc || 'Unmatched bank item' }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSuggestedJE(data.suggested_je);
+    } catch (e: any) {
+      setError(`JE creation failed: ${e.message}`);
+    } finally {
+      setCreatingJE(false);
     }
   };
 
@@ -238,6 +261,64 @@ export default function BankReconciliation() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Unmatched → JE section */}
+      <div className="mt-6 bg-amber-950/40 border border-amber-700/60 rounded-xl p-5">
+        <p className="text-sm text-amber-300 font-semibold mb-1">Unmatched items can create Journal Entries automatically</p>
+        <p className="text-xs text-gray-400 mb-4">Enter the amount and description for any unmatched bank transaction to get a suggested JE.</p>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Amount (AED)</label>
+            <input
+              type="number"
+              value={reconJEAmount}
+              onChange={e => setReconJEAmount(e.target.value)}
+              placeholder="0.00"
+              className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white w-36 focus:outline-none focus:border-amber-500"
+            />
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-xs text-gray-400 block mb-1">Description</label>
+            <input
+              type="text"
+              value={reconJEDesc}
+              onChange={e => setReconJEDesc(e.target.value)}
+              placeholder="Bank charges, fees…"
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+            />
+          </div>
+          <button
+            onClick={handleCreateReconJE}
+            disabled={creatingJE || !reconJEAmount}
+            className="flex items-center gap-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium text-white transition-colors"
+          >
+            {creatingJE ? 'Creating…' : 'Create JE for Unmatched'}
+          </button>
+        </div>
+        {suggestedJE && (
+          <div className="mt-4 bg-gray-900/60 border border-gray-700 rounded-lg p-4 text-sm">
+            <p className="text-xs text-gray-400 mb-2 font-semibold uppercase tracking-wider">Suggested Journal Entry</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs text-gray-500">Debit</p>
+                <p className="text-white font-mono">{suggestedJE.debit_account} — {suggestedJE.debit_name}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Credit</p>
+                <p className="text-white font-mono">{suggestedJE.credit_account} — {suggestedJE.credit_name}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Amount (AED)</p>
+                <p className="text-amber-400 font-semibold">{(suggestedJE.amount ?? suggestedJE.amount_aed ?? 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Description</p>
+                <p className="text-gray-300">{suggestedJE.description}</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Method legend */}

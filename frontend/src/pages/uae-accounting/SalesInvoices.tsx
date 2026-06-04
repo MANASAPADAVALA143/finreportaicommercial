@@ -19,6 +19,8 @@ export default function SalesInvoices() {
   const [tab, setTab]             = useState<'invoices' | 'aging'>('invoices');
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState('');
+  const [postingGL, setPostingGL] = useState<string>('');
+  const [glCreated, setGLCreated] = useState<Record<string, string>>({});
 
   const load = () => {
     setLoading(true);
@@ -42,6 +44,29 @@ export default function SalesInvoices() {
       load();
     } catch (e: any) {
       setError(e.message);
+    }
+  };
+
+  const handlePostToGL = async (inv: SalesInvoice) => {
+    setPostingGL(inv.id);
+    try {
+      const res = await fetch('/api/uae/accounting/invoice-to-je', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoice_id: inv.invoice_number,
+          invoice_type: 'AR',
+          amount: inv.subtotal,
+          vendor: inv.customer_id,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setGLCreated(prev => ({ ...prev, [inv.id]: data.je_id ?? 'JE Created' }));
+    } catch (e: any) {
+      setError(`GL post failed: ${e.message}`);
+    } finally {
+      setPostingGL('');
     }
   };
 
@@ -168,14 +193,27 @@ export default function SalesInvoices() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {inv.status === 'draft' && (
-                        <button
-                          onClick={() => handlePost(inv.id)}
-                          className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors"
-                        >
-                          Post
-                        </button>
-                      )}
+                      <div className="flex items-center justify-center gap-2 flex-wrap">
+                        {inv.status === 'draft' && (
+                          <button
+                            onClick={() => handlePost(inv.id)}
+                            className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors"
+                          >
+                            Post
+                          </button>
+                        )}
+                        {glCreated[inv.id] ? (
+                          <span className="text-xs text-green-400 font-medium whitespace-nowrap">JE Created ✅</span>
+                        ) : (
+                          <button
+                            onClick={() => handlePostToGL(inv)}
+                            disabled={postingGL === inv.id}
+                            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:opacity-50 px-3 py-1 rounded text-white transition-colors whitespace-nowrap"
+                          >
+                            {postingGL === inv.id ? '…' : 'Post to GL →'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))
