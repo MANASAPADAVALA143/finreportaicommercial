@@ -1,5 +1,5 @@
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
+﻿import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/ap-invoice/utils';
 
 const STYLES: Record<string, string> = {
   not_required: 'bg-slate-100 text-slate-700 border-slate-200',
@@ -23,3 +23,4 @@ export function ApprovalStatusBadge({ status }: { status: string | null | undefi
     </Badge>
   );
 }
+

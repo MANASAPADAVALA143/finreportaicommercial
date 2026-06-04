@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+﻿import * as XLSX from 'xlsx';
 
 export function exportRowsToExcel(filename: string, sheets: { name: string; rows: Record<string, unknown>[] }[]) {
   const wb = XLSX.utils.book_new();
@@ -22,7 +22,7 @@ export function downloadBase64Pdf(base64: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-/** Opens print dialog on a minimal HTML document (browser “Save as PDF”). */
+/** Opens print dialog on a minimal HTML document (browser â€œSave as PDFâ€). */
 export function exportHtmlPrintPdf(title: string, innerHtml: string) {
   const w = window.open('', '_blank');
   if (!w) return;
@@ -31,3 +31,4 @@ export function exportHtmlPrintPdf(title: string, innerHtml: string) {
   );
   w.document.close();
 }
+

@@ -1,8 +1,8 @@
-/**
+﻿/**
  * TallyPrime Rel 7.0 Integration
  * Supports: Standard + Edit Log versions
  * XML format: TDL-based voucher import
- * Port: 9000 (enable in TallyPrime → F12 → Configure)
+ * Port: 9000 (enable in TallyPrime â†’ F12 â†’ Configure)
  */
 
 export type TallyVersion = 'standard' | 'edit_log';
@@ -24,7 +24,7 @@ export interface TallySettings {
   version: TallyVersion;
 }
 
-// ── Build one Purchase Voucher per invoice ──────────────────
+// â”€â”€ Build one Purchase Voucher per invoice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function buildVoucher(inv: Record<string, unknown>, settings: TallySettings): string {
   const date = String(inv.invoice_date || '').replace(/-/g, '');
   const subtotal = Number(inv.subtotal_amount ?? inv.total_amount ?? 0);
@@ -79,7 +79,7 @@ function buildVoucher(inv: Record<string, unknown>, settings: TallySettings): st
   </TALLYMESSAGE>`;
 }
 
-// ── Generate full XML envelope ──────────────────────────────
+// â”€â”€ Generate full XML envelope â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function generateTallyXML(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -108,7 +108,7 @@ export function generateTallyXML(
   </ENVELOPE>`;
 }
 
-// ── Download XML file (always works) ───────────────────────
+// â”€â”€ Download XML file (always works) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function downloadTallyXML(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -123,8 +123,8 @@ export function downloadTallyXML(
   URL.revokeObjectURL(url);
 }
 
-// ── Push directly to TallyPrime HTTP server ─────────────────
-// Requires: TallyPrime → F12 → Configure → Enable HTTP → Port 9000
+// â”€â”€ Push directly to TallyPrime HTTP server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Requires: TallyPrime â†’ F12 â†’ Configure â†’ Enable HTTP â†’ Port 9000
 export async function pushToTallyPrime(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -158,14 +158,15 @@ export async function pushToTallyPrime(
       imported: count,
     };
   } catch {
-    // Network error — TallyPrime not running or wrong port
+    // Network error â€” TallyPrime not running or wrong port
     // Fall back to file download
     downloadTallyXML(invoices, settings);
     return {
       success: true,
       message:
-        'TallyPrime not reachable — XML file downloaded instead. Import via: TallyPrime → Gateway → Import Data → Vouchers',
+        'TallyPrime not reachable â€” XML file downloaded instead. Import via: TallyPrime â†’ Gateway â†’ Import Data â†’ Vouchers',
       imported: 0,
     };
   }
 }
+

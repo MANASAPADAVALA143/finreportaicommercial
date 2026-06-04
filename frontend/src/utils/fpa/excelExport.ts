@@ -1,4 +1,4 @@
-import type { VarianceRow } from '../../types/fpa';
+﻿import type { VarianceRow } from '../../types/fpa';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -35,3 +35,4 @@ export async function exportVarianceExcelWithAI(rows: VarianceRow[]): Promise<vo
   a.click();
   window.URL.revokeObjectURL(url);
 }
+

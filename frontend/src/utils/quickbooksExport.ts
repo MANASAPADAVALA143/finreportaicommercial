@@ -1,5 +1,5 @@
-/**
- * QuickBooks integration — IIF format (Desktop) and Online API
+﻿/**
+ * QuickBooks integration â€” IIF format (Desktop) and Online API
  */
 
 export function generateQBIIF(invoices: Array<Record<string, unknown>>): string {
@@ -101,3 +101,4 @@ export async function pushToQBOnline(
   }
   return res.json();
 }
+

@@ -1,8 +1,8 @@
-// Anomaly Detection System for Invoice Processing
+﻿// Anomaly Detection System for Invoice Processing
 
 export type RiskScore = 'low' | 'medium' | 'high';
 
-// ─── Training-based anomaly check ────────────────────────────────────────────
+// â”€â”€â”€ Training-based anomaly check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface TrainingCheckResult {
   profile_found: boolean;
@@ -214,3 +214,4 @@ export async function detectAnomalies(
     risk_flags: flags,
   };
 }
+

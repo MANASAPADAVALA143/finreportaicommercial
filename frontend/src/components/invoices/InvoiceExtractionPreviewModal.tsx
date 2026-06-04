@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
 import {
   Dialog,
@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { NormalizedExtractedInvoice } from '@/lib/cameraService';
+import type { NormalizedExtractedInvoice } from '@/lib/ap-invoice/cameraService';
 
 export type PreviewLineItem = {
   description: string;
@@ -82,8 +82,8 @@ export function InvoiceExtractionPreviewModal({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="purchase">AP — purchase (vendor bill)</SelectItem>
-                <SelectItem value="sales">AR — sales (customer bill)</SelectItem>
+                <SelectItem value="purchase">AP â€” purchase (vendor bill)</SelectItem>
+                <SelectItem value="sales">AR â€” sales (customer bill)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -165,7 +165,7 @@ export function InvoiceExtractionPreviewModal({
             </div>
           </div>
 
-          {/* Line items — read-only preview */}
+          {/* Line items â€” read-only preview */}
           {lineItems && lineItems.length > 0 && (
             <div className="grid gap-1">
               <Label>Line items ({lineItems.length})</Label>
@@ -182,7 +182,7 @@ export function InvoiceExtractionPreviewModal({
                   <tbody>
                     {lineItems.map((li, i) => (
                       <tr key={i} className="border-t">
-                        <td className="px-2 py-1.5 text-left">{li.description || '—'}</td>
+                        <td className="px-2 py-1.5 text-left">{li.description || 'â€”'}</td>
                         <td className="px-2 py-1.5 text-right">{li.quantity}</td>
                         <td className="px-2 py-1.5 text-right">{li.unit_price.toLocaleString()}</td>
                         <td className="px-2 py-1.5 text-right font-medium">{li.total.toLocaleString()}</td>
@@ -201,10 +201,11 @@ export function InvoiceExtractionPreviewModal({
             Cancel
           </Button>
           <Button type="button" disabled={saving} onClick={() => onSave(v)}>
-            {saving ? 'Saving…' : 'Save to invoice list'}
+            {saving ? 'Savingâ€¦' : 'Save to invoice list'}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
+

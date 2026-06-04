@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import { getMyCompany } from '@/lib/companyService';
+﻿import { useCallback, useEffect, useState } from 'react';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
 
 export type CompanySettingsRow = {
   id: string;
@@ -74,3 +74,4 @@ export function useCompanySettings() {
     companyName: settings?.company_name ?? '',
   };
 }
+

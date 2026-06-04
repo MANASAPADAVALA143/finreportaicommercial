@@ -1,6 +1,6 @@
-/**
+﻿/**
  * Public FastAPI origin for browser calls.
- * In production, VITE_API_URL must be set (e.g. on Vercel) — never defaults to localhost,
+ * In production, VITE_API_URL must be set (e.g. on Vercel) â€” never defaults to localhost,
  * which would make every visitor's browser call their own machine.
  */
 export function backendOrigin(): string {
@@ -14,3 +14,4 @@ export function backendOrigin(): string {
 export function isBackendConfigured(): boolean {
   return backendOrigin() !== "";
 }
+

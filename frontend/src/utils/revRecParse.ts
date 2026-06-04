@@ -1,4 +1,4 @@
-import Papa from 'papaparse';
+﻿import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 
 /** Navy / blue tokens aligned with FinReportAI R2R styling */
@@ -133,3 +133,4 @@ export function billingToContractSchedules(records: BillingRecord[]): Array<{
     recognition_type: 'over_time',
   }));
 }
+

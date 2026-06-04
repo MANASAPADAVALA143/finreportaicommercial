@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { Invoice, InvoiceApprovalRow } from '@/lib/supabase';
+﻿import { useCallback, useEffect, useState } from 'react';
+import type { Invoice, InvoiceApprovalRow } from '@/lib/ap-invoice/supabase';
 import { useToast } from '@/hooks/use-toast';
 import { useWorkEmail } from '@/hooks/useWorkEmail';
 import {
@@ -7,7 +7,7 @@ import {
   submitInvoiceForApproval,
   processApprovalAction,
   emailsMatch,
-} from '@/lib/approvalService';
+} from '@/lib/ap-invoice/approvalService';
 import { ApprovalStatusBadge } from '@/components/approvals/ApprovalStatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -104,7 +104,7 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-semibold text-gray-900">Approval chain</h3>
-          <p className="text-xs text-gray-500">Multi-step rules from Settings → Approval rules</p>
+          <p className="text-xs text-gray-500">Multi-step rules from Settings â†’ Approval rules</p>
         </div>
         <ApprovalStatusBadge status={chainStatus} />
       </div>
@@ -112,7 +112,7 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
       {invoice.submitted_for_approval_at && (
         <p className="text-xs text-gray-600">
           Submitted {format(new Date(invoice.submitted_for_approval_at), 'PPp')}
-          {invoice.approval_submitted_by ? ` · by ${invoice.approval_submitted_by}` : ''}
+          {invoice.approval_submitted_by ? ` Â· by ${invoice.approval_submitted_by}` : ''}
         </p>
       )}
 
@@ -132,7 +132,7 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="font-medium text-gray-900">
-                Step {r.step_index + 1} · {r.approver_email}
+                Step {r.step_index + 1} Â· {r.approver_email}
               </div>
               <div className="text-xs text-gray-500 capitalize">{r.status}</div>
               {r.actioned_at && (
@@ -143,7 +143,7 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
           </div>
         ))}
         {rows.length > 0 && chainStatus === 'pending' && !pendingRow && (
-          <p className="text-xs text-amber-800">Waiting for next approver row to be created… refresh if stuck.</p>
+          <p className="text-xs text-amber-800">Waiting for next approver row to be createdâ€¦ refresh if stuck.</p>
         )}
       </div>
 
@@ -208,10 +208,11 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
       <div className="flex items-center gap-2 text-xs text-gray-500 border-t pt-3">
         <Circle className="h-3 w-3" />
         <span>
-          {invoice.vendor_name} · {formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')} · due{' '}
+          {invoice.vendor_name} Â· {formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')} Â· due{' '}
           {displayDate(invoice.due_date, dateFormat)}
         </span>
       </div>
     </div>
   );
 }
+

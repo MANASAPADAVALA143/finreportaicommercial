@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Scenario Planning Financial Calculation Engine
  * 
  * This module calculates financial outcomes based on user-defined assumptions
@@ -30,7 +30,7 @@ export interface ScenarioAssumptions {
   revenueGrowth: number;        // Overall revenue growth %
   domesticMix: number;          // Domestic sales mix %
   exportGrowth: number;         // Export sales growth %
-  newCustomerRev: number;       // New customer revenue (₹Cr)
+  newCustomerRev: number;       // New customer revenue (â‚¹Cr)
   cogsPercent: number;          // COGS as % of revenue
   payrollGrowth: number;        // Payroll growth %
   opexGrowth: number;           // Operating expense growth %
@@ -55,18 +55,18 @@ export interface CalculatedResults {
 
 // Default baseline from October 2025 actuals
 export const DEFAULT_BASELINE: BaselineData = {
-  priorRevenue: 330000000,      // ₹33Cr
-  priorCOGS: 185000000,          // ₹18.5Cr
-  priorGrossProfit: 145000000,   // ₹14.5Cr
-  priorOpex: 126000000,          // ₹12.6Cr (total opex)
-  priorPayroll: 32000000,        // ₹3.2Cr
-  priorAdmin: 14500000,          // ₹1.45Cr
-  priorDepreciation: 14000000,   // ₹1.4Cr
-  priorInterest: 8000000,        // ₹0.8Cr
-  priorTax: 27000000,            // ₹2.7Cr (est. 30% rate)
+  priorRevenue: 330000000,      // â‚¹33Cr
+  priorCOGS: 185000000,          // â‚¹18.5Cr
+  priorGrossProfit: 145000000,   // â‚¹14.5Cr
+  priorOpex: 126000000,          // â‚¹12.6Cr (total opex)
+  priorPayroll: 32000000,        // â‚¹3.2Cr
+  priorAdmin: 14500000,          // â‚¹1.45Cr
+  priorDepreciation: 14000000,   // â‚¹1.4Cr
+  priorInterest: 8000000,        // â‚¹0.8Cr
+  priorTax: 27000000,            // â‚¹2.7Cr (est. 30% rate)
   
-  openingCash: 25000000,         // ₹2.5Cr starting cash
-  avgMonthlyBurn: 1800000,       // ₹18L/month average burn
+  openingCash: 25000000,         // â‚¹2.5Cr starting cash
+  avgMonthlyBurn: 1800000,       // â‚¹18L/month average burn
   
   domesticRevenueMix: 76,
   exportRevenueMix: 24
@@ -94,7 +94,7 @@ export function calculateScenario(
   baseRevenue = baseRevenue * (1 - assumptions.churnPercent / 100);
   
   // Add new customer revenue
-  const newCustomerRevenue = assumptions.newCustomerRev * 10000000; // Convert Cr to ₹
+  const newCustomerRevenue = assumptions.newCustomerRev * 10000000; // Convert Cr to â‚¹
   
   // Calculate domestic vs export split
   const domesticRevenue = baseRevenue * (assumptions.domesticMix / 100);
@@ -352,3 +352,4 @@ export function calculateSensitivity(
     };
   });
 }
+

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import type { Invoice } from '@/lib/supabase';
+﻿import { useEffect, useState } from 'react';
+import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { Button } from '@/components/ui/button';
-import { clearDuplicateFlag, fetchInvoiceById, recheckInvoiceDuplicate } from '@/lib/invoices';
+import { clearDuplicateFlag, fetchInvoiceById, recheckInvoiceDuplicate } from '@/lib/ap-invoice/invoices';
 import { useToast } from '@/hooks/use-toast';
 import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
@@ -56,9 +56,9 @@ export function DuplicateWarningBanner({
   }
 
   const origLabel = original
-    ? `${original.invoice_number} — ${original.vendor_name}, ${formatCurrency(Number(original.total_amount), original.currency || 'INR')}, ${displayDate(original.invoice_date, dateFormat)}`
+    ? `${original.invoice_number} â€” ${original.vendor_name}, ${formatCurrency(Number(original.total_amount), original.currency || 'INR')}, ${displayDate(original.invoice_date, dateFormat)}`
     : loadingOriginal
-      ? 'Loading original…'
+      ? 'Loading originalâ€¦'
       : invoice.duplicate_of_id
         ? '(Original invoice not found or was removed)'
         : 'Unknown original';
@@ -152,3 +152,4 @@ export function DuplicateWarningBanner({
     </div>
   );
 }
+

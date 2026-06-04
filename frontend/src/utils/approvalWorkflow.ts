@@ -1,4 +1,4 @@
-// Approval Workflow System
+﻿// Approval Workflow System
 
 export type ApprovalLevel = 'none' | 'manager' | 'cfo';
 
@@ -47,3 +47,4 @@ export function getApprovalLevelName(level: ApprovalLevel): string {
       return 'Unknown';
   }
 }
+

@@ -1,5 +1,5 @@
-import { useNavigate } from 'react-router-dom';
-import type { Invoice } from '@/lib/supabase';
+﻿import { useNavigate } from 'react-router-dom';
+import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatCurrency } from '@/utils/currency';
@@ -58,7 +58,7 @@ export function DuplicateAlertsCard({ invoices }: Props) {
                 {formatCurrency(primaryTotal, primaryCur)}
               </span>
               {Object.keys(sumSameCurrency).length > 1 && (
-                <span className="block text-amber-800 mt-1">Multiple currencies — totals shown per base where available.</span>
+                <span className="block text-amber-800 mt-1">Multiple currencies â€” totals shown per base where available.</span>
               )}
             </p>
           </>
@@ -69,9 +69,10 @@ export function DuplicateAlertsCard({ invoices }: Props) {
           className={`mt-3 w-full ${isClear ? 'border-green-600 text-green-800' : 'border-amber-600 text-amber-900'}`}
           onClick={() => navigate('/invoices?filter=duplicates')}
         >
-          Review duplicates →
+          Review duplicates â†’
         </Button>
       </CardContent>
     </Card>
   );
 }
+

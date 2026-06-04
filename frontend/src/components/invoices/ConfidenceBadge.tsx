@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+﻿import { cn } from '@/lib/ap-invoice/utils';
 
 type Props = {
   score: number | null;
@@ -18,7 +18,7 @@ export function ConfidenceBadge({ score, size = 'sm', className }: Props) {
           className
         )}
       >
-        {showLabel ? 'Not scored' : '—'}
+        {showLabel ? 'Not scored' : 'â€”'}
       </span>
     );
   }
@@ -44,3 +44,4 @@ export function ConfidenceBadge({ score, size = 'sm', className }: Props) {
     </span>
   );
 }
+

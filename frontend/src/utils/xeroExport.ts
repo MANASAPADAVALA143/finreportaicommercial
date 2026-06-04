@@ -1,5 +1,5 @@
-/**
- * Xero accounting integration — CSV import and API
+﻿/**
+ * Xero accounting integration â€” CSV import and API
  */
 
 export function generateXeroCSV(invoices: Array<Record<string, unknown>>): string {
@@ -100,3 +100,4 @@ export async function pushToXeroAPI(
   }
   return res.json();
 }
+

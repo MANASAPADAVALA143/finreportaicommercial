@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+﻿import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/ap-invoice/supabase';
 import type { TallySettings } from '@/utils/tallyExport';
 
 export type TallyVersion = 'standard' | 'edit_log';
@@ -53,3 +53,4 @@ export function toTallySettings(erp: ErpSettings): TallySettings {
     version: erp.tally_version || 'standard',
   };
 }
+

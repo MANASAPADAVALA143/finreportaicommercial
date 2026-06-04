@@ -1,11 +1,11 @@
-/**
- * Chart of Accounts (COA) mapping — Enterprise tier
- * Resolves GL: chart_of_accounts (IFRS mapping) → company gl_accounts + accounting standard engine
+﻿/**
+ * Chart of Accounts (COA) mapping â€” Enterprise tier
+ * Resolves GL: chart_of_accounts (IFRS mapping) â†’ company gl_accounts + accounting standard engine
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { resolveGLCodeSmart, type GLSuggestionSource } from '@/lib/accountingStandardService';
-import { getMyCompany } from '@/lib/companyService';
+import { resolveGLCodeSmart, type GLSuggestionSource } from '@/lib/ap-invoice/accountingStandardService';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
 
 /** @deprecated Import from `@/utils/ifrsStandardGL` for static maps */
 export { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
@@ -113,3 +113,4 @@ export function invoiceGlFieldsFromResult(glRes: GLResult): Record<string, unkno
     gl_standard_ref: glRes.standard_ref ?? null,
   };
 }
+

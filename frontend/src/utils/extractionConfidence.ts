@@ -1,4 +1,4 @@
-import type { Invoice } from '@/lib/supabase';
+﻿import type { Invoice } from '@/lib/ap-invoice/supabase';
 
 export function normalizeFieldConfidenceMap(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
@@ -98,3 +98,4 @@ export function getExtractionScoreSource(inv: Invoice): 'ocr' | 'ifrs' | 'comple
 export function invoiceNeedsExtractionReview(inv: Invoice): boolean {
   return getEffectiveExtractionScore(inv) < 70;
 }
+

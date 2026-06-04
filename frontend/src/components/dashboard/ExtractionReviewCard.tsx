@@ -1,5 +1,5 @@
-import { useNavigate } from 'react-router-dom';
-import type { Invoice } from '@/lib/supabase';
+﻿import { useNavigate } from 'react-router-dom';
+import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ScanLine } from 'lucide-react';
@@ -56,3 +56,4 @@ export function ExtractionReviewCard({ invoices }: Props) {
     </Card>
   );
 }
+

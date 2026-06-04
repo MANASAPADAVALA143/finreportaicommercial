@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { ApprovalRule } from '@/lib/supabase';
-import { fetchApprovalRules, saveApprovalRule, deleteApprovalRule } from '@/lib/approvalService';
+﻿import { useCallback, useEffect, useState } from 'react';
+import type { ApprovalRule } from '@/lib/ap-invoice/supabase';
+import { fetchApprovalRules, saveApprovalRule, deleteApprovalRule } from '@/lib/ap-invoice/approvalService';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -155,9 +155,9 @@ export function ApprovalRulesSection() {
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-gray-500">Loading…</p>
+            <p className="text-sm text-gray-500">Loadingâ€¦</p>
           ) : rules.length === 0 ? (
-            <p className="text-sm text-gray-500">No rules yet. Add one to enable “Submit for approval”.</p>
+            <p className="text-sm text-gray-500">No rules yet. Add one to enable â€œSubmit for approvalâ€.</p>
           ) : (
             <Table>
               <TableHeader>
@@ -174,12 +174,12 @@ export function ApprovalRulesSection() {
                 {rules.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell>{Number(r.min_amount).toLocaleString()}</TableCell>
-                    <TableCell>{r.max_amount != null ? Number(r.max_amount).toLocaleString() : '∞'}</TableCell>
+                    <TableCell>{r.max_amount != null ? Number(r.max_amount).toLocaleString() : 'âˆž'}</TableCell>
                     <TableCell>{r.required_approvers}</TableCell>
                     <TableCell className="max-w-[240px] truncate text-xs" title={r.approver_emails.join(', ')}>
                       {r.approver_emails.join(', ')}
                     </TableCell>
-                    <TableCell>{r.department || '—'}</TableCell>
+                    <TableCell>{r.department || 'â€”'}</TableCell>
                     <TableCell className="flex gap-1">
                       <Button variant="ghost" size="icon" onClick={() => openEdit(r)}>
                         <Pencil className="h-4 w-4" />
@@ -268,3 +268,4 @@ export function ApprovalRulesSection() {
     </>
   );
 }
+

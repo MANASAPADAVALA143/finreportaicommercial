@@ -1,4 +1,4 @@
-/** Legacy IFRS category → default GL (used as fallback when templates do not match). */
+﻿/** Legacy IFRS category â†’ default GL (used as fallback when templates do not match). */
 export const IFRS_STANDARD_GL: Record<string, { code: string; name: string }> = {
   'Professional Services': { code: '6100', name: 'Professional Fees' },
   'IT Infrastructure': { code: '1500', name: 'Fixed Assets IT' },
@@ -11,3 +11,4 @@ export const IFRS_STANDARD_GL: Record<string, { code: string; name: string }> = 
   'Travel & Entertainment': { code: '6600', name: 'Travel Expenses' },
   'Industrial Supplies': { code: '6050', name: 'Supply & Materials' },
 };
+

@@ -1,4 +1,4 @@
-// 3-Way Matching System for Invoice Processing
+﻿// 3-Way Matching System for Invoice Processing
 // Compares Purchase Order (PO), Goods Receipt Note (GRN), and Invoice amounts
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -19,9 +19,9 @@ export type MatchResult = {
  * Compares PO, GRN, and Invoice amounts to determine match status
  * 
  * Rules:
- * - If all match within 1%: status = "matched" ✅
- * - If invoice > PO by more than 5%: status = "mismatch" ❌
- * - If GRN < PO: status = "partial" ⚠️
+ * - If all match within 1%: status = "matched" âœ…
+ * - If invoice > PO by more than 5%: status = "mismatch" âŒ
+ * - If GRN < PO: status = "partial" âš ï¸
  * - If no PO found: status = "no_po"
  */
 export function compareAmounts(
@@ -57,7 +57,7 @@ export function compareAmounts(
     ) {
       return {
         match_status: 'matched',
-        match_notes: `✅ Perfect match! PO (${poAmount.toLocaleString()}), GRN (${grnAmount.toLocaleString()}), and Invoice (${invoiceAmount.toLocaleString()}) all match within 1%.`,
+        match_notes: `âœ… Perfect match! PO (${poAmount.toLocaleString()}), GRN (${grnAmount.toLocaleString()}), and Invoice (${invoiceAmount.toLocaleString()}) all match within 1%.`,
         po_amount: poAmount,
         grn_amount: grnAmount,
         invoice_amount: invoiceAmount,
@@ -70,7 +70,7 @@ export function compareAmounts(
     if (invoiceVariancePercent > 5) {
       return {
         match_status: 'mismatch',
-        match_notes: `❌ Mismatch detected! Invoice amount (${invoiceAmount.toLocaleString()}) exceeds PO amount (${poAmount.toLocaleString()}) by ${invoiceVariancePercent.toFixed(2)}%. This requires investigation.`,
+        match_notes: `âŒ Mismatch detected! Invoice amount (${invoiceAmount.toLocaleString()}) exceeds PO amount (${poAmount.toLocaleString()}) by ${invoiceVariancePercent.toFixed(2)}%. This requires investigation.`,
         po_amount: poAmount,
         grn_amount: grnAmount,
         invoice_amount: invoiceAmount,
@@ -86,7 +86,7 @@ export function compareAmounts(
       
       return {
         match_status: 'partial',
-        match_notes: `⚠️ Partial match. GRN (${grnAmount.toLocaleString()}) is ${grnShortfallPercent.toFixed(2)}% less than PO (${poAmount.toLocaleString()}). Invoice (${invoiceAmount.toLocaleString()}) may need adjustment.`,
+        match_notes: `âš ï¸ Partial match. GRN (${grnAmount.toLocaleString()}) is ${grnShortfallPercent.toFixed(2)}% less than PO (${poAmount.toLocaleString()}). Invoice (${invoiceAmount.toLocaleString()}) may need adjustment.`,
         po_amount: poAmount,
         grn_amount: grnAmount,
         invoice_amount: invoiceAmount,
@@ -99,7 +99,7 @@ export function compareAmounts(
     if (invoiceGrnVariancePercent <= 1 && Math.abs(invoiceVariancePercent) <= 5) {
       return {
         match_status: 'matched',
-        match_notes: `✅ Match confirmed. Invoice (${invoiceAmount.toLocaleString()}) matches GRN (${grnAmount.toLocaleString()}). PO variance (${invoiceVariancePercent.toFixed(2)}%) is within acceptable tolerance.`,
+        match_notes: `âœ… Match confirmed. Invoice (${invoiceAmount.toLocaleString()}) matches GRN (${grnAmount.toLocaleString()}). PO variance (${invoiceVariancePercent.toFixed(2)}%) is within acceptable tolerance.`,
         po_amount: poAmount,
         grn_amount: grnAmount,
         invoice_amount: invoiceAmount,
@@ -114,7 +114,7 @@ export function compareAmounts(
   if (Math.abs(invoiceVariancePercent) <= 1) {
     return {
       match_status: 'matched',
-      match_notes: `✅ Match confirmed. Invoice (${invoiceAmount.toLocaleString()}) matches PO (${poAmount.toLocaleString()}) within 1%. No GRN available for comparison.`,
+      match_notes: `âœ… Match confirmed. Invoice (${invoiceAmount.toLocaleString()}) matches PO (${poAmount.toLocaleString()}) within 1%. No GRN available for comparison.`,
       po_amount: poAmount,
       invoice_amount: invoiceAmount,
       variance: invoiceVariance,
@@ -126,7 +126,7 @@ export function compareAmounts(
   if (invoiceVariancePercent > 5) {
     return {
       match_status: 'mismatch',
-      match_notes: `❌ Mismatch detected! Invoice amount (${invoiceAmount.toLocaleString()}) exceeds PO amount (${poAmount.toLocaleString()}) by ${invoiceVariancePercent.toFixed(2)}%. This requires investigation.`,
+      match_notes: `âŒ Mismatch detected! Invoice amount (${invoiceAmount.toLocaleString()}) exceeds PO amount (${poAmount.toLocaleString()}) by ${invoiceVariancePercent.toFixed(2)}%. This requires investigation.`,
       po_amount: poAmount,
       invoice_amount: invoiceAmount,
       variance: invoiceVariance,
@@ -137,7 +137,7 @@ export function compareAmounts(
   // Within tolerance but not perfect match
   return {
     match_status: 'partial',
-    match_notes: `⚠️ Partial match. Invoice (${invoiceAmount.toLocaleString()}) differs from PO (${poAmount.toLocaleString()}) by ${Math.abs(invoiceVariancePercent).toFixed(2)}%. No GRN available for comparison.`,
+    match_notes: `âš ï¸ Partial match. Invoice (${invoiceAmount.toLocaleString()}) differs from PO (${poAmount.toLocaleString()}) by ${Math.abs(invoiceVariancePercent).toFixed(2)}%. No GRN available for comparison.`,
     po_amount: poAmount,
     invoice_amount: invoiceAmount,
     variance: invoiceVariance,
@@ -301,13 +301,13 @@ export async function runThreeWayMatch(
 export function getMatchStatusName(status: MatchStatus): string {
   switch (status) {
     case 'three_way_matched':
-      return '3-Way Matched ✅';
+      return '3-Way Matched âœ…';
     case 'matched':
       return 'PO Matched';
     case 'partial':
-      return 'Partial ⚠️';
+      return 'Partial âš ï¸';
     case 'mismatch':
-      return 'Mismatch ❌';
+      return 'Mismatch âŒ';
     case 'no_po':
       return 'No PO';
     default:
@@ -334,3 +334,4 @@ export function getMatchStatusColor(status: MatchStatus): string {
       return 'bg-gray-100 text-gray-800 border-gray-200';
   }
 }
+

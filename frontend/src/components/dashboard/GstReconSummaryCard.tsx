@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { getGstReconSummary } from '@/lib/gstService';
+import { getGstReconSummary } from '@/lib/ap-invoice/gstService';
 import { Receipt } from 'lucide-react';
 
 function currentPeriod(): string {
@@ -52,14 +52,14 @@ export function GstReconSummaryCard() {
           <>
             <p className="text-sm text-gray-600">Run GST migration to enable summaries.</p>
             <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-              Open GST recon →
+              Open GST recon â†’
             </Button>
           </>
         ) : s.total === 0 ? (
           <>
             <p className="text-sm text-gray-600">No GST lines this month yet.</p>
             <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-              Run reconciliation →
+              Run reconciliation â†’
             </Button>
           </>
         ) : (
@@ -75,12 +75,12 @@ export function GstReconSummaryCard() {
                 className="mt-3 w-full border-amber-600 text-amber-900"
                 onClick={() => navigate('/gst-recon')}
               >
-                Review →
+                Review â†’
               </Button>
             )}
             {allUnmatched && (
               <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-                Run reconciliation →
+                Run reconciliation â†’
               </Button>
             )}
             {allMatched && (
@@ -92,3 +92,4 @@ export function GstReconSummaryCard() {
     </Card>
   );
 }
+

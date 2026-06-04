@@ -1,33 +1,33 @@
-/**
- * Parse amount from n8n/string - handles "46,846.00", "₹46,846", "$1,234.56"
+﻿/**
+ * Parse amount from n8n/string - handles "46,846.00", "â‚¹46,846", "$1,234.56"
  */
 export function parseAmount(val: unknown): number {
   if (!val) return 0;
-  const cleaned = String(val).replace(/[₹$,\s]/g, '').trim();
+  const cleaned = String(val).replace(/[â‚¹$,\s]/g, '').trim();
   return parseFloat(cleaned) || 0;
 }
 
 export const CURRENCY_SYMBOLS: Record<string, string> = {
-  INR: '₹',
+  INR: 'â‚¹',
   USD: '$',
-  EUR: '€',
-  GBP: '£',
-  AED: 'د.إ',
+  EUR: 'â‚¬',
+  GBP: 'Â£',
+  AED: 'Ø¯.Ø¥',
   SGD: 'S$',
-  JPY: '¥',
+  JPY: 'Â¥',
   AUD: 'A$',
   CAD: 'C$',
-  SAR: '﷼',
+  SAR: 'ï·¼',
   MYR: 'RM',
   ZAR: 'R',
   CHF: 'Fr',
   HKD: 'HK$',
   NZD: 'NZ$',
-  NGN: '₦',
+  NGN: 'â‚¦',
   KES: 'KSh',
   BRL: 'R$',
   MXN: 'MX$',
-  PHP: '₱',
+  PHP: 'â‚±',
 };
 
 /**
@@ -62,3 +62,4 @@ export function formatCurrency(amount: number, currency: string = 'INR'): string
     })
   );
 }
+

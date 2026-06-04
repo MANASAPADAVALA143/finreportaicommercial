@@ -1,4 +1,4 @@
-export interface TaxType {
+﻿export interface TaxType {
   code: string;
   label: string;
   countries: string[];
@@ -9,13 +9,13 @@ export const TAX_TYPES: TaxType[] = [
   { code: 'NONE', label: 'No Tax / Tax Exempt', countries: ['ALL'] },
   {
     code: 'GST_IGST',
-    label: 'GST — IGST (Interstate)',
+    label: 'GST â€” IGST (Interstate)',
     countries: ['IN'],
     components: [{ name: 'IGST', rate: 18 }],
   },
   {
     code: 'GST_CGST_SGST',
-    label: 'GST — CGST + SGST (Intrastate)',
+    label: 'GST â€” CGST + SGST (Intrastate)',
     countries: ['IN'],
     components: [
       { name: 'CGST', rate: 9 },
@@ -48,7 +48,7 @@ export const TAX_TYPES: TaxType[] = [
   },
   {
     code: 'SALES_TAX',
-    label: 'Sales Tax (USA — rate varies by state)',
+    label: 'Sales Tax (USA â€” rate varies by state)',
     countries: ['US'],
     components: [{ name: 'Sales Tax', rate: 0 }],
   },
@@ -98,3 +98,4 @@ export function calculateTax(
   const taxAmount = breakdown.reduce((s, c) => s + c.amount, 0);
   return { taxAmount, total: subtotal + taxAmount, breakdown };
 }
+

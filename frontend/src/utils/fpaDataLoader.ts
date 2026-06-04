@@ -1,4 +1,4 @@
-// Helper to load FP&A data from localStorage
+﻿// Helper to load FP&A data from localStorage
 // Each module reads only what it needs
 function getFirstStored(keys: string[]): any | null {
   for (const k of keys) {
@@ -47,7 +47,7 @@ export const calculateVariance = (actual: any, budget: any) => {
   };
 };
 
-// BUG 2 FIX: Normalise scale (Lakhs vs Crores). If budget is 10x+ larger than actual, assume budget in Lakhs → convert to Crores.
+// BUG 2 FIX: Normalise scale (Lakhs vs Crores). If budget is 10x+ larger than actual, assume budget in Lakhs â†’ convert to Crores.
 const normaliseBudgetScale = (actualData: any, budgetData: any): any => {
   if (!actualData || !budgetData) return budgetData;
   const ref = (actualData.totalRevenue || actualData.domesticRevenue || 0) || 1;
@@ -474,12 +474,12 @@ export const calculateRealKPIs = (actualData: any, budgetData: any) => {
 export const convertBudgetToLineItems = (budgetData: any) => {
   if (!budgetData) return [];
 
-  // ── Fast path: use real uploaded lineItems when available ──────────────────
+  // â”€â”€ Fast path: use real uploaded lineItems when available â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // These are stored by BudgetManagement.handleFileUpload or master upload.
   if (budgetData.lineItems && Array.isArray(budgetData.lineItems) && budgetData.lineItems.length > 0) {
     const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     return budgetData.lineItems.map((item: any, idx: number) => {
-      // Reconstruct monthly object — prefer stored monthly array, else spread annual evenly
+      // Reconstruct monthly object â€” prefer stored monthly array, else spread annual evenly
       let monthly: Record<string, number> = { jan:0,feb:0,mar:0,apr:0,may:0,jun:0,jul:0,aug:0,sep:0,oct:0,nov:0,dec:0 };
       if (item.monthly && typeof item.monthly === 'object') {
         monthly = { ...monthly, ...item.monthly };
@@ -492,7 +492,7 @@ export const convertBudgetToLineItems = (budgetData: any) => {
       }
       const annualBudget = MONTH_KEYS.reduce((s, k) => s + (monthly[k] || 0), 0);
 
-      // Determine category (income / expense / other) — check accountType first then keywords
+      // Determine category (income / expense / other) â€” check accountType first then keywords
       const accType = String(item.accountType || item.account_type || '').toLowerCase();
       const name    = String(item.account || item.account_name || item.category || item.lineItem || '').toLowerCase();
       const isExpenseItem = accType.includes('expense') || accType.includes('cost')
@@ -713,7 +713,7 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
   const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
   const months    = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-  // ── Extract real monthly actuals from lineItems if available ─────────────
+  // â”€â”€ Extract real monthly actuals from lineItems if available â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Check actual lineItems for monthly arrays
   const getMonthlyArray = (data: any, type: 'actual' | 'budget'): number[] => {
     if (!data?.lineItems?.length) return new Array(12).fill(0);
@@ -753,7 +753,7 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
     const slope = actualValues.reduce((s, v, i) => s + (i - avgX) * (v - avgY), 0)
       / actualValues.reduce((s, _, i) => s + Math.pow(i - avgX, 2), 0);
     growthRate = avgY > 0 ? slope / avgY : 0.02;
-    growthRate = Math.max(-0.05, Math.min(0.15, growthRate)); // clamp to ±15% monthly
+    growthRate = Math.max(-0.05, Math.min(0.15, growthRate)); // clamp to Â±15% monthly
   }
 
   const lastActualVal = actualValues[actualValues.length - 1] || (actual.totalRevenue || 0) / 12;
@@ -776,7 +776,7 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
       actualRevenue  = 0;
       forecastRevenue = lastActualVal * Math.pow(1 + growthRate, monthsAhead);
     } else {
-      // No monthly data — use annual total spread
+      // No monthly data â€” use annual total spread
       actualRevenue  = isActual ? (actual.totalRevenue || 0) / 12 : 0;
       forecastRevenue = isActual ? actualRevenue : ((actual.totalRevenue || 0) / 12) * 1.05;
     }
@@ -801,7 +801,7 @@ export const generateForecastFromReal = (actualData: any, budgetData: any, month
     };
   });
 
-  // Expense Forecast — BUG 3 FIX: Use same growth rate as revenue so expenses are projected consistently (avoid 93% margin)
+  // Expense Forecast â€” BUG 3 FIX: Use same growth rate as revenue so expenses are projected consistently (avoid 93% margin)
   const totalBudgetExpenses =
     (budget.costOfGoodsSold || 0) + (budget.payroll || 0) + (budget.adminExpenses || 0) +
     (budget.marketingCosts || 0) + (budget.distributionCosts || 0) + (budget.rentExpense || 0) + (budget.depreciation || 0);
@@ -874,25 +874,25 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
       metrics: [
         {
           label: 'Revenue',
-          value: `₹${((actual.totalRevenue || 0) / 10000000).toFixed(1)}Cr`,
+          value: `â‚¹${((actual.totalRevenue || 0) / 10000000).toFixed(1)}Cr`,
           change: `${revenueVariance >= 0 ? '+' : ''}${revenueVariance.toFixed(1)}%`,
           status: revenueVariance >= 0 ? 'positive' : 'negative'
         },
         {
           label: 'EBITDA',
-          value: `₹${(ebitda / 10000000).toFixed(1)}Cr`,
+          value: `â‚¹${(ebitda / 10000000).toFixed(1)}Cr`,
           change: `Margin: ${(ebitda / (actual.totalRevenue || 1) * 100).toFixed(1)}%`,
           status: 'positive'
         },
         {
           label: 'Net Profit',
-          value: `₹${(netProfit / 10000000).toFixed(1)}Cr`,
+          value: `â‚¹${(netProfit / 10000000).toFixed(1)}Cr`,
           change: `${profitVariance >= 0 ? '+' : ''}${profitVariance.toFixed(1)}%`,
           status: profitVariance >= 0 ? 'positive' : 'negative'
         },
         {
           label: 'Cash Position',
-          value: `₹${((actual.cashAndEquivalents || 0) / 10000000).toFixed(1)}Cr`,
+          value: `â‚¹${((actual.cashAndEquivalents || 0) / 10000000).toFixed(1)}Cr`,
           change: 'Strong liquidity',
           status: 'positive'
         }
@@ -907,19 +907,19 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
       metrics: [
         {
           label: 'Total Revenue',
-          value: `₹${((actual.totalRevenue || 0) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${((actual.totalRevenue || 0) / 10000000).toFixed(2)}Cr`,
           change: `vs Budget: ${revenueVariance >= 0 ? '+' : ''}${revenueVariance.toFixed(1)}%`,
           status: revenueVariance >= 0 ? 'positive' : 'negative'
         },
         {
           label: 'Gross Profit',
-          value: `₹${(grossProfit / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${(grossProfit / 10000000).toFixed(2)}Cr`,
           change: `Margin: ${grossMargin.toFixed(1)}%`,
           status: 'positive'
         },
         {
           label: 'Operating Expenses',
-          value: `₹${((actual.totalOperatingExpenses || 0) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${((actual.totalOperatingExpenses || 0) / 10000000).toFixed(2)}Cr`,
           change: `${((actual.totalOperatingExpenses || 0) / (actual.totalRevenue || 1) * 100).toFixed(1)}% of Revenue`,
           status: 'neutral'
         },
@@ -940,19 +940,19 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
       metrics: [
         {
           label: 'Revenue Variance',
-          value: `₹${(((actual.totalRevenue || 0) - (budget.totalRevenue || 0)) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${(((actual.totalRevenue || 0) - (budget.totalRevenue || 0)) / 10000000).toFixed(2)}Cr`,
           change: `${revenueVariance >= 0 ? '+' : ''}${revenueVariance.toFixed(1)}%`,
           status: revenueVariance >= 0 ? 'positive' : 'negative'
         },
         {
           label: 'COGS Variance',
-          value: `₹${(((actual.costOfGoodsSold || 0) - (budget.costOfGoodsSold || 0)) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${(((actual.costOfGoodsSold || 0) - (budget.costOfGoodsSold || 0)) / 10000000).toFixed(2)}Cr`,
           change: `${(((actual.costOfGoodsSold || 0) - (budget.costOfGoodsSold || 0)) / (budget.costOfGoodsSold || 1) * 100).toFixed(1)}%`,
           status: (actual.costOfGoodsSold || 0) <= (budget.costOfGoodsSold || 0) ? 'positive' : 'negative'
         },
         {
           label: 'OpEx Variance',
-          value: `₹${(((actual.totalOperatingExpenses || 0) - (budget.totalOperatingExpenses || 0)) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${(((actual.totalOperatingExpenses || 0) - (budget.totalOperatingExpenses || 0)) / 10000000).toFixed(2)}Cr`,
           change: `${(((actual.totalOperatingExpenses || 0) - (budget.totalOperatingExpenses || 0)) / (budget.totalOperatingExpenses || 1) * 100).toFixed(1)}%`,
           status: (actual.totalOperatingExpenses || 0) <= (budget.totalOperatingExpenses || 0) ? 'positive' : 'negative'
         }
@@ -967,25 +967,25 @@ export const generateBoardPackSections = (actualData: any, budgetData: any) => {
       metrics: [
         {
           label: 'Cash & Equivalents',
-          value: `₹${((actual.cashAndEquivalents || 0) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${((actual.cashAndEquivalents || 0) / 10000000).toFixed(2)}Cr`,
           change: 'Strong position',
           status: 'positive'
         },
         {
           label: 'Accounts Receivable',
-          value: `₹${((actual.accountsReceivable || 0) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${((actual.accountsReceivable || 0) / 10000000).toFixed(2)}Cr`,
           change: `DSO: ${((actual.accountsReceivable || 0) / ((actual.totalRevenue || 1) / 365)).toFixed(0)} days`,
           status: 'neutral'
         },
         {
           label: 'Accounts Payable',
-          value: `₹${((actual.accountsPayable || 0) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${((actual.accountsPayable || 0) / 10000000).toFixed(2)}Cr`,
           change: `DPO: ${((actual.accountsPayable || 0) / ((actual.costOfGoodsSold || 1) / 365)).toFixed(0)} days`,
           status: 'neutral'
         },
         {
           label: 'Working Capital',
-          value: `₹${(((actual.cashAndEquivalents || 0) + (actual.accountsReceivable || 0) + (actual.inventory || 0) - (actual.accountsPayable || 0)) / 10000000).toFixed(2)}Cr`,
+          value: `â‚¹${(((actual.cashAndEquivalents || 0) + (actual.accountsReceivable || 0) + (actual.inventory || 0) - (actual.accountsPayable || 0)) / 10000000).toFixed(2)}Cr`,
           change: 'Adequate',
           status: 'positive'
         }
@@ -1074,3 +1074,4 @@ export const getMissingDataMessage = (missing: string[]) => {
   
   return `Upload ${missingLabels.join(' and ')} to see this analysis`;
 };
+

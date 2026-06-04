@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Parse CFO Services Context from Excel sheet rows.
  * Used by UploadData (central upload) and CFOServices (in-page upload).
  */
@@ -25,7 +25,7 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
   };
   const getNum = (row: any, ...keys: string[]) => {
     const v = get(row, ...keys);
-    const n = parseFloat(String(v).replace(/[₹,%\s]/g, ''));
+    const n = parseFloat(String(v).replace(/[â‚¹,%\s]/g, ''));
     return Number.isFinite(n) ? n : 0;
   };
   const getNumByKeyword = (row: any, ...keywords: string[]) => {
@@ -35,7 +35,7 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
     if (!key) return 0;
     const v = row[key];
     if (v === undefined || v === null || v === '') return 0;
-    const n = parseFloat(String(v).replace(/[₹,%\s]/g, ''));
+    const n = parseFloat(String(v).replace(/[â‚¹,%\s]/g, ''));
     return Number.isFinite(n) ? n : 0;
   };
   const section = (name: string) => (row: any) =>
@@ -157,3 +157,4 @@ export async function parseCFOServicesContextFromFile(file: File): Promise<CFOSe
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName]);
   return parseCFOServicesContextFromRows(rows as any[], file.name);
 }
+
