@@ -253,6 +253,16 @@ const APCalendar        = safeLazy(() => import('./pages/ap-invoices/PaymentCale
 const APGLAccounts      = safeLazy(() => import('./pages/ap-invoices/GLAccounts'));
 const APIntegrations    = safeLazy(() => import('./pages/ap-invoices/APIntegrations'));
 const APSettings        = safeLazy(() => import('./pages/ap-invoices/Settings'));
+// New pages from AP Invoice app
+const APCFODashboard    = safeLazy(() => import('./pages/ap-invoices/CFODashboard'));
+const APAuditLog        = safeLazy(() => import('./pages/ap-invoices/AuditLog'));
+const APEmailInvoices   = safeLazy(() => import('./pages/ap-invoices/EmailInvoices'));
+const APMonthEndClose   = safeLazy(() => import('./pages/ap-invoices/MonthEndChecklist'));
+const APAnomalyIntel    = safeLazy(() => import('./pages/ap-invoices/AnomalyIntelligence'));
+const APPaymentLog      = safeLazy(() => import('./pages/ap-invoices/PaymentLog'));
+const APVendorPortal    = safeLazy(() => import('./pages/ap-invoices/VendorUploadPortal'));
+const APCompanyConfig   = safeLazy(() => import('./pages/ap-invoices/CompanyConfig'));
+const APTrainingData    = safeLazy(() => import('./pages/ap-invoices/TrainingData'));
 
 // â”€â”€ Accounting Pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const CloseStatusPage = safeLazy(() => import('./pages/accounting/CloseStatus'));
@@ -404,8 +414,17 @@ function App() {
                   <Route path="gst-recon"    element={<APGSTRecon />} />
                   <Route path="calendar"     element={<APCalendar />} />
                   <Route path="gl-accounts"  element={<APGLAccounts />} />
-                  <Route path="integrations" element={<APIntegrations />} />
-                  <Route path="settings"     element={<APSettings />} />
+                  <Route path="integrations"   element={<APIntegrations />} />
+                  <Route path="settings"       element={<APSettings />} />
+                  <Route path="cfo"            element={<APCFODashboard />} />
+                  <Route path="audit-log"      element={<APAuditLog />} />
+                  <Route path="email-invoices" element={<APEmailInvoices />} />
+                  <Route path="month-end"      element={<APMonthEndClose />} />
+                  <Route path="anomaly"        element={<APAnomalyIntel />} />
+                  <Route path="payment-log"    element={<APPaymentLog />} />
+                  <Route path="vendor-portal"  element={<APVendorPortal />} />
+                  <Route path="company-config" element={<APCompanyConfig />} />
+                  <Route path="training"       element={<APTrainingData />} />
                 </Route>
               </Route>
 

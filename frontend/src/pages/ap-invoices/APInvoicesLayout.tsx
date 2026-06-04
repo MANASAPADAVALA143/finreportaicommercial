@@ -7,68 +7,74 @@ import type React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { MarketProvider, useMarket } from '../../contexts/MarketContext';
 import {
-  LayoutDashboard,
-  FileText,
-  Upload,
-  CheckCircle,
-  Users,
-  ShoppingCart,
-  Package,
-  ListTodo,
-  TrendingUp,
-  Landmark,
-  Receipt,
-  CalendarDays,
-  BookOpen,
-  Link2,
-  Settings,
+  LayoutDashboard, FileText, Upload, CheckCircle, Users,
+  ShoppingCart, Package, ListTodo, TrendingUp, Landmark,
+  Receipt, CalendarDays, BookOpen, Link2, Settings,
+  BarChart3, Mail, AlertTriangle, ClipboardList, Building,
+  Database, CreditCard, Shield,
 } from 'lucide-react';
 
 type NavItem = { to: string; label: string; icon: React.ElementType; end?: boolean };
 type NavSection = { label: string | null; items: NavItem[] };
 
-const NAV_SECTIONS: NavSection[] = [
-  {
-    label: null,
-    items: [
-      { to: '/ap-invoices',              label: 'CFO Dashboard',       icon: LayoutDashboard, end: true },
-      { to: '/ap-invoices/action-queue', label: "Today's Action Queue", icon: ListTodo },
-    ],
-  },
-  {
-    label: 'Invoices',
-    items: [
-      { to: '/ap-invoices/list',         label: 'Invoice List',        icon: FileText },
-      { to: '/ap-invoices/upload',       label: 'Upload Invoice',      icon: Upload },
-      { to: '/ap-invoices/approvals',    label: 'My Approvals',        icon: CheckCircle },
-    ],
-  },
-  {
-    label: 'Procurement',
-    items: [
-      { to: '/ap-invoices/po',           label: 'Purchase Orders',     icon: ShoppingCart },
-      { to: '/ap-invoices/grn',          label: 'Goods Receipts',      icon: Package },
-      { to: '/ap-invoices/vendors',      label: 'Vendors',             icon: Users },
-    ],
-  },
-  {
-    label: 'Analytics',
-    items: [
-      { to: '/ap-invoices/aging',        label: 'AP Aging',            icon: TrendingUp },
-      { to: '/ap-invoices/bank-recon',   label: 'Bank Recon',          icon: Landmark },
-      { to: '/ap-invoices/gst-recon',    label: 'GST Recon',           icon: Receipt },
-      { to: '/ap-invoices/calendar',     label: 'Calendar',            icon: CalendarDays },
-      { to: '/ap-invoices/gl-accounts',  label: 'GL Accounts',         icon: BookOpen },
-    ],
-  },
-  {
-    label: 'Setup',
-    items: [
-      { to: '/ap-invoices/integrations', label: 'Integrations',        icon: Link2 },
-      { to: '/ap-invoices/settings',     label: 'Settings',            icon: Settings },
-    ],
-  },
-];
+function useNavSections(isUAE: boolean): NavSection[] {
+  return [
+    {
+      label: null,
+      items: [
+        { to: '/ap-invoices',              label: 'Dashboard',            icon: LayoutDashboard, end: true },
+        { to: '/ap-invoices/cfo',          label: 'CFO Dashboard',        icon: BarChart3 },
+        { to: '/ap-invoices/action-queue', label: "Action Queue",         icon: ListTodo },
+      ],
+    },
+    {
+      label: 'Invoices',
+      items: [
+        { to: '/ap-invoices/list',         label: 'Invoice List',         icon: FileText },
+        { to: '/ap-invoices/upload',       label: 'Upload Invoice',       icon: Upload },
+        { to: '/ap-invoices/approvals',    label: 'My Approvals',         icon: CheckCircle },
+        { to: '/ap-invoices/email-invoices', label: 'Email Invoices',     icon: Mail },
+        { to: '/ap-invoices/vendor-portal', label: 'Vendor Portal',       icon: Building },
+      ],
+    },
+    {
+      label: 'Procurement',
+      items: [
+        { to: '/ap-invoices/po',           label: 'Purchase Orders',      icon: ShoppingCart },
+        { to: '/ap-invoices/grn',          label: 'Goods Receipts',       icon: Package },
+        { to: '/ap-invoices/vendors',      label: 'Vendors',              icon: Users },
+      ],
+    },
+    {
+      label: 'Analytics & Recon',
+      items: [
+        { to: '/ap-invoices/aging',        label: 'AP Aging',             icon: TrendingUp },
+        { to: '/ap-invoices/bank-recon',   label: 'Bank Recon',           icon: Landmark },
+        { to: '/ap-invoices/gst-recon',    label: isUAE ? 'VAT Recon' : 'GST Recon', icon: Receipt },
+        { to: '/ap-invoices/calendar',     label: 'Payment Calendar',     icon: CalendarDays },
+        { to: '/ap-invoices/gl-accounts',  label: 'GL Accounts',          icon: BookOpen },
+        { to: '/ap-invoices/payment-log',  label: 'Payment Log',          icon: CreditCard },
+      ],
+    },
+    {
+      label: 'AI & Compliance',
+      items: [
+        { to: '/ap-invoices/anomaly',      label: 'Anomaly Intelligence',  icon: AlertTriangle },
+        { to: '/ap-invoices/month-end',    label: 'Month-End Close',       icon: ClipboardList },
+        { to: '/ap-invoices/audit-log',    label: 'Audit Log',             icon: Shield },
+        { to: '/ap-invoices/training',     label: 'AI Training Data',      icon: Database },
+      ],
+    },
+    {
+      label: 'Setup',
+      items: [
+        { to: '/ap-invoices/company-config', label: 'Company Config',     icon: Building },
+        { to: '/ap-invoices/integrations',   label: 'Integrations',       icon: Link2 },
+        { to: '/ap-invoices/settings',       label: 'Settings',           icon: Settings },
+      ],
+    },
+  ];
+}
 
 const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors';
 const linkIdle   = 'text-slate-400 hover:bg-slate-800 hover:text-white';
@@ -122,7 +128,7 @@ function APInvoicesLayoutInner() {
 
         {/* Nav */}
         <nav className="flex-1 px-2 py-3 space-y-4">
-          {NAV_SECTIONS.map((section, si) => (
+          {useNavSections(isUAE).map((section, si) => (
             <div key={si}>
               {section.label && (
                 <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
