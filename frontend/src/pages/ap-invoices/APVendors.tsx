@@ -1,6 +1,6 @@
-/**
+﻿/**
  * APVendors.tsx
- * Vendor master — derived from invoices table (no separate vendors table required).
+ * Vendor master â€” derived from invoices table (no separate vendors table required).
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Building2, RefreshCw, X } from 'lucide-react';
@@ -37,7 +37,7 @@ function VendorDrawer({ vendor, invoices, onClose }: { vendor: VendorRow; invoic
               { label: 'Total Invoices', value: String(vendor.totalInvoices) },
               { label: 'Total Spend',    value: fmtAED(vendor.totalSpend) },
               { label: 'Avg Invoice',    value: fmtAED(vendor.avgAmount) },
-              { label: 'Last Invoice',   value: vendor.lastInvoice || '—' },
+              { label: 'Last Invoice',   value: vendor.lastInvoice || 'â€”' },
             ].map(({ label, value }) => (
               <div key={label} className="bg-gray-800 rounded-lg p-3">
                 <p className="text-[10px] text-gray-400">{label}</p>
@@ -53,7 +53,7 @@ function VendorDrawer({ vendor, invoices, onClose }: { vendor: VendorRow; invoic
                 <div key={inv.id} className="flex items-center justify-between text-xs border-b border-gray-800 pb-2">
                   <div>
                     <p className="text-white">#{inv.invoice_number}</p>
-                    <p className="text-gray-500">{inv.invoice_date || inv.created_at?.slice(0, 10) || '—'}</p>
+                    <p className="text-gray-500">{inv.invoice_date || inv.created_at?.slice(0, 10) || 'â€”'}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-white">{fmtAED(inv.total_amount)}</p>
@@ -127,7 +127,7 @@ export default function APVendors() {
     if (v.riskCounts['high'] > 0) return 'High';
     if (v.riskCounts['medium'] > 0) return 'Medium';
     if (v.riskCounts['low'] > 0) return 'Low';
-    return '—';
+    return 'â€”';
   };
 
   return (
@@ -135,7 +135,7 @@ export default function APVendors() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Vendors</h1>
-          <p className="text-gray-400 text-sm mt-1">{vendors.length} vendors · derived from invoice history</p>
+          <p className="text-gray-400 text-sm mt-1">{vendors.length} vendors Â· derived from invoice history</p>
         </div>
         <button onClick={load} disabled={loading} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg disabled:opacity-50">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -144,7 +144,7 @@ export default function APVendors() {
 
       <div className="relative mb-4">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendor…" className="bg-gray-800 border border-gray-700 text-white pl-8 pr-3 py-2 rounded-lg text-sm w-72" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search vendorâ€¦" className="bg-gray-800 border border-gray-700 text-white pl-8 pr-3 py-2 rounded-lg text-sm w-72" />
       </div>
 
       <div className="bg-gray-800/60 border border-gray-700 rounded-xl overflow-hidden">
@@ -185,7 +185,7 @@ export default function APVendors() {
                   <td className="px-4 py-3 text-gray-300 text-xs">{v.totalInvoices}</td>
                   <td className="px-4 py-3 text-white text-xs font-medium">{fmtAED(v.totalSpend)}</td>
                   <td className="px-4 py-3 text-gray-300 text-xs">{fmtAED(v.avgAmount)}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{v.lastInvoice || '—'}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{v.lastInvoice || 'â€”'}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1 flex-wrap">
                       {Object.entries(v.statuses).slice(0, 3).map(([s, c]) => (
@@ -205,3 +205,4 @@ export default function APVendors() {
     </div>
   );
 }
+

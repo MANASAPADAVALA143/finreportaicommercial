@@ -1,5 +1,5 @@
-/**
- * APIntegrations.tsx — Zoho Books + QuickBooks integration hub
+﻿/**
+ * APIntegrations.tsx â€” Zoho Books + QuickBooks integration hub
  * Connect, sync, and manage external accounting integrations
  */
 import { useState } from 'react';
@@ -25,7 +25,7 @@ const INTEGRATIONS: Integration[] = [
   {
     id: 'zoho',
     name: 'Zoho Books',
-    logo: '🟠',
+    logo: 'ðŸŸ ',
     description: 'Sync AP invoices, vendor payments, and purchase orders with Zoho Books.',
     connected: false,
     color: 'from-orange-900/40 to-orange-800/20 border-orange-700/50',
@@ -35,7 +35,7 @@ const INTEGRATIONS: Integration[] = [
   {
     id: 'quickbooks',
     name: 'QuickBooks Online',
-    logo: '🟢',
+    logo: 'ðŸŸ¢',
     description: 'Two-way sync with QuickBooks: push approved invoices, pull vendor bills.',
     connected: false,
     color: 'from-green-900/40 to-green-800/20 border-green-700/50',
@@ -45,7 +45,7 @@ const INTEGRATIONS: Integration[] = [
   {
     id: 'xero',
     name: 'Xero',
-    logo: '🔵',
+    logo: 'ðŸ”µ',
     description: 'Import bills from Xero and push approved payments back automatically.',
     connected: false,
     color: 'from-blue-900/40 to-blue-800/20 border-blue-700/50',
@@ -55,7 +55,7 @@ const INTEGRATIONS: Integration[] = [
   {
     id: 'tally',
     name: 'Tally Prime',
-    logo: '🟣',
+    logo: 'ðŸŸ£',
     description: 'Export approved invoices to Tally in standard XML/JSON voucher format.',
     connected: false,
     color: 'from-purple-900/40 to-purple-800/20 border-purple-700/50',
@@ -101,7 +101,7 @@ export default function APIntegrations() {
     setSyncStatus(p => ({ ...p, [intg.id]: ok ? 'success' : 'error' }));
     setSyncLogs(p => [{
       time: new Date().toLocaleTimeString(),
-      action: `${intg.name} sync — ${ok ? 'invoices pulled' : 'failed'}`,
+      action: `${intg.name} sync â€” ${ok ? 'invoices pulled' : 'failed'}`,
       count: ok ? Math.floor(Math.random() * 20 + 5) : 0,
       status: ok ? 'success' : 'error',
     }, ...p.slice(0, 19)]);
@@ -187,7 +187,7 @@ export default function APIntegrations() {
                         disabled={sStatus === 'syncing'}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium">
                         <RefreshCw className={`w-3.5 h-3.5 ${sStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                        {sStatus === 'syncing' ? 'Syncing…' : sStatus === 'success' ? '✓ Synced' : sStatus === 'error' ? '✗ Failed' : 'Sync Now'}
+                        {sStatus === 'syncing' ? 'Syncingâ€¦' : sStatus === 'success' ? 'âœ“ Synced' : sStatus === 'error' ? 'âœ— Failed' : 'Sync Now'}
                       </button>
                       <button
                         onClick={() => handleDisconnect(intg.id)}
@@ -263,3 +263,4 @@ export default function APIntegrations() {
     </div>
   );
 }
+

@@ -1,19 +1,19 @@
-/**
- * APInvoiceList.tsx — Full replica of InvoiceFlow Invoice List in FinReportAI dark design.
+﻿/**
+ * APInvoiceList.tsx â€” Full replica of InvoiceFlow Invoice List in FinReportAI dark design.
  * Features: 8-step pipeline stepper, all filter tabs, all columns, invoice detail modal.
  */
 import { useEffect, useState, useMemo } from 'react';
 import { Search, X, RefreshCw, ChevronLeft, ChevronRight, Eye, CheckCircle2, AlertTriangle, Download } from 'lucide-react';
 import { apSupabase, type APInvoice, type APInvoiceLineItem } from '../../lib/apSupabase';
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fmtAmt = (n: number, cur = 'AED') =>
   `${cur} ${n.toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const PAGE_SIZE = 20;
 
-// ── stepper ───────────────────────────────────────────────────────────────────
+// â”€â”€ stepper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STEPS = [
   'Uploaded', 'AI Extracted', 'IFRS Classify', '3-Way Match',
@@ -50,7 +50,7 @@ function PipelineStepper({ invoices }: { invoices: APInvoice[] }) {
                   ${done   ? 'bg-green-600 border-green-500 text-white'
                   : active ? 'bg-blue-600 border-blue-400 text-white'
                            : 'bg-gray-700 border-gray-600 text-gray-400'}`}>
-                  {done ? '✓' : i + 1}
+                  {done ? 'âœ“' : i + 1}
                 </div>
                 <span className={`text-[10px] whitespace-nowrap font-medium
                   ${done ? 'text-green-400' : active ? 'text-blue-400' : 'text-gray-500'}`}>
@@ -68,7 +68,7 @@ function PipelineStepper({ invoices }: { invoices: APInvoice[] }) {
   );
 }
 
-// ── badges ────────────────────────────────────────────────────────────────────
+// â”€â”€ badges â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const statusBadge = (s: string) => {
   const map: Record<string, string> = {
@@ -97,18 +97,18 @@ const riskBadge = (r: string | null) => {
 
 const matchBadge = (s: string | null) => {
   const labels: Record<string, { text: string; cls: string }> = {
-    matched:           { text: '✅ Matched',   cls: 'text-green-400' },
-    three_way_matched: { text: '✅ 3-Way',      cls: 'text-emerald-400 font-bold' },
-    partial:           { text: '⚠️ Partial',   cls: 'text-amber-400' },
-    mismatch:          { text: '❌ Mismatch',  cls: 'text-red-400' },
-    no_po:             { text: '— No PO',      cls: 'text-gray-500' },
+    matched:           { text: 'âœ… Matched',   cls: 'text-green-400' },
+    three_way_matched: { text: 'âœ… 3-Way',      cls: 'text-emerald-400 font-bold' },
+    partial:           { text: 'âš ï¸ Partial',   cls: 'text-amber-400' },
+    mismatch:          { text: 'âŒ Mismatch',  cls: 'text-red-400' },
+    no_po:             { text: 'â€” No PO',      cls: 'text-gray-500' },
   };
-  if (!s) return <span className="text-gray-500 text-xs">—</span>;
+  if (!s) return <span className="text-gray-500 text-xs">â€”</span>;
   const cfg = labels[s] || { text: s, cls: 'text-gray-400' };
   return <span className={`text-xs ${cfg.cls}`}>{cfg.text}</span>;
 };
 
-// ── invoice detail modal ──────────────────────────────────────────────────────
+// â”€â”€ invoice detail modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function InvoiceModal({ inv, lineItems, onClose, onRefresh }: {
   inv: APInvoice;
@@ -157,16 +157,16 @@ function InvoiceModal({ inv, lineItems, onClose, onRefresh }: {
           {/* Key details grid */}
           <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
             {[
-              ['Invoice Date', inv.invoice_date || '—'],
-              ['Due Date', inv.due_date || '—'],
+              ['Invoice Date', inv.invoice_date || 'â€”'],
+              ['Due Date', inv.due_date || 'â€”'],
               ['Amount', fmtAmt(inv.total_amount, inv.currency)],
-              ['Tax', inv.tax_amount ? fmtAmt(inv.tax_amount, inv.currency) : '—'],
+              ['Tax', inv.tax_amount ? fmtAmt(inv.tax_amount, inv.currency) : 'â€”'],
               ['PO Number', inv.po_number || 'No PO'],
-              ['3-Way Match', inv.match_status || '—'],
-              ['IFRS Category', inv.ifrs_category || '—'],
-              ['Confidence', inv.ifrs_confidence ? `${inv.ifrs_confidence}%` : '—'],
-              ['Risk Score', inv.risk_score || '—'],
-              ['GL Account', (inv as any).gl_account || '—'],
+              ['3-Way Match', inv.match_status || 'â€”'],
+              ['IFRS Category', inv.ifrs_category || 'â€”'],
+              ['Confidence', inv.ifrs_confidence ? `${inv.ifrs_confidence}%` : 'â€”'],
+              ['Risk Score', inv.risk_score || 'â€”'],
+              ['GL Account', (inv as any).gl_account || 'â€”'],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between py-1 border-b border-gray-800">
                 <span className="text-gray-400 text-xs">{k}</span>
@@ -242,7 +242,7 @@ function InvoiceModal({ inv, lineItems, onClose, onRefresh }: {
   );
 }
 
-// ── main component ────────────────────────────────────────────────────────────
+// â”€â”€ main component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type ViewTab = 'all' | 'approvals' | 'duplicates' | 'review';
 type TypeTab = 'all_types' | 'ap' | 'ar';
@@ -358,7 +358,7 @@ export default function APInvoiceList() {
       {/* 8-step pipeline stepper */}
       {invoices.length > 0 && <PipelineStepper invoices={invoices} />}
 
-      {/* Filter tabs row 1 — view mode */}
+      {/* Filter tabs row 1 â€” view mode */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         {(['all','approvals','duplicates','review'] as ViewTab[]).map(t => (
           <button key={t} onClick={() => setViewTab(t)}
@@ -375,13 +375,13 @@ export default function APInvoiceList() {
         ))}
       </div>
 
-      {/* Filter row 2 — dropdowns + search + date range */}
+      {/* Filter row 2 â€” dropdowns + search + date range */}
       <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 mb-4 space-y-3">
         <div className="flex flex-wrap gap-2">
           <div className="relative flex-1 min-w-[200px]">
             <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search by invoice # or vendor name…"
+              placeholder="Search by invoice # or vendor nameâ€¦"
               className="w-full bg-gray-700 border border-gray-600 text-white pl-8 pr-3 py-2 rounded-lg text-xs" />
           </div>
           {[
@@ -401,7 +401,7 @@ export default function APInvoiceList() {
           <span className="font-medium">Date Range:</span>
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
             className="bg-gray-700 border border-gray-600 text-white px-3 py-1.5 rounded-lg text-xs" />
-          <span>→</span>
+          <span>â†’</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
             className="bg-gray-700 border border-gray-600 text-white px-3 py-1.5 rounded-lg text-xs" />
           {(dateFrom || dateTo || search || statusF !== 'All Statuses' || matchF !== 'All Match Status' || riskF !== 'All Risk') && (
@@ -476,7 +476,7 @@ export default function APInvoiceList() {
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-blue-400 font-mono font-medium">{inv.invoice_number || '—'}</span>
+                          <span className="text-blue-400 font-mono font-medium">{inv.invoice_number || 'â€”'}</span>
                           {(inv as any).source && (
                             <span className="text-[9px] text-gray-500 capitalize">{(inv as any).source}</span>
                           )}
@@ -495,18 +495,18 @@ export default function APInvoiceList() {
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-gray-300 max-w-[120px] truncate">
-                        {inv.ifrs_category || '—'}
+                        {inv.ifrs_category || 'â€”'}
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         {inv.ifrs_confidence
                           ? <span className="text-emerald-400 font-medium">{inv.ifrs_confidence}%</span>
-                          : <span className="text-gray-600">—</span>}
+                          : <span className="text-gray-600">â€”</span>}
                       </td>
                       <td className="px-3 py-2.5">{matchBadge(inv.match_status)}</td>
                       <td className="px-3 py-2.5">
                         {gl ? (
                           <span className="text-blue-400 font-mono text-[10px]">{gl}</span>
-                        ) : <span className="text-gray-600">—</span>}
+                        ) : <span className="text-gray-600">â€”</span>}
                       </td>
                       <td className="px-3 py-2.5 text-center">{riskBadge(inv.risk_score)}</td>
                       <td className="px-3 py-2.5 text-center" onClick={e => e.stopPropagation()}>
@@ -526,9 +526,9 @@ export default function APInvoiceList() {
         {/* Pagination footer */}
         {filtered.length > PAGE_SIZE && (
           <div className="px-4 py-3 border-t border-gray-700 flex items-center justify-between text-xs text-gray-400">
-            <span>Showing {(page-1)*PAGE_SIZE + 1}–{Math.min(page*PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+            <span>Showing {(page-1)*PAGE_SIZE + 1}â€“{Math.min(page*PAGE_SIZE, filtered.length)} of {filtered.length}</span>
             <div className="flex items-center gap-1">
-              <button onClick={() => setPage(1)} disabled={page===1} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30">«</button>
+              <button onClick={() => setPage(1)} disabled={page===1} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30">Â«</button>
               <button onClick={() => setPage(p => p-1)} disabled={page===1} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30"><ChevronLeft size={12} /></button>
               {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                 const p = Math.max(1, Math.min(page - 2 + i, totalPages - 4 + i));
@@ -540,7 +540,7 @@ export default function APInvoiceList() {
                 );
               })}
               <button onClick={() => setPage(p => p+1)} disabled={page===totalPages} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30"><ChevronRight size={12} /></button>
-              <button onClick={() => setPage(totalPages)} disabled={page===totalPages} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30">»</button>
+              <button onClick={() => setPage(totalPages)} disabled={page===totalPages} className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30">Â»</button>
             </div>
           </div>
         )}
@@ -558,3 +558,4 @@ export default function APInvoiceList() {
     </div>
   );
 }
+

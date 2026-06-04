@@ -1,5 +1,5 @@
-/**
- * APCalendar.tsx — Payment & Due Date Calendar
+﻿/**
+ * APCalendar.tsx â€” Payment & Due Date Calendar
  * Shows invoices due/payments scheduled on a monthly calendar grid
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -33,7 +33,7 @@ export default function APCalendar() {
   };
   useEffect(() => { load(); }, []);
 
-  // Map date → invoices
+  // Map date â†’ invoices
   const byDate = useMemo(() => {
     const map: Record<string, APInvoice[]> = {};
     for (const inv of invoices) {
@@ -158,7 +158,7 @@ export default function APCalendar() {
           </div>
         </div>
 
-        {/* Side panel — selected day or upcoming */}
+        {/* Side panel â€” selected day or upcoming */}
         <div className="space-y-4">
           {selected ? (
             <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
@@ -166,7 +166,7 @@ export default function APCalendar() {
                 <h3 className="text-sm font-bold text-white">
                   {new Date(selected + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}
                 </h3>
-                <button onClick={() => setSelected(null)} className="text-slate-500 hover:text-white text-xs">✕ Clear</button>
+                <button onClick={() => setSelected(null)} className="text-slate-500 hover:text-white text-xs">âœ• Clear</button>
               </div>
               {selectedInvoices.length === 0 ? (
                 <p className="text-slate-500 text-sm">No invoices on this date.</p>
@@ -195,7 +195,7 @@ export default function APCalendar() {
               <Clock className="w-4 h-4 text-blue-400" /> Upcoming Due
             </h3>
             {loading ? (
-              <p className="text-slate-500 text-xs">Loading…</p>
+              <p className="text-slate-500 text-xs">Loadingâ€¦</p>
             ) : monthInvoices.filter(i => i.status !== 'Paid').slice(0, 8).map(inv => {
               const overdue = inv.due_date && new Date(inv.due_date) < now;
               return (
@@ -203,7 +203,7 @@ export default function APCalendar() {
                   <div>
                     <p className="font-mono text-blue-400 text-xs">{inv.invoice_number}</p>
                     <p className="text-slate-300 text-xs truncate max-w-[120px]">{inv.vendor_name}</p>
-                    <p className="text-slate-500 text-[10px]">{inv.due_date?.slice(0,10) ?? '—'}</p>
+                    <p className="text-slate-500 text-[10px]">{inv.due_date?.slice(0,10) ?? 'â€”'}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-white text-xs font-semibold">{fmt(inv.total_amount, inv.currency)}</p>
@@ -229,3 +229,4 @@ export default function APCalendar() {
     </div>
   );
 }
+

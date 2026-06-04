@@ -1,5 +1,5 @@
-/**
- * APBankRecon.tsx — Bank Reconciliation for AP
+﻿/**
+ * APBankRecon.tsx â€” Bank Reconciliation for AP
  * Matches bank transactions against posted invoices/payments
  */
 import { useState, useEffect } from 'react';
@@ -11,7 +11,7 @@ function fmt(n: number, cur = 'AED') {
   return new Intl.NumberFormat('en-AE', { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(n);
 }
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
@@ -186,7 +186,7 @@ export default function APBankRecon() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-500">Loading bank transactions…</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-slate-500">Loading bank transactionsâ€¦</td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={8} className="text-center py-12 text-slate-500">No transactions in this category</td></tr>
               ) : (
@@ -198,7 +198,7 @@ export default function APBankRecon() {
                       <td className="px-4 py-3 text-slate-300 text-xs whitespace-nowrap">{fmtDate(tx.date)}</td>
                       <td className="px-4 py-3 text-slate-200 max-w-[200px] truncate">{tx.description}</td>
                       <td className="px-4 py-3 font-semibold text-white">{fmt(tx.amount)}</td>
-                      <td className="px-4 py-3 font-mono text-slate-400 text-xs">{tx.reference || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-slate-400 text-xs">{tx.reference || 'â€”'}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           {statusIcon(tx.matchStatus)}
@@ -213,7 +213,7 @@ export default function APBankRecon() {
                             <p className="font-mono text-blue-400">{matchedInv.invoice_number}</p>
                             <p className="text-slate-500">{matchedInv.vendor_name}</p>
                           </div>
-                        ) : <span className="text-slate-600">—</span>}
+                        ) : <span className="text-slate-600">â€”</span>}
                       </td>
                       <td className="px-4 py-3">
                         {tx.matchStatus === 'suggested' && (
@@ -237,9 +237,10 @@ export default function APBankRecon() {
         </div>
         <div className="px-4 py-3 border-t border-slate-700 flex items-center justify-between text-xs text-slate-500">
           <span>Showing {filtered.length} of {bankTxs.length} transactions</span>
-          <span>Data auto-generated from InvoiceFlow invoices · Import actual bank statement via CSV/Excel</span>
+          <span>Data auto-generated from InvoiceFlow invoices Â· Import actual bank statement via CSV/Excel</span>
         </div>
       </div>
     </div>
   );
 }
+

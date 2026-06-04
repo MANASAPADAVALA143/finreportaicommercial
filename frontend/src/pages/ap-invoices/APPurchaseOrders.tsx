@@ -1,5 +1,5 @@
-/**
- * APPurchaseOrders.tsx — Purchase Orders with Add PO dialog + 3-way match status.
+﻿/**
+ * APPurchaseOrders.tsx â€” Purchase Orders with Add PO dialog + 3-way match status.
  */
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { Search, Plus, Trash2, RefreshCw, FileSpreadsheet, ScanLine, X, ChevronDown } from 'lucide-react';
@@ -106,7 +106,7 @@ function AddPODialog({ vendors, onSaved, onClose }: { vendors: string[]; onSaved
           </div>
           <div><label className={labelCls}>Description</label>
             <textarea value={form.description} onChange={e => f('description', e.target.value)}
-              rows={2} className={inputCls} placeholder="PO description…" /></div>
+              rows={2} className={inputCls} placeholder="PO descriptionâ€¦" /></div>
 
           {/* Line items */}
           <div>
@@ -145,7 +145,7 @@ function AddPODialog({ vendors, onSaved, onClose }: { vendors: string[]; onSaved
           <div className="flex gap-3 pt-1">
             <button onClick={onClose} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-2.5 rounded-xl text-sm">Cancel</button>
             <button onClick={save} disabled={saving} className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-sm font-medium">
-              {saving ? 'Saving…' : 'Create PO'}
+              {saving ? 'Savingâ€¦' : 'Create PO'}
             </button>
           </div>
         </div>
@@ -225,7 +225,7 @@ export default function APPurchaseOrders() {
           <p className="text-gray-400 text-sm mt-0.5">Manage purchase orders for 3-way matching</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => alert('Scan PO PDF — AI extraction requires InvoiceFlow agent running')}
+          <button onClick={() => alert('Scan PO PDF â€” AI extraction requires InvoiceFlow agent running')}
             className="flex items-center gap-1.5 border border-gray-600 hover:border-gray-500 px-3 py-2 rounded-lg text-xs text-gray-300">
             <ScanLine size={13} /> Scan PO PDF
           </button>
@@ -252,7 +252,7 @@ export default function APPurchaseOrders() {
       <div className="relative mb-4">
         <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search by PO number or vendor name…"
+          placeholder="Search by PO number or vendor nameâ€¦"
           className="w-full bg-gray-800 border border-gray-700 text-white pl-8 pr-3 py-2 rounded-lg text-sm" />
       </div>
 
@@ -291,13 +291,13 @@ export default function APPurchaseOrders() {
                     <td className="px-4 py-3 text-white text-xs max-w-[160px] truncate">{po.vendor_name}</td>
                     <td className="px-4 py-3 text-white text-xs font-medium whitespace-nowrap">{fmtAmt(po.po_amount, po.currency || 'USD')}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{po.po_date}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{po.delivery_date || '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{po.delivery_date || 'â€”'}</td>
                     <td className="px-4 py-3"><span className={statusBadge(po.status)}>{po.status}</span></td>
-                    <td className="px-4 py-3 text-blue-400 text-xs font-mono">{po.grn_number || '—'}</td>
+                    <td className="px-4 py-3 text-blue-400 text-xs font-mono">{po.grn_number || 'â€”'}</td>
                     <td className="px-4 py-3">
                       {po.match_status
-                        ? <span className="text-xs text-green-400 font-medium">✅ {po.match_status}</span>
-                        : <span className="text-xs text-gray-500">—</span>}
+                        ? <span className="text-xs text-green-400 font-medium">âœ… {po.match_status}</span>
+                        : <span className="text-xs text-gray-500">â€”</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{po.created_at?.slice(0, 10)}</td>
                     <td className="px-4 py-3">
@@ -317,3 +317,4 @@ export default function APPurchaseOrders() {
     </div>
   );
 }
+

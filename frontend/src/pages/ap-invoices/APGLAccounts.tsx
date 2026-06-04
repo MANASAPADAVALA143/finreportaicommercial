@@ -1,5 +1,5 @@
-/**
- * APGLAccounts.tsx — GL Account Mapping
+﻿/**
+ * APGLAccounts.tsx â€” GL Account Mapping
  * Shows which GL accounts are assigned to invoices, allows mapping IFRS categories to GL codes
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -114,7 +114,7 @@ export default function APGLAccounts() {
           <h1 className="text-xl font-bold text-white flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-purple-400" /> GL Account Mapping
           </h1>
-          <p className="text-slate-400 text-sm mt-0.5">Map IFRS categories to GL account codes — click Edit to override</p>
+          <p className="text-slate-400 text-sm mt-0.5">Map IFRS categories to GL account codes â€” click Edit to override</p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm">
@@ -146,7 +146,7 @@ export default function APGLAccounts() {
       <div className="relative max-w-xs">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search GL code, category…"
+          placeholder="Search GL code, categoryâ€¦"
           className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
       </div>
 
@@ -163,7 +163,7 @@ export default function APGLAccounts() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-12 text-slate-500">Loading GL accounts…</td></tr>
+                <tr><td colSpan={7} className="text-center py-12 text-slate-500">Loading GL accountsâ€¦</td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-12 text-slate-500">No GL entries found</td></tr>
               ) : (
@@ -228,9 +228,10 @@ export default function APGLAccounts() {
           </table>
         </div>
         <div className="px-4 py-3 border-t border-slate-700 text-xs text-slate-500">
-          {filtered.length} categories · Edits are session-only. Connect to ERP to persist GL mapping.
+          {filtered.length} categories Â· Edits are session-only. Connect to ERP to persist GL mapping.
         </div>
       </div>
     </div>
   );
 }
+

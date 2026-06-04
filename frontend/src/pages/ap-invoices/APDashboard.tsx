@@ -1,4 +1,4 @@
-/**
+﻿/**
  * APDashboard.tsx
  * AP InvoiceFlow dashboard embedded inside FinReportAI.
  * Live data from InvoiceFlow Supabase project.
@@ -86,7 +86,7 @@ export default function APDashboard() {
       .map(([month, count]) => ({ month: month.slice(5), count }));
   })();
 
-  // Pie chart — status distribution
+  // Pie chart â€” status distribution
   const statusCounts = ['Processing', 'Approved', 'Paid', 'Rejected', 'On Hold'].map(s => ({
     name: s,
     value: invoices.filter(i => i.status === s).length,
@@ -95,12 +95,12 @@ export default function APDashboard() {
   const recent = invoices.slice(0, 10);
 
   const KPI = [
-    { label: 'Invoices This Month', value: loading ? '—' : String(stats.total), icon: FileText,     color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-700/40' },
-    { label: 'Pending Approvals',   value: loading ? '—' : String(stats.pending), icon: Clock,        color: 'text-amber-400',  bg: 'bg-amber-500/10',  border: 'border-amber-700/40', pulse: stats.pending > 0 },
-    { label: 'Total AP Value',      value: loading ? '—' : fmtAED(stats.totalValue), icon: DollarSign,   color: 'text-emerald-400',bg: 'bg-emerald-500/10',border: 'border-emerald-700/40' },
-    { label: 'Approved',            value: loading ? '—' : String(stats.approvedCount), icon: CheckCircle,  color: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-700/40' },
-    { label: 'Duplicate Flags',     value: loading ? '—' : String(stats.duplicateFlags), icon: AlertTriangle, color: 'text-red-400',  bg: 'bg-red-500/10',    border: 'border-red-700/40', pulse: stats.duplicateFlags > 0 },
-    { label: 'Avg Processing (s)',  value: loading ? '—' : String(stats.avgSeconds), icon: Zap,          color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-700/40' },
+    { label: 'Invoices This Month', value: loading ? 'â€”' : String(stats.total), icon: FileText,     color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-700/40' },
+    { label: 'Pending Approvals',   value: loading ? 'â€”' : String(stats.pending), icon: Clock,        color: 'text-amber-400',  bg: 'bg-amber-500/10',  border: 'border-amber-700/40', pulse: stats.pending > 0 },
+    { label: 'Total AP Value',      value: loading ? 'â€”' : fmtAED(stats.totalValue), icon: DollarSign,   color: 'text-emerald-400',bg: 'bg-emerald-500/10',border: 'border-emerald-700/40' },
+    { label: 'Approved',            value: loading ? 'â€”' : String(stats.approvedCount), icon: CheckCircle,  color: 'text-green-400',  bg: 'bg-green-500/10',  border: 'border-green-700/40' },
+    { label: 'Duplicate Flags',     value: loading ? 'â€”' : String(stats.duplicateFlags), icon: AlertTriangle, color: 'text-red-400',  bg: 'bg-red-500/10',    border: 'border-red-700/40', pulse: stats.duplicateFlags > 0 },
+    { label: 'Avg Processing (s)',  value: loading ? 'â€”' : String(stats.avgSeconds), icon: Zap,          color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-700/40' },
   ];
 
   const statusBadge = (s: string) => {
@@ -126,7 +126,7 @@ export default function APDashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">AP Invoice Dashboard</h1>
-          <p className="text-gray-400 text-sm mt-1">Live from InvoiceFlow · all AP invoices, approvals, and risk signals</p>
+          <p className="text-gray-400 text-sm mt-1">Live from InvoiceFlow Â· all AP invoices, approvals, and risk signals</p>
         </div>
         <button onClick={load} disabled={loading} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -200,7 +200,7 @@ export default function APDashboard() {
         <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-white">Recent Invoices</h3>
           <button onClick={() => navigate('/ap-invoices/list')} className="text-xs text-blue-400 hover:text-blue-300">
-            View all →
+            View all â†’
           </button>
         </div>
         <div className="overflow-x-auto">
@@ -230,15 +230,15 @@ export default function APDashboard() {
                     className="border-b border-gray-700/30 hover:bg-gray-700/20 cursor-pointer transition-colors"
                     onClick={() => navigate('/ap-invoices/list')}
                   >
-                    <td className="px-4 py-3 text-blue-400 font-mono text-xs">{inv.invoice_number || '—'}</td>
+                    <td className="px-4 py-3 text-blue-400 font-mono text-xs">{inv.invoice_number || 'â€”'}</td>
                     <td className="px-4 py-3 text-white text-xs max-w-[160px] truncate">{inv.vendor_name}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{inv.invoice_date || inv.created_at?.slice(0, 10) || '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{inv.invoice_date || inv.created_at?.slice(0, 10) || 'â€”'}</td>
                     <td className="px-4 py-3 text-white text-xs font-medium">{fmtAED(inv.total_amount)}</td>
                     <td className="px-4 py-3">
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border ${statusBadge(inv.status)}`}>{inv.status}</span>
                     </td>
                     <td className={`px-4 py-3 text-xs font-medium ${riskBadge(inv.risk_score)}`}>
-                      {inv.risk_score ? inv.risk_score.toUpperCase() : '—'}
+                      {inv.risk_score ? inv.risk_score.toUpperCase() : 'â€”'}
                     </td>
                   </tr>
                 ))
@@ -250,3 +250,4 @@ export default function APDashboard() {
     </div>
   );
 }
+

@@ -1,10 +1,11 @@
-/**
+﻿/**
  * APInvoicesLayout.tsx
- * AP InvoiceFlow embedded inside FinReportAI — dark design, live data from InvoiceFlow Supabase.
+ * AP InvoiceFlow embedded inside FinReportAI â€” dark design, live data from InvoiceFlow Supabase.
  * Full sidebar matching standalone InvoiceFlow app.
  */
 import type React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { MarketProvider, useMarket } from '../../contexts/MarketContext';
 import {
   LayoutDashboard,
   FileText,
@@ -73,7 +74,32 @@ const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-me
 const linkIdle   = 'text-slate-400 hover:bg-slate-800 hover:text-white';
 const linkActive = 'bg-blue-700/80 text-white';
 
-export default function APInvoicesLayout() {
+function MarketToggle() {
+  const { market, setMarket, isUAE } = useMarket();
+  return (
+    <div className="flex items-center gap-1 bg-slate-800 rounded-full p-0.5 mt-2">
+      <button
+        onClick={() => setMarket('uae')}
+        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
+          isUAE ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+        }`}
+      >
+        🇦🇪 UAE
+      </button>
+      <button
+        onClick={() => setMarket('india')}
+        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
+          !isUAE ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
+        }`}
+      >
+        🇮🇳 India
+      </button>
+    </div>
+  );
+}
+
+function APInvoicesLayoutInner() {
+  const { isUAE } = useMarket();
   return (
     <div className="flex min-h-screen w-full bg-gray-950 text-gray-100">
       {/* Left sub-nav */}
@@ -81,7 +107,7 @@ export default function APInvoicesLayout() {
         {/* Brand */}
         <div className="px-4 py-5 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">📄</div>
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">ðŸ“„</div>
             <div>
               <p className="text-sm font-bold text-white leading-tight">InvoiceFlow</p>
               <p className="text-[10px] text-slate-500">AP Processing</p>
@@ -89,8 +115,9 @@ export default function APInvoicesLayout() {
           </div>
           <span className="inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full bg-green-900 text-green-300 border border-green-800 font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            Live · InvoiceFlow
+            Live Â· InvoiceFlow
           </span>
+          <MarketToggle />
         </div>
 
         {/* Nav */}
@@ -127,7 +154,7 @@ export default function APInvoicesLayout() {
             rel="noopener noreferrer"
             className="text-[11px] text-slate-500 hover:text-blue-400 flex items-center gap-1 transition-colors"
           >
-            ↗ Open full InvoiceFlow app
+            â†— Open full InvoiceFlow app
           </a>
         </div>
       </aside>
@@ -139,3 +166,12 @@ export default function APInvoicesLayout() {
     </div>
   );
 }
+
+export default function APInvoicesLayout() {
+  return (
+    <MarketProvider>
+      <APInvoicesLayoutInner />
+    </MarketProvider>
+  );
+}
+

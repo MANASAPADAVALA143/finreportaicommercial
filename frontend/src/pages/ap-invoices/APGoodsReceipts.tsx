@@ -1,6 +1,6 @@
-/**
+﻿/**
  * APGoodsReceipts.tsx
- * Goods Receipts (GRN) management — embedded inside FinReportAI from InvoiceFlow data.
+ * Goods Receipts (GRN) management â€” embedded inside FinReportAI from InvoiceFlow data.
  * Queries: goods_receipts, purchase_orders
  */
 import { useState, useEffect, useRef } from 'react';
@@ -12,15 +12,15 @@ import {
 import { apSupabase, type GoodsReceipt, type PurchaseOrder } from '../../lib/apSupabase';
 import * as XLSX from 'xlsx';
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function fmt(n: number | null | undefined, cur = 'AED') {
-  if (n == null) return '—';
+  if (n == null) return 'â€”';
   return new Intl.NumberFormat('en-AE', { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(n);
 }
 
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
@@ -41,13 +41,13 @@ function StatusBadge({ s }: { s: string | null | undefined }) {
   );
 }
 
-// ── line-item row ─────────────────────────────────────────────────────────────
+// â”€â”€ line-item row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface LineItem { description: string; ordered_qty: number; received_qty: number; unit_price: number; }
 
 function emptyLine(): LineItem { return { description: '', ordered_qty: 1, received_qty: 1, unit_price: 0 }; }
 
-// ── Create GRN form ───────────────────────────────────────────────────────────
+// â”€â”€ Create GRN form â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface CreateGRNProps {
   pos: PurchaseOrder[];
@@ -92,7 +92,7 @@ function CreateGRNPanel({ pos, onSaved, onClose }: CreateGRNProps) {
 
   // PDF scan via OCR placeholder
   const handleScanPDF = () => {
-    alert('PDF scanning feature — connect to InvoiceFlow AI agent at /api/agent/extract-image');
+    alert('PDF scanning feature â€” connect to InvoiceFlow AI agent at /api/agent/extract-image');
   };
 
   const handleSave = async () => {
@@ -153,9 +153,9 @@ function CreateGRNPanel({ pos, onSaved, onClose }: CreateGRNProps) {
                 onChange={e => selectPO(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
               >
-                <option value="">— Select PO —</option>
+                <option value="">â€” Select PO â€”</option>
                 {pos.map(p => (
-                  <option key={p.id} value={p.id}>{p.po_number} · {p.vendor_name} · {fmt(p.po_amount, p.currency ?? 'AED')}</option>
+                  <option key={p.id} value={p.id}>{p.po_number} Â· {p.vendor_name} Â· {fmt(p.po_amount, p.currency ?? 'AED')}</option>
                 ))}
               </select>
             </div>
@@ -263,7 +263,7 @@ function CreateGRNPanel({ pos, onSaved, onClose }: CreateGRNProps) {
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm text-white">Cancel</button>
           <button onClick={handleSave} disabled={saving || !selectedPO}
             className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-semibold text-white">
-            {saving ? 'Saving…' : 'Save GRN'}
+            {saving ? 'Savingâ€¦' : 'Save GRN'}
           </button>
         </div>
       </div>
@@ -271,7 +271,7 @@ function CreateGRNPanel({ pos, onSaved, onClose }: CreateGRNProps) {
   );
 }
 
-// ── GRN detail modal ──────────────────────────────────────────────────────────
+// â”€â”€ GRN detail modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function GRNModal({ grn, onClose }: { grn: GoodsReceipt; onClose: () => void }) {
   const lineItems = Array.isArray(grn.grn_line_items) ? grn.grn_line_items : [];
@@ -281,7 +281,7 @@ function GRNModal({ grn, onClose }: { grn: GoodsReceipt; onClose: () => void }) 
         <div className="flex items-center justify-between p-5 border-b border-slate-700">
           <div>
             <h2 className="text-base font-bold text-white">{grn.grn_number}</h2>
-            <p className="text-xs text-slate-400">{grn.vendor_name} · {fmtDate(grn.received_date)}</p>
+            <p className="text-xs text-slate-400">{grn.vendor_name} Â· {fmtDate(grn.received_date)}</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
@@ -291,10 +291,10 @@ function GRNModal({ grn, onClose }: { grn: GoodsReceipt; onClose: () => void }) 
             {[
               ['Received Amount', fmt(grn.received_amount)],
               ['Status', grn.status ?? 'received'],
-              ['Received By', grn.received_by ?? '—'],
-              ['PO ID', grn.po_id ?? '—'],
-              ['Invoice #', grn.invoice_number ?? '—'],
-              ['Notes', grn.notes ?? '—'],
+              ['Received By', grn.received_by ?? 'â€”'],
+              ['PO ID', grn.po_id ?? 'â€”'],
+              ['Invoice #', grn.invoice_number ?? 'â€”'],
+              ['Notes', grn.notes ?? 'â€”'],
             ].map(([k, v]) => (
               <div key={k}>
                 <p className="text-[10px] text-slate-500 uppercase tracking-wide">{k}</p>
@@ -337,7 +337,7 @@ function GRNModal({ grn, onClose }: { grn: GoodsReceipt; onClose: () => void }) 
   );
 }
 
-// ── Bulk import helper ────────────────────────────────────────────────────────
+// â”€â”€ Bulk import helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function bulkImportGRNs(file: File, pos: PurchaseOrder[]): Promise<{ imported: number; errors: string[] }> {
   const buf = await file.arrayBuffer();
@@ -380,7 +380,7 @@ async function bulkImportGRNs(file: File, pos: PurchaseOrder[]): Promise<{ impor
   return { imported, errors };
 }
 
-// ── Download template ─────────────────────────────────────────────────────────
+// â”€â”€ Download template â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function downloadTemplate() {
   const ws = XLSX.utils.json_to_sheet([{
@@ -400,7 +400,7 @@ function downloadTemplate() {
   XLSX.writeFile(wb, 'grn_import_template.xlsx');
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// â”€â”€ Main page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function APGoodsReceipts() {
   const [grns, setGrns] = useState<GoodsReceipt[]>([]);
@@ -444,14 +444,14 @@ export default function APGoodsReceipts() {
 
   // get PO number for display
   const getPoNumber = (g: GoodsReceipt) =>
-    pos.find(p => p.id === g.po_id)?.po_number ?? g.po_id ?? '—';
+    pos.find(p => p.id === g.po_id)?.po_number ?? g.po_id ?? 'â€”';
 
   const handleBulkImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setBulkMsg('Importing…');
+    setBulkMsg('Importingâ€¦');
     const { imported, errors } = await bulkImportGRNs(file, pos);
-    setBulkMsg(errors.length ? `${imported} imported, ${errors.length} errors: ${errors.slice(0, 2).join('; ')}` : `✓ ${imported} GRNs imported`);
+    setBulkMsg(errors.length ? `${imported} imported, ${errors.length} errors: ${errors.slice(0, 2).join('; ')}` : `âœ“ ${imported} GRNs imported`);
     await load();
     e.target.value = '';
   };
@@ -515,7 +515,7 @@ export default function APGoodsReceipts() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search GRN #, vendor, invoice…"
+            placeholder="Search GRN #, vendor, invoiceâ€¦"
             className="w-full bg-slate-800 border border-slate-600 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -552,7 +552,7 @@ export default function APGoodsReceipts() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} className="text-center py-16 text-slate-500">Loading goods receipts…</td></tr>
+                <tr><td colSpan={10} className="text-center py-16 text-slate-500">Loading goods receiptsâ€¦</td></tr>
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="text-center py-20">
@@ -584,11 +584,11 @@ export default function APGoodsReceipts() {
                         {items > 0 ? (
                           <span className="px-2 py-0.5 rounded-full bg-blue-900 text-blue-300 text-xs font-medium">{items} items</span>
                         ) : (
-                          <span className="text-slate-600 text-xs">—</span>
+                          <span className="text-slate-600 text-xs">â€”</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-slate-400 text-xs font-mono">{g.invoice_number ?? '—'}</td>
-                      <td className="px-4 py-3 text-slate-400 text-xs">{g.received_by ?? '—'}</td>
+                      <td className="px-4 py-3 text-slate-400 text-xs font-mono">{g.invoice_number ?? 'â€”'}</td>
+                      <td className="px-4 py-3 text-slate-400 text-xs">{g.received_by ?? 'â€”'}</td>
                       <td className="px-4 py-3"><StatusBadge s={g.status} /></td>
                       <td className="px-4 py-3">
                         <button onClick={() => setSelected(g)}
@@ -631,3 +631,4 @@ export default function APGoodsReceipts() {
     </div>
   );
 }
+

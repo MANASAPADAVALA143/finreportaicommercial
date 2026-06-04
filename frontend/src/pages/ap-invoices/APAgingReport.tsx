@@ -1,5 +1,5 @@
-/**
- * APAgingReport.tsx — AP Aging Report
+﻿/**
+ * APAgingReport.tsx â€” AP Aging Report
  * Groups outstanding invoices into aging buckets: Current, 1-30, 31-60, 61-90, 90+ days
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -12,7 +12,7 @@ function fmt(n: number, cur = 'AED') {
   return new Intl.NumberFormat('en-AE', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n);
 }
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
@@ -57,9 +57,9 @@ export default function APAgingReport() {
     invoices.forEach(inv => groups[getAgingBucket(inv)].push(inv));
     return [
       { label: 'Current',   days: 'Not yet due',  invoices: groups['current'], total: groups['current'].reduce((s,i) => s+i.total_amount, 0), color: '#22c55e' },
-      { label: '1–30 Days', days: '1–30 days',    invoices: groups['1-30'],   total: groups['1-30'].reduce((s,i) => s+i.total_amount, 0),   color: '#facc15' },
-      { label: '31–60 Days',days: '31–60 days',   invoices: groups['31-60'],  total: groups['31-60'].reduce((s,i) => s+i.total_amount, 0),  color: '#fb923c' },
-      { label: '61–90 Days',days: '61–90 days',   invoices: groups['61-90'],  total: groups['61-90'].reduce((s,i) => s+i.total_amount, 0),  color: '#f97316' },
+      { label: '1â€“30 Days', days: '1â€“30 days',    invoices: groups['1-30'],   total: groups['1-30'].reduce((s,i) => s+i.total_amount, 0),   color: '#facc15' },
+      { label: '31â€“60 Days',days: '31â€“60 days',   invoices: groups['31-60'],  total: groups['31-60'].reduce((s,i) => s+i.total_amount, 0),  color: '#fb923c' },
+      { label: '61â€“90 Days',days: '61â€“90 days',   invoices: groups['61-90'],  total: groups['61-90'].reduce((s,i) => s+i.total_amount, 0),  color: '#f97316' },
       { label: '90+ Days',  days: 'Over 90 days', invoices: groups['90+'],    total: groups['90+'].reduce((s,i) => s+i.total_amount, 0),    color: '#ef4444' },
     ];
   }, [invoices]);
@@ -175,7 +175,7 @@ export default function APAgingReport() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="text-center py-12 text-slate-500">Loading aging report…</td></tr>
+                <tr><td colSpan={7} className="text-center py-12 text-slate-500">Loading aging reportâ€¦</td></tr>
               ) : displayInvoices.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-12 text-slate-500">No invoices in this bucket</td></tr>
               ) : (
@@ -216,3 +216,4 @@ export default function APAgingReport() {
     </div>
   );
 }
+

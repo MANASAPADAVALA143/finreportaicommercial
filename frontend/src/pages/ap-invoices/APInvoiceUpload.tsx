@@ -1,17 +1,17 @@
-/**
- * APInvoiceUpload.tsx — Full InvoiceFlow Upload page with GulfTax AI integration.
+﻿/**
+ * APInvoiceUpload.tsx â€” Full InvoiceFlow Upload page with GulfTax AI integration.
  *
  * Tabs: Scan Invoice | Single Upload | Bulk Excel
  *
  * GulfTax 3-step flow (Scan + Single tabs):
- *   Step 1 — Upload & Extract (AI extraction from image/form)
- *   Step 2 — GulfTax Classify (UAE VAT treatment, risk score, decision)
- *   Step 3 — Review & Post (confirm → save invoice + optional JE post)
+ *   Step 1 â€” Upload & Extract (AI extraction from image/form)
+ *   Step 2 â€” GulfTax Classify (UAE VAT treatment, risk score, decision)
+ *   Step 3 â€” Review & Post (confirm â†’ save invoice + optional JE post)
  *
  * Decisions from GulfTax bridge:
- *   AUTO_APPROVE  (risk < 35)  → green  → straight to GL
- *   REVIEW_QUEUE  (35–69)      → amber  → CFO approval queue
- *   HARD_BLOCK    (≥ 70 / bad TRN) → red → blocked, must resolve
+ *   AUTO_APPROVE  (risk < 35)  â†’ green  â†’ straight to GL
+ *   REVIEW_QUEUE  (35â€“69)      â†’ amber  â†’ CFO approval queue
+ *   HARD_BLOCK    (â‰¥ 70 / bad TRN) â†’ red â†’ blocked, must resolve
  */
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -23,7 +23,7 @@ import {
 import { apSupabase, apAgentUrl } from '../../lib/apSupabase';
 import * as XLSX from 'xlsx';
 
-// ── Shared types ──────────────────────────────────────────────────────────────
+// â”€â”€ Shared types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Tab = 'scan' | 'single' | 'bulk';
 
@@ -48,7 +48,7 @@ type ExtractionResult = {
   ifrs_confidence?: number;
 };
 
-// ── GulfTax types & helpers ───────────────────────────────────────────────────
+// â”€â”€ GulfTax types & helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type GulfTaxDecision = 'AUTO_APPROVE' | 'REVIEW_QUEUE' | 'HARD_BLOCK';
 
@@ -124,7 +124,7 @@ async function approveAndPost(params: {
   return res.json();
 }
 
-// ── GulfTax classification panel ──────────────────────────────────────────────
+// â”€â”€ GulfTax classification panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const DECISION_STYLE: Record<GulfTaxDecision, { bg: string; border: string; text: string; icon: typeof ShieldCheck; label: string }> = {
   AUTO_APPROVE: {
@@ -154,7 +154,7 @@ function RiskMeter({ score }: { score: number }) {
         <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
       </div>
       <div className="flex justify-between text-[10px] text-gray-600">
-        <span>0 — Safe</span><span>35 — Review</span><span>70 — Block</span>
+        <span>0 â€” Safe</span><span>35 â€” Review</span><span>70 â€” Block</span>
       </div>
     </div>
   );
@@ -200,7 +200,7 @@ function GulfTaxPanel({
         });
         onConfirm(postResult);
       } else {
-        // REVIEW_QUEUE — save without JE posting
+        // REVIEW_QUEUE â€” save without JE posting
         onConfirm(undefined);
       }
     } catch (e: any) {
@@ -236,7 +236,7 @@ function GulfTaxPanel({
           ['VAT Rate',       `${result.vat_rate}%`],
           ['VAT Amount',     `AED ${result.vat_amount_aed.toLocaleString()}`],
           ['Confidence',     `${(result.confidence_score * 100).toFixed(0)}%`],
-          ['TRN Valid',      result.trn_valid ? '✓ Valid' : '✗ Missing / Invalid'],
+          ['TRN Valid',      result.trn_valid ? 'âœ“ Valid' : 'âœ— Missing / Invalid'],
           ['Art. 54 Block',  result.blocked_input_vat ? `AED ${result.blocked_vat_amount} blocked` : 'None'],
         ].map(([k, v]) => (
           <div key={k} className="bg-gray-900/50 rounded-lg px-3 py-2">
@@ -257,7 +257,7 @@ function GulfTaxPanel({
       {/* Art 54 block detail */}
       {result.blocked_input_vat && result.blocked_reason && (
         <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-3">
-          <p className="text-xs text-amber-300 font-medium mb-1">Art. 54 — Input VAT Blocked</p>
+          <p className="text-xs text-amber-300 font-medium mb-1">Art. 54 â€” Input VAT Blocked</p>
           <p className="text-xs text-gray-400">{result.blocked_reason}</p>
           <p className="text-xs text-gray-500 mt-1">AED {result.blocked_vat_amount.toLocaleString()} will be expensed (non-recoverable).</p>
         </div>
@@ -285,7 +285,7 @@ function GulfTaxPanel({
         <button onClick={handleConfirm} disabled={acting}
           className="w-full flex items-center justify-center gap-2 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white py-3 rounded-xl text-sm font-medium">
           {acting ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
-          {acting ? 'Posting to GL…' : 'Confirm & Post to UAE GL'}
+          {acting ? 'Posting to GLâ€¦' : 'Confirm & Post to UAE GL'}
         </button>
       )}
 
@@ -294,7 +294,7 @@ function GulfTaxPanel({
           <button onClick={handleConfirm} disabled={acting}
             className="w-full flex items-center justify-center gap-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white py-3 rounded-xl text-sm font-medium">
             {acting ? <Loader2 size={15} className="animate-spin" /> : <ShieldAlert size={15} />}
-            {acting ? 'Sending…' : 'Send to CFO Review Queue'}
+            {acting ? 'Sendingâ€¦' : 'Send to CFO Review Queue'}
           </button>
           <p className="text-center text-xs text-gray-500">Invoice will be saved with <strong className="text-amber-400">Pending Approval</strong> status</p>
         </div>
@@ -319,7 +319,7 @@ function GulfTaxPanel({
   );
 }
 
-// ── JE Posted confirmation panel ──────────────────────────────────────────────
+// â”€â”€ JE Posted confirmation panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function JEPostedPanel({ result, onDone }: { result: PostResult; onDone: () => void }) {
   return (
@@ -328,7 +328,7 @@ function JEPostedPanel({ result, onDone }: { result: PostResult; onDone: () => v
         <CheckCircle size={22} className="text-green-400 shrink-0" />
         <div>
           <p className="text-green-400 font-semibold">{result.message}</p>
-          <p className="text-xs text-gray-400 mt-0.5">JE Reference: <span className="text-white font-mono">{result.je_reference}</span> · Post date: {result.post_date}</p>
+          <p className="text-xs text-gray-400 mt-0.5">JE Reference: <span className="text-white font-mono">{result.je_reference}</span> Â· Post date: {result.post_date}</p>
         </div>
       </div>
 
@@ -358,13 +358,13 @@ function JEPostedPanel({ result, onDone }: { result: PostResult; onDone: () => v
       </div>
 
       <button onClick={onDone} className="w-full bg-green-700 hover:bg-green-600 text-white py-2.5 rounded-xl text-sm font-medium">
-        Done — Go to Invoice List
+        Done â€” Go to Invoice List
       </button>
     </div>
   );
 }
 
-// ── Step indicator ─────────────────────────────────────────────────────────────
+// â”€â”€ Step indicator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STEPS = ['Upload & Extract', 'GulfTax Classify', 'Review & Post'];
 
@@ -395,7 +395,7 @@ function StepIndicator({ current }: { current: number }) {
   );
 }
 
-// ── Scan Invoice tab ──────────────────────────────────────────────────────────
+// â”€â”€ Scan Invoice tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function ScanTab() {
   const navigate = useNavigate();
@@ -491,7 +491,7 @@ function ScanTab() {
     } catch (e: any) { setError(e.message); }
   };
 
-  // Step 2 — JE posted
+  // Step 2 â€” JE posted
   if (step === 2 && postResult) {
     return (
       <div className="space-y-4">
@@ -505,12 +505,12 @@ function ScanTab() {
     <div className="space-y-5">
       <StepIndicator current={step} />
 
-      {/* Step 0 — Upload & Extract */}
+      {/* Step 0 â€” Upload & Extract */}
       {step === 0 && (
         <>
           <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-5">
-            <h3 className="text-sm font-semibold text-white mb-1">Step 1 — Upload Invoice</h3>
-            <p className="text-xs text-gray-400 mb-4">Take a photo, upload an image, or select a PDF — Claude AI extracts all fields automatically.</p>
+            <h3 className="text-sm font-semibold text-white mb-1">Step 1 â€” Upload Invoice</h3>
+            <p className="text-xs text-gray-400 mb-4">Take a photo, upload an image, or select a PDF â€” Claude AI extracts all fields automatically.</p>
 
             <div
               onDragOver={e => e.preventDefault()}
@@ -540,7 +540,7 @@ function ScanTab() {
             {file && !extracted && (
               <button onClick={handleExtract} disabled={extracting}
                 className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-medium text-sm">
-                {extracting ? <><Loader2 size={15} className="animate-spin" /> Extracting with Claude AI…</> : <><Camera size={15} /> Extract Invoice Fields</>}
+                {extracting ? <><Loader2 size={15} className="animate-spin" /> Extracting with Claude AIâ€¦</> : <><Camera size={15} /> Extract Invoice Fields</>}
               </button>
             )}
           </div>
@@ -574,15 +574,15 @@ function ScanTab() {
               <button onClick={handleClassify} disabled={classifying}
                 className="w-full flex items-center justify-center gap-2 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white py-3 rounded-xl font-medium text-sm">
                 {classifying
-                  ? <><Loader2 size={15} className="animate-spin" /> Classifying with GulfTax AI…</>
-                  : <><ShieldCheck size={15} /> Step 2 — Classify VAT with GulfTax</>}
+                  ? <><Loader2 size={15} className="animate-spin" /> Classifying with GulfTax AIâ€¦</>
+                  : <><ShieldCheck size={15} /> Step 2 â€” Classify VAT with GulfTax</>}
               </button>
             </div>
           )}
         </>
       )}
 
-      {/* Step 1 — GulfTax panel */}
+      {/* Step 1 â€” GulfTax panel */}
       {step === 1 && gulfTax && extracted && (
         <div className="space-y-4">
           <div className="bg-gray-800/40 border border-gray-700/40 rounded-xl p-4 text-xs">
@@ -622,7 +622,7 @@ function ScanTab() {
   );
 }
 
-// ── Single Upload (manual entry) tab ─────────────────────────────────────────
+// â”€â”€ Single Upload (manual entry) tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SingleUploadTab() {
   const navigate = useNavigate();
@@ -723,7 +723,7 @@ function SingleUploadTab() {
     catch (e: any) { setError(e.message); }
   };
 
-  // Step 2 — JE posted
+  // Step 2 â€” JE posted
   if (step === 2 && postResult) {
     return (
       <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-6 space-y-4">
@@ -733,7 +733,7 @@ function SingleUploadTab() {
     );
   }
 
-  // Step 1 — GulfTax review
+  // Step 1 â€” GulfTax review
   if (step === 1 && gulfTax) {
     const total = parseFloat(form.total_amount) || autoTotal;
     return (
@@ -759,7 +759,7 @@ function SingleUploadTab() {
     );
   }
 
-  // Step 0 — Form
+  // Step 0 â€” Form
   return (
     <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-6 space-y-5">
       <StepIndicator current={0} />
@@ -776,7 +776,7 @@ function SingleUploadTab() {
         <div><label className={labelCls}>PO Number</label>
           <input value={form.po_number} onChange={e => f('po_number', e.target.value)} placeholder="PO-123" className={inputCls} /></div>
         <div><label className={labelCls}>Description / Notes</label>
-          <input value={form.description} onChange={e => f('description', e.target.value)} placeholder="Services rendered…" className={inputCls} /></div>
+          <input value={form.description} onChange={e => f('description', e.target.value)} placeholder="Services renderedâ€¦" className={inputCls} /></div>
         <div><label className={labelCls}>Invoice Date</label>
           <input type="date" value={form.invoice_date} onChange={e => f('invoice_date', e.target.value)} className={inputCls} /></div>
         <div><label className={labelCls}>Due Date</label>
@@ -842,14 +842,14 @@ function SingleUploadTab() {
         <button onClick={handleClassify} disabled={classifying || saving}
           className="flex-1 flex items-center justify-center gap-2 bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white py-2.5 rounded-xl text-sm font-medium">
           {classifying ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-          {classifying ? 'Classifying…' : 'Classify with GulfTax →'}
+          {classifying ? 'Classifyingâ€¦' : 'Classify with GulfTax â†’'}
         </button>
       </div>
     </div>
   );
 }
 
-// ── Bulk Excel tab ────────────────────────────────────────────────────────────
+// â”€â”€ Bulk Excel tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function BulkTab() {
   const navigate  = useNavigate();
@@ -902,7 +902,7 @@ function BulkTab() {
       }));
       const { error: err } = await apSupabase.from('invoices').insert(mapped);
       if (err) throw err;
-      setResult(`✅ ${mapped.length} invoices imported successfully.`);
+      setResult(`âœ… ${mapped.length} invoices imported successfully.`);
       setTimeout(() => navigate('/ap-invoices/list'), 1500);
     } catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
@@ -919,7 +919,7 @@ function BulkTab() {
       </div>
       <div className="bg-teal-900/20 border border-teal-700/30 rounded-xl p-3">
         <p className="text-xs text-teal-300">
-          💡 Bulk imports skip GulfTax classification. Use the Scan or Single tab for UAE VAT-sensitive invoices.
+          ðŸ’¡ Bulk imports skip GulfTax classification. Use the Scan or Single tab for UAE VAT-sensitive invoices.
         </p>
       </div>
 
@@ -937,7 +937,7 @@ function BulkTab() {
 
       {rows.length > 0 && (
         <div className="bg-gray-800/60 border border-gray-700 rounded-xl overflow-hidden">
-          <div className="px-4 py-2 border-b border-gray-700 text-xs text-gray-400 font-medium">Preview — first 5 rows</div>
+          <div className="px-4 py-2 border-b border-gray-700 text-xs text-gray-400 font-medium">Preview â€” first 5 rows</div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead><tr className="text-gray-500 border-b border-gray-700">
@@ -966,22 +966,22 @@ function BulkTab() {
         <button onClick={handleImport} disabled={saving}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-3 rounded-xl font-medium">
           {saving ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-          {saving ? 'Importing…' : `Import ${rows.length} Invoices`}
+          {saving ? 'Importingâ€¦' : `Import ${rows.length} Invoices`}
         </button>
       )}
     </div>
   );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// â”€â”€ Main component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function APInvoiceUpload() {
   const [tab, setTab] = useState<Tab>('scan');
 
   const tabs: { key: Tab; label: string; icon: string; badge?: string }[] = [
-    { key: 'scan',   label: 'Scan Invoice',     icon: '📷', badge: 'GulfTax' },
-    { key: 'single', label: 'Single Upload',    icon: '📄', badge: 'GulfTax' },
-    { key: 'bulk',   label: 'Bulk (Excel/CSV)', icon: '📊' },
+    { key: 'scan',   label: 'Scan Invoice',     icon: 'ðŸ“·', badge: 'GulfTax' },
+    { key: 'single', label: 'Single Upload',    icon: 'ðŸ“„', badge: 'GulfTax' },
+    { key: 'bulk',   label: 'Bulk (Excel/CSV)', icon: 'ðŸ“Š' },
   ];
 
   return (
@@ -1013,3 +1013,4 @@ export default function APInvoiceUpload() {
     </div>
   );
 }
+

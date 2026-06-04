@@ -1,5 +1,5 @@
-/**
- * APGSTRecon.tsx — GST / VAT Reconciliation
+﻿/**
+ * APGSTRecon.tsx â€” GST / VAT Reconciliation
  * Reconciles input tax credit claimed on invoices vs filed GST returns
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -12,7 +12,7 @@ function fmt(n: number, cur = 'AED') {
   return new Intl.NumberFormat('en-AE', { style: 'currency', currency: cur, maximumFractionDigits: 2 }).format(n);
 }
 function fmtDate(d: string | null | undefined) {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
@@ -21,7 +21,7 @@ type ReconciliationStatus = 'matched' | 'variance' | 'missing_gstin' | 'no_tax';
 function getReconStatus(inv: APInvoice): ReconciliationStatus {
   if (!inv.tax_amount || inv.tax_amount === 0) return 'no_tax';
   if (!inv.tax_rate) return 'missing_gstin';
-  // Verify: tax_amount ≈ total_amount * tax_rate / 100
+  // Verify: tax_amount â‰ˆ total_amount * tax_rate / 100
   const expected = (inv.subtotal_amount ?? inv.total_amount - (inv.tax_amount ?? 0)) * (inv.tax_rate / 100);
   if (Math.abs(expected - (inv.tax_amount ?? 0)) < 1) return 'matched';
   return 'variance';
@@ -68,10 +68,10 @@ export default function APGSTRecon() {
   ].filter(d => d.value > 0);
 
   const statusLabel: Record<ReconciliationStatus, { text: string; cls: string }> = {
-    matched:      { text: '✅ Matched',       cls: 'bg-green-900 text-green-300 border-green-700' },
-    variance:     { text: '⚠️ Variance',      cls: 'bg-orange-900 text-orange-300 border-orange-700' },
-    missing_gstin:{ text: '🔷 Missing Rate',  cls: 'bg-yellow-900 text-yellow-300 border-yellow-700' },
-    no_tax:       { text: '— No Tax',         cls: 'bg-slate-700 text-slate-400 border-slate-600' },
+    matched:      { text: 'âœ… Matched',       cls: 'bg-green-900 text-green-300 border-green-700' },
+    variance:     { text: 'âš ï¸ Variance',      cls: 'bg-orange-900 text-orange-300 border-orange-700' },
+    missing_gstin:{ text: 'ðŸ”· Missing Rate',  cls: 'bg-yellow-900 text-yellow-300 border-yellow-700' },
+    no_tax:       { text: 'â€” No Tax',         cls: 'bg-slate-700 text-slate-400 border-slate-600' },
   };
 
   const exportXLSX = () => {
@@ -126,7 +126,7 @@ export default function APGSTRecon() {
             { label: 'Total Tax Claimed',  value: fmt(totalTax),    color: 'text-white' },
             { label: 'Matched Tax',        value: fmt(matchedTax),  color: 'text-green-400' },
             { label: 'Variance Amount',    value: fmt(varianceTax), color: 'text-orange-400' },
-            { label: 'Match Rate',         value: invoices.length ? `${Math.round((counts.matched / invoices.length) * 100)}%` : '—', color: 'text-blue-400' },
+            { label: 'Match Rate',         value: invoices.length ? `${Math.round((counts.matched / invoices.length) * 100)}%` : 'â€”', color: 'text-blue-400' },
           ].map(({ label, value, color }) => (
             <div key={label} className="bg-slate-900 border border-slate-700 rounded-xl p-4">
               <p className="text-xs text-slate-400">{label}</p>
@@ -193,7 +193,7 @@ export default function APGSTRecon() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="text-center py-12 text-slate-500">Loading GST reconciliation…</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-slate-500">Loading GST reconciliationâ€¦</td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={8} className="text-center py-12 text-slate-500">No records found</td></tr>
               ) : (
@@ -203,9 +203,9 @@ export default function APGSTRecon() {
                     <td className="px-4 py-3 text-white font-medium">{inv.vendor_name}</td>
                     <td className="px-4 py-3 text-slate-300 text-xs">{fmtDate(inv.invoice_date)}</td>
                     <td className="px-4 py-3 text-white font-semibold">{fmt(inv.total_amount, inv.currency)}</td>
-                    <td className="px-4 py-3 text-slate-200">{inv.tax_amount != null ? fmt(inv.tax_amount, inv.currency) : '—'}</td>
-                    <td className="px-4 py-3 text-slate-300">{inv.tax_rate != null ? `${inv.tax_rate}%` : '—'}</td>
-                    <td className="px-4 py-3 text-slate-300">{inv.subtotal_amount != null ? fmt(inv.subtotal_amount, inv.currency) : '—'}</td>
+                    <td className="px-4 py-3 text-slate-200">{inv.tax_amount != null ? fmt(inv.tax_amount, inv.currency) : 'â€”'}</td>
+                    <td className="px-4 py-3 text-slate-300">{inv.tax_rate != null ? `${inv.tax_rate}%` : 'â€”'}</td>
+                    <td className="px-4 py-3 text-slate-300">{inv.subtotal_amount != null ? fmt(inv.subtotal_amount, inv.currency) : 'â€”'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusLabel[status].cls}`}>
                         {statusLabel[status].text}
@@ -218,9 +218,10 @@ export default function APGSTRecon() {
           </table>
         </div>
         <div className="px-4 py-3 border-t border-slate-700 text-xs text-slate-500">
-          Showing {filtered.length} of {invoices.length} invoices · Total tax: {fmt(totalTax)}
+          Showing {filtered.length} of {invoices.length} invoices Â· Total tax: {fmt(totalTax)}
         </div>
       </div>
     </div>
   );
 }
+

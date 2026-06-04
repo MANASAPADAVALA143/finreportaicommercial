@@ -1,5 +1,5 @@
-/**
- * APActionQueue.tsx — Today's Action Queue
+﻿/**
+ * APActionQueue.tsx â€” Today's Action Queue
  * Shows invoices needing urgent attention, CFO approval, review, etc.
  */
 import { useState, useEffect } from 'react';
@@ -76,10 +76,10 @@ export default function APActionQueue() {
   const urgent = groups.urgent.length + groups.overdue.length;
 
   const sectionConfig = [
-    { key: 'urgent'      , label: '🔴 URGENT',             color: 'border-red-700 bg-red-900/10',     dot: 'bg-red-500', items: groups.urgent },
-    { key: 'overdue'     , label: '🟠 OVERDUE',            color: 'border-orange-700 bg-orange-900/10', dot: 'bg-orange-500', items: groups.overdue },
-    { key: 'cfo_approval', label: '🟢 PENDING CFO APPROVAL', color: 'border-green-700 bg-green-900/10', dot: 'bg-green-500', items: groups.cfo_approval },
-    { key: 'review'      , label: '🟡 REVIEW',             color: 'border-yellow-700 bg-yellow-900/10', dot: 'bg-yellow-500', items: groups.review },
+    { key: 'urgent'      , label: 'ðŸ”´ URGENT',             color: 'border-red-700 bg-red-900/10',     dot: 'bg-red-500', items: groups.urgent },
+    { key: 'overdue'     , label: 'ðŸŸ  OVERDUE',            color: 'border-orange-700 bg-orange-900/10', dot: 'bg-orange-500', items: groups.overdue },
+    { key: 'cfo_approval', label: 'ðŸŸ¢ PENDING CFO APPROVAL', color: 'border-green-700 bg-green-900/10', dot: 'bg-green-500', items: groups.cfo_approval },
+    { key: 'review'      , label: 'ðŸŸ¡ REVIEW',             color: 'border-yellow-700 bg-yellow-900/10', dot: 'bg-yellow-500', items: groups.review },
   ];
 
   return (
@@ -88,7 +88,7 @@ export default function APActionQueue() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Today's Action Queue</h1>
-          <p className="text-slate-400 text-sm mt-0.5">{todayStr} — {total > 0 ? `${total} invoice${total !== 1 ? 's' : ''} need your attention` : 'No items need attention'}</p>
+          <p className="text-slate-400 text-sm mt-0.5">{todayStr} â€” {total > 0 ? `${total} invoice${total !== 1 ? 's' : ''} need your attention` : 'No items need attention'}</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={load}
@@ -97,7 +97,7 @@ export default function APActionQueue() {
           </button>
           <button onClick={() => navigate('/ap-invoices/list')}
             className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium">
-            View All Invoices →
+            View All Invoices â†’
           </button>
         </div>
       </div>
@@ -122,7 +122,7 @@ export default function APActionQueue() {
 
       {loading ? (
         <div className="flex items-center justify-center py-24 text-slate-400">
-          <RefreshCw className="w-6 h-6 animate-spin mr-2" /> Loading action queue…
+          <RefreshCw className="w-6 h-6 animate-spin mr-2" /> Loading action queueâ€¦
         </div>
       ) : total === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-center">
@@ -156,7 +156,7 @@ export default function APActionQueue() {
                             </span>
                           )}
                         </div>
-                        <p className="text-white font-medium text-sm">{inv.vendor_name} — <span className="text-slate-300">{fmt(inv.total_amount, inv.currency)}</span></p>
+                        <p className="text-white font-medium text-sm">{inv.vendor_name} â€” <span className="text-slate-300">{fmt(inv.total_amount, inv.currency)}</span></p>
                         <div className="flex items-center gap-1.5 mt-1.5 text-xs text-red-400">
                           <X className="w-3.5 h-3.5" /> {reason}
                         </div>
@@ -188,7 +188,7 @@ export default function APActionQueue() {
               <span className="text-sm font-semibold text-white">Summary</span>
             </div>
             <p className="text-sm text-slate-400">
-              {urgent} urgent · {groups.review.length} review · {groups.cfo_approval.length} CFO pending
+              {urgent} urgent Â· {groups.review.length} review Â· {groups.cfo_approval.length} CFO pending
             </p>
           </div>
         </div>
@@ -196,3 +196,4 @@ export default function APActionQueue() {
     </div>
   );
 }
+

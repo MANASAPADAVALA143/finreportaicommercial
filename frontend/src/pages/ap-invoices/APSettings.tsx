@@ -1,5 +1,5 @@
-/**
- * APSettings.tsx — AP InvoiceFlow Settings
+﻿/**
+ * APSettings.tsx â€” AP InvoiceFlow Settings
  * Approval workflows, notification preferences, company settings, pipeline configuration
  */
 import { useState } from 'react';
@@ -97,7 +97,7 @@ export default function APSettings() {
         ))}
       </div>
 
-      {/* ── General tab ── */}
+      {/* â”€â”€ General tab â”€â”€ */}
       {tab === 'general' && (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 space-y-5 max-w-2xl">
           <h2 className="text-sm font-bold text-white flex items-center gap-2"><Building2 className="w-4 h-4" /> Company Settings</h2>
@@ -124,7 +124,7 @@ export default function APSettings() {
         </div>
       )}
 
-      {/* ── Approvals tab ── */}
+      {/* â”€â”€ Approvals tab â”€â”€ */}
       {tab === 'approvals' && (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 space-y-6 max-w-2xl">
           <h2 className="text-sm font-bold text-white flex items-center gap-2"><Workflow className="w-4 h-4" /> Approval Workflow</h2>
@@ -165,7 +165,7 @@ export default function APSettings() {
         </div>
       )}
 
-      {/* ── Notifications tab ── */}
+      {/* â”€â”€ Notifications tab â”€â”€ */}
       {tab === 'notifications' && (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 space-y-5 max-w-2xl">
           <h2 className="text-sm font-bold text-white flex items-center gap-2"><Bell className="w-4 h-4" /> Notification Preferences</h2>
@@ -190,7 +190,7 @@ export default function APSettings() {
         </div>
       )}
 
-      {/* ── Pipeline tab ── */}
+      {/* â”€â”€ Pipeline tab â”€â”€ */}
       {tab === 'pipeline' && (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 space-y-5 max-w-2xl">
           <h2 className="text-sm font-bold text-white flex items-center gap-2"><Settings className="w-4 h-4" /> 8-Step Pipeline Configuration</h2>
@@ -200,7 +200,7 @@ export default function APSettings() {
               { label: 'AI Extraction',          desc: 'Claude AI extracts fields from scanned invoices',     value: aiExtract,     set: setAiExtract },
               { label: 'IFRS Classification',    desc: 'Auto-classify expenses by IFRS category',             value: ifrsClassify,  set: setIfrsClassify },
               { label: 'Risk Scoring',           desc: 'Flag duplicate, high-value, or unusual invoices',     value: riskScore,     set: setRiskScore },
-              { label: '3-Way Matching',         desc: 'Match invoice ↔ PO ↔ GRN automatically',             value: threeWay,      set: setThreeWay },
+              { label: '3-Way Matching',         desc: 'Match invoice â†” PO â†” GRN automatically',             value: threeWay,      set: setThreeWay },
               { label: 'Auto GL Coding',         desc: 'Auto-assign GL codes from IFRS category mapping',     value: autoGL,        set: setAutoGL },
             ] as const).map(({ label, desc, value, set }) => (
               <div key={label} className="flex items-center justify-between py-2.5 border-b border-slate-800 last:border-0">
@@ -243,3 +243,4 @@ export default function APSettings() {
     </div>
   );
 }
+

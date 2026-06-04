@@ -1,6 +1,6 @@
-/**
+﻿/**
  * APApprovals.tsx
- * Approval queue — Pending / Approved / Rejected tabs with 3-way match display.
+ * Approval queue â€” Pending / Approved / Rejected tabs with 3-way match display.
  */
 import { useEffect, useState } from 'react';
 import { CheckCircle2, X, AlertTriangle, Clock, RefreshCw } from 'lucide-react';
@@ -15,9 +15,9 @@ type TabKey = 'pending' | 'approved' | 'rejected';
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
 function MatchLine({ inv }: { inv: APInvoice }) {
-  const po  = inv.po_number ? '✅ PO linked' : '❌ No PO';
-  const grn = inv.match_status === 'three_way_matched' ? '✅ GRN matched' : inv.match_status === 'matched' ? '✅ Matched' : '⚠️ Not matched';
-  const price = inv.match_status === 'mismatch' ? '❌ Price mismatch' : inv.match_status === 'partial' ? '⚠️ Partial match' : '✅ Amount OK';
+  const po  = inv.po_number ? 'âœ… PO linked' : 'âŒ No PO';
+  const grn = inv.match_status === 'three_way_matched' ? 'âœ… GRN matched' : inv.match_status === 'matched' ? 'âœ… Matched' : 'âš ï¸ Not matched';
+  const price = inv.match_status === 'mismatch' ? 'âŒ Price mismatch' : inv.match_status === 'partial' ? 'âš ï¸ Partial match' : 'âœ… Amount OK';
   return (
     <div className="flex gap-3 flex-wrap text-xs">
       <span className="text-gray-300">{po}</span>
@@ -101,7 +101,7 @@ export default function APApprovals() {
     } else {
       setActing(inv.id);
       await apSupabase.from('invoices').update({ status: 'Approved', approval_status: 'approved', approved_at: new Date().toISOString() }).eq('id', inv.id);
-      showToast(`✅ Invoice ${inv.invoice_number} approved & ready to post to GL.`);
+      showToast(`âœ… Invoice ${inv.invoice_number} approved & ready to post to GL.`);
     }
     setActing('');
     void load();
@@ -132,7 +132,7 @@ export default function APApprovals() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Approvals</h1>
-          <p className="text-gray-400 text-sm mt-1">Review · approve · reject AP invoices</p>
+          <p className="text-gray-400 text-sm mt-1">Review Â· approve Â· reject AP invoices</p>
         </div>
         <button onClick={load} disabled={loading} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg disabled:opacity-50">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -179,7 +179,7 @@ export default function APApprovals() {
 
                     {/* Amount + date */}
                     <p className="text-lg font-bold text-white mb-1">{fmtAED(inv.total_amount)}</p>
-                    <p className="text-xs text-gray-400 mb-2">{inv.invoice_date || inv.created_at?.slice(0, 10) || '—'} · {inv.ifrs_category || 'No category'}</p>
+                    <p className="text-xs text-gray-400 mb-2">{inv.invoice_date || inv.created_at?.slice(0, 10) || 'â€”'} Â· {inv.ifrs_category || 'No category'}</p>
 
                     {/* 3-way match */}
                     <MatchLine inv={inv} />
@@ -262,3 +262,4 @@ export default function APApprovals() {
     </div>
   );
 }
+
