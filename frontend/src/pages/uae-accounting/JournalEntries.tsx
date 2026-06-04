@@ -113,15 +113,33 @@ export default function JournalEntries() {
         const jeNum = String(r.je_number || r['JE Number'] || '').trim();
         if (!jeNum) continue;
         if (!jeMap.has(jeNum)) {
+          // Normalise any date format → YYYY-MM-DD
+          const MONTHS: Record<string,string> = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+          const parseDate = (d: string): string => {
+            if (!d) return new Date().toISOString().slice(0,10);
+            // DD-Mon-YY or DD-Mon-YYYY  e.g. 01-Oct-25 or 01-Oct-2025
+            const m1 = d.match(/^(\d{1,2})[\/\-]([A-Za-z]{3})[\/\-](\d{2,4})$/);
+            if (m1) {
+              const yr = m1[3].length === 2 ? `20${m1[3]}` : m1[3];
+              return `${yr}-${MONTHS[m1[2].charAt(0).toUpperCase()+m1[2].slice(1).toLowerCase()]||'01'}-${m1[1].padStart(2,'0')}`;
+            }
+            // DD/MM/YYYY
+            const m2 = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (m2) return `${m2[3]}-${m2[2].padStart(2,'0')}-${m2[1].padStart(2,'0')}`;
+            // already YYYY-MM-DD
+            if (/^\d{4}-\d{2}-\d{2}/.test(d)) return d.slice(0,10);
+            return new Date().toISOString().slice(0,10);
+          };
+          const rawDate = r.date || r.gl_date || '';
+          const isoDate = parseDate(rawDate);
           jeMap.set(jeNum, {
             header: {
               reference: jeNum,
-              entry_date: r.date || r.gl_date || new Date().toISOString().slice(0,10),
+              entry_date: isoDate,
               period: (() => {
-                const d = r.date || r.gl_date || '';
-                const m = d.match(/(\d{2})-(\w{3})-(\d{2,4})/);
-                if (m) { const months: Record<string,string> = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'}; return `20${m[3].length===2?m[3]:m[3].slice(2)}-${months[m[2]]||'01'}`; }
-                return period;
+                const m = rawDate.match(/(\d{2})-(\w{3})-(\d{2,4})/);
+                if (m) { return `${m[3].length===2?`20${m[3]}`:m[3]}-${MONTHS[m[2].charAt(0).toUpperCase()+m[2].slice(1).toLowerCase()]||'01'}`; }
+                return isoDate.slice(0,7) || period;
               })(),
               description: r.description || '',
               source: String(r.source || 'manual').toLowerCase() as any,
@@ -147,11 +165,15 @@ export default function JournalEntries() {
         if (!je.header.description && r.description) je.header.description = r.description;
       }
 
+      // Dedup: collect existing references to avoid duplicates
+      const existingRefs = new Set(entries.map(e => e.reference));
+
       // Save each JE via service
-      let saved = 0, skipped = 0;
+      let saved = 0, skipped = 0, dupes = 0;
       const errs: string[] = [];
       for (const [jeNum, { header, lines }] of jeMap) {
         if (lines.length === 0) { skipped++; continue; }
+        if (existingRefs.has(jeNum)) { dupes++; continue; } // skip duplicate
         try {
           await svc.createJE({ ...header, lines });
           saved++;
@@ -160,7 +182,7 @@ export default function JournalEntries() {
         }
       }
       setImportErrors(errs);
-      setImportMsg(`✅ Imported ${saved} journal entries${skipped > 0 ? ` (${skipped} skipped — no lines)` : ''}. ${errs.length > 0 ? `${errs.length} errors — see below.` : ''} Click "Run Anomaly Detection" to flag suspicious entries.`);
+      setImportMsg(`✅ Imported ${saved} journal entries${skipped > 0 ? ` (${skipped} skipped — no lines)` : ''}${dupes > 0 ? ` (${dupes} duplicates skipped)` : ''}. ${errs.length > 0 ? `${errs.length} errors — see below.` : ''} Click "Run Anomaly Detection" to flag suspicious entries.`);
       load();
     } catch (e: any) {
       setImportErrors([e.message]);
