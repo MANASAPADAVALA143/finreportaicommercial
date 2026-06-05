@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 import type { AuditLogEntry } from './supabase';
 import { getMyCompany } from './companyService';
 
@@ -161,3 +161,4 @@ export function exportAuditLogCsv(entries: AuditLogEntry[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
+

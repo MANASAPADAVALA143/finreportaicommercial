@@ -1,8 +1,8 @@
-/**
- * Authentication service — thin wrapper around Supabase Auth.
+﻿/**
+ * Authentication service â€” thin wrapper around Supabase Auth.
  * Used by LoginPage, SignupPage, AuthGuard, and Layout logout.
  */
-import { supabase } from '@/lib/supabase';
+import { supabase } from './supabase';
 import type { User, Session } from '@supabase/supabase-js';
 
 export type AuthUser = User;
@@ -40,3 +40,4 @@ export function onAuthStateChange(callback: (session: AuthSession | null) => voi
   const { data } = supabase.auth.onAuthStateChange((_event, session) => callback(session));
   return () => data.subscription.unsubscribe();
 }
+

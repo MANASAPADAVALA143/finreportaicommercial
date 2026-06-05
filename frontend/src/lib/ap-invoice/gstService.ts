@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 import { requireCompanyId } from './companyService';
 import type { Gstr2bEntry, Invoice } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
@@ -30,7 +30,7 @@ function parseGstDate(dt: string): string | null {
 
 export type Gstr2bInsertRow = Omit<Gstr2bEntry, 'id' | 'total_gst' | 'matched_invoice_id' | 'created_at'>;
 
-/** Parse GSTR-2B JSON — unknown shape returns []. */
+/** Parse GSTR-2B JSON â€” unknown shape returns []. */
 export function parseGstr2bJson(raw: unknown, companyGstin: string, period: string): Gstr2bInsertRow[] {
   const entries: Gstr2bInsertRow[] = [];
 
@@ -160,7 +160,7 @@ export async function runGstReconciliation(
   return result;
 }
 
-/** Invoices in period with GST amount — all recon statuses (for GST Recon table). */
+/** Invoices in period with GST amount â€” all recon statuses (for GST Recon table). */
 export async function getGstReconInvoices(period: string): Promise<Invoice[]> {
   const { start, end } = periodToDateRange(period);
   const { data, error } = await supabase

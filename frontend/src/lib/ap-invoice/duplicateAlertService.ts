@@ -1,10 +1,10 @@
-/**
+﻿/**
  * Duplicate alert before payment.
  * Checks if an invoice is flagged as a duplicate OR if there are potential
  * duplicates (same vendor + similar amount) in the recent window.
  */
-import { supabase } from '@/lib/supabase';
-import type { Invoice } from '@/lib/supabase';
+import { supabase } from './supabase';
+import type { Invoice } from './supabase';
 
 export interface DuplicateAlert {
   /** Invoice is already DB-flagged as duplicate */
@@ -52,3 +52,4 @@ export async function checkDuplicateBeforePayment(
 
   return { flagged, potentialMatches };
 }
+

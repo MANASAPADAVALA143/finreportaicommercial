@@ -1,5 +1,5 @@
-import { supabase, type Invoice } from '@/lib/supabase';
-import { logAction } from '@/lib/auditService';
+﻿import { supabase, type Invoice } from './supabase';
+import { logAction } from './auditService';
 
 /** Flagged duplicates (flat rows; load original via duplicate_of_id if needed). */
 export async function getFlaggedDuplicates(): Promise<Invoice[]> {
@@ -68,3 +68,4 @@ export async function fetchInvoiceById(id: string): Promise<Invoice | null> {
   if (error) throw error;
   return (data as Invoice) ?? null;
 }
+

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WhatsApp one-tap approval notifications via n8n webhook.
  * Set VITE_WHATSAPP_WEBHOOK_URL in .env to your n8n WhatsApp workflow.
  * Set VITE_APP_URL to your production URL (e.g. https://apinvoice.vercel.app).
@@ -37,12 +37,12 @@ export function buildApprovalUrls(approvalRowId: string, approverEmail: string) 
 
 /**
  * Send a WhatsApp approval request via n8n.
- * Fire-and-forget — never throws so the approval workflow continues even if WhatsApp fails.
+ * Fire-and-forget â€” never throws so the approval workflow continues even if WhatsApp fails.
  */
 export async function sendWhatsAppApprovalRequest(payload: WhatsAppApprovalPayload): Promise<void> {
   const webhookUrl = (import.meta.env.VITE_WHATSAPP_WEBHOOK_URL as string | undefined)?.trim();
   if (!webhookUrl) {
-    console.info('[whatsapp] skipped — set VITE_WHATSAPP_WEBHOOK_URL to enable', payload.invoice_number);
+    console.info('[whatsapp] skipped â€” set VITE_WHATSAPP_WEBHOOK_URL to enable', payload.invoice_number);
     return;
   }
   try {
@@ -82,3 +82,4 @@ export async function notifyApproverViaWhatsApp(
     reject_url,
   });
 }
+

@@ -605,7 +605,7 @@ export function PurchaseOrders() {
     setRematching(true);
     try {
       // Get all POs to rematch (specific list or all open POs)
-      const company = await import('@/lib/companyService').then(m => m.getMyCompany());
+      const company = await import('../../lib/ap-invoice/companyService').then(m => m.getMyCompany());
       let q = supabase.from('purchase_orders').select('id,po_number');
       if (company?.id) q = q.eq('company_id', company.id);
       if (poNumbers?.length) q = q.in('po_number', poNumbers);
@@ -1161,4 +1161,5 @@ export function PurchaseOrders() {
     </div>
   );
 }
+
 

@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 import { logAction } from './auditService';
 import { requireCompanyId } from './companyService';
 import { runAutoMatch } from './threeWayMatchService';
@@ -148,3 +148,4 @@ export async function processEmailIntake(payload: EmailIntakePayload): Promise<{
 
   return { invoices_created, errors };
 }
+

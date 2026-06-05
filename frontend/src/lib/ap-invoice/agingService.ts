@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 
 export interface AgingBucket {
   label: string;
@@ -37,7 +37,7 @@ function isInvoicePaid(payment_status: string | null | undefined, status: string
   return status === 'Paid' || payment_status === 'paid';
 }
 
-/** Aging bucket summary — current + three overdue bands */
+/** Aging bucket summary â€” current + three overdue bands */
 export async function getAgingSummary(): Promise<AgingBucket[]> {
   const today = new Date().toISOString().split('T')[0];
 
@@ -51,8 +51,8 @@ export async function getAgingSummary(): Promise<AgingBucket[]> {
 
   const buckets = {
     current: { label: 'Current', key: 'current', count: 0, amount: 0 },
-    days_1_30: { label: '1–30 days', key: '1_30', count: 0, amount: 0 },
-    days_31_60: { label: '31–60 days', key: '31_60', count: 0, amount: 0 },
+    days_1_30: { label: '1â€“30 days', key: '1_30', count: 0, amount: 0 },
+    days_31_60: { label: '31â€“60 days', key: '31_60', count: 0, amount: 0 },
     over_60: { label: '60+ days', key: 'over_60', count: 0, amount: 0 },
   };
 
@@ -156,7 +156,7 @@ export async function getAgingInvoices(bucket?: string): Promise<AgingInvoice[]>
     .filter((row) => !bucket || row.aging_bucket === bucket);
 }
 
-/** DPO ≈ (outstanding / purchases in window) × days in window */
+/** DPO â‰ˆ (outstanding / purchases in window) Ã— days in window */
 export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const since = new Date(Date.now() - periodDays * 86400000).toISOString().split('T')[0];
 
@@ -279,3 +279,4 @@ export function exportAgingCsv(invoices: AgingInvoice[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
+

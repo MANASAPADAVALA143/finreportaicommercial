@@ -1,4 +1,4 @@
-const GULFTAX_API = import.meta.env.VITE_GULFTAX_API_URL || 'https://gulftax.vercel.app';
+﻿const GULFTAX_API = import.meta.env.VITE_GULFTAX_API_URL || 'https://gulftax.vercel.app';
 
 export interface TRNValidationResult {
   valid: boolean;
@@ -53,9 +53,10 @@ export async function classifyVATWithGulfTax(invoice: {
     return {
       treatment: 'standard',
       confidence: 0,
-      reason: 'GulfTax API unreachable — defaulting to standard rated',
+      reason: 'GulfTax API unreachable â€” defaulting to standard rated',
       applicable_rate: 5,
       error: err instanceof Error ? err.message : 'Unknown error',
     };
   }
 }
+

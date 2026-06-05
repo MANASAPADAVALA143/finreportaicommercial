@@ -1,11 +1,11 @@
-/**
- * Payment reminder service — finds approved invoices due within N days and fires reminders.
+﻿/**
+ * Payment reminder service â€” finds approved invoices due within N days and fires reminders.
  * Set VITE_PAYMENT_REMINDER_WEBHOOK_URL to an n8n workflow that sends email/WhatsApp.
  *
  * Payload per overdue / upcoming invoice:
  *   { type, invoice_id, invoice_number, vendor_name, due_date, days_until_due, total_amount, currency, vendor_email, vendor_phone }
  */
-import { supabase } from '@/lib/supabase';
+import { supabase } from './supabase';
 
 export interface PaymentReminderPayload {
   type: 'overdue' | 'due_soon';
@@ -97,8 +97,8 @@ export async function sendPaymentReminders(dueSoonDays = 7): Promise<PaymentRemi
     await fireWebhook(payload);
     sent++;
     const label = daysUntilDue < 0
-      ? `${inv.invoice_number} — OVERDUE by ${Math.abs(daysUntilDue)}d`
-      : `${inv.invoice_number} — due in ${daysUntilDue}d`;
+      ? `${inv.invoice_number} â€” OVERDUE by ${Math.abs(daysUntilDue)}d`
+      : `${inv.invoice_number} â€” due in ${daysUntilDue}d`;
     messages.push(label);
   }
 
@@ -131,3 +131,4 @@ export async function getUpcomingDueInvoices(dueSoonDays = 7) {
     return d <= cutoff;
   });
 }
+

@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+﻿import * as XLSX from 'xlsx';
 import { supabase } from './supabase';
 import { getMyCompany, getCompanyConfig } from './companyService';
 import { getAgentAutonomyConfig } from './agentConfigService';
@@ -185,7 +185,7 @@ export type RunAutoMatchOptions = {
 
 /**
  * Runs PO / GRN / invoice tolerance match, logs `match_results`, updates invoice.
- * Does not throw on missing tables — logs and rethrows only for unexpected errors.
+ * Does not throw on missing tables â€” logs and rethrows only for unexpected errors.
  */
 export async function runAutoMatch(
   invoiceId: string,
@@ -393,7 +393,7 @@ export async function runAutoMatch(
     }
 
     if (tolerance.require_grn_for_match && (!grn || grnAmount <= 0)) {
-      exceptions.push('No confirmed GRN with value — goods receipt required before payment');
+      exceptions.push('No confirmed GRN with value â€” goods receipt required before payment');
     }
 
     const priceDiffPct =
@@ -449,25 +449,25 @@ export async function runAutoMatch(
     summary = 'No matching purchase order found. Link a PO or create one in Purchase Orders.';
   } else if (tolerance.require_grn_for_match && !checks.grn_exists) {
     engine = 'no_grn';
-    summary = `PO ${String(po?.po_number ?? '')} found — waiting for a confirmed goods receipt.`;
+    summary = `PO ${String(po?.po_number ?? '')} found â€” waiting for a confirmed goods receipt.`;
   } else if (withinTolerance && checks.grn_exists) {
     engine = 'full_match';
-    summary = `Full 3-way match: PO ${String(po?.po_number ?? '')} · GRN ${String((grn as { grn_number?: string })?.grn_number ?? '')} · within tolerance`;
+    summary = `Full 3-way match: PO ${String(po?.po_number ?? '')} Â· GRN ${String((grn as { grn_number?: string })?.grn_number ?? '')} Â· within tolerance`;
   } else if (withinTolerance) {
     engine = 'partial_match';
-    summary = `2-way match: PO ${String(po?.po_number ?? '')} · within tolerance · no GRN required`;
+    summary = `2-way match: PO ${String(po?.po_number ?? '')} Â· within tolerance Â· no GRN required`;
   } else if (!checks.within_price_tolerance) {
     engine = 'amount_variance';
-    summary = 'Amount variance exceeds tolerance — manual review required.';
+    summary = 'Amount variance exceeds tolerance â€” manual review required.';
   } else if (!checks.within_qty_tolerance) {
     engine = 'qty_variance';
-    summary = 'Invoice vs GRN variance exceeds tolerance — manual review required.';
+    summary = 'Invoice vs GRN variance exceeds tolerance â€” manual review required.';
   } else if (!checks.grn_matches_po) {
     engine = 'failed';
     summary = exceptions[0] ?? 'GRN does not match PO within tolerance.';
   } else {
     engine = 'failed';
-    summary = exceptions[0] ?? 'Match failed — manual review required.';
+    summary = exceptions[0] ?? 'Match failed â€” manual review required.';
   }
 
   const grnExists = !!checks.grn_exists;
@@ -539,7 +539,7 @@ export async function runAutoMatch(
     updatePayload.approval_status = 'approved';
     updatePayload.status = 'Approved';
     updatePayload.approved_at = new Date().toISOString();
-    /* invoices.approved_by is uuid in DB — never use a string label here */
+    /* invoices.approved_by is uuid in DB â€” never use a string label here */
     updatePayload.approved_by = null;
   }
 
@@ -579,15 +579,15 @@ export function autoMatchToastMessage(result: AutoMatchRunResult): string {
   if (result.skipped) return result.summary;
   if (result.engine_status === 'full_match' || result.engine_status === 'partial_match') {
     return result.engine_status === 'full_match'
-      ? `Auto-matched ✓ ${result.summary}`
-      : `Invoice 2-way matched ✓ ${result.summary}`;
+      ? `Auto-matched âœ“ ${result.summary}`
+      : `Invoice 2-way matched âœ“ ${result.summary}`;
   }
-  if (result.engine_status === 'no_po') return 'No PO found — invoice in review queue';
+  if (result.engine_status === 'no_po') return 'No PO found â€” invoice in review queue';
   if (result.engine_status === 'amount_variance') {
-    return `Amount variance ${result.amount_variance_pct.toFixed(1)}% — sent for review`;
+    return `Amount variance ${result.amount_variance_pct.toFixed(1)}% â€” sent for review`;
   }
-  if (result.engine_status === 'no_grn') return 'PO found — waiting for goods receipt (GRN)';
-  return result.summary || 'Match complete — review recommended';
+  if (result.engine_status === 'no_grn') return 'PO found â€” waiting for goods receipt (GRN)';
+  return result.summary || 'Match complete â€” review recommended';
 }
 
 export async function runBulkAutoMatch(): Promise<{ matched: number; failed: number }> {
@@ -797,9 +797,9 @@ function cellStr(v: unknown): string {
   return String(v).trim();
 }
 
-/** Parse qty/price cells from CSV/Excel (commas, ₹/$/spaces). */
+/** Parse qty/price cells from CSV/Excel (commas, â‚¹/$/spaces). */
 function parseImportNumber(raw: string): number {
-  const t = raw.replace(/,/g, '').replace(/[\s$€£₹]/g, '').trim();
+  const t = raw.replace(/,/g, '').replace(/[\s$â‚¬Â£â‚¹]/g, '').trim();
   if (!t) return NaN;
   const n = parseFloat(t);
   return Number.isFinite(n) ? n : NaN;
@@ -827,7 +827,7 @@ function pickRow(r: Record<string, unknown>, ...aliases: string[]): string {
   }
   for (const alias of aliases) {
     const target = normHeaderKey(alias);
-    /* Long aliases only — short ones (e.g. "invoice") would match invoice_date. */
+    /* Long aliases only â€” short ones (e.g. "invoice") would match invoice_date. */
     if (target.length >= 12) {
       for (const k of keys) {
         const nk = normHeaderKey(k);
@@ -1237,7 +1237,7 @@ export async function bulkImportGRNs(
   };
 
   if (!company?.id) {
-    result.errors.push({ grn_number: '—', error: 'No company selected. Set your company in settings.' });
+    result.errors.push({ grn_number: 'â€”', error: 'No company selected. Set your company in settings.' });
     result.failed = masterRows.length;
     return result;
   }
@@ -1246,8 +1246,8 @@ export async function bulkImportGRNs(
 
   for (let i = 0; i < masterRows.length; i++) {
     const grn = masterRows[i];
-    const label = `${grn.grn_number} — ${grn.vendor_name || 'GRN'}`;
-    onProgress?.(i + 1, masterRows.length, `Processing ${label}…`);
+    const label = `${grn.grn_number} â€” ${grn.vendor_name || 'GRN'}`;
+    onProgress?.(i + 1, masterRows.length, `Processing ${label}â€¦`);
 
     let warning: string | undefined;
 
@@ -1268,7 +1268,7 @@ export async function bulkImportGRNs(
 
       if (dup) {
         result.skipped++;
-        result.errors.push({ grn_number: grnNum, error: 'Skipped — GRN number already exists' });
+        result.errors.push({ grn_number: grnNum, error: 'Skipped â€” GRN number already exists' });
         result.results.push({
           grn_number: grnNum,
           invoice_number: grn.invoice_number,
@@ -1292,10 +1292,10 @@ export async function bulkImportGRNs(
           poId = poRows[0].id as string;
           resolvedPoNumber = String(poRows[0].po_number ?? resolvedPoNumber);
         } else {
-          warning = `PO "${resolvedPoNumber}" not found — GRN saved without PO link`;
+          warning = `PO "${resolvedPoNumber}" not found â€” GRN saved without PO link`;
         }
       } else {
-        warning = warning || 'No PO number — GRN saved without PO link';
+        warning = warning || 'No PO number â€” GRN saved without PO link';
       }
 
       let lines = lineItemRows
@@ -1311,7 +1311,7 @@ export async function bulkImportGRNs(
       if (lines.length === 0) {
         lines = [
           {
-          description: grn.notes.trim() || `${grn.vendor_name || 'Vendor'} — receipt`,
+          description: grn.notes.trim() || `${grn.vendor_name || 'Vendor'} â€” receipt`,
           ordered_qty: 1,
           received_qty: 1,
           unit_price: 0,
@@ -1537,3 +1537,4 @@ export function downloadGRNImportExcelTemplate(): void {
   XLSX.utils.book_append_sheet(wb, ws2, 'Line Items');
   XLSX.writeFile(wb, 'GRN_Import_Template.xlsx');
 }
+

@@ -1,11 +1,10 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+﻿import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// AP InvoiceFlow uses its own Supabase project (xuaaqonmaarldzklocax)
-const supabaseUrl = import.meta.env.VITE_AP_SUPABASE_URL ?? import.meta.env.VITE_SUPABASE_URL ?? '';
-const supabaseAnonKey = import.meta.env.VITE_AP_SUPABASE_ANON_KEY ?? import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env — app will load but data features will fail until set.');
+  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env â€” app will load but data features will fail until set.');
 }
 
 export const supabase: SupabaseClient = createClient(
@@ -31,7 +30,7 @@ export type Invoice = {
   ifrs_category: string | null;
   /** IFRS / classification confidence from n8n (legacy semantic). */
   ifrs_confidence: number | null;
-  /** Overall extraction / OCR confidence (0–100); may mirror IFRS or come from n8n OCR fields. */
+  /** Overall extraction / OCR confidence (0â€“100); may mirror IFRS or come from n8n OCR fields. */
   ocr_confidence?: number | null;
   /** Optional per-field scores from n8n, e.g. { "vendor_name": 95, "total_amount": 88 }. */
   ocr_confidence_fields?: Record<string, number> | string | null;
@@ -329,3 +328,4 @@ export type GLAccount = {
   created_at: string;
   updated_at: string;
 };
+

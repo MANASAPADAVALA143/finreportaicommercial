@@ -1,9 +1,9 @@
-import { supabase } from '@/lib/supabase';
-import type { ApprovalRule, Invoice, InvoiceApprovalRow } from '@/lib/supabase';
-import { notifyApprovalEvent } from '@/lib/approvalNotifications';
-import { logAction } from '@/lib/auditService';
-import { requireCompanyId } from '@/lib/companyService';
-import { notifyApproverViaWhatsApp } from '@/lib/whatsappService';
+﻿import { supabase } from './supabase';
+import type { ApprovalRule, Invoice, InvoiceApprovalRow } from './supabase';
+import { notifyApprovalEvent } from './approvalNotifications';
+import { logAction } from './auditService';
+import { requireCompanyId } from './companyService';
+import { notifyApproverViaWhatsApp } from './whatsappService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 export type ApprovalRowStatus = 'pending' | 'approved' | 'rejected';
@@ -122,7 +122,7 @@ export async function submitInvoiceForApproval(
     total_steps: chain.length,
   });
 
-  // WhatsApp one-tap — use approver's phone from the rule (index matches approver_emails)
+  // WhatsApp one-tap â€” use approver's phone from the rule (index matches approver_emails)
   const approverPhone = rule.approver_phones?.[0] ?? null;
   void notifyApproverViaWhatsApp(
     approvalRowId,
@@ -397,3 +397,4 @@ export async function deleteApprovalRule(id: string) {
   const { error } = await supabase.from('approval_rules').delete().eq('id', id);
   if (error) throw error;
 }
+

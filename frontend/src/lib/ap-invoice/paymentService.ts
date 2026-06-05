@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 import type { Invoice, PaymentBatch } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 import { requireCompanyId } from './companyService';
@@ -174,7 +174,7 @@ export async function markOverdueInvoices(): Promise<number> {
   return typeof data === 'number' ? data : Number(data) || 0;
 }
 
-/** Cash flow for next ~30 days — grouped by week (unpaid vs scheduled by effective pay date) */
+/** Cash flow for next ~30 days â€” grouped by week (unpaid vs scheduled by effective pay date) */
 export async function getCashFlowForecast() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -215,3 +215,4 @@ export async function getCashFlowForecast() {
     return { label: week.label, unpaid, scheduled };
   });
 }
+

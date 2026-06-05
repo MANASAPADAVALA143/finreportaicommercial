@@ -1,4 +1,4 @@
-/** Demo / screenshot-friendly vendor labels (no DB migration required). */
+﻿/** Demo / screenshot-friendly vendor labels (no DB migration required). */
 export function anonymiseVendor(name: string): string {
   const n = name.trim();
   const exact: Record<string, string> = {
@@ -28,3 +28,4 @@ export function redactDemoVendorNames(text: string): string {
   t = t.replace(/\bAWS\b(?=\s|,|$|\))/gi, 'CloudMatrix Technologies');
   return t;
 }
+

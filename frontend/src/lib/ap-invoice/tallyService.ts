@@ -1,12 +1,12 @@
-/**
+﻿/**
  * Tally ERP Service
  * Handles: single invoice push, bulk sync, connection test, sync status tracking.
  * Wraps tallyExport.ts primitives and writes tally_synced / tally_synced_at back to Supabase.
  */
-import { supabase } from '@/lib/supabase';
+import { supabase } from './supabase';
 import { pushToTallyPrime, downloadTallyXML, type TallySettings } from '@/utils/tallyExport';
-import { logAction } from '@/lib/auditService';
-import type { Invoice } from '@/lib/supabase';
+import { logAction } from './auditService';
+import type { Invoice } from './supabase';
 
 export interface TallySyncResult {
   success: boolean;
@@ -168,12 +168,12 @@ export async function testTallyConnection(
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes('abort') || msg.includes('timeout')) {
-      return { ok: false, message: `Connection timed out — is TallyPrime running at ${tallyUrl}?` };
+      return { ok: false, message: `Connection timed out â€” is TallyPrime running at ${tallyUrl}?` };
     }
-    // CORS / network error — Tally is likely not running
+    // CORS / network error â€” Tally is likely not running
     return {
       ok: false,
-      message: `Cannot reach ${tallyUrl}. Enable TallyPrime HTTP server: Gateway → Configure → Enable HTTP → Port 9000.`,
+      message: `Cannot reach ${tallyUrl}. Enable TallyPrime HTTP server: Gateway â†’ Configure â†’ Enable HTTP â†’ Port 9000.`,
     };
   }
 }
@@ -211,3 +211,4 @@ export async function getTallySyncStats(): Promise<{
   const synced = data.filter((r) => r.tally_synced === true).length;
   return { totalApproved, synced, unsynced: totalApproved - synced };
 }
+

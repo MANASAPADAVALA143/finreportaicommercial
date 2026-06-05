@@ -633,7 +633,7 @@ export function InvoiceUpload() {
   const handleSaveFromScanPreview = async (values: NormalizedExtractedInvoice) => {
     setSavingFromScan(true);
     try {
-      const { getMyCompany } = await import('@/lib/companyService');
+      const { getMyCompany } = await import('../../lib/ap-invoice/companyService');
       const company = await getMyCompany();
       const invKind: 'purchase' | 'sales' = values.invoice_kind;
       const today = new Date().toISOString().slice(0, 10);
@@ -3845,4 +3845,5 @@ export function InvoiceUpload() {
     </div>
   );
 }
+
 

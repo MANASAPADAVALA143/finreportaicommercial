@@ -1,4 +1,4 @@
-export type Market = 'india' | 'uae';
+﻿export type Market = 'india' | 'uae';
 
 export interface MarketConfig {
   market: Market;
@@ -17,7 +17,7 @@ export interface MarketConfig {
 export const INDIA_CONFIG: MarketConfig = {
   market: 'india',
   currency: 'INR',
-  currencySymbol: '₹',
+  currencySymbol: 'â‚¹',
   taxLabel: 'GST',
   taxIdLabel: 'GSTIN',
   taxIdPlaceholder: '36AABCT1234M1Z5',
@@ -69,10 +69,11 @@ export const VAT_TREATMENT_OPTIONS = [
 ] as const;
 
 export const UAE_FTA_QUARTERS = [
-  { value: 'Q1-2025', label: 'Q1 2025 (Jan–Mar)' },
-  { value: 'Q2-2025', label: 'Q2 2025 (Apr–Jun)' },
-  { value: 'Q3-2025', label: 'Q3 2025 (Jul–Sep)' },
-  { value: 'Q4-2025', label: 'Q4 2025 (Oct–Dec)' },
-  { value: 'Q1-2026', label: 'Q1 2026 (Jan–Mar)' },
-  { value: 'Q2-2026', label: 'Q2 2026 (Apr–Jun)' },
+  { value: 'Q1-2025', label: 'Q1 2025 (Janâ€“Mar)' },
+  { value: 'Q2-2025', label: 'Q2 2025 (Aprâ€“Jun)' },
+  { value: 'Q3-2025', label: 'Q3 2025 (Julâ€“Sep)' },
+  { value: 'Q4-2025', label: 'Q4 2025 (Octâ€“Dec)' },
+  { value: 'Q1-2026', label: 'Q1 2026 (Janâ€“Mar)' },
+  { value: 'Q2-2026', label: 'Q2 2026 (Aprâ€“Jun)' },
 ] as const;
+

@@ -262,7 +262,7 @@ export default function CFODashboard() {
       setInsights(ins);
       // Load AI training summary
       try {
-        const company = await import('@/lib/companyService').then((m) => m.getMyCompany());
+        const company = await import('../../lib/ap-invoice/companyService').then((m) => m.getMyCompany());
         if (company) {
           const [intRes, vpRes] = await Promise.all([
             supabase.from('ap_intelligence').select('*').eq('company_id', company.id).maybeSingle(),
@@ -1051,4 +1051,5 @@ export default function CFODashboard() {
     </div>
   );
 }
+
 

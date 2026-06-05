@@ -1,4 +1,4 @@
-import { invoiceFlowAgentUrl } from '@/lib/apiBase';
+﻿import { invoiceFlowAgentUrl } from './apiBase';
 
 export type NormalizedExtractedInvoice = {
   invoice_number: string;
@@ -107,13 +107,13 @@ function describeFailedResponse(status: number, text: string, parsed: Record<str
   const snippet = trimmed.slice(0, 280);
   const base = snippet ? `HTTP ${status}: ${snippet}` : `HTTP ${status}`;
   if (status === 450) {
-    return `${base} (Some networks/parental filters use status 450 — try another connection or disable filtering.)`;
+    return `${base} (Some networks/parental filters use status 450 â€” try another connection or disable filtering.)`;
   }
   if (status === 405) {
     return (
       `${base} ` +
       `HTTP 405 here often means the POST hit the web app (e.g. Vercel SPA) instead of FastAPI. ` +
-      `On Vercel: set INVOICEFLOW_AGENT_URL to your agent base URL, leave VITE_API_URL empty so scan uses the built-in proxy, and redeploy — ` +
+      `On Vercel: set INVOICEFLOW_AGENT_URL to your agent base URL, leave VITE_API_URL empty so scan uses the built-in proxy, and redeploy â€” ` +
       `or set VITE_API_URL to your FastAPI URL only (not your Vercel site URL).`
     );
   }
@@ -130,14 +130,14 @@ function loadImageElement(src: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Phone cameras often output HEIC (unsupported by many APIs). Large photos can hit limits — shrink to JPEG.
+ * Phone cameras often output HEIC (unsupported by many APIs). Large photos can hit limits â€” shrink to JPEG.
  */
 async function prepareImageForExtract(file: File): Promise<File> {
   const nameLower = file.name.toLowerCase();
   const typeLower = (file.type || '').toLowerCase();
   if (typeLower.includes('heic') || typeLower.includes('heif') || nameLower.endsWith('.heic') || nameLower.endsWith('.heif')) {
     throw new Error(
-      'This photo is HEIC/HEIF. Please use Upload file and choose a JPEG/PNG, or change the phone camera to “Most Compatible” (JPEG).'
+      'This photo is HEIC/HEIF. Please use Upload file and choose a JPEG/PNG, or change the phone camera to â€œMost Compatibleâ€ (JPEG).'
     );
   }
   if (!typeLower.startsWith('image/')) return file;
@@ -205,3 +205,4 @@ export async function extractInvoiceFromImageFile(file: File): Promise<ExtractIm
   const confidence = typeof o.confidence === 'number' ? o.confidence : undefined;
   return { invoice, confidence };
 }
+

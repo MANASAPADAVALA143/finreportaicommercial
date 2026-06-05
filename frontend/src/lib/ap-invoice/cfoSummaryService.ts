@@ -1,12 +1,12 @@
-/**
+﻿/**
  * CFO weekly WhatsApp summary.
  * Aggregates AP data for the past 7 days (or custom window) and sends a summary
- * via VITE_CFO_SUMMARY_WEBHOOK_URL (n8n → Twilio WhatsApp / email).
+ * via VITE_CFO_SUMMARY_WEBHOOK_URL (n8n â†’ Twilio WhatsApp / email).
  *
  * Summary payload: { period, total_invoices, total_amount, approved, pending, rejected,
  *   overdue_count, overdue_amount, top_vendors, currency }
  */
-import { supabase } from '@/lib/supabase';
+import { supabase } from './supabase';
 
 export interface CfoSummaryPayload {
   period_label: string;
@@ -97,7 +97,7 @@ export async function buildCfoSummary(days = 7, recipients: string[] = []): Prom
     : 'INR';
 
   return {
-    period_label: `Last ${days} days (${startIso} – ${endIso})`,
+    period_label: `Last ${days} days (${startIso} â€“ ${endIso})`,
     period_start: startIso,
     period_end: endIso,
     total_invoices: invoices.length,
@@ -141,3 +141,4 @@ export async function sendCfoSummary(days = 7, recipients: string[] = []): Promi
     return { ok: false, message: e instanceof Error ? e.message : String(e), payload };
   }
 }
+

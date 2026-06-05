@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 
 export type SubscriptionTier = 'starter' | 'growth' | 'enterprise';
 
@@ -310,7 +310,7 @@ export async function isSuperAdmin(): Promise<boolean> {
 /** Use on every insert into tenant-scoped tables. */
 export async function requireCompanyId(): Promise<string> {
   const c = await getMyCompany();
-  if (!c?.id) throw new Error('No company context — run MULTI-TENANT-MIGRATION.sql and ensure companies row exists.');
+  if (!c?.id) throw new Error('No company context â€” run MULTI-TENANT-MIGRATION.sql and ensure companies row exists.');
   return c.id;
 }
 
@@ -410,3 +410,4 @@ export async function fetchAllCompaniesAdmin(): Promise<Company[]> {
 }
 
 export { parseApprovalFlow };
+
