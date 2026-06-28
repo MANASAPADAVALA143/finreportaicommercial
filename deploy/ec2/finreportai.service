@@ -1,0 +1,16 @@
+[Unit]
+Description=FinReportAI / Gnanova FastAPI Backend
+After=network.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/finreportaicommercial/backend
+EnvironmentFile=/home/ubuntu/finreportaicommercial/backend/.env
+Environment=PATH=/home/ubuntu/finreportaicommercial/backend/venv/bin
+ExecStart=/home/ubuntu/finreportaicommercial/backend/venv/bin/gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8000 --timeout 120
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
