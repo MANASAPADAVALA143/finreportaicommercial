@@ -35,8 +35,9 @@ scikit-learn==1.4.2
 joblib==1.4.2
 xgboost==2.0.3
 
-# --- AI / LLM ---
+# --- AI / LLM (no torch / sentence-transformers / GPU stack) ---
 anthropic==0.94.0
+openai>=1.40.0,<2
 fastapi-mcp==0.4.0
 
 # --- PDF / Office / XML ---
@@ -65,9 +66,9 @@ botocore>=1.34.0,<2
 supabase==2.10.0
 twilio>=8.0.0,<10
 
-# --- RAG / embeddings (heavy; lazy-imported in code) ---
+# --- RAG (ChromaDB only — no local embedding models) ---
+# Excluded intentionally: sentence-transformers, torch, transformers, huggingface-hub, nvidia-*, cuda-*
 chromadb>=0.5.0,<0.6
-sentence-transformers>=2.7.0,<3
 
 # --- Scheduler ---
 apscheduler==3.10.4
