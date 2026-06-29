@@ -1,38 +1,39 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../lib/ap-invoice/supabase';
-import { useMarket } from '../../contexts/MarketContext';
-import { EMIRATES } from '../../lib/ap-invoice/marketConfig';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Label } from '../../components/ui/label';
-import { Switch } from '../../components/ui/switch';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Separator } from '../../components/ui/separator';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import { useMarket } from '@/contexts/MarketContext';
+import { EMIRATES } from '@/lib/ap-invoice/marketConfig';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../components/ui/select';
-import { useToast } from '../../hooks/use-toast';
+} from '@/components/ui/select';
+import { useToast } from '@/hooks/use-toast';
 import { Download, Database, User, Building, Key, Mail, ArrowLeft, LayoutDashboard, Upload, FileSpreadsheet, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { COUNTRIES, STANDARDS, FY_OPTIONS, TIMEZONE_OPTIONS } from '@/constants/companyCountries';
-import { CurrencyCombobox } from '../../components/ap-invoice/CurrencyCombobox';
+import { CurrencyCombobox } from '@/components/ap-invoice/CurrencyCombobox';
 import { ApprovalRulesSection } from '@/components/approvals/ApprovalRulesSection';
-import { Checkbox } from '../../components/ui/checkbox';
-import { getMyCompany, requireCompanyId } from '../../lib/ap-invoice/companyService';
+import { Checkbox } from '@/components/ui/checkbox';
+import { getMyCompany, requireCompanyId } from '@/lib/ap-invoice/companyService';
 import {
   testTallyConnection,
   syncApprovedToTally,
   getTallySyncStats,
-} from '../../lib/ap-invoice/tallyService';
-import { toTallySettings } from '../../hooks/useErpSettings';
-import { sendPaymentReminders } from '../../lib/ap-invoice/paymentReminderService';
-import { sendCfoSummary } from '../../lib/ap-invoice/cfoSummaryService';
-import { loadZohoSettings, saveZohoSettings, testZohoConnection, type ZohoSettings } from '../../lib/ap-invoice/zohoService';
+} from '@/lib/ap-invoice/tallyService';
+import { toTallySettings } from '@/hooks/useErpSettings';
+import { sendPaymentReminders } from '@/lib/ap-invoice/paymentReminderService';
+import { sendCfoSummary } from '@/lib/ap-invoice/cfoSummaryService';
+import { loadZohoSettings, saveZohoSettings, testZohoConnection, type ZohoSettings } from '@/lib/ap-invoice/zohoService';
+import { loadQBSettings, saveQBSettings, testQBConnection, type QBSettings } from '@/lib/ap-invoice/quickbooksService';
 
 const COMPANY_TYPE_OPTIONS = [
   { value: 'private_limited', label: 'Private Limited' },
@@ -79,6 +80,11 @@ export function Settings() {
   const [zohoTesting, setZohoTesting] = useState(false);
   const [zohoTestResult, setZohoTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  const [qb, setQb] = useState<QBSettings>({ client_id: '', client_secret: '', refresh_token: '', realm_id: '', environment: 'production' });
+  const [qbSaving, setQbSaving] = useState(false);
+  const [qbTesting, setQbTesting] = useState(false);
+  const [qbTestResult, setQbTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
   const [userProfile, setUserProfile] = useState({
     name: 'John Doe',
     email: 'john@invoiceflow.com',
@@ -108,7 +114,28 @@ export function Settings() {
     fetchSettings();
     fetchCOA();
     fetchCompanySettingsRow();
+    void fetchCompanyMarketFields();
   }, []);
+
+  async function fetchCompanyMarketFields() {
+    try {
+      const cid = (await getMyCompany())?.id;
+      if (!cid) return;
+      const { data, error } = await supabase
+        .from('companies')
+        .select('fta_registration, vat_filing_frequency, emirate')
+        .eq('id', cid)
+        .maybeSingle();
+      if (error || !data) return;
+      if (data.fta_registration) setFtaRegistration(String(data.fta_registration));
+      if (data.vat_filing_frequency === 'monthly' || data.vat_filing_frequency === 'quarterly') {
+        setVatFilingFrequency(data.vat_filing_frequency);
+      }
+      if (data.emirate) setEmirate(String(data.emirate));
+    } catch (e) {
+      console.warn('companies market fields:', e);
+    }
+  }
 
   async function fetchCompanySettingsRow() {
     try {
@@ -177,6 +204,18 @@ export function Settings() {
         if (error) throw error;
         if (data?.id) setCompanyRow((p) => ({ ...p, id: data.id }));
       }
+
+      const { error: marketErr } = await supabase
+        .from('companies')
+        .update({
+          market,
+          fta_registration: ftaRegistration.trim() || null,
+          vat_filing_frequency: vatFilingFrequency,
+          emirate: emirate || null,
+        })
+        .eq('id', company_id);
+      if (marketErr) throw marketErr;
+
       toast({ title: 'Saved', description: 'Company settings updated.' });
     } catch (e: unknown) {
       console.error(e);
@@ -219,6 +258,7 @@ export function Settings() {
       setTallyVersion((settings.find((s) => s.setting_key === 'tally_version')?.setting_value as 'standard' | 'edit_log') || 'standard');
       getTallySyncStats().then(setTallySyncStats).catch(() => null);
       loadZohoSettings().then((s) => setZoho((prev) => ({ ...prev, ...s }))).catch(() => null);
+      loadQBSettings().then((s) => setQb((prev) => ({ ...prev, ...s }))).catch(() => null);
     } catch (error) {
       console.error('Error fetching settings:', error);
     } finally {
@@ -258,7 +298,7 @@ export function Settings() {
       }
 
       // Save API endpoint setting
-      console.log('ðŸ’¾ Saving API endpoint:', apiEndpoint);
+      console.log('💾 Saving API endpoint:', apiEndpoint);
       
       const { data: existingApi, error: apiCheckError } = await supabase
         .from('app_settings')
@@ -267,12 +307,12 @@ export function Settings() {
         .maybeSingle();
 
       if (apiCheckError) {
-        console.error('âŒ Error checking existing API endpoint:', apiCheckError);
+        console.error('❌ Error checking existing API endpoint:', apiCheckError);
         throw apiCheckError;
       }
 
       if (existingApi) {
-        console.log('ðŸ“ Updating existing API endpoint record');
+        console.log('📝 Updating existing API endpoint record');
         const { error: apiUpdateError } = await supabase
           .from('app_settings')
           .update({
@@ -282,22 +322,22 @@ export function Settings() {
           .eq('setting_key', 'api_endpoint');
         
         if (apiUpdateError) {
-          console.error('âŒ Error updating API endpoint:', apiUpdateError);
+          console.error('❌ Error updating API endpoint:', apiUpdateError);
           throw apiUpdateError;
         }
-        console.log('âœ… API endpoint updated successfully');
+        console.log('✅ API endpoint updated successfully');
       } else {
-        console.log('âž• Inserting new API endpoint record');
+        console.log('➕ Inserting new API endpoint record');
         const { error: apiInsertError } = await supabase.from('app_settings').insert({
           setting_key: 'api_endpoint',
           setting_value: apiEndpoint,
         });
         
         if (apiInsertError) {
-          console.error('âŒ Error inserting API endpoint:', apiInsertError);
+          console.error('❌ Error inserting API endpoint:', apiInsertError);
           throw apiInsertError;
         }
-        console.log('âœ… API endpoint inserted successfully');
+        console.log('✅ API endpoint inserted successfully');
       }
 
       // Verify the save worked
@@ -308,18 +348,18 @@ export function Settings() {
         .maybeSingle();
 
       if (verifyError) {
-        console.error('âŒ Error verifying saved API endpoint:', verifyError);
+        console.error('❌ Error verifying saved API endpoint:', verifyError);
         throw verifyError;
       }
 
       if (verifyData?.setting_value === apiEndpoint) {
-        console.log('âœ… Verified: API endpoint saved correctly:', verifyData.setting_value);
+        console.log('✅ Verified: API endpoint saved correctly:', verifyData.setting_value);
         toast({
           title: 'Success',
           description: `Settings saved successfully. API endpoint configured: ${apiEndpoint.substring(0, 50)}...`,
         });
       } else {
-        console.warn('âš ï¸ Verification failed. Expected:', apiEndpoint, 'Got:', verifyData?.setting_value);
+        console.warn('⚠️ Verification failed. Expected:', apiEndpoint, 'Got:', verifyData?.setting_value);
         toast({
           title: 'Warning',
           description: 'Settings may not have saved correctly. Please check and try again.',
@@ -381,7 +421,7 @@ export function Settings() {
       // Refresh settings to ensure they're up to date
       await fetchSettings();
     } catch (error: any) {
-      console.error('âŒ Error saving settings:', error);
+      console.error('❌ Error saving settings:', error);
       toast({
         title: 'Error',
         description: error?.message || 'Failed to save settings. Please check the browser console for details.',
@@ -568,7 +608,7 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      {/* Company Settings â€” saved to company_settings table */}
+      {/* Company Settings — saved to company_settings table */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -787,7 +827,7 @@ export function Settings() {
             <div>
               <h3 className="text-sm font-semibold text-gray-900">Market / Region</h3>
               <p className="mt-1 text-xs text-gray-500">
-                Switches tax labels, currency, and compliance rules. India and UAE clients use the same codebase â€” per company.
+                Switches tax labels, currency, and compliance rules. India and UAE clients use the same codebase — per company.
               </p>
             </div>
             <div className="flex gap-3">
@@ -802,8 +842,8 @@ export function Settings() {
                   fontWeight: 600,
                 }}
               >
-                <div>ðŸ‡®ðŸ‡³ India Mode</div>
-                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>GST Â· GSTIN Â· INR Â· Tally</div>
+                <div>🇮🇳 India Mode</div>
+                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>GST · GSTIN · INR · Tally</div>
               </button>
               <button
                 type="button"
@@ -816,8 +856,8 @@ export function Settings() {
                   fontWeight: 600,
                 }}
               >
-                <div>ðŸ‡¦ðŸ‡ª UAE Mode</div>
-                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>VAT Â· TRN Â· AED Â· FTA</div>
+                <div>🇦🇪 UAE Mode</div>
+                <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>VAT · TRN · AED · FTA</div>
               </button>
             </div>
             {isUAE && (
@@ -862,7 +902,7 @@ export function Settings() {
               disabled={savingCompany}
               className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
             >
-              {savingCompany ? 'Savingâ€¦' : 'Save Company Settings'}
+              {savingCompany ? 'Saving…' : 'Save Company Settings'}
             </Button>
           </div>
         </CardContent>
@@ -922,7 +962,7 @@ export function Settings() {
                   onChange={(e) =>
                     setUserProfile({ ...userProfile, currentPassword: e.target.value })
                   }
-                  placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                  placeholder="••••••••"
                 />
               </div>
               <div className="space-y-2">
@@ -934,7 +974,7 @@ export function Settings() {
                   onChange={(e) =>
                     setUserProfile({ ...userProfile, newPassword: e.target.value })
                   }
-                  placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                  placeholder="••••••••"
                 />
               </div>
               <div className="space-y-2">
@@ -946,7 +986,7 @@ export function Settings() {
                   onChange={(e) =>
                     setUserProfile({ ...userProfile, confirmPassword: e.target.value })
                   }
-                  placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                  placeholder="••••••••"
                 />
               </div>
             </div>
@@ -1032,7 +1072,7 @@ export function Settings() {
               <Input
                 id="openai-key"
                 type="password"
-                placeholder="sk-â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                placeholder="sk-••••••••••••••••••••••••"
               />
               <p className="text-sm text-gray-500">
                 Required for AI-powered invoice data extraction and IFRS classification
@@ -1048,7 +1088,7 @@ export function Settings() {
         </CardContent>
       </Card>
 
-      {/* ERP Integrations â€” Tally, QuickBooks, Xero */}
+      {/* ERP Integrations — Tally, QuickBooks, Xero */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1064,7 +1104,7 @@ export function Settings() {
           <div className="rounded-lg border border-gray-200 p-4">
             <div className="flex items-center justify-between gap-4 mb-4">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">ðŸ“Š</span>
+                <span className="text-2xl">📊</span>
                 <div>
                   <div className="font-semibold">Tally ERP</div>
                   <div className="text-sm text-gray-500">
@@ -1091,7 +1131,7 @@ export function Settings() {
                   placeholder="http://localhost:9000"
                 />
                 <p className="text-xs text-gray-500">
-                  Enable HTTP port in TallyPrime â†’ Gateway â†’ Configure
+                  Enable HTTP port in TallyPrime → Gateway → Configure
                 </p>
               </div>
               <div className="space-y-2">
@@ -1108,7 +1148,7 @@ export function Settings() {
               <Label>TallyPrime Version</Label>
               <div className="flex gap-3">
                 {[
-                  { value: 'standard' as const, label: 'TallyPrime Rel 7.0', desc: 'Standard â€” for most businesses' },
+                  { value: 'standard' as const, label: 'TallyPrime Rel 7.0', desc: 'Standard — for most businesses' },
                   { value: 'edit_log' as const, label: 'TallyPrime Edit Log Rel 7.0', desc: 'MCA compliance + audit trail' },
                 ].map((opt) => (
                   <div
@@ -1135,14 +1175,14 @@ export function Settings() {
               </p>
             </div>
             <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/50 p-3 text-sm text-gray-700">
-              <p className="font-medium text-gray-800 mb-1">TallyPrime Rel 7.0 â€” Enable HTTP API</p>
+              <p className="font-medium text-gray-800 mb-1">TallyPrime Rel 7.0 — Enable HTTP API</p>
               <ol className="list-decimal list-inside space-y-0.5 text-xs">
                 <li>Open TallyPrime</li>
                 <li>Press F12 (Configure)</li>
                 <li>Go to Advanced Configuration</li>
-                <li>Enable TallyPrime Server â†’ YES</li>
-                <li>Port Number â†’ 9000</li>
-                <li>Allow HTTP XML Requests â†’ YES</li>
+                <li>Enable TallyPrime Server → YES</li>
+                <li>Port Number → 9000</li>
+                <li>Allow HTTP XML Requests → YES</li>
                 <li>Press Enter to save. TallyPrime must be running with company open when pushing from InvoiceFlow.</li>
               </ol>
             </div>
@@ -1164,7 +1204,7 @@ export function Settings() {
             )}
             {tallyTestResult && (
               <div className={`mt-2 rounded p-2 text-sm ${tallyTestResult.ok ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-                {tallyTestResult.ok ? 'âœ… ' : 'âŒ '}{tallyTestResult.message}
+                {tallyTestResult.ok ? '✅ ' : '❌ '}{tallyTestResult.message}
               </div>
             )}
             <div className="flex flex-wrap gap-2 mt-4">
@@ -1197,7 +1237,7 @@ export function Settings() {
                   }
                 }}
               >
-                {tallyTesting ? 'Testingâ€¦' : 'Test Connection'}
+                {tallyTesting ? 'Testing…' : 'Test Connection'}
               </Button>
               <Button
                 variant="outline"
@@ -1213,7 +1253,7 @@ export function Settings() {
                     });
                     const result = await syncApprovedToTally(settings);
                     toast({
-                      title: `Sync complete â€” ${result.synced} synced, ${result.failed} failed`,
+                      title: `Sync complete — ${result.synced} synced, ${result.failed} failed`,
                       description: result.messages.slice(0, 3).join(' | '),
                     });
                     const stats = await getTallySyncStats();
@@ -1225,7 +1265,7 @@ export function Settings() {
                   }
                 }}
               >
-                {tallySyncing ? 'Syncingâ€¦' : 'Sync All Approved'}
+                {tallySyncing ? 'Syncing…' : 'Sync All Approved'}
               </Button>
             </div>
           </div>
@@ -1273,7 +1313,7 @@ export function Settings() {
             </div>
             {zohoTestResult && (
               <div className={`mt-2 rounded p-2 text-sm ${zohoTestResult.ok ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-                {zohoTestResult.ok ? 'âœ… ' : 'âŒ '}{zohoTestResult.message}
+                {zohoTestResult.ok ? '✅ ' : '❌ '}{zohoTestResult.message}
               </div>
             )}
             <div className="flex gap-2 mt-3">
@@ -1293,7 +1333,7 @@ export function Settings() {
                 }}
                 className="bg-[#1a56db]"
               >
-                {zohoSaving ? 'Savingâ€¦' : 'Save Zoho'}
+                {zohoSaving ? 'Saving…' : 'Save Zoho'}
               </Button>
               <Button
                 size="sm"
@@ -1312,7 +1352,7 @@ export function Settings() {
                   }
                 }}
               >
-                {zohoTesting ? 'Testingâ€¦' : 'Test Connection'}
+                {zohoTesting ? 'Testing…' : 'Test Connection'}
               </Button>
             </div>
             <p className="text-xs text-gray-500 mt-2">
@@ -1320,15 +1360,73 @@ export function Settings() {
             </p>
           </div>
 
-          {/* QuickBooks placeholder */}
-          <div className="rounded-lg border border-gray-200 p-4 opacity-75">
-            <div className="flex items-center gap-3">
+          {/* QuickBooks Online */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+            <div className="flex items-center gap-3 mb-1">
               <div className="bg-[#2CA01C] rounded px-2 py-1 text-white font-bold text-sm">QB</div>
               <div>
                 <div className="font-semibold">QuickBooks Online</div>
-                <div className="text-sm text-gray-500">Connect via OAuth â€” add VITE_QB_CLIENT_ID to .env</div>
+                <div className="text-sm text-gray-500">Push approved bills directly to QuickBooks Online</div>
               </div>
             </div>
+            <Input value={qb.client_id} onChange={(e) => setQb((p) => ({ ...p, client_id: e.target.value }))} placeholder="QB App Client ID" />
+            <Input type="password" value={qb.client_secret} onChange={(e) => setQb((p) => ({ ...p, client_secret: e.target.value }))} placeholder="QB App Client Secret" />
+            <Input type="password" value={qb.refresh_token} onChange={(e) => setQb((p) => ({ ...p, refresh_token: e.target.value }))} placeholder="Refresh Token (from Intuit OAuth flow)" />
+            <Input value={qb.realm_id} onChange={(e) => setQb((p) => ({ ...p, realm_id: e.target.value }))} placeholder="Realm ID (Company ID)" />
+            <select
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={qb.environment}
+              onChange={(e) => setQb((p) => ({ ...p, environment: e.target.value as QBSettings['environment'] }))}
+            >
+              <option value="production">Production</option>
+              <option value="sandbox">Sandbox (testing)</option>
+            </select>
+            {qbTestResult && (
+              <div className={`rounded p-2 text-sm ${qbTestResult.ok ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                {qbTestResult.ok ? '✅ ' : '❌ '}{qbTestResult.message}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                disabled={qbSaving}
+                onClick={async () => {
+                  setQbSaving(true);
+                  try {
+                    await saveQBSettings(qb);
+                    toast({ title: 'Saved', description: 'QuickBooks settings saved.' });
+                  } catch (e) {
+                    toast({ title: 'Error', description: String(e), variant: 'destructive' });
+                  } finally {
+                    setQbSaving(false);
+                  }
+                }}
+              >
+                {qbSaving ? 'Saving…' : 'Save QB'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={qbTesting}
+                onClick={async () => {
+                  setQbTesting(true);
+                  setQbTestResult(null);
+                  try {
+                    const result = await testQBConnection(qb);
+                    setQbTestResult(result);
+                  } catch (e) {
+                    setQbTestResult({ ok: false, message: String(e) });
+                  } finally {
+                    setQbTesting(false);
+                  }
+                }}
+              >
+                {qbTesting ? 'Testing…' : 'Test Connection'}
+              </Button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Get credentials at <a href="https://developer.intuit.com" className="underline" target="_blank" rel="noreferrer">developer.intuit.com</a>. Scope: <code>com.intuit.quickbooks.accounting</code>. Use the OAuth Playground to get a refresh token, then paste it above.
+            </p>
           </div>
 
           {/* Xero placeholder */}
@@ -1337,7 +1435,7 @@ export function Settings() {
               <div className="bg-[#13B5EA] rounded px-2 py-1 text-white font-bold text-sm">XERO</div>
               <div>
                 <div className="font-semibold">Xero</div>
-                <div className="text-sm text-gray-500">Connect via OAuth â€” add VITE_XERO_CLIENT_ID to .env</div>
+                <div className="text-sm text-gray-500">Connect via OAuth — add VITE_XERO_CLIENT_ID to .env</div>
               </div>
             </div>
           </div>
@@ -1402,7 +1500,7 @@ export function Settings() {
                       <td className="px-3 py-1.5 font-mono">{row.gl_code}</td>
                       <td className="px-3 py-1.5">{row.account_name}</td>
                       <td className="px-3 py-1.5">{row.account_type}</td>
-                      <td className="px-3 py-1.5 text-blue-600">{row.ifrs_mapping || 'â€”'}</td>
+                      <td className="px-3 py-1.5 text-blue-600">{row.ifrs_mapping || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1454,7 +1552,7 @@ export function Settings() {
                 toast({
                   title: `Reminders: ${result.sent} sent (${result.overdue} overdue, ${result.due_soon} upcoming)`,
                   description: webhookSet
-                    ? result.messages.slice(0, 5).join(' Â· ') || 'No invoices matched.'
+                    ? result.messages.slice(0, 5).join(' · ') || 'No invoices matched.'
                     : 'Set VITE_PAYMENT_REMINDER_WEBHOOK_URL to actually send. Found: ' + result.messages.slice(0, 3).join(', '),
                 });
               } catch (e) {
@@ -1464,7 +1562,7 @@ export function Settings() {
               }
             }}
           >
-            {reminderSending ? 'Sendingâ€¦' : 'Send Reminders Now'}
+            {reminderSending ? 'Sending…' : 'Send Reminders Now'}
           </Button>
         </CardContent>
       </Card>
@@ -1527,7 +1625,7 @@ export function Settings() {
               }
             }}
           >
-            {cfoSending ? 'Sendingâ€¦' : 'Send CFO Summary Now'}
+            {cfoSending ? 'Sending…' : 'Send CFO Summary Now'}
           </Button>
         </CardContent>
       </Card>
@@ -1540,7 +1638,7 @@ export function Settings() {
             <CardTitle>Vendor Self-Upload Portal</CardTitle>
           </div>
           <CardDescription>
-            Share this link with vendors so they can submit invoices directly â€” no login required.
+            Share this link with vendors so they can submit invoices directly — no login required.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -1713,7 +1811,7 @@ export function Settings() {
             <strong>InvoiceFlow AP Processing</strong>
           </p>
           <p>Version 1.0.0</p>
-          <p>Â© 2024 InvoiceFlow. All rights reserved.</p>
+          <p>© 2024 InvoiceFlow. All rights reserved.</p>
           <p className="mt-4 text-xs text-gray-500">
             This application helps streamline your accounts payable process with
             automated invoice processing, IFRS classification, and comprehensive
@@ -1724,4 +1822,3 @@ export function Settings() {
     </div>
   );
 }
-

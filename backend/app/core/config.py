@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "FinReport AI"
     VERSION: str = "1.0.0"
     DEBUG: bool = True
+    ENVIRONMENT: str = "production"  # production | demo
+    DEMO_TENANT_ID: str = "00000000-0000-4000-8000-000000000001"
     
     # Database — sqlite default so `uvicorn` starts without Postgres; override in .env for production
     DATABASE_URL: str = "sqlite:///./finreportai.db"
@@ -33,6 +35,8 @@ class Settings(BaseSettings):
         "https://finreportaicommercial-production-8907.up.railway.app",
         "https://finreportaicommercial.up.railway.app",
     ]
+    # Production Vercel URL — appended to CORS in main.py (e.g. https://finreportai.vercel.app)
+    FRONTEND_URL: str = ""
 
     # Expose FastAPI routes as MCP tools at /mcp (requires `fastapi-mcp` package)
     ENABLE_FASTAPI_MCP: bool = True

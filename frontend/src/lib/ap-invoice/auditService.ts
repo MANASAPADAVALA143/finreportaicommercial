@@ -1,6 +1,7 @@
-﻿import { supabase } from './supabase';
+import { supabase } from './supabase';
 import type { AuditLogEntry } from './supabase';
 import { getMyCompany } from './companyService';
+import { logApAudit } from './apAuditService';
 
 export type AuditAction =
   | 'invoice.created'
@@ -18,6 +19,7 @@ export type AuditAction =
   | 'gst.gstr2b_uploaded'
   | 'vendor.created'
   | 'vendor.updated'
+  | 'vendor.bank_changed'
   | 'invoice.matched'
   | 'tally.sync'
   | 'tally.bulk_sync';
@@ -31,6 +33,33 @@ export function getInvoiceflowWorkEmail(): string | null {
   }
 }
 
+const AP_AUDIT_MIRROR: Partial<Record<AuditAction, { entity_type: string; action: string }>> = {
+  'approval.approved': { entity_type: 'invoice', action: 'approved' },
+  'approval.rejected': { entity_type: 'invoice', action: 'rejected' },
+  'payment.marked_paid': { entity_type: 'payment', action: 'paid' },
+  'invoice.created': { entity_type: 'invoice', action: 'created' },
+  'invoice.updated': { entity_type: 'invoice', action: 'updated' },
+  'vendor.created': { entity_type: 'vendor', action: 'created' },
+  'vendor.updated': { entity_type: 'vendor', action: 'updated' },
+};
+
+function mirrorToApAudit(
+  action: AuditAction,
+  entityId: string | null,
+  performedBy: string | null,
+  metadata: Record<string, unknown>,
+): void {
+  const mapped = AP_AUDIT_MIRROR[action];
+  if (!mapped) return;
+  logApAudit({
+    entity_type: mapped.entity_type,
+    entity_id: entityId,
+    action: mapped.action,
+    action_by: performedBy,
+    new_values: metadata,
+  });
+}
+
 /** Fire-and-forget; never throws to callers. */
 export function logAction(
   action: AuditAction,
@@ -39,6 +68,7 @@ export function logAction(
   performedBy: string | null,
   metadata: Record<string, unknown> = {}
 ): void {
+  mirrorToApAudit(action, entityId, performedBy, metadata);
   void (async () => {
     try {
       const co = await getMyCompany();
@@ -161,4 +191,3 @@ export function exportAuditLogCsv(entries: AuditLogEntry[]) {
   a.click();
   URL.revokeObjectURL(url);
 }
-

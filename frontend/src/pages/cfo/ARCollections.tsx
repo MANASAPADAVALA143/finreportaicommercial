@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, ReferenceLine } from 'recharts';
 import { Sparkles } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { cfoGet, cfoPost, fmtMoney } from '../../services/cfoDesk.service';
+import { getARAging } from '../../services/arService';
 
 const C = {
   bg: '#060A12', surface: '#0B1120', panel: '#0F1829', border: '#1A2640',
@@ -16,37 +16,75 @@ const RISK_LABELS: Record<string, string> = { low: '🟢 Low', medium: '🟡 Med
 type Bucket = { bucket: string; amount: number; pct: number; risk: string };
 type Customer = { name: string; amount: number; bucket: string; risk: string; last_contact: string; entity: string; note: string };
 type DSO = { month: string; dso: number };
-type ARData = { total_ar: number; total_overdue: number; dso_current: number; dso_target: number; dso_trend: DSO[]; aging_buckets: Bucket[]; customers: Customer[] };
+type ARData = { total_ar: number; total_overdue: number; dso_current: number; dso_target: number; currency?: string; dso_trend: DSO[]; aging_buckets: Bucket[]; customers: Customer[] };
 type InsightCard = { module: string; impact: string; title: string; body: string; data_tag: string; action: string };
-
-function fmt(n: number) { return `€${(n / 1000).toFixed(0)}K`; }
 
 export default function ARCollections() {
   const [data, setData] = useState<ARData | null>(null);
   const [insight, setInsight] = useState<InsightCard | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
+  const [currency, setCurrency] = useState('AED');
 
   useEffect(() => { void load(); }, []);
 
   async function load() {
     try {
-      const r = await fetch(`${API}/api/ar-collections/summary`);
-      setData(await r.json() as ARData);
+      const [d, aging] = await Promise.all([
+        cfoGet<ARData>('/api/ar-collections/summary'),
+        getARAging().catch(() => null),
+      ]);
+      setCurrency(d.currency || 'AED');
+      if (aging?.buckets?.length) {
+        const total = aging.total_outstanding || 0;
+        const riskMap: Record<string, string> = {
+          'Current': 'low',
+          '1-30 days': 'medium',
+          '31-60 days': 'high',
+          '61-90 days': 'high',
+          '90+ days': 'critical',
+        };
+        d.aging_buckets = aging.buckets.map(b => ({
+          bucket: b.bucket,
+          amount: b.total_aed,
+          pct: total ? Math.round((b.total_aed / total) * 100) : 0,
+          risk: riskMap[b.bucket] ?? 'medium',
+        }));
+        d.total_ar = total;
+        d.total_overdue = aging.buckets
+          .filter(b => b.bucket !== 'Current')
+          .reduce((s, b) => s + b.total_aed, 0);
+        if (aging.buckets.some(b => b.customers?.length)) {
+          d.customers = aging.buckets.flatMap(b =>
+            (b.customers || []).map(name => ({
+              name,
+              amount: b.total_aed / Math.max(1, b.customers.length),
+              bucket: b.bucket,
+              risk: riskMap[b.bucket] ?? 'medium',
+              last_contact: '—',
+              entity: 'UAE',
+              note: `${b.invoice_count} invoice(s) in ${b.bucket}`,
+            })),
+          );
+        }
+      }
+      setData(d);
     } catch { /* ignore */ }
   }
 
   async function loadInsight() {
     setInsightLoading(true);
     try {
-      const r = await fetch(`${API}/api/ar-collections/ai-insight`, { method: 'POST' });
-      setInsight(await r.json() as InsightCard);
-    } catch { setInsight({ module: 'AR & COLLECTIONS', impact: 'high impact', title: 'Error', body: 'Failed to load.', data_tag: '', action: '' }); }
+      setInsight(await cfoPost<InsightCard>('/api/ar-collections/ai-insight'));
+    } catch {
+      setInsight({ module: 'AR & COLLECTIONS', impact: 'high impact', title: 'Error', body: 'Failed to load.', data_tag: '', action: '' });
+    }
     setInsightLoading(false);
   }
 
   if (!data) return <div style={{ background: C.bg, minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textDim, fontFamily: C.font }}>Loading…</div>;
 
-  const overduePct = Math.round((data.total_overdue / data.total_ar) * 100);
+  const fmt = (n: number) => fmtMoney(n, currency);
+  const overduePct = data.total_ar ? Math.round((data.total_overdue / data.total_ar) * 100) : 0;
   const bucketData = data.aging_buckets.map(b => ({ name: b.bucket.replace(' days', 'd').replace('Current (0-30d)', '0-30d'), amount: b.amount / 1000, fill: RISK_COLORS[b.risk] }));
 
   return (
@@ -76,13 +114,13 @@ export default function ARCollections() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
         {/* Aging bucket chart */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: 20 }}>
-          <div style={{ fontSize: 10, color: C.textDim, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 16 }}>Aging Buckets (€K)</div>
+          <div style={{ fontSize: 10, color: C.textDim, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 16 }}>Aging Buckets ({currency} K)</div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={bucketData} layout="vertical" margin={{ left: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: C.textDim }} tickLine={false} axisLine={false} />
               <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: C.textDim }} tickLine={false} axisLine={false} width={60} />
-              <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, fontFamily: C.font }} formatter={(v: number) => [`€${v}K`, 'Amount']} labelStyle={{ color: C.textDim }} />
+              <Tooltip contentStyle={{ background: C.panel, border: `1px solid ${C.border}`, fontSize: 11, fontFamily: C.font }} formatter={(v: number) => [`${currency} ${v}K`, 'Amount']} labelStyle={{ color: C.textDim }} />
               <Bar dataKey="amount" radius={[0, 3, 3, 0]}>
                 {bucketData.map((entry, i) => (
                   <rect key={i} fill={entry.fill} />

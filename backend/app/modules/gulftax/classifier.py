@@ -25,8 +25,8 @@ def _get_rag():
     if _rag is not None:
         return _rag
     try:
-        from app.modules.gulftax.rag import UAETaxRAG
-        _rag = UAETaxRAG()
+        from app.services.uae_tax_rag import get_rag_instance
+        _rag = get_rag_instance()
     except Exception:
         _rag = None
     return _rag
@@ -92,6 +92,83 @@ ENTERTAINMENT / CATERING (Art.53 — Input VAT BLOCKED):
   - Set blocked_input_vat = true
   - Set blocked_reason = "Art.53(1)(b) — input VAT on entertainment/meals not recoverable"
   - blocked_vat_amount = amount * 0.05"""
+
+_ENTERTAINMENT_KWS = {
+    "restaurant", "hotel", "entertainment", "meals", "leisure", "recreation",
+    "hospitality", "catering", "food", "beverage", "gala", "buffet", "dinner",
+    "lunch", "cafe", "nobu", "hilton", "hyatt", "marriott",
+}
+_FOREIGN_VENDOR_HINTS = {
+    "ireland", "uk", "usa", "india", "singapore", "amazon", "microsoft", "google",
+    "aws", "ltd", "inc", "gmbh", "bv", "pte", "llc", "(uk)", "(us)", "(ie)",
+}
+
+
+def _is_entertainment(description: str) -> bool:
+    desc = (description or "").lower()
+    return any(kw in desc for kw in _ENTERTAINMENT_KWS)
+
+
+def _is_foreign_vendor(vendor: Optional[str]) -> bool:
+    if not vendor:
+        return False
+    v = vendor.lower()
+    return any(h in v for h in _FOREIGN_VENDOR_HINTS)
+
+
+def _box_number(vat_treatment: str, blocked: bool) -> int:
+    if vat_treatment == "reverse_charge":
+        return 10
+    if blocked:
+        return 11
+    return 9
+
+
+def _classification_bucket(data: Dict[str, Any]) -> str:
+    """3-tab bucket: auto_approve | review | blocked."""
+    if data.get("blocked_input_vat") or float(data.get("confidence_score", 1)) < 0.55:
+        return "blocked"
+    if data.get("flag_for_review") or float(data.get("confidence_score", 1)) < 0.85:
+        return "review"
+    return "auto_approve"
+
+
+def _enrich_classification(
+    data: Dict[str, Any],
+    *,
+    description: str,
+    amount_aed: float,
+    vendor_or_customer: Optional[str],
+    transaction_type: str,
+) -> Dict[str, Any]:
+    """Art.54 entertainment, reverse charge auto-detection, box + bucket."""
+    out = dict(data)
+
+    if transaction_type == "purchase" and _is_entertainment(description):
+        out["blocked_input_vat"] = True
+        out["blocked_reason"] = out.get("blocked_reason") or (
+            "Art.54/53 — input VAT on entertainment/meals not recoverable"
+        )
+        out["blocked_vat_amount"] = round(amount_aed * 0.05, 2)
+        out["art54_entertainment"] = True
+
+    if transaction_type == "purchase" and _is_foreign_vendor(vendor_or_customer):
+        if out.get("vat_treatment") not in ("zero_rated", "exempt", "out_of_scope"):
+            out["vat_treatment"] = "reverse_charge"
+            out["vat_rate"] = 5
+            out["vat_amount_aed"] = round(amount_aed * 0.05, 2)
+            out["reverse_charge"] = True
+            out["reasoning"] = (
+                out.get("reasoning", "")
+                + " Reverse charge applies — foreign supplier (Art. 48)."
+            ).strip()
+
+    out["box_number"] = _box_number(
+        str(out.get("vat_treatment", "standard_rated")),
+        bool(out.get("blocked_input_vat")),
+    )
+    out["bucket"] = _classification_bucket(out)
+    return out
 
 
 def classify_transaction(
@@ -163,7 +240,7 @@ Return JSON only:
             response_text = response_text.split("```")[1].split("```")[0].strip()
 
         result = json.loads(response_text)
-        return {
+        base = {
             "vat_treatment": result.get("vat_treatment", "standard_rated"),
             "vat_rate": int(result.get("vat_rate", 5)),
             "vat_amount_aed": float(result.get("vat_amount_aed", amount_aed * 0.05)),
@@ -177,9 +254,16 @@ Return JSON only:
             "rag_citations": rag_sources,
             "uae_law_sources": rag_sources,
         }
+        return _enrich_classification(
+            base,
+            description=description,
+            amount_aed=amount_aed,
+            vendor_or_customer=vendor_or_customer,
+            transaction_type=transaction_type,
+        )
     except Exception as exc:
         logger.warning("GulfTax classify error: %s", exc)
-        return {
+        base = {
             "vat_treatment": "standard_rated",
             "vat_rate": 5,
             "vat_amount_aed": round(amount_aed * 0.05, 2),
@@ -193,6 +277,13 @@ Return JSON only:
             "rag_citations": [],
             "uae_law_sources": [],
         }
+        return _enrich_classification(
+            base,
+            description=description,
+            amount_aed=amount_aed,
+            vendor_or_customer=vendor_or_customer,
+            transaction_type=transaction_type,
+        )
 
 
 def classify_batch(
@@ -263,7 +354,7 @@ Return ONLY the JSON array. No markdown, no preamble."""
         out = []
         for i, spec in enumerate(items):
             r = result_map.get(i + 1, {})
-            out.append({
+            base = {
                 "vat_treatment": r.get("vat_treatment", "standard_rated"),
                 "vat_rate": int(r.get("vat_rate", 5)),
                 "vat_amount_aed": float(r.get("vat_amount_aed", spec["amount"] * 0.05)),
@@ -275,7 +366,14 @@ Return ONLY the JSON array. No markdown, no preamble."""
                 "blocked_reason": r.get("blocked_reason"),
                 "blocked_vat_amount": float(r.get("blocked_vat_amount", 0.0)),
                 "rag_citations": [],
-            })
+            }
+            out.append(_enrich_classification(
+                base,
+                description=spec.get("description", ""),
+                amount_aed=float(spec.get("amount", 0)),
+                vendor_or_customer=spec.get("vendor"),
+                transaction_type=spec.get("transaction_type", "purchase"),
+            ))
         return out
     except Exception as exc:
         logger.warning("GulfTax batch classify error: %s", exc)

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Wire VITE_APPROVAL_NOTIFY_WEBHOOK_URL to n8n or a Supabase Edge Function that sends Resend email.
  * Payload is JSON; your receiver can branch on `type`.
  */
@@ -36,4 +36,3 @@ export async function notifyApprovalEvent(payload: ApprovalNotifyPayload): Promi
     console.warn('[approval notify] webhook failed', e);
   }
 }
-

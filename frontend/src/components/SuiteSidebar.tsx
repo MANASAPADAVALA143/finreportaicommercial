@@ -5,11 +5,15 @@ import {
   Calculator, Calendar, Clock, Coins, FileText, GitMerge, LayoutDashboard,
   Landmark, Lock, MessageSquare, Percent, Plug, Receipt, ShoppingCart,
   Shield, Sliders, Table, TrendingUp, Users, ArrowRight, Presentation,
-  Banknote, ShieldCheck, ShieldX, Upload,
+  Banknote, ShieldCheck, ShieldX, Upload, Layers,
 } from 'lucide-react';
 import { useSuite } from '../context/SuiteContext';
+import { useCompany } from '../context/CompanyContext';
+import { useAuth } from '../context/AuthContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
-import { INDIA_NAV, UAE_NAV, FPA_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { isUaeFinanceSuiteOnly, filterNavByRole } from '../config/productRole';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 // ── Icon registry (lucide icons keyed by our string names) ───────────────────
 const ICONS: Record<string, React.ElementType> = {
@@ -29,6 +33,7 @@ const ICONS: Record<string, React.ElementType> = {
   'file-text':       FileText,
   'git-merge':       GitMerge,
   'landmark':        Landmark,
+  'layers':          Layers,
   'layout-dashboard':LayoutDashboard,
   'lock':            Lock,
   'message-square':  MessageSquare,
@@ -116,6 +121,12 @@ function GulfTaxWidget() {
 
       {/* Upload link */}
       <Link
+        to="/gulftax"
+        className="block text-[10px] text-amber-400/80 hover:text-amber-300 mb-1.5"
+      >
+        Open GulfTax →
+      </Link>
+      <Link
         to="/ap-invoices/upload"
         className="flex items-center gap-1.5 text-[11px] text-teal-400 hover:text-teal-300 transition-colors mt-1"
       >
@@ -142,6 +153,8 @@ const BADGE_COLOR: Record<string, string> = {
   ERP:     'bg-gray-600/40 text-gray-300',
   AGENTIC: 'bg-purple-800/40 text-purple-200',
   NEW:     'bg-green-700/40 text-green-300',
+  Soon:    'bg-gray-600/40 text-gray-300',
+  Group:   'bg-indigo-700/40 text-indigo-300',
 };
 
 function NavItem({ item, accentColor }: { item: NavLeaf; accentColor: string }) {
@@ -198,12 +211,32 @@ function renderNav(nav: NavEntry[], accentColor: string) {
 
 export function SuiteSidebar() {
   const { activeSuite } = useSuite();
+  const { companiesList } = useCompany();
+  const { productRole, user } = useAuth();
+  const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const accentColor = SUITE_COLOR[activeSuite];
 
-  const navItems =
-    activeSuite === 'india' ? INDIA_NAV
-    : activeSuite === 'uae' ? UAE_NAV
-    : FPA_NAV;
+  const uaeNav = uaeOnly
+    ? UAE_FINANCE_SUITE_NAV
+    : companiesList.length >= 2
+      ? [
+          ...UAE_NAV.slice(0, 3),
+          { label: 'Group Consolidation', path: '/consolidation', icon: 'layers', badge: 'Group' },
+          ...UAE_NAV.slice(3),
+        ]
+      : UAE_NAV;
+
+  const navItems = filterNavByRole(
+    uaeOnly
+      ? uaeNav
+      : activeSuite === 'india'
+        ? INDIA_NAV
+        : activeSuite === 'uae'
+          ? uaeNav
+          : FPA_NAV,
+    productRole,
+    user?.role,
+  );
 
   return (
     <div
@@ -216,10 +249,12 @@ export function SuiteSidebar() {
         <div className="text-gray-500 text-xs mt-0.5">AI-native Finance Platform</div>
       </div>
 
-      {/* Suite switcher */}
-      <div className="shrink-0">
-        <SuiteSwitcher />
-      </div>
+      {/* Suite switcher — hidden for uae_client */}
+      {!uaeOnly && (
+        <div className="shrink-0">
+          <SuiteSwitcher />
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
@@ -227,13 +262,16 @@ export function SuiteSidebar() {
       </nav>
 
       {/* GulfTax AI widget — UAE suite only */}
-      {activeSuite === 'uae' && (
+      {activeSuite === 'uae' && !uaeOnly && (
         <div className="shrink-0">
-          <GulfTaxWidget />
+          <ErrorBoundary>
+            <GulfTaxWidget />
+          </ErrorBoundary>
         </div>
       )}
 
-      {/* Shared AI services panel (Step 8) */}
+      {/* Shared AI services panel */}
+      {!uaeOnly && (
       <div className="shrink-0 px-3 pb-2">
         <div className="rounded-lg bg-white/[0.03] border border-white/8 p-2.5">
           <div className="text-[10px] text-gray-500 mb-2 font-medium uppercase tracking-wider">
@@ -257,8 +295,10 @@ export function SuiteSidebar() {
           </div>
         </div>
       </div>
+      )}
 
       {/* NEXUS-C footer */}
+      {!uaeOnly && (
       <div className="px-4 py-3 border-t border-white/10 shrink-0">
         <div className="text-[10px] text-gray-500 mb-1">NEXUS-C Agentic Layer</div>
         <Link
@@ -269,6 +309,7 @@ export function SuiteSidebar() {
           Open Command Center
         </Link>
       </div>
+      )}
     </div>
   );
 }

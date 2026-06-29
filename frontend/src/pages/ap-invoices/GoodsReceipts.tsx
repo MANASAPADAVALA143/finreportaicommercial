@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
 import { requireCompanyId } from '../../lib/ap-invoice/companyService';
@@ -41,7 +41,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { Badge } from '../../components/ui/badge';
 import { useToast } from '../../hooks/use-toast';
 import { format } from 'date-fns';
-import { ClipboardList, Plus, Trash2, Upload, FileSpreadsheet, ScanLine } from 'lucide-react';
+import { ClipboardList, Plus, Trash2, FileSpreadsheet, ScanLine } from 'lucide-react';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import {
   Dialog,
@@ -116,6 +116,8 @@ export function GoodsReceipts() {
   const [importLog, setImportLog] = useState<string[]>([]);
   const [importResult, setImportResult] = useState<BulkImportGRNResult | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [importFileName, setImportFileName] = useState('');
+  const [importParseHint, setImportParseHint] = useState<string | null>(null);
   const [scanningGrn, setScanningGrn] = useState(false);
   const [bulkGrnProgress, setBulkGrnProgress] = useState<{ done: number; total: number } | null>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
@@ -291,6 +293,8 @@ export function GoodsReceipts() {
     setCsvMasterText('');
     setCsvLinesText('');
     setImportMode('excel');
+    setImportFileName('');
+    setImportParseHint(null);
     if (excelInputRef.current) excelInputRef.current.value = '';
     if (csvMasterRef.current) csvMasterRef.current.value = '';
     if (csvLinesRef.current) csvLinesRef.current.value = '';
@@ -412,28 +416,44 @@ export function GoodsReceipts() {
 
   async function handleExcelImportPick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = '';
     if (!file) return;
     const low = file.name.toLowerCase();
     if (!low.endsWith('.xlsx') && !low.endsWith('.xls')) {
       toast({ title: 'Use Excel', description: 'Choose a .xlsx or .xls file.', variant: 'destructive' });
+      e.target.value = '';
       return;
     }
+    setImportFileName(file.name);
+    setImportParseHint('Reading spreadsheet…');
     setImportBusy(true);
     try {
       const parsed = await parseGRNImportExcelFile(file);
       setImportPreview(parsed);
       if (parsed.master.length === 0) {
+        const looksLikePo =
+          /purchase.?order|^po[-_ ]/i.test(file.name) ||
+          parsed.lineItems.some((l) => l.grn_number && !l.description);
+        setImportParseHint(
+          looksLikePo
+            ? 'No GRN rows found. This file looks like a Purchase Order export — upload POs on the Purchase Orders page. GRN files need a grn_number column (download GRN template below).'
+            : 'No GRN rows found. Required column: grn_number. Also include po_number, vendor_name, received_amount. Download the GRN Excel template below.',
+        );
         toast({
           title: 'No GRN rows found',
-          description: 'Expected columns include grn_number, po_number, vendor_name. Add a sheet named GRN Master or Line Items.',
+          description: 'Use the GRN template (grn_number column). PO files go on Purchase Orders page.',
           variant: 'destructive',
         });
         setImportPhase('pick');
       } else {
+        setImportParseHint(`${parsed.master.length} GRN(s) ready — review below and click Import.`);
         setImportPhase('preview');
+        toast({
+          title: 'File parsed',
+          description: `${parsed.master.length} GRN(s) found. Click "Import" to save.`,
+        });
       }
     } catch (err) {
+      setImportParseHint(err instanceof Error ? err.message : 'Could not read file');
       toast({
         title: 'Could not read file',
         description: err instanceof Error ? err.message : 'Invalid spreadsheet',
@@ -570,8 +590,12 @@ export function GoodsReceipts() {
             {bulkGrnProgress ? `Scanning ${bulkGrnProgress.done}/${bulkGrnProgress.total}â€¦` : 'Bulk Scan GRNs'}
           </Button>
 
-          <Button type="button" variant="outline" onClick={openImportModal}>
-            <Upload className="mr-2 h-4 w-4" />
+          <Button
+            type="button"
+            className="bg-emerald-600 text-white hover:bg-emerald-700"
+            onClick={openImportModal}
+          >
+            <FileSpreadsheet className="mr-2 h-4 w-4" />
             Import GRNs (Excel)
           </Button>
           <Button className="bg-[#0A4B8F]" type="button" onClick={() => setTab('create')}>
@@ -788,7 +812,7 @@ export function GoodsReceipts() {
           if (!open) resetImportModal();
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto bg-white text-gray-900 border-gray-200">
           <DialogHeader>
             <DialogTitle>
               {importPhase === 'running'
@@ -813,53 +837,103 @@ export function GoodsReceipts() {
 
           {importPhase === 'pick' && (
             <div className="space-y-4">
-              <div className="flex gap-2">
-                <Button type="button" size="sm" variant={importMode === 'excel' ? 'default' : 'outline'} onClick={() => setImportMode('excel')}>
-                  Excel
-                </Button>
-                <Button type="button" size="sm" variant={importMode === 'csv' ? 'default' : 'outline'} onClick={() => setImportMode('csv')}>
-                  Two CSVs
-                </Button>
-              </div>
+              <Tabs
+                value={importMode}
+                onValueChange={(v) => setImportMode(v as 'excel' | 'csv')}
+              >
+                <TabsList className="grid w-full grid-cols-2 bg-slate-100 border border-slate-200">
+                  <TabsTrigger
+                    value="excel"
+                    className="data-[state=active]:bg-[#0A4B8F] data-[state=active]:text-white data-[state=active]:shadow-sm"
+                  >
+                    <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+                    Excel (.xlsx)
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="csv"
+                    className="data-[state=active]:bg-[#0A4B8F] data-[state=active]:text-white data-[state=active]:shadow-sm"
+                  >
+                    Two CSVs
+                  </TabsTrigger>
+                </TabsList>
 
-              {importMode === 'excel' ? (
-                <div className="space-y-2">
-                  <Label>Excel (.xlsx / .xls)</Label>
+                <TabsContent value="excel" className="mt-4 space-y-2">
+                  <Label className="text-gray-700">Upload Excel file (.xlsx / .xls)</Label>
                   <Input
                     ref={excelInputRef}
                     type="file"
                     accept=".xlsx,.xls"
                     disabled={importBusy}
+                    className="bg-white text-gray-900 border-gray-300"
                     onChange={(e) => void handleExcelImportPick(e)}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Sheets like &quot;GRN Master&quot; and &quot;Line Items&quot; are detected automatically. Line items are matched by{' '}
-                    <code className="text-xs">grn_number</code>.
+                  {importFileName && (
+                    <p className="text-sm text-gray-700">
+                      Selected: <span className="font-medium">{importFileName}</span>
+                      {importBusy ? ' — parsing…' : ''}
+                    </p>
+                  )}
+                  {importParseHint && (
+                    <p className={`text-sm rounded-md border px-3 py-2 ${importParseHint.includes('ready') ? 'border-green-200 bg-green-50 text-green-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+                      {importParseHint}
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-500">
+                    Use the <strong>GRN template</strong> (columns: grn_number, po_number, vendor_name, received_amount).
+                    Purchase Order files belong on <Link to="/ap-invoices/purchase-orders" className="text-blue-600 underline">Purchase Orders</Link>.
                   </p>
-                </div>
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>Master CSV</Label>
-                    <Input ref={csvMasterRef} type="file" accept=".csv" disabled={importBusy} onChange={(e) => void handleCsvMasterPick(e)} />
+                </TabsContent>
+
+                <TabsContent value="csv" className="mt-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label className="text-gray-700">Master CSV</Label>
+                      <Input
+                        ref={csvMasterRef}
+                        type="file"
+                        accept=".csv"
+                        disabled={importBusy}
+                        className="bg-white text-gray-900 border-gray-300"
+                        onChange={(e) => void handleCsvMasterPick(e)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-gray-700">Line items CSV</Label>
+                      <Input
+                        ref={csvLinesRef}
+                        type="file"
+                        accept=".csv"
+                        disabled={importBusy}
+                        className="bg-white text-gray-900 border-gray-300"
+                        onChange={(e) => void handleCsvLinesPick(e)}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 sm:col-span-2">
+                      You can upload master only (one line per GRN will be generated); line CSV adds detailed lines per{' '}
+                      <code className="rounded bg-gray-100 px-1 text-xs text-gray-800">grn_number</code>.
+                    </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Line items CSV</Label>
-                    <Input ref={csvLinesRef} type="file" accept=".csv" disabled={importBusy} onChange={(e) => void handleCsvLinesPick(e)} />
-                  </div>
-                  <p className="text-xs text-muted-foreground sm:col-span-2">
-                    You can upload master only (one line per GRN will be generated); line CSV adds detailed lines per{' '}
-                    <code className="text-xs">grn_number</code>.
-                  </p>
-                </div>
-              )}
+                </TabsContent>
+              </Tabs>
 
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => downloadGRNImportExcelTemplate()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="border-gray-300 text-gray-800 hover:bg-gray-50"
+                  onClick={() => downloadGRNImportExcelTemplate()}
+                >
                   <FileSpreadsheet className="mr-2 h-4 w-4" />
                   Download Excel template
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={() => downloadGRNImportCSVTemplates()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="border-gray-300 text-gray-800 hover:bg-gray-50"
+                  onClick={() => downloadGRNImportCSVTemplates()}
+                >
                   <FileSpreadsheet className="mr-2 h-4 w-4" />
                   Download CSV templates
                 </Button>

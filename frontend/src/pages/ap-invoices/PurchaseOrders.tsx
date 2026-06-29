@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
 import { getMyCompany, requireCompanyId } from '../../lib/ap-invoice/companyService';
@@ -35,6 +35,9 @@ import { rerunAutoMatchForPo } from '../../lib/ap-invoice/threeWayMatchService';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import { format } from 'date-fns';
 import { useToast } from '../../hooks/use-toast';
+import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { useMarket } from '../../contexts/MarketContext';
+import { formatCurrency } from '../../utils/currency';
 import * as XLSX from 'xlsx';
 import {
   AlertDialog,
@@ -54,8 +57,87 @@ const statusColors = {
   Cancelled: 'bg-red-100 text-red-800 border-red-200',
 };
 
+/** numeric(15,2) max — values above this (e.g. TRN in wrong column) cause Postgres 22003 overflow */
+const MAX_PO_AMOUNT = 9999999999999.99;
+
+const PO_AMOUNT_ALIASES = ['po_amount', 'po amount', 'amount', 'total_amount', 'total amount', 'po_value', 'value', 'total'];
+const PO_NUMBER_ALIASES = ['po_number', 'po number', 'po #', 'po_no', 'po no', 'purchase_order', 'purchase order'];
+const PO_VENDOR_ALIASES = ['vendor_name', 'vendor name', 'vendor', 'supplier', 'supplier_name', 'supplier name'];
+const PO_DATE_ALIASES = ['po_date', 'po date', 'date', 'order_date', 'order date'];
+
+function normHeaderKey(k: string): string {
+  return k.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_#]/g, '');
+}
+
+function pickRowValue(row: Record<string, unknown>, aliases: string[]): unknown {
+  for (const key of Object.keys(row)) {
+    const n = normHeaderKey(key);
+    if (aliases.some((a) => normHeaderKey(a) === n || n.includes(normHeaderKey(a)))) return row[key];
+  }
+  return undefined;
+}
+
+function parsePoAmount(val: unknown): number {
+  if (val == null || val === '') return 0;
+  if (typeof val === 'number') {
+    if (!Number.isFinite(val) || val < 0 || val > MAX_PO_AMOUNT) return 0;
+    return Math.round(val * 100) / 100;
+  }
+  let s = String(val).trim().replace(/[^\d.,-]/g, '');
+  if (!s) return 0;
+  // Indian lakhs: 2,62,500 → 262500
+  if (/^\d{1,3}(,\d{2,3})+$/.test(s)) s = s.replace(/,/g, '');
+  else s = s.replace(/,/g, '');
+  const n = parseFloat(s);
+  if (!Number.isFinite(n) || n < 0 || n > MAX_PO_AMOUNT) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+function normalizePoDate(val: unknown): string {
+  if (val == null || val === '') return '';
+  if (typeof val === 'number' && Number.isFinite(val)) {
+    if (val > 25000 && val < 80000) {
+      const d = XLSX.SSF.parse_date_code(val);
+      if (d) return `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
+    }
+  }
+  const s = String(val).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = s.split(/[/-]/);
+  if (d.length === 3) {
+    const day = d[0].padStart(2, '0');
+    const month = d[1].padStart(2, '0');
+    const year = d[2].length === 2 ? '20' + d[2] : d[2];
+    return `${year}-${month}-${day}`;
+  }
+  return s;
+}
+
+function findPOHeaderRowIndex(sheet: XLSX.WorkSheet): number {
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][];
+  for (let i = 0; i < Math.min(rows.length, 12); i++) {
+    const row = rows[i];
+    if (!Array.isArray(row)) continue;
+    const cells = row.map((c) => String(c ?? '').trim().toLowerCase());
+    if (cells.some((c) => PO_NUMBER_ALIASES.some((a) => c === a || c.includes('po_number') || c.includes('po number')))) {
+      return i;
+    }
+    if (cells.some((c) => PO_AMOUNT_ALIASES.includes(c) || c === 'po amount')) return i;
+  }
+  return 0;
+}
+
 export function PurchaseOrders() {
   const { toast } = useToast();
+  const { baseCurrency: settingsCurrency, settings } = useCompanySettings();
+  const { config, isUAE, market } = useMarket();
+  const baseCurrency = useMemo(() => {
+    if (isUAE || market === 'uae') return 'AED';
+    const country = (settings?.country ?? '').toUpperCase();
+    if (country === 'AE' || country === 'UAE' || settingsCurrency === 'AED') return 'AED';
+    return settingsCurrency ?? config.currency ?? 'AED';
+  }, [isUAE, market, settings?.country, settingsCurrency, config.currency]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [filteredPOs, setFilteredPOs] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,7 +235,7 @@ export function PurchaseOrders() {
       }
 
       setDialogOpen(true);
-      toast({ title: 'âœ… PO extracted', description: `${d.vendor_name || 'Vendor'} â€” â‚¹${total.toLocaleString()}. Review and save.` });
+      toast({ title: 'PO extracted', description: `${d.vendor_name || 'Vendor'} — ${formatCurrency(total, d.currency || baseCurrency)}. Review and save.` });
     } catch (err) {
       toast({ title: 'PDF extraction failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
     } finally {
@@ -199,7 +281,7 @@ export function PurchaseOrders() {
           description: d.description || d.ifrs_category || null,
           notes: `Bulk scanned from: ${file.name}`,
           status: 'Open',
-          currency: d.currency || 'INR',
+          currency: d.currency || baseCurrency,
         });
         if (error) throw new Error(error.message);
         saved++;
@@ -239,9 +321,14 @@ export function PurchaseOrders() {
 
   async function fetchPurchaseOrders() {
     try {
-      const company = await getMyCompany();
+      let companyId: string | null = null;
+      try {
+        companyId = await requireCompanyId();
+      } catch {
+        companyId = (await getMyCompany())?.id ?? null;
+      }
       let q = supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       const { data, error } = await q;
 
       if (error) throw error;
@@ -249,16 +336,16 @@ export function PurchaseOrders() {
       setPurchaseOrders(rows);
 
       const meta: Record<string, { grn?: string; invLabel: string }> = {};
-      if (company?.id && rows.length > 0) {
+      if (companyId && rows.length > 0) {
         const ids = rows.map((r) => r.id);
         const [grnRes, invRes] = await Promise.all([
           supabase
             .from('goods_receipts')
             .select('po_id, grn_number, received_date')
-            .eq('company_id', company.id)
+            .eq('company_id', companyId)
             .in('po_id', ids)
             .order('received_date', { ascending: false }),
-          supabase.from('invoices').select('po_id, match_status').eq('company_id', company.id).in('po_id', ids),
+          supabase.from('invoices').select('po_id, match_status').eq('company_id', companyId).in('po_id', ids),
         ]);
         const grnByPo: Record<string, string> = {};
         for (const g of grnRes.data ?? []) {
@@ -396,23 +483,6 @@ export function PurchaseOrders() {
     status: string;
   };
 
-  function normalizeDate(val: unknown): string {
-    if (!val) return '';
-    const s = String(val).trim();
-    if (!s) return '';
-    // Already yyyy-mm-dd
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // dd/mm/yyyy or dd-mm-yyyy
-    const d = s.split(/[/-]/);
-    if (d.length === 3) {
-      const day = d[0].padStart(2, '0');
-      const month = d[1].padStart(2, '0');
-      const year = d[2].length === 2 ? '20' + d[2] : d[2];
-      return `${year}-${month}-${day}`;
-    }
-    return s;
-  }
-
   function parsePOFile(file: File): Promise<PORow[]> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -426,11 +496,11 @@ export function PurchaseOrders() {
             const lines = text.split(/\r?\n/).filter((l) => l.trim());
             if (lines.length < 2) return resolve([]);
             const header = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
-            const poNumIdx = header.findIndex((h) => h === 'po_number' || h === 'po number');
-            const vendorIdx = header.findIndex((h) => h === 'vendor_name' || h === 'vendor name');
-            const amountIdx = header.findIndex((h) => ['po_amount','po amount','amount','total_amount','total amount','po_value'].includes(h));
-            const dateIdx = header.findIndex((h) => h === 'po_date' || h === 'po date' || h === 'date');
-            const delivIdx = header.findIndex((h) => h === 'delivery_date' || h === 'delivery date');
+            const poNumIdx = header.findIndex((h) => PO_NUMBER_ALIASES.some((a) => normHeaderKey(a) === h));
+            const vendorIdx = header.findIndex((h) => PO_VENDOR_ALIASES.some((a) => normHeaderKey(a) === h));
+            const amountIdx = header.findIndex((h) => PO_AMOUNT_ALIASES.some((a) => normHeaderKey(a) === h));
+            const dateIdx = header.findIndex((h) => PO_DATE_ALIASES.some((a) => normHeaderKey(a) === h));
+            const delivIdx = header.findIndex((h) => normHeaderKey(h) === 'delivery_date' || h === 'delivery_date');
             const descIdx = header.findIndex((h) => h === 'description');
             const notesIdx = header.findIndex((h) => h === 'notes');
             const statusIdx = header.findIndex((h) => h === 'status');
@@ -438,9 +508,9 @@ export function PurchaseOrders() {
               const cells = lines[i].split(',').map((c) => c.trim().replace(/^["']|["']$/g, ''));
               const po_number = (poNumIdx >= 0 ? cells[poNumIdx] : cells[0]) || '';
               const vendor_name = (vendorIdx >= 0 ? cells[vendorIdx] : cells[1]) || '';
-              const po_amount = amountIdx >= 0 ? parseFloat(cells[amountIdx]) || 0 : parseFloat(cells[2]) || 0;
-              const po_date = normalizeDate(dateIdx >= 0 ? cells[dateIdx] : cells[3]);
-              const delivery_date = delivIdx >= 0 ? normalizeDate(cells[delivIdx]) : undefined;
+              const po_amount = parsePoAmount(amountIdx >= 0 ? cells[amountIdx] : undefined);
+              const po_date = normalizePoDate(dateIdx >= 0 ? cells[dateIdx] : undefined);
+              const delivery_date = delivIdx >= 0 ? normalizePoDate(cells[delivIdx]) : undefined;
               const description = descIdx >= 0 ? cells[descIdx] : undefined;
               const notes = notesIdx >= 0 ? cells[notesIdx] : undefined;
               const status = (statusIdx >= 0 ? cells[statusIdx] : 'Open') || 'Open';
@@ -462,31 +532,20 @@ export function PurchaseOrders() {
           const data = new Uint8Array(raw as ArrayBuffer);
           const wb = XLSX.read(data, { type: 'array' });
           const sheet = wb.Sheets[wb.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
-          const rawKeys = Object.keys(json[0] || {});
-          const norm = (k: string) => k.toLowerCase().replace(/\s+/g, '_');
-          const poNumK = rawKeys.find((k) => norm(k) === 'po_number' || norm(k) === 'po number') || rawKeys[0];
-          const vendorK = rawKeys.find((k) => norm(k) === 'vendor_name' || norm(k) === 'vendor name') || rawKeys[1];
-          const amountK = rawKeys.find((k) => ['po_amount','po amount','amount','total_amount','total amount','po_value'].includes(norm(k))) || rawKeys[2];
-          const dateK = rawKeys.find((k) => norm(k) === 'po_date' || norm(k) === 'po date' || norm(k) === 'date') || rawKeys[3];
-          const delivK = rawKeys.find((k) => norm(k) === 'delivery_date' || norm(k) === 'delivery date');
-          const descK = rawKeys.find((k) => norm(k) === 'description');
-          const notesK = rawKeys.find((k) => norm(k) === 'notes');
-          const statusK = rawKeys.find((k) => norm(k) === 'status');
+          const headerRowIndex = findPOHeaderRowIndex(sheet);
+          const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+            range: headerRowIndex,
+            defval: '',
+          });
           for (const row of json) {
-            const get = (key: string | undefined, fallback: string) => {
-              if (!key) return fallback;
-              const v = row[key];
-              return v != null && v !== '' ? String(v).trim() : fallback;
-            };
-            const po_number = get(poNumK, '');
-            const vendor_name = get(vendorK, '');
-            const po_amount = Number(row[amountK]) || 0;
-            const po_date = normalizeDate(row[dateK]);
-            const delivery_date = delivK ? normalizeDate(row[delivK]) : undefined;
-            const description = descK ? get(descK, '') : undefined;
-            const notes = notesK ? get(notesK, '') : undefined;
-            const status = (statusK ? get(statusK, 'Open') : 'Open') || 'Open';
+            const po_number = String(pickRowValue(row, PO_NUMBER_ALIASES) ?? '').trim();
+            const vendor_name = String(pickRowValue(row, PO_VENDOR_ALIASES) ?? '').trim();
+            const po_amount = parsePoAmount(pickRowValue(row, PO_AMOUNT_ALIASES));
+            const po_date = normalizePoDate(pickRowValue(row, PO_DATE_ALIASES));
+            const delivery_date = normalizePoDate(pickRowValue(row, ['delivery_date', 'delivery date']));
+            const description = String(pickRowValue(row, ['description']) ?? '').trim() || undefined;
+            const notes = String(pickRowValue(row, ['notes']) ?? '').trim() || undefined;
+            const status = String(pickRowValue(row, ['status']) ?? 'Open').trim() || 'Open';
             if (po_number && vendor_name && po_date) {
               rows.push({
                 po_number,
@@ -494,8 +553,8 @@ export function PurchaseOrders() {
                 po_amount,
                 po_date,
                 delivery_date: delivery_date || undefined,
-                description: description || undefined,
-                notes: notes || undefined,
+                description,
+                notes,
                 status: ['Open', 'Partially Received', 'Fully Received', 'Closed', 'Cancelled'].includes(status) ? status : 'Open',
               });
             }
@@ -549,12 +608,13 @@ export function PurchaseOrders() {
           company_id: companyId,
           po_number: row.po_number.trim(),
           vendor_name: row.vendor_name.trim(),
-          po_amount: parseFloat(String(row.po_amount).replace(/,/g, '')) || 0,
+          po_amount: parsePoAmount(row.po_amount),
           po_date: row.po_date || null,
           delivery_date: row.delivery_date || null,
           description: row.description || null,
           notes: row.notes || null,
           status: row.status || 'Open',
+          currency: baseCurrency,
           updated_at: new Date().toISOString(),
         };
         const { error } = await supabase
@@ -659,6 +719,7 @@ export function PurchaseOrders() {
         po_date: formData.po_date,
         description: formData.description || null,
         status: formData.status,
+        currency: baseCurrency,
         updated_at: new Date().toISOString(),
       };
       if (formData.delivery_date) payload.delivery_date = formData.delivery_date;
@@ -717,14 +778,14 @@ export function PurchaseOrders() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-3xl font-bold text-gray-900">Purchase Orders</h1>
           <p className="mt-1 text-sm text-gray-500">
             Manage purchase orders for 3-way matching
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 max-w-full">
           <input
             ref={fileInputRef}
             type="file"
@@ -752,40 +813,19 @@ export function PurchaseOrders() {
           <Button
             type="button"
             variant="outline"
-            disabled={scanningPdf}
-            onClick={() => pdfScanRef.current?.click()}
-            className="border-purple-300 text-purple-700 hover:bg-purple-50"
-          >
-            <ScanLine className="mr-2 h-4 w-4" />
-            {scanningPdf && !bulkScanProgress ? 'Extractingâ€¦' : 'Scan PO PDF'}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={scanningPdf}
-            onClick={() => bulkScanRef.current?.click()}
-            className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-          >
-            <ScanLine className="mr-2 h-4 w-4" />
-            {bulkScanProgress
-              ? `Scanning ${bulkScanProgress.done}/${bulkScanProgress.total}â€¦`
-              : 'Bulk Scan POs'}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
             disabled={uploading}
             onClick={() => fileInputRef.current?.click()}
+            className="shrink-0 border-[#0A4B8F] text-[#0A4B8F] hover:bg-blue-50"
           >
             <Upload className="mr-2 h-4 w-4" />
-            {uploading ? 'Uploadingâ€¦' : 'Upload CSV/Excel'}
+            {uploading ? 'Uploading…' : 'Upload Excel'}
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={downloadPOTemplate}
-            className="text-gray-600"
+            className="shrink-0 text-gray-600"
           >
             <FileDown className="mr-2 h-4 w-4" />
             Download template
@@ -793,16 +833,38 @@ export function PurchaseOrders() {
           <Button
             type="button"
             variant="outline"
+            disabled={scanningPdf}
+            onClick={() => pdfScanRef.current?.click()}
+            className="shrink-0 border-purple-300 text-purple-700 hover:bg-purple-50"
+          >
+            <ScanLine className="mr-2 h-4 w-4" />
+            {scanningPdf && !bulkScanProgress ? 'Extracting…' : 'Scan PO PDF'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={scanningPdf}
+            onClick={() => bulkScanRef.current?.click()}
+            className="shrink-0 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+          >
+            <ScanLine className="mr-2 h-4 w-4" />
+            {bulkScanProgress
+              ? `Scanning ${bulkScanProgress.done}/${bulkScanProgress.total}…`
+              : 'Bulk Scan POs'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
             disabled={rematching}
             onClick={() => void handleRematchAll()}
-            className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+            className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${rematching ? 'animate-spin' : ''}`} />
-            {rematching ? 'Matchingâ€¦' : 'Re-run All Matches'}
+            {rematching ? 'Matching…' : 'Re-run All Matches'}
           </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-[#0A4B8F]">
+              <Button className="shrink-0 bg-[#0A4B8F]">
                 <Plus className="mr-2 h-4 w-4" />
                 Add Purchase Order
               </Button>
@@ -856,7 +918,7 @@ export function PurchaseOrders() {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="po_amount">Total Amount</Label>
+                  <Label htmlFor="po_amount">Total Amount ({baseCurrency})</Label>
                   <Input
                     id="po_amount"
                     type="number"
@@ -1047,14 +1109,17 @@ export function PurchaseOrders() {
           )}
         </CardHeader>
         <CardContent>
-          {filteredPOs.length === 0 ? (
-            <div className="py-12 text-center">
+          {purchaseOrders.length === 0 ? (
+            <div className="py-16 text-center">
               <ShoppingCart className="mx-auto h-12 w-12 text-gray-400" />
-              <p className="mt-4 text-gray-600">No purchase orders found</p>
-              <p className="mt-2 text-sm text-gray-500">
-                Upload a CSV/Excel file or add a purchase order manually to get started
-              </p>
+              <p className="mt-4 text-gray-600">No purchase orders yet — create your first PO</p>
+              <Button className="mt-6 bg-[#0A4B8F]" onClick={() => setDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create PO
+              </Button>
             </div>
+          ) : filteredPOs.length === 0 ? (
+            <div className="py-12 text-center text-gray-500">No purchase orders match your filters</div>
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -1078,10 +1143,7 @@ export function PurchaseOrders() {
                       <TableCell className="font-medium">{po.po_number}</TableCell>
                       <TableCell>{po.vendor_name}</TableCell>
                       <TableCell>
-                        ${Number(po.po_amount).toLocaleString('en-US', {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
+                        {formatCurrency(Number(po.po_amount), po.currency || baseCurrency)}
                       </TableCell>
                       <TableCell>
                         {po.po_date ? format(new Date(po.po_date), 'MMM dd, yyyy') : 'â€”'}
@@ -1120,7 +1182,7 @@ export function PurchaseOrders() {
                       </TableCell>
                       <TableCell>
                         <Button size="sm" variant="outline" className="h-8 text-xs" asChild>
-                          <Link to={`/goods-receipts?poId=${po.id}`}>Create GRN</Link>
+                          <Link to={`/ap-invoices/grn?poId=${po.id}`}>Create GRN</Link>
                         </Button>
                       </TableCell>
                     </TableRow>

@@ -1,4 +1,4 @@
-﻿"""
+"""
 UAE Complete Accounting System — DB Models
 ==========================================
 All tables for the full UAE accounting suite.
@@ -31,7 +31,8 @@ class UAEAccount(Base):
     __tablename__ = "uae_accounts"
 
     id          = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id   = Column(String(64), nullable=False, index=True)
+    tenant_id   = Column(String(36), nullable=False, index=True)
+    company_id  = Column(String(36), nullable=True, index=True)
     code        = Column(String(20), nullable=False)
     name        = Column(String(200), nullable=False)
     account_type = Column(String(50))   # Asset/Liability/Equity/Income/Expense
@@ -56,16 +57,20 @@ class UAEJournalEntry(Base):
     __tablename__ = "uae_journal_entries"
 
     id           = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id    = Column(String(64), nullable=False, index=True)
+    tenant_id    = Column(String(36), nullable=False, index=True)
+    company_id   = Column(String(36), nullable=True, index=True)
     entry_number = Column(String(30))   # JE-2024-0001
     entry_date   = Column(Date, nullable=False)
     period       = Column(String(7))    # "2024-12"
     description  = Column(String(500))
     reference    = Column(String(100))
     source       = Column(String(50), default="manual")  # manual/invoiceflow/bank/accrual/accrual_reversal
-    status       = Column(String(20), default="draft")   # draft/posted/reversed/scheduled
+    status       = Column(String(20), default="draft")   # draft/posted/reversed/scheduled/pending_approval/rejected
     is_recurring = Column(Boolean, default=False)
     posted_at    = Column(DateTime)
+    approved_by  = Column(String(200), nullable=True)
+    approved_at  = Column(DateTime, nullable=True)
+    rejection_reason = Column(String(500), nullable=True)
     created_at   = Column(DateTime, default=datetime.utcnow)
 
     lines = relationship("UAEJournalLine", back_populates="journal_entry", cascade="all, delete-orphan")
@@ -118,7 +123,8 @@ class UAESalesInvoice(Base):
     __tablename__ = "uae_sales_invoices"
 
     id              = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id       = Column(String(64), nullable=False, index=True)
+    tenant_id       = Column(String(36), nullable=False, index=True)
+    company_id      = Column(String(36), nullable=True, index=True)
     invoice_number  = Column(String(30))   # INV-2024-0001
     customer_id     = Column(String(36), ForeignKey("uae_customers.id"))
     invoice_date    = Column(Date)
@@ -136,7 +142,15 @@ class UAESalesInvoice(Base):
     supply_type     = Column(String(30), default="standard")  # standard/zero-rated/exempt
     journal_entry_id = Column(String(36), ForeignKey("uae_journal_entries.id"), nullable=True)
     notes           = Column(Text)
+    sent_at         = Column(DateTime, nullable=True)
+    paid_date       = Column(Date, nullable=True)
+    payment_reference = Column(String(100), nullable=True)
+    overdue_notified_at = Column(DateTime, nullable=True)
+    last_dunning_level = Column(Integer, default=0)
+    last_dunning_sent_at = Column(DateTime, nullable=True)
+    dunning_count = Column(Integer, default=0)
     created_at      = Column(DateTime, default=datetime.utcnow)
+    updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer = relationship("UAECustomer", back_populates="invoices")
     lines    = relationship("UAESalesInvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
@@ -166,7 +180,8 @@ class UAEBankAccount(Base):
     __tablename__ = "uae_bank_accounts"
 
     id                      = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id               = Column(String(64), nullable=False, index=True)
+    tenant_id               = Column(String(36), nullable=False, index=True)
+    company_id              = Column(String(36), nullable=True, index=True)
     bank_name               = Column(String(100))  # ENBD/FAB/ADCB/RAKBank/DIB
     account_number          = Column(String(30))
     iban                    = Column(String(35))
@@ -225,7 +240,8 @@ class UAEFixedAsset(Base):
     __tablename__ = "uae_fixed_assets"
 
     id                      = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id               = Column(String(64), nullable=False, index=True)
+    tenant_id               = Column(String(36), nullable=False, index=True)
+    company_id              = Column(String(36), nullable=True, index=True)
     asset_code              = Column(String(20))   # FA-2024-001
     name                    = Column(String(200))
     category                = Column(String(100))  # Computer/Vehicle/Furniture/Machinery/Building
@@ -295,5 +311,10 @@ class UAEPeriodClose(Base):
     ap_reviewed             = Column(Boolean, default=False)
     ifrs_statements_generated = Column(Boolean, default=False)
     management_accounts_done = Column(Boolean, default=False)
+    # 13-item checklist (added FX + intercompany + IFRS + audit trail)
+    multi_currency_revaluation = Column(Boolean, default=False)
+    intercompany_balances_reconciled = Column(Boolean, default=False)
+    ifrs_adjustments_posted = Column(Boolean, default=False)
+    audit_trail_exported = Column(Boolean, default=False)
     closed_at               = Column(DateTime)
     created_at              = Column(DateTime, default=datetime.utcnow)

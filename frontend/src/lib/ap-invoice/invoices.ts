@@ -1,5 +1,75 @@
-﻿import { supabase, type Invoice } from './supabase';
-import { logAction } from './auditService';
+import { supabase, type Invoice } from '@/lib/ap-invoice/supabase';
+import { logAction } from '@/lib/ap-invoice/auditService';
+
+/** UAE advance-payment columns — may be absent until migration 003 is applied. */
+export const ADVANCE_PAYMENT_DB_COLUMNS = [
+  'is_advance_payment',
+  'contract_value',
+  'delivery_date',
+  'advance_vat_amount',
+  'remaining_vat_amount',
+] as const;
+
+type PostgrestError = { message?: string; code?: string; details?: string; hint?: string };
+
+function stripMissingColumn(
+  payload: Record<string, unknown>,
+  error: PostgrestError,
+): Record<string, unknown> | null {
+  const match = error.message?.match(/Could not find the '([^']+)' column/);
+  if (error.code === 'PGRST204' && match?.[1] && match[1] in payload) {
+    const { [match[1]]: _removed, ...rest } = payload;
+    return rest;
+  }
+  return null;
+}
+
+export function logSupabaseInvoiceError(
+  label: string,
+  error: PostgrestError,
+  payload?: Record<string, unknown>,
+): void {
+  console.error(`[invoices] ${label}`, {
+    message: error.message,
+    code: error.code,
+    details: error.details,
+    hint: error.hint,
+    payloadKeys: payload ? Object.keys(payload) : undefined,
+  });
+}
+
+/** Insert or update by invoice_number; strips unknown columns when schema lags behind app. */
+export async function upsertInvoiceRow(
+  payload: Record<string, unknown>,
+): Promise<{ data: Invoice | null; error: PostgrestError | null }> {
+  let current = { ...payload };
+  const maxAttempts = Object.keys(current).length + 5;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const { data, error } = await supabase
+      .from('invoices')
+      .upsert(current, { onConflict: 'invoice_number' })
+      .select()
+      .single();
+
+    if (!error) {
+      return { data: data as Invoice, error: null };
+    }
+
+    const stripped = stripMissingColumn(current, error);
+    if (stripped) {
+      current = stripped;
+      continue;
+    }
+
+    return { data: null, error };
+  }
+
+  return {
+    data: null,
+    error: { message: 'Exceeded retry limit stripping unknown invoice columns' },
+  };
+}
 
 /** Flagged duplicates (flat rows; load original via duplicate_of_id if needed). */
 export async function getFlaggedDuplicates(): Promise<Invoice[]> {
@@ -68,4 +138,3 @@ export async function fetchInvoiceById(id: string): Promise<Invoice | null> {
   if (error) throw error;
   return (data as Invoice) ?? null;
 }
-

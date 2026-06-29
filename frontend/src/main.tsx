@@ -1,7 +1,8 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
+import { AuthProvider } from './context/AuthContext';
 import './index.css';
 
 const rootEl = document.getElementById('root');
@@ -23,10 +24,12 @@ window.addEventListener('unhandledrejection', (ev) => {
     <pre style="margin-top:12px;font-size:11px;color:#fca5a5;white-space:pre-wrap">${msg.replace(/</g, '&lt;')}</pre></div>`;
 });
 
-ReactDOM.createRoot(rootEl).render(
-  <React.StrictMode>
+createRoot(rootEl).render(
+  <StrictMode>
     <ErrorBoundary>
-      <App />
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </ErrorBoundary>
-  </React.StrictMode>
+  </StrictMode>,
 );

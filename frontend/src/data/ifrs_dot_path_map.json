@@ -1,0 +1,193 @@
+{
+  "_comment": "Keep in sync with backend/app/data/ifrs_dot_path_map.json",
+  "mappings": {
+    "financialPosition.assets.current.cashAndEquivalents": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Assets",
+      "ifrs_line_item": "Cash and cash equivalents",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.current.tradeReceivables": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Assets",
+      "ifrs_line_item": "Trade and other receivables (gross)",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.current.inventories": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Assets",
+      "ifrs_line_item": "Inventories",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.current.prepayments": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Assets",
+      "ifrs_line_item": "Prepayments and other current assets",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.current.otherCurrent": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Assets",
+      "ifrs_line_item": "Prepayments and other current assets",
+      "match_quality": "best_fit",
+      "note": "No dedicated 'Other current assets' master line; uses prepayments bucket as catch-all"
+    },
+    "financialPosition.assets.nonCurrent.propertyPlantEquipment": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Assets",
+      "ifrs_line_item": "Property plant and equipment (gross)",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.nonCurrent.intangibleAssets": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Assets",
+      "ifrs_line_item": "Other intangible assets",
+      "match_quality": "exact"
+    },
+    "financialPosition.assets.nonCurrent.investments": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Assets",
+      "ifrs_line_item": "Other financial assets",
+      "match_quality": "best_fit",
+      "note": "Long-term investments map to Other financial assets (associates line is entity-specific)"
+    },
+    "financialPosition.assets.nonCurrent.otherNonCurrent": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Assets",
+      "ifrs_line_item": "Other financial assets",
+      "match_quality": "best_fit",
+      "note": "Catch-all non-current asset bucket"
+    },
+    "financialPosition.liabilities.current.tradePayables": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Liabilities",
+      "ifrs_line_item": "Trade and other payables",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.current.shortTermBorrowings": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Liabilities",
+      "ifrs_line_item": "Borrowings — current",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.current.accruedExpenses": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Liabilities",
+      "ifrs_line_item": "Accruals and other payables",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.current.otherCurrent": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Current Liabilities",
+      "ifrs_line_item": "Accruals and other payables",
+      "match_quality": "best_fit",
+      "note": "No dedicated 'Other current liabilities' master line; uses accruals bucket as catch-all"
+    },
+    "financialPosition.liabilities.nonCurrent.borrowings": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Liabilities",
+      "ifrs_line_item": "Borrowings — non-current",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.nonCurrent.deferredTax": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Liabilities",
+      "ifrs_line_item": "Deferred tax liabilities",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.nonCurrent.provisions": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Liabilities",
+      "ifrs_line_item": "Provisions",
+      "match_quality": "exact"
+    },
+    "financialPosition.liabilities.nonCurrent.otherNonCurrent": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Non-current Liabilities",
+      "ifrs_line_item": "Other non-current liabilities",
+      "match_quality": "exact",
+      "note": "Dedicated master line added to STATEMENT_STRUCTURE (distinct from Provisions)"
+    },
+    "financialPosition.equity.shareCapital": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Equity",
+      "ifrs_line_item": "Share capital",
+      "match_quality": "exact"
+    },
+    "financialPosition.equity.retainedEarnings": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Equity",
+      "ifrs_line_item": "Retained earnings",
+      "match_quality": "exact"
+    },
+    "financialPosition.equity.otherReserves": {
+      "ifrs_statement": "financial_position",
+      "ifrs_section": "Equity",
+      "ifrs_line_item": "Other comprehensive income reserve",
+      "match_quality": "best_fit",
+      "note": "Generic 'other reserves' — may need revaluation or FX reserve for specific GLs"
+    },
+    "profitLoss.revenue": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Revenue",
+      "ifrs_line_item": "Revenue from contracts with customers",
+      "match_quality": "exact"
+    },
+    "profitLoss.costOfSales": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Cost of Sales",
+      "ifrs_line_item": "Cost of goods sold",
+      "match_quality": "exact"
+    },
+    "profitLoss.operatingExpenses.employeeBenefits": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Operating Expenses",
+      "ifrs_line_item": "Employee benefits expense",
+      "match_quality": "exact"
+    },
+    "profitLoss.operatingExpenses.administrative": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Operating Expenses",
+      "ifrs_line_item": "General and administrative expense",
+      "match_quality": "exact"
+    },
+    "profitLoss.operatingExpenses.distribution": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Operating Expenses",
+      "ifrs_line_item": "Selling and distribution expense",
+      "match_quality": "exact"
+    },
+    "profitLoss.operatingExpenses.depreciation": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Operating Expenses",
+      "ifrs_line_item": "Depreciation — PPE",
+      "match_quality": "best_fit",
+      "note": "Combined D&A label maps to PPE depreciation; ROU/amortisation lines need separate GLs"
+    },
+    "profitLoss.operatingExpenses.other": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Operating Expenses",
+      "ifrs_line_item": "Other operating expenses",
+      "match_quality": "exact"
+    },
+    "profitLoss.financeIncome": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Finance Items",
+      "ifrs_line_item": "Finance income",
+      "match_quality": "exact"
+    },
+    "profitLoss.financeCosts": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Finance Items",
+      "ifrs_line_item": "Finance costs — interest on loans",
+      "match_quality": "best_fit",
+      "note": "Generic finance costs; lease interest uses Finance costs — interest on leases"
+    },
+    "profitLoss.incomeTax": {
+      "ifrs_statement": "profit_loss",
+      "ifrs_section": "Tax",
+      "ifrs_line_item": "Income tax expense — current",
+      "match_quality": "exact"
+    }
+  }
+}

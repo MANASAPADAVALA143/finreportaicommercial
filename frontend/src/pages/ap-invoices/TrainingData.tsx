@@ -1,17 +1,17 @@
-﻿/**
- * Training Data Onboarding â€” /training
- * Upload 3-5 years of historical invoices â†’ build vendor profiles â†’ power anomaly detection
+/**
+ * Training Data Onboarding — /training
+ * Upload 3-5 years of historical invoices → build vendor profiles → power anomaly detection
  */
 
 import { useEffect, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { useToast } from '../../hooks/use-toast';
-import { getMyCompany } from '../../lib/ap-invoice/companyService';
-import { supabase } from '../../lib/ap-invoice/supabase';
-import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Progress } from '../../components/ui/progress';
+import { useToast } from '@/hooks/use-toast';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import {
   Table,
   TableBody,
@@ -19,7 +19,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
+} from '@/components/ui/table';
 import {
   AlertTriangle,
   BookOpen,
@@ -38,7 +38,7 @@ import {
   XCircle,
 } from 'lucide-react';
 
-// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface VendorProfile {
   id: string;
@@ -99,7 +99,7 @@ interface ParsedInvoiceRow {
   [key: string]: unknown;
 }
 
-// â”€â”€â”€ Required columns spec â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Required columns spec ────────────────────────────────────────────────────
 
 const REQUIRED_COLS = [
   { key: 'vendor_name',      label: 'Vendor Name',       required: true },
@@ -116,7 +116,7 @@ const REQUIRED_COLS = [
   { key: 'po_number',        label: 'PO Number',         required: false },
 ];
 
-// â”€â”€â”€ Column normaliser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Column normaliser ────────────────────────────────────────────────────────
 
 /** Flexible mapping: handles Tally exports, custom headers, Indian naming conventions */
 function normaliseRow(raw: Record<string, unknown>): ParsedInvoiceRow {
@@ -133,7 +133,7 @@ function normaliseRow(raw: Record<string, unknown>): ParsedInvoiceRow {
     return '';
   };
 
-  // Normalise Excel date serial â†’ string
+  // Normalise Excel date serial → string
   const parseDate = (v: string) => {
     if (!v) return '';
     // Excel serial number (e.g. 44927)
@@ -141,7 +141,7 @@ function normaliseRow(raw: Record<string, unknown>): ParsedInvoiceRow {
       const d = XLSX.SSF.parse_date_code(parseInt(v, 10));
       return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
     }
-    // DD/MM/YYYY â†’ YYYY-MM-DD
+    // DD/MM/YYYY → YYYY-MM-DD
     const ddmm = v.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
     if (ddmm) {
       const yr = ddmm[3].length === 2 ? `20${ddmm[3]}` : ddmm[3];
@@ -155,7 +155,7 @@ function normaliseRow(raw: Record<string, unknown>): ParsedInvoiceRow {
     invoice_number:  find('invoicenumber','invoiceno','invoicenum','billnumber','billno','vouchernumber'),
     invoice_date:    parseDate(find('invoicedate','billdate','date','voucherdate','invdate')),
     due_date:        parseDate(find('duedate','paymentduedate','paydue')),
-    total_amount:    find('totalamount','amount','total','netamount','invoiceamount','billamount','grossamount').replace(/[,â‚¹\s]/g,''),
+    total_amount:    find('totalamount','amount','total','netamount','invoiceamount','billamount','grossamount').replace(/[,₹\s]/g,''),
     currency:        find('currency','curr','cur') || 'INR',
     description:     find('description','narration','particulars','itemdescription','desc'),
     gl_code:         find('glcode','gl','accountcode','ledgercode','accountno'),
@@ -166,14 +166,14 @@ function normaliseRow(raw: Record<string, unknown>): ParsedInvoiceRow {
   };
 }
 
-// â”€â”€â”€ Excel template (3 sheets) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Excel template (3 sheets) ───────────────────────────────────────────────
 
 function downloadExcelTemplate() {
   const wb = XLSX.utils.book_new();
 
-  // Sheet 1 â€” Instructions
+  // Sheet 1 — Instructions
   const instructions = [
-    ['InvoiceFlow â€” Training Data Template'],
+    ['InvoiceFlow — Training Data Template'],
     [''],
     ['INSTRUCTIONS'],
     ['1. Use Sheet 2 (Invoice Template) to paste your historical invoice data'],
@@ -182,10 +182,10 @@ function downloadExcelTemplate() {
     ['4. More data = smarter anomaly detection'],
     [''],
     ['EXPORTING FROM TALLY'],
-    ['Gateway of Tally â†’ Display More Reports â†’ Account Books â†’ Purchase Register'],
+    ['Gateway of Tally → Display More Reports → Account Books → Purchase Register'],
     ['Set date range (last 3-5 years)'],
-    ['Press Alt+E â†’ Export â†’ Excel'],
-    ['Upload that file directly â€” InvoiceFlow maps Tally columns automatically'],
+    ['Press Alt+E → Export → Excel'],
+    ['Upload that file directly — InvoiceFlow maps Tally columns automatically'],
     [''],
     ['DATE FORMAT'],
     ['Accepted formats: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY'],
@@ -193,7 +193,7 @@ function downloadExcelTemplate() {
     ['APPROVAL STATUS'],
     ['Use: approved / rejected / pending'],
     [''],
-    ['GL CODES (optional â€” system will learn if not provided)'],
+    ['GL CODES (optional — system will learn if not provided)'],
     ['6100 = Professional Services'],
     ['6200 = Office Supplies'],
     ['6300 = Marketing & Advertising'],
@@ -208,7 +208,7 @@ function downloadExcelTemplate() {
   ws1['!cols'] = [{ wch: 60 }];
   XLSX.utils.book_append_sheet(wb, ws1, 'Instructions');
 
-  // Sheet 2 â€” Template
+  // Sheet 2 — Template
   const templateHeaders = [
     'invoice_number', 'invoice_date', 'due_date', 'vendor_name',
     'total_amount', 'currency', 'description', 'gl_code',
@@ -218,7 +218,7 @@ function downloadExcelTemplate() {
   ws2['!cols'] = templateHeaders.map(() => ({ wch: 20 }));
   XLSX.utils.book_append_sheet(wb, ws2, 'Invoice Template');
 
-  // Sheet 3 â€” Sample data
+  // Sheet 3 — Sample data
   const sample = [
     ['invoice_number','invoice_date','due_date','vendor_name','total_amount','currency','description','gl_code','ifrs_category','approval_status','department','po_number'],
     ['INV-2022-001','2022-04-05','2022-05-05','Tata Consultancy Services','220000','INR','IT Consulting Q1','6100','Operating Expense','approved','IT','PO-101'],
@@ -234,16 +234,16 @@ function downloadExcelTemplate() {
   XLSX.writeFile(wb, 'InvoiceFlow_Training_Template.xlsx');
 }
 
-// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) =>
   n >= 10000000
-    ? `â‚¹${(n / 10000000).toFixed(2)}Cr`
+    ? `₹${(n / 10000000).toFixed(2)}Cr`
     : n >= 100000
-    ? `â‚¹${(n / 100000).toFixed(1)}L`
+    ? `₹${(n / 100000).toFixed(1)}L`
     : n >= 1000
-    ? `â‚¹${(n / 1000).toFixed(1)}K`
-    : `â‚¹${n.toLocaleString('en-IN')}`;
+    ? `₹${(n / 1000).toFixed(1)}K`
+    : `₹${n.toLocaleString('en-IN')}`;
 
 function getRisk(p: VendorProfile): 'high' | 'watch' | 'normal' {
   let score = 0;
@@ -260,7 +260,7 @@ function RiskBadge({ profile }: { profile: VendorProfile }) {
   return <Badge className="bg-green-100 text-green-800 border-green-300">Normal</Badge>;
 }
 
-// â”€â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function TrainingData() {
   const { toast } = useToast();
@@ -309,6 +309,9 @@ export function TrainingData() {
         supabase.from('vendor_profiles').select('*').eq('company_id', cid).order('mean_amount', { ascending: false }),
         supabase.from('training_uploads').select('*').eq('company_id', cid).order('uploaded_at', { ascending: false }).limit(10),
       ]);
+      if (intRes.error) console.warn('[training] ap_intelligence:', intRes.error.message);
+      if (vpRes.error) console.warn('[training] vendor_profiles:', vpRes.error.message);
+      if (upRes.error) console.warn('[training] training_uploads:', upRes.error.message);
       setIntelligence(intRes.data ?? null);
       setVendors((vpRes.data ?? []) as VendorProfile[]);
       setUploadHistory((upRes.data ?? []) as TrainingUpload[]);
@@ -317,7 +320,7 @@ export function TrainingData() {
     }
   }
 
-  // â”€â”€â”€ File handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── File handling ───────────────────────────────────────────────────────────
 
   function parseFile(file: File) {
     setFileName(file.name);
@@ -348,12 +351,12 @@ export function TrainingData() {
         if (missingCrit.length > 0) {
           setShowColumnMap(true);
           toast({
-            title: `${normalised.length} rows loaded â€” check column mapping`,
+            title: `${normalised.length} rows loaded — check column mapping`,
             description: `Could not auto-map: ${missingCrit.map((c) => c.label).join(', ')}`,
           });
         } else {
           setShowColumnMap(false);
-          toast({ title: `âœ… ${normalised.length} invoices loaded`, description: `${new Set(normalised.map((r) => r.vendor_name)).size} vendors detected. Click "Start Training".` });
+          toast({ title: `✅ ${normalised.length} invoices loaded`, description: `${new Set(normalised.map((r) => r.vendor_name)).size} vendors detected. Click "Start Training".` });
         }
       } catch (err) {
         toast({ title: 'Parse error', description: String(err), variant: 'destructive' });
@@ -373,9 +376,14 @@ export function TrainingData() {
     if (!companyId) return;
     setTallyReading(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) {
+        authHeaders.Authorization = `Bearer ${session.access_token}`;
+      }
       const resp = await fetch('/api/tally/read-history', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           company_id: companyId,
           tally_url: tallyUrl,
@@ -389,7 +397,7 @@ export function TrainingData() {
         toast({ title: 'Tally read failed', description: result.error || result.message || 'Unknown error', variant: 'destructive' });
       } else {
         toast({
-          title: 'ðŸ§  Tally history imported!',
+          title: '🧠 Tally history imported!',
           description: `${result.vendors_profiled} vendor profiles built from ${result.total_invoices} vouchers.`,
         });
         await refreshData(companyId);
@@ -409,10 +417,15 @@ export function TrainingData() {
     setUploading(true);
     setUploadProgress(15);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) {
+        authHeaders.Authorization = `Bearer ${session.access_token}`;
+      }
       const timer = setInterval(() => setUploadProgress((p) => Math.min(p + 5, 75)), 400);
       const resp = await fetch('/api/training/upload', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({ company_id: companyId, invoices: parsedRows, file_name: fileName }),
       });
       clearInterval(timer);
@@ -431,7 +444,7 @@ export function TrainingData() {
       };
       setUploadProgress(100);
       toast({
-        title: 'ðŸ§  Model trained successfully!',
+        title: '🧠 Model trained successfully!',
         description: `${result.vendors_profiled} vendor profiles built from ${result.total_invoices} invoices.`,
       });
       setParsedRows([]);
@@ -447,7 +460,7 @@ export function TrainingData() {
     }
   }
 
-  // â”€â”€â”€ Vendor table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── Vendor table ─────────────────────────────────────────────────────────────
 
   const sortedVendors = [...vendors]
     .filter((v) => filterRisk === 'all' || getRisk(v) === filterRisk)
@@ -470,12 +483,12 @@ export function TrainingData() {
         : <ChevronUp className="h-3 w-3 inline ml-0.5" />
       : null;
 
-  // â”€â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-16">
 
-      {/* â”€â”€ Header â”€â”€ */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -483,7 +496,7 @@ export function TrainingData() {
             AI Training Data
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Upload 3â€“5 years of historical invoices Â· system learns your patterns Â· powers smart anomaly detection
+            Upload 3–5 years of historical invoices · system learns your patterns · powers smart anomaly detection
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -504,7 +517,7 @@ export function TrainingData() {
         </div>
       </div>
 
-      {/* â”€â”€ Tally Help Panel â”€â”€ */}
+      {/* ── Tally Help Panel ── */}
       {showTallyHelp && (
         <Card className="border-amber-200 bg-amber-50">
           <CardHeader className="pb-2">
@@ -515,20 +528,20 @@ export function TrainingData() {
           </CardHeader>
           <CardContent>
             <ol className="space-y-2 text-sm text-amber-800">
-              <li className="flex gap-2"><span className="font-bold shrink-0">Step 1.</span><span>Open Tally â†’ <strong>Gateway of Tally</strong></span></li>
-              <li className="flex gap-2"><span className="font-bold shrink-0">Step 2.</span><span><strong>Display More Reports â†’ Account Books â†’ Purchase Register</strong></span></li>
-              <li className="flex gap-2"><span className="font-bold shrink-0">Step 3.</span><span>Set date range: <strong>last 3â€“5 years</strong> (e.g. 01-Apr-2020 to 31-Mar-2025)</span></li>
-              <li className="flex gap-2"><span className="font-bold shrink-0">Step 4.</span><span>Press <kbd className="bg-amber-200 px-1 rounded text-xs font-mono">Alt+E</kbd> â†’ <strong>Export</strong> â†’ choose <strong>Excel (.xlsx)</strong></span></li>
-              <li className="flex gap-2"><span className="font-bold shrink-0">Step 5.</span><span>Upload that file here â€” InvoiceFlow automatically maps Tally column names</span></li>
+              <li className="flex gap-2"><span className="font-bold shrink-0">Step 1.</span><span>Open Tally → <strong>Gateway of Tally</strong></span></li>
+              <li className="flex gap-2"><span className="font-bold shrink-0">Step 2.</span><span><strong>Display More Reports → Account Books → Purchase Register</strong></span></li>
+              <li className="flex gap-2"><span className="font-bold shrink-0">Step 3.</span><span>Set date range: <strong>last 3–5 years</strong> (e.g. 01-Apr-2020 to 31-Mar-2025)</span></li>
+              <li className="flex gap-2"><span className="font-bold shrink-0">Step 4.</span><span>Press <kbd className="bg-amber-200 px-1 rounded text-xs font-mono">Alt+E</kbd> → <strong>Export</strong> → choose <strong>Excel (.xlsx)</strong></span></li>
+              <li className="flex gap-2"><span className="font-bold shrink-0">Step 5.</span><span>Upload that file here — InvoiceFlow automatically maps Tally column names</span></li>
             </ol>
             <div className="mt-3 rounded-md bg-amber-100 border border-amber-200 px-3 py-2 text-xs text-amber-700">
-              ðŸ’¡ <strong>Tip:</strong> Tally exports use "Party Name" for vendor, "Voucher Date" for invoice date, and "Net Amount" for total â€” all are mapped automatically.
+              💡 <strong>Tip:</strong> Tally exports use "Party Name" for vendor, "Voucher Date" for invoice date, and "Net Amount" for total — all are mapped automatically.
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* â”€â”€ SECTION 1: Training Status Cards â”€â”€ */}
+      {/* ── SECTION 1: Training Status Cards ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className={intelligence?.is_trained ? 'border-green-300 bg-green-50' : 'border-orange-200 bg-orange-50'}>
           <CardContent className="pt-5 pb-4">
@@ -539,7 +552,7 @@ export function TrainingData() {
               <span className="text-sm font-semibold text-gray-700">Training Status</span>
             </div>
             <p className={`text-lg font-bold ${intelligence?.is_trained ? 'text-green-700' : 'text-orange-500'}`}>
-              {intelligence?.is_trained ? 'Trained âœ“' : 'Not Trained'}
+              {intelligence?.is_trained ? 'Trained ✓' : 'Not Trained'}
             </p>
             {intelligence?.last_trained_at
               ? <p className="text-xs text-gray-500 mt-0.5">Last: {new Date(intelligence.last_trained_at).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}</p>
@@ -555,7 +568,7 @@ export function TrainingData() {
             </p>
             {intelligence?.training_date_from && (
               <p className="text-xs text-gray-400 mt-0.5">
-                {intelligence.training_date_from} â†’ {intelligence.training_date_to}
+                {intelligence.training_date_from} → {intelligence.training_date_to}
               </p>
             )}
           </CardContent>
@@ -566,8 +579,8 @@ export function TrainingData() {
             <p className="text-sm font-medium text-gray-500 mb-1">Vendor Profiles</p>
             <p className="text-2xl font-bold text-gray-900">{vendors.length}</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              {vendors.filter((v) => v.is_recurring).length} recurring Â·{' '}
-              {vendors.filter((v) => v.is_splitting_vendor).length} splitting risk Â·{' '}
+              {vendors.filter((v) => v.is_recurring).length} recurring ·{' '}
+              {vendors.filter((v) => v.is_splitting_vendor).length} splitting risk ·{' '}
               {vendors.filter((v) => getRisk(v) === 'high').length} high risk
             </p>
           </CardContent>
@@ -577,16 +590,16 @@ export function TrainingData() {
           <CardContent className="pt-5 pb-4">
             <p className="text-sm font-medium text-gray-500 mb-1">Avg Invoice Amount</p>
             <p className="text-2xl font-bold text-gray-900">
-              {intelligence ? fmt(intelligence.avg_invoice_amount) : 'â€”'}
+              {intelligence ? fmt(intelligence.avg_invoice_amount) : '—'}
             </p>
             <p className="text-xs text-gray-400 mt-0.5">
-              {intelligence ? `${intelligence.avg_invoices_per_month?.toFixed(1) ?? 'â€”'}/month avg` : 'No data yet'}
+              {intelligence ? `${intelligence.avg_invoices_per_month?.toFixed(1) ?? '—'}/month avg` : 'No data yet'}
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* â”€â”€ SECTION 1b: Read from Tally Directly â”€â”€ */}
+      {/* ── SECTION 1b: Read from Tally Directly ── */}
       <Card className="border-blue-200 bg-blue-50/30">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -595,7 +608,7 @@ export function TrainingData() {
             <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-xs">Live ERP</Badge>
           </CardTitle>
           <CardDescription>
-            No manual export needed â€” InvoiceFlow reads all purchase vouchers directly from TallyPrime via HTTP port 9000.
+            No manual export needed — InvoiceFlow reads all purchase vouchers directly from TallyPrime via HTTP port 9000.
             Requires TallyPrime running with HTTP server enabled.
           </CardDescription>
         </CardHeader>
@@ -647,20 +660,20 @@ export function TrainingData() {
               className="bg-blue-600 hover:bg-blue-700 text-white"
             >
               {tallyReading
-                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Reading from Tallyâ€¦</>
+                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Reading from Tally…</>
                 : <><Brain className="h-4 w-4 mr-2" />Read from TallyPrime</>}
             </Button>
             <p className="text-xs text-gray-500">
-              Reads all Purchase vouchers from the date range Â· auto-builds vendor profiles
+              Reads all Purchase vouchers from the date range · auto-builds vendor profiles
             </p>
           </div>
           <div className="rounded-md bg-blue-100 border border-blue-200 px-3 py-2 text-xs text-blue-700">
-            <strong>Enable in TallyPrime:</strong> Gateway of Tally â†’ F12 â†’ Configure â†’ Advanced Configuration â†’ Enable HTTP Server â†’ Port: 9000
+            <strong>Enable in TallyPrime:</strong> Gateway of Tally → F12 → Configure → Advanced Configuration → Enable HTTP Server → Port: 9000
           </div>
         </CardContent>
       </Card>
 
-      {/* â”€â”€ SECTION 2: Upload â”€â”€ */}
+      {/* ── SECTION 2: Upload ── */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
@@ -668,7 +681,7 @@ export function TrainingData() {
             Upload Historical Invoice Data
           </CardTitle>
           <CardDescription>
-            Accepts Excel (.xlsx) and CSV Â· columns auto-mapped from Tally, QuickBooks, or any format Â·
+            Accepts Excel (.xlsx) and CSV · columns auto-mapped from Tally, QuickBooks, or any format ·
             minimum 5 invoices, recommended 500+
           </CardDescription>
         </CardHeader>
@@ -691,7 +704,7 @@ export function TrainingData() {
                 </span>
               ))}
             </div>
-            <p className="text-[10px] text-gray-400 mt-1.5">* required Â· all others optional but improve accuracy</p>
+            <p className="text-[10px] text-gray-400 mt-1.5">* required · all others optional but improve accuracy</p>
           </div>
 
           {/* Drop zone */}
@@ -708,9 +721,9 @@ export function TrainingData() {
           >
             <Upload className="mx-auto h-9 w-9 text-gray-300 mb-2" />
             <p className="text-sm font-semibold text-gray-700">
-              {fileName ? `ðŸ“„ ${fileName}` : 'Drop Excel or CSV here, or click to browse'}
+              {fileName ? `📄 ${fileName}` : 'Drop Excel or CSV here, or click to browse'}
             </p>
-            <p className="text-xs text-gray-400 mt-1">Supports .xlsx Â· .xls Â· .csv Â· Tally export files</p>
+            <p className="text-xs text-gray-400 mt-1">Supports .xlsx · .xls · .csv · Tally export files</p>
             <input
               ref={fileInputRef}
               type="file"
@@ -725,7 +738,7 @@ export function TrainingData() {
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
               <p className="text-sm font-semibold text-amber-800 mb-2 flex items-center gap-1.5">
                 <AlertTriangle className="h-4 w-4" />
-                Column Mapping â€” Headers detected in your file:
+                Column Mapping — Headers detected in your file:
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {rawHeaders.map((h) => (
@@ -744,7 +757,7 @@ export function TrainingData() {
             <div className="rounded-lg border overflow-hidden">
               <div className="bg-indigo-50 px-4 py-2 border-b flex items-center justify-between">
                 <span className="text-xs font-semibold text-indigo-700">
-                  Preview â€” {parsedRows.length.toLocaleString('en-IN')} invoices Â·{' '}
+                  Preview — {parsedRows.length.toLocaleString('en-IN')} invoices ·{' '}
                   {new Set(parsedRows.map((r) => r.vendor_name)).size} vendors
                 </span>
                 <Badge variant="outline" className="text-xs">
@@ -767,9 +780,9 @@ export function TrainingData() {
                         <td className="px-3 py-1.5 text-gray-500 font-mono text-[11px]">{String(row.invoice_number ?? '')}</td>
                         <td className="px-3 py-1.5 text-gray-600">{String(row.invoice_date ?? '')}</td>
                         <td className="px-3 py-1.5 text-gray-900 font-medium">
-                          â‚¹{Number(String(row.total_amount || 0).replace(/[^0-9.]/g, '')).toLocaleString('en-IN')}
+                          ₹{Number(String(row.total_amount || 0).replace(/[^0-9.]/g, '')).toLocaleString('en-IN')}
                         </td>
-                        <td className="px-3 py-1.5 text-gray-500 font-mono text-[11px]">{String(row.gl_code ?? 'â€”')}</td>
+                        <td className="px-3 py-1.5 text-gray-500 font-mono text-[11px]">{String(row.gl_code ?? '—')}</td>
                         <td className="px-3 py-1.5">
                           {row.approval_status ? (
                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
@@ -779,7 +792,7 @@ export function TrainingData() {
                             }`}>
                               {String(row.approval_status)}
                             </span>
-                          ) : <span className="text-gray-300">â€”</span>}
+                          ) : <span className="text-gray-300">—</span>}
                         </td>
                       </tr>
                     ))}
@@ -799,7 +812,7 @@ export function TrainingData() {
                 size="lg"
               >
                 {uploading
-                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Trainingâ€¦</>
+                  ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Training…</>
                   : <><Brain className="h-4 w-4 mr-2" /> Start Training ({parsedRows.length.toLocaleString('en-IN')} invoices)</>}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => { setParsedRows([]); setFileName(''); setRawHeaders([]); }}>
@@ -815,10 +828,10 @@ export function TrainingData() {
             <div className="space-y-1.5">
               <Progress value={uploadProgress} className="h-2.5" />
               <p className="text-xs text-gray-500">
-                {uploadProgress < 30 ? 'Parsing invoicesâ€¦' :
-                 uploadProgress < 60 ? 'Computing vendor statisticsâ€¦' :
-                 uploadProgress < 85 ? 'Building anomaly baselinesâ€¦' :
-                 'Saving profiles to databaseâ€¦'}
+                {uploadProgress < 30 ? 'Parsing invoices…' :
+                 uploadProgress < 60 ? 'Computing vendor statistics…' :
+                 uploadProgress < 85 ? 'Building anomaly baselines…' :
+                 'Saving profiles to database…'}
               </p>
             </div>
           )}
@@ -853,14 +866,14 @@ export function TrainingData() {
         </CardContent>
       </Card>
 
-      {/* â”€â”€ SECTION 3: Vendor Profiles Table â”€â”€ */}
+      {/* ── SECTION 3: Vendor Profiles Table ── */}
       {vendors.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <CardTitle className="text-base">Vendor Profiles</CardTitle>
-                <CardDescription>What the system learned from your history Â· click row for anomaly thresholds</CardDescription>
+                <CardDescription>What the system learned from your history · click row for anomaly thresholds</CardDescription>
               </div>
               <div className="flex gap-1.5 flex-wrap">
                 {(['all', 'high', 'watch', 'normal'] as const).map((r) => (
@@ -935,7 +948,7 @@ export function TrainingData() {
                           <TableCell className="text-gray-600 tabular-nums">{v.avg_invoices_per_month?.toFixed(1)}</TableCell>
                           <TableCell>
                             <span className="font-mono text-xs bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
-                              {v.typical_gl_code || 'â€”'}
+                              {v.typical_gl_code || '—'}
                             </span>
                           </TableCell>
                           <TableCell>
@@ -967,46 +980,46 @@ export function TrainingData() {
                           <TableCell><RiskBadge profile={v} /></TableCell>
                         </TableRow>
 
-                        {/* â”€â”€ SECTION 4: Expanded Anomaly Rules â”€â”€ */}
+                        {/* ── SECTION 4: Expanded Anomaly Rules ── */}
                         {expandedVendor === v.id && (
                           <TableRow key={`${v.id}-exp`} className="bg-indigo-50/50">
                             <TableCell colSpan={9} className="py-4 px-6">
                               <p className="text-xs font-semibold text-indigo-700 mb-3 flex items-center gap-1.5">
                                 <Brain className="h-3.5 w-3.5" />
-                                Anomaly thresholds for <span className="font-bold">{v.vendor_name}</span> â€” trained on {v.training_invoice_count} invoices
+                                Anomaly thresholds for <span className="font-bold">{v.vendor_name}</span> — trained on {v.training_invoice_count} invoices
                               </p>
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
                                 {/* Auto-approve */}
                                 <div className="rounded-lg bg-green-50 border border-green-200 p-3">
-                                  <p className="font-bold text-green-700 mb-1">âœ… Auto-approve range</p>
+                                  <p className="font-bold text-green-700 mb-1">✅ Auto-approve range</p>
                                   <p className="text-green-900 font-semibold text-sm">
-                                    {fmt(Math.max(0, v.mean_amount - 2 * v.std_deviation))} â€“ {fmt(v.mean_amount + 2 * v.std_deviation)}
+                                    {fmt(Math.max(0, v.mean_amount - 2 * v.std_deviation))} – {fmt(v.mean_amount + 2 * v.std_deviation)}
                                   </p>
-                                  <p className="text-green-600 mt-0.5">Within Â±2Ïƒ of avg {fmt(v.mean_amount)}</p>
+                                  <p className="text-green-600 mt-0.5">Within ±2σ of avg {fmt(v.mean_amount)}</p>
                                 </div>
                                 {/* Review */}
                                 <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-3">
-                                  <p className="font-bold text-yellow-700 mb-1">âš ï¸ Review range</p>
+                                  <p className="font-bold text-yellow-700 mb-1">⚠️ Review range</p>
                                   <p className="text-yellow-900 font-semibold text-sm">
-                                    {fmt(Math.max(0, v.mean_amount - 3 * v.std_deviation))} â€“ {fmt(v.mean_amount + 3 * v.std_deviation)}
+                                    {fmt(Math.max(0, v.mean_amount - 3 * v.std_deviation))} – {fmt(v.mean_amount + 3 * v.std_deviation)}
                                   </p>
-                                  <p className="text-yellow-600 mt-0.5">Between 2Ïƒâ€“3Ïƒ (unusual)</p>
+                                  <p className="text-yellow-600 mt-0.5">Between 2σ–3σ (unusual)</p>
                                 </div>
                                 {/* Hold */}
                                 <div className="rounded-lg bg-red-50 border border-red-200 p-3">
-                                  <p className="font-bold text-red-700 mb-1">ðŸš« Hold / Escalate</p>
+                                  <p className="font-bold text-red-700 mb-1">🚫 Hold / Escalate</p>
                                   <p className="text-red-900 font-semibold text-sm">
                                     Below {fmt(Math.max(0, v.mean_amount - 3 * v.std_deviation))} or above {fmt(v.mean_amount + 3 * v.std_deviation)}
                                   </p>
-                                  <p className="text-red-600 mt-0.5">Beyond 3Ïƒ â€” extreme anomaly</p>
+                                  <p className="text-red-600 mt-0.5">Beyond 3σ — extreme anomaly</p>
                                 </div>
                               </div>
                               {/* Additional stats */}
                               <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-gray-600">
-                                <div><span className="font-medium text-gray-700">Seen range:</span> {fmt(v.min_amount)} â€“ {fmt(v.max_amount)}</div>
+                                <div><span className="font-medium text-gray-700">Seen range:</span> {fmt(v.min_amount)} – {fmt(v.max_amount)}</div>
                                 <div><span className="font-medium text-gray-700">Median:</span> {fmt(v.median_amount)}</div>
-                                <div><span className="font-medium text-gray-700">IFRS:</span> {v.typical_ifrs_category || 'â€”'}</div>
-                                <div><span className="font-medium text-gray-700">Period:</span> {v.training_date_from} â†’ {v.training_date_to}</div>
+                                <div><span className="font-medium text-gray-700">IFRS:</span> {v.typical_ifrs_category || '—'}</div>
+                                <div><span className="font-medium text-gray-700">Period:</span> {v.training_date_from} → {v.training_date_to}</div>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -1021,7 +1034,7 @@ export function TrainingData() {
         </Card>
       )}
 
-      {/* â”€â”€ Anomaly Rules Active Summary â”€â”€ */}
+      {/* ── Anomaly Rules Active Summary ── */}
       {vendors.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
@@ -1035,27 +1048,27 @@ export function TrainingData() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[
                 {
-                  icon: 'ðŸ“Š', title: 'Z-Score Amount Check', active: true, color: 'blue',
-                  desc: 'Flags invoices >3Ïƒ above vendor average. Extreme alert at >5Ïƒ. Client-specific, not generic.',
+                  icon: '📊', title: 'Z-Score Amount Check', active: true, color: 'blue',
+                  desc: 'Flags invoices >3σ above vendor average. Extreme alert at >5σ. Client-specific, not generic.',
                 },
                 {
-                  icon: 'ðŸ”', title: 'Recurring Vendor Deviation', active: vendors.some((v) => v.is_recurring), color: 'indigo',
+                  icon: '🔁', title: 'Recurring Vendor Deviation', active: vendors.some((v) => v.is_recurring), color: 'indigo',
                   desc: `${vendors.filter((v) => v.is_recurring).length} recurring vendors profiled. Any amount >10% deviation is flagged.`,
                 },
                 {
-                  icon: 'âœ‚ï¸', title: 'Invoice Splitting Detection', active: vendors.some((v) => v.is_splitting_vendor), color: 'red',
+                  icon: '✂️', title: 'Invoice Splitting Detection', active: vendors.some((v) => v.is_splitting_vendor), color: 'red',
                   desc: `${vendors.filter((v) => v.is_splitting_vendor).length} vendors historically split invoices. New submissions checked against this pattern.`,
                 },
                 {
-                  icon: 'ðŸ“ˆ', title: 'Price Drift Alert', active: vendors.some((v) => v.price_trend === 'increasing'), color: 'orange',
+                  icon: '📈', title: 'Price Drift Alert', active: vendors.some((v) => v.price_trend === 'increasing'), color: 'orange',
                   desc: `${vendors.filter((v) => v.price_trend === 'increasing').length} vendors showing consistent price increases (Mann-Kendall test).`,
                 },
                 {
-                  icon: 'ðŸš«', title: 'High Rejection Rate', active: vendors.some((v) => v.historical_rejection_rate > 0.1), color: 'red',
-                  desc: `${vendors.filter((v) => v.historical_rejection_rate > 0.1).length} vendors with >10% historical rejections â€” auto-flagged on entry.`,
+                  icon: '🚫', title: 'High Rejection Rate', active: vendors.some((v) => v.historical_rejection_rate > 0.1), color: 'red',
+                  desc: `${vendors.filter((v) => v.historical_rejection_rate > 0.1).length} vendors with >10% historical rejections — auto-flagged on entry.`,
                 },
                 {
-                  icon: 'ðŸ†•', title: 'New Vendor Detection', active: true, color: 'yellow',
+                  icon: '🆕', title: 'New Vendor Detection', active: true, color: 'yellow',
                   desc: 'Any vendor not in training data is flagged as first-time. Risk score +10. KYC recommended.',
                 },
               ].map((rule) => (
@@ -1084,14 +1097,14 @@ export function TrainingData() {
         </Card>
       )}
 
-      {/* â”€â”€ Empty state â”€â”€ */}
+      {/* ── Empty state ── */}
       {!loading && vendors.length === 0 && (
         <div className="text-center py-20 text-gray-400">
           <Brain className="h-14 w-14 mx-auto mb-3 text-gray-200" />
           <p className="font-semibold text-gray-500 text-lg">No training data yet</p>
           <p className="text-sm mt-1 text-gray-400">
             Upload historical invoices above to train the AI model.<br />
-            Recommended: 3â€“5 years of data for best accuracy.
+            Recommended: 3–5 years of data for best accuracy.
           </p>
           <div className="flex gap-3 justify-center mt-5">
             <Button variant="outline" onClick={downloadExcelTemplate}>
@@ -1108,4 +1121,3 @@ export function TrainingData() {
     </div>
   );
 }
-

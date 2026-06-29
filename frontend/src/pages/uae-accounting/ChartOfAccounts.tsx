@@ -17,6 +17,8 @@ const TYPE_COLORS: Record<string, string> = {
 
 export default function ChartOfAccounts() {
   const [accounts, setAccounts]   = useState<UAEAccount[]>([]);
+  const [setupCoaCount, setSetupCoaCount] = useState(0);
+  const [companyName, setCompanyName] = useState('');
   const [loading, setLoading]     = useState(true);
   const [seeding, setSeeding]     = useState(false);
   const [search, setSearch]       = useState('');
@@ -26,8 +28,17 @@ export default function ChartOfAccounts() {
 
   const load = () => {
     setLoading(true);
-    svc.listAccounts()
-      .then(d => setAccounts(d.accounts))
+    Promise.all([
+      svc.listAccounts(),
+      svc.getSetupContext().catch(() => null),
+    ])
+      .then(([d, ctx]) => {
+        setAccounts(d.accounts);
+        if (ctx) {
+          setSetupCoaCount(ctx.coa_count);
+          setCompanyName(ctx.company?.company_name || '');
+        }
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
   };
@@ -55,23 +66,29 @@ export default function ChartOfAccounts() {
   });
 
   const types = Array.from(new Set(accounts.map(a => a.account_type))).sort();
+  const fromSetup = setupCoaCount > 0;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Chart of Accounts</h1>
-          <p className="text-gray-400 text-sm mt-1">UAE IFRS-aligned — 62 standard accounts</p>
+          <p className="text-gray-400 text-sm mt-1">
+            {companyName ? `${companyName} · ` : ''}
+            {fromSetup ? `${setupCoaCount} accounts from Company Setup` : 'UAE IFRS-aligned — 62 standard accounts'}
+          </p>
         </div>
         <div className="flex gap-3">
-          <button
-            onClick={handleSeed}
-            disabled={seeding}
-            className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            <Zap size={14} />
-            {seeding ? 'Seeding…' : 'Seed UAE CoA'}
-          </button>
+          {!fromSetup && accounts.length === 0 && (
+            <button
+              onClick={handleSeed}
+              disabled={seeding}
+              className="flex items-center gap-2 bg-green-700 hover:bg-green-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Zap size={14} />
+              {seeding ? 'Seeding…' : 'Seed UAE CoA'}
+            </button>
+          )}
           <button className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-medium transition-colors">
             <Plus size={14} /> Add Account
           </button>

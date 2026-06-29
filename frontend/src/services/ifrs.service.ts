@@ -1,12 +1,12 @@
 import axios from "axios";
+import { getIfrsTenantId } from "./ifrsTenant";
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
 const BASE_URL = `${API_BASE.replace(/\/$/, "")}/api/ifrs`;
 const BOARD_PACK_BASE = `${API_BASE.replace(/\/$/, "")}/api/board-pack`;
-const TENANT = (import.meta.env.VITE_TENANT_ID && String(import.meta.env.VITE_TENANT_ID).trim()) || "default";
 
-const headers = () => ({
-  "X-Tenant-ID": TENANT,
+const headers = (tenantId?: string) => ({
+  "X-Tenant-ID": (tenantId && tenantId.trim()) || getIfrsTenantId(),
 });
 
 export type HarnessTier = "blocked" | "needs_review" | "auto_confirmed" | "confirmed" | "auto_fixed";
@@ -37,7 +37,7 @@ export type IFRSMapping = {
   ifrs_line_item: string;
   ifrs_section: string;
   ifrs_sub_section?: string | null;
-  mapping_source: "ai_suggested" | "user_confirmed" | "user_overridden" | "tally_suggested";
+  mapping_source: "ai_suggested" | "user_confirmed" | "user_overridden" | "tally_suggested" | "template_suggested";
   ai_confidence_score: number;
   ai_reasoning?: string | null;
   is_confirmed: boolean;
@@ -172,6 +172,36 @@ export const ifrsService = {
   async createTemplate(payload: { template_name: string; industry?: string; trial_balance_id: number; is_default?: boolean }) {
     const { data } = await axios.post(`${BASE_URL}/mapping-templates`, payload, { headers: headers() });
     return data;
+  },
+
+  async saveTemplateFromCoa(
+    payload: {
+      template_name: string;
+      industry?: string;
+      is_default?: boolean;
+      company_name?: string;
+      currency?: string;
+      entries: Array<{
+        gl_code: string;
+        gl_description: string;
+        ifrs_statement: string;
+        ifrs_section: string;
+        ifrs_line_item: string;
+        ifrs_sub_section?: string | null;
+      }>;
+    },
+    tenantId?: string
+  ) {
+    const { data } = await axios.post(`${BASE_URL}/mapping-templates/from-coa`, payload, {
+      headers: headers(tenantId),
+    });
+    return data as {
+      id: number;
+      template_name: string;
+      entries_saved: number;
+      is_default: boolean;
+      tenant_id: string;
+    };
   },
 
   async generateStatements(tbId: number) {

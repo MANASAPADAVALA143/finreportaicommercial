@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import uuid
 from typing import Annotated
 
@@ -87,6 +88,12 @@ QBUD_PATTERNS = [
     (["q4_bud", "q4_budget", "q4 budget", "bud_q4"], [9, 10, 11]),
 ]
 
+JUNK_ACCOUNT_NAMES = {
+    "section", "pl", "bs", "hc", "arr", "module", "modules", "description", "instructions",
+}
+
+HDR_RE = re.compile(r"account|category|budget|actual|line.?item|department", re.I)
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -147,6 +154,112 @@ def _annual_to_monthly(row: dict, monthly: list[float]) -> list[float]:
     return monthly
 
 
+def _find_header_row(raw: pd.DataFrame) -> int:
+    for i in range(min(8, len(raw))):
+        vals = [str(v or "").strip() for v in raw.iloc[i].tolist()]
+        if sum(1 for v in vals if HDR_RE.search(v)) >= 2:
+            return i
+    return 0
+
+
+def _normalize_upload_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Detect header row when title rows exist above column names."""
+    if df.empty:
+        return df
+    first_cols = [_norm(str(c)) for c in df.columns]
+    if any(p in c for c in first_cols for p in ("account", "budget", "actual", "category", "section")):
+        df = df.rename(columns={c: _norm(c) for c in df.columns})
+        return df.dropna(how="all")
+
+    raw = df.copy()
+    hdr = _find_header_row(raw)
+    header_vals = [_norm(str(v or "")) or f"col_{j}" for j, v in enumerate(raw.iloc[hdr].tolist())]
+    body = raw.iloc[hdr + 1 :].copy()
+    body.columns = header_vals
+    return body.dropna(how="all")
+
+
+def _dataframe_fpa_score(df: pd.DataFrame) -> int:
+    df = _normalize_upload_df(df)
+    if df.empty:
+        return 0
+    cols = list(df.columns)
+    score = 0
+    for token in ("account", "budget", "actual", "section", "jan_act", "jan_actual", "department"):
+        if any(token in c for c in cols):
+            score += 4
+    name_col = next(
+        (c for c in cols if c in {"account_name", "account", "name", "line_item", "category", "description"}),
+        cols[0] if cols else None,
+    )
+    if not name_col:
+        return score
+    numeric_rows = 0
+    for _, row in df.iterrows():
+        name = str(row.get(name_col, "") or "").strip().lower()
+        if not name or name in JUNK_ACCOUNT_NAMES:
+            continue
+        row_d = {k: row[k] for k in cols}
+        actuals = _extract_monthly(row_d, ACT_PATTERNS)
+        budgets = _extract_monthly(row_d, BUD_PATTERNS)
+        if any(v != 0 for v in actuals) or any(v != 0 for v in budgets):
+            numeric_rows += 1
+            continue
+        for key in ("actual", "budget", "ytd_actual", "ytd_budget", "annual_actual", "annual_budget"):
+            if key in row_d and _pn(row_d.get(key)):
+                numeric_rows += 1
+                break
+    return score + numeric_rows * 3
+
+
+def _read_excel_best_sheet(raw: bytes) -> pd.DataFrame:
+    xl = pd.ExcelFile(io.BytesIO(raw))
+    best_df: pd.DataFrame | None = None
+    best_score = -1
+    for sheet in xl.sheet_names:
+        try:
+            raw_df = pd.read_excel(xl, sheet_name=sheet, header=None, dtype=str)
+            raw_df = raw_df.dropna(how="all")
+            if raw_df.empty:
+                continue
+            df = _normalize_upload_df(raw_df)
+            score = _dataframe_fpa_score(df)
+            if sheet.strip().upper() in {"PL", "P&L", "PROFIT_AND_LOSS", "VARIANCE", "DATA"}:
+                score += 10
+            if score > best_score:
+                best_score = score
+                best_df = df
+        except Exception:
+            continue
+    if best_df is None or best_df.empty:
+        raise HTTPException(400, "No usable sheet found — add Account, Budget, and Actual columns with values.")
+    return best_df
+
+
+def _read_upload_dataframe(raw: bytes, filename: str) -> pd.DataFrame:
+    if filename.lower().endswith((".xlsx", ".xls")):
+        return _read_excel_best_sheet(raw)
+    for enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try:
+            df = pd.read_csv(io.StringIO(raw.decode(enc)), dtype=str)
+            return _normalize_upload_df(df.dropna(how="all"))
+        except Exception:
+            continue
+    raise HTTPException(400, "Could not decode CSV — try UTF-8 encoding.")
+
+
+def _row_has_amounts(actuals: list[float], budgets: list[float], row_d: dict) -> bool:
+    if any(v != 0 for v in actuals) or any(v != 0 for v in budgets):
+        return True
+    for key in (
+        "actual", "budget", "ytd_actual", "ytd_budget", "annual_actual", "annual_budget",
+        "fy_actual", "fy_budget",
+    ):
+        if key in row_d and _pn(row_d.get(key)):
+            return True
+    return False
+
+
 def _parse_df(df: pd.DataFrame, company_id: str, upload_id: str) -> list[FpaMasterRow]:
     # Normalise column names
     col_map = {c: _norm(c) for c in df.columns}
@@ -174,6 +287,8 @@ def _parse_df(df: pd.DataFrame, company_id: str, upload_id: str) -> list[FpaMast
         name = str(row_d.get(name_col, "") or "").strip()
         if not name or name.lower() in {"nan", "none", ""}:
             continue
+        if name.strip().lower() in JUNK_ACCOUNT_NAMES:
+            continue
 
         # Section detection
         if sect_col:
@@ -197,13 +312,74 @@ def _parse_df(df: pd.DataFrame, company_id: str, upload_id: str) -> list[FpaMast
         actuals = _extract_monthly(row_d, ACT_PATTERNS)
         actuals = _extract_quarterly(row_d, QACT_PATTERNS, actuals)
         actuals = _annual_to_monthly(row_d, actuals)
+        if all(v == 0 for v in actuals):
+            actual_col = next(
+                (
+                    c
+                    for c in cols
+                    if _norm(c)
+                    in {
+                        "actual",
+                        "actual_amount",
+                        "actuals",
+                        "ytd_actual",
+                        "actual_ytd",
+                        "fy_actual",
+                        "annual_actual",
+                    }
+                ),
+                None,
+            )
+            if actual_col:
+                val = _pn(row_d.get(actual_col))
+                if val:
+                    actuals = [val / 12] * 12
+            if all(v == 0 for v in actuals):
+                for ytd_key in ("ytd_actual", "actual_ytd"):
+                    if ytd_key in row_d:
+                        val = _pn(row_d.get(ytd_key))
+                        if val:
+                            actuals = [val / 12] * 12
+                            break
 
         # Monthly budgets
         budgets = _extract_monthly(row_d, BUD_PATTERNS)
         budgets = _extract_quarterly(row_d, QBUD_PATTERNS, budgets)
+        if all(v == 0 for v in budgets):
+            budget_col = next(
+                (
+                    c
+                    for c in cols
+                    if _norm(c)
+                    in {
+                        "budget",
+                        "budget_amount",
+                        "budgets",
+                        "ytd_budget",
+                        "budget_ytd",
+                        "fy_budget",
+                        "annual_budget",
+                    }
+                ),
+                None,
+            )
+            if budget_col:
+                val = _pn(row_d.get(budget_col))
+                if val:
+                    budgets = [val / 12] * 12
+            if all(v == 0 for v in budgets):
+                for ytd_key in ("ytd_budget", "budget_ytd"):
+                    if ytd_key in row_d:
+                        val = _pn(row_d.get(ytd_key))
+                        if val:
+                            budgets = [val / 12] * 12
+                            break
         if all(v == 0 for v in budgets) and any(v != 0 for v in actuals):
             # Fall back: use actuals as budget when budget columns missing
             budgets = actuals[:]
+
+        if not _row_has_amounts(actuals, budgets, row_d):
+            continue
 
         rows_out.append(FpaMasterRow(
             upload_id      = upload_id,
@@ -248,23 +424,12 @@ async def upload_master(
     filename = file.filename or ""
 
     try:
-        if filename.lower().endswith((".xlsx", ".xls")):
-            df = pd.read_excel(io.BytesIO(raw), dtype=str)
-        else:
-            for enc in ("utf-8", "utf-8-sig", "latin-1"):
-                try:
-                    df = pd.read_csv(io.StringIO(raw.decode(enc)), dtype=str)
-                    break
-                except Exception:
-                    continue
-            else:
-                raise HTTPException(400, "Could not decode CSV — try UTF-8 encoding.")
+        df = _read_upload_dataframe(raw, filename)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(400, f"Could not parse file: {exc}")
 
-    df = df.dropna(how="all")
     if df.empty:
         raise HTTPException(400, "File is empty after removing blank rows.")
 
@@ -272,7 +437,11 @@ async def upload_master(
     rows = _parse_df(df, company_id, upload_id)
 
     if not rows:
-        raise HTTPException(422, "No valid data rows found. Check the file has an account_name/line_item column and at least one numeric column.")
+        raise HTTPException(
+            422,
+            "No valid data rows with budget/actual values. "
+            "Use columns: section, account_name, budget, actual (or jan_act…dec_act).",
+        )
 
     # Optionally delete previous upload for this company
     if replace_existing:

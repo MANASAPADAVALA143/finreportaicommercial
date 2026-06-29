@@ -1,6 +1,15 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { BudgetLineItem, MonthlyBudget } from '../../types/budget';
 import { Edit2, Check, X } from 'lucide-react';
+import {
+  BUDGET_MONTH_KEYS,
+  BUDGET_SECTION_CONFIG,
+  getBudgetRowStatus,
+  getBudgetSection,
+  getMonthCellStyle,
+  sumMonthlyValues,
+  type BudgetSection,
+} from '../../utils/budgetUtils';
 
 interface BudgetTableProps {
   data: BudgetLineItem[];
@@ -16,11 +25,12 @@ const CURRENCY_SYMBOL: Record<string, string> = {
   AED: 'د.إ',
 };
 
+const SECTION_ORDER: BudgetSection[] = ['REVENUE', 'COGS', 'EXPENSE', 'OTHER'];
+
 const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency = 'USD' }) => {
   const [editingCell, setEditingCell] = useState<{ id: string; month: keyof MonthlyBudget } | null>(null);
   const [editValue, setEditValue] = useState<string>('');
 
-  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'] as const;
   const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   const formatCurrency = (value: number): string => {
@@ -37,9 +47,27 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency 
     return `${symbol}${lakh.toFixed(2)}L`;
   };
 
-  const calculateTotal = (monthly: MonthlyBudget): number => {
-    return Object.values(monthly).reduce((sum, val) => sum + val, 0);
-  };
+  const displayName = (item: BudgetLineItem) =>
+    String(item.lineItem || item.category || 'Line item');
+
+  const groupedRows = useMemo(() => {
+    const rows = data.filter((r) => !r.isHeader);
+    const buckets: Record<BudgetSection, BudgetLineItem[]> = {
+      REVENUE: [],
+      COGS: [],
+      EXPENSE: [],
+      OTHER: [],
+    };
+    rows.forEach((row) => {
+      const section = getBudgetSection(row.accountType, displayName(row));
+      buckets[section].push(row);
+    });
+    return SECTION_ORDER.flatMap((section) => {
+      const items = buckets[section];
+      if (!items.length) return [];
+      return [{ type: 'section' as const, section }, ...items.map((item) => ({ type: 'row' as const, item, section }))];
+    });
+  }, [data]);
 
   const handleCellClick = (item: BudgetLineItem, month: keyof MonthlyBudget) => {
     if (item.isEditable) {
@@ -50,26 +78,20 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency 
 
   const handleSave = () => {
     if (!editingCell) return;
-    
     const numValue = parseFloat(editValue);
     if (isNaN(numValue) || numValue < 0) {
       alert('Please enter a valid positive number');
       return;
     }
-
-    const updatedData = data.map(item => {
+    const updatedData = data.map((item) => {
       if (item.id === editingCell.id) {
         return {
           ...item,
-          monthly: {
-            ...item.monthly,
-            [editingCell.month]: numValue
-          }
+          monthly: { ...item.monthly, [editingCell.month]: numValue },
         };
       }
       return item;
     });
-
     onDataChange(updatedData);
     setEditingCell(null);
     setEditValue('');
@@ -81,64 +103,72 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency 
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleSave();
-    } else if (e.key === 'Escape') {
-      handleCancel();
-    }
-  };
-
-  const getCellStyle = (item: BudgetLineItem) => {
-    if (item.isHeader) {
-      return 'bg-blue-50 font-semibold text-gray-900';
-    }
-    return 'bg-white hover:bg-gray-50';
-  };
-
-  const getIndentStyle = (indent: number = 0) => {
-    return `pl-${indent * 4 + 4}`;
+    if (e.key === 'Enter') handleSave();
+    else if (e.key === 'Escape') handleCancel();
   };
 
   return (
-    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+    <div className="overflow-x-auto border border-slate-700 rounded-lg">
       <table className="w-full text-sm">
-        <thead className="bg-gradient-to-r from-blue-600 to-blue-700 text-white sticky top-0 z-10">
+        <thead className="bg-gradient-to-r from-slate-800 to-slate-900 text-slate-100 sticky top-0 z-10">
           <tr>
-            <th className="py-3 px-4 text-left font-semibold min-w-[250px]">Line Item</th>
-            {monthLabels.map(label => (
-              <th key={label} className="py-3 px-3 text-right font-semibold min-w-[110px]">{label}</th>
+            <th className="py-3 px-4 text-left font-semibold min-w-[220px]">Account</th>
+            <th className="py-3 px-3 text-left font-semibold min-w-[100px]">Status</th>
+            <th className="py-3 px-3 text-left font-semibold min-w-[110px]">Department</th>
+            {monthLabels.map((label) => (
+              <th key={label} className="py-3 px-3 text-right font-semibold min-w-[96px]">
+                {label}
+              </th>
             ))}
-            <th className="py-3 px-4 text-right font-semibold min-w-[120px] bg-blue-800">Total</th>
-            <th className="py-3 px-4 text-right font-semibold min-w-[120px] bg-blue-800">FY2024 Actual</th>
-            <th className="py-3 px-4 text-right font-semibold min-w-[100px] bg-blue-800">% Change</th>
+            <th className="py-3 px-4 text-right font-semibold min-w-[110px] bg-slate-900">Total</th>
+            <th className="py-3 px-4 text-right font-semibold min-w-[110px] bg-slate-900">FY2024</th>
+            <th className="py-3 px-4 text-right font-semibold min-w-[90px] bg-slate-900">% Chg</th>
           </tr>
         </thead>
-        <tbody>
-          {data.map((item, idx) => {
-            const total = calculateTotal(item.monthly);
+        <tbody className="bg-slate-950 text-slate-100">
+          {groupedRows.map((entry, idx) => {
+            if (entry.type === 'section') {
+              const cfg = BUDGET_SECTION_CONFIG[entry.section];
+              return (
+                <tr key={`section-${entry.section}`} className={`${cfg.bg} border-b ${cfg.border}`}>
+                  <td colSpan={17} className={`px-4 py-2 text-xs font-bold tracking-widest uppercase ${cfg.text}`}>
+                    {cfg.label}
+                  </td>
+                </tr>
+              );
+            }
+
+            const item = entry.item;
+            const status = getBudgetRowStatus(item);
+            const total = sumMonthlyValues(item.monthly);
             const priorYear = item.priorYearActual || 0;
             const changePercent = priorYear > 0 ? ((total - priorYear) / priorYear) * 100 : 0;
-            
+            const accountName = displayName(item);
+
             return (
-              <tr
-                key={item.id}
-                className={`border-b border-gray-100 ${getCellStyle(item)} transition-colors`}
-              >
-                <td className={`py-2 px-4 ${getIndentStyle(item.indent)}`}>
-                  <div className="flex items-center gap-2">
-                    <span className={item.isHeader ? 'text-base font-bold' : 'text-sm'}>
-                      {item.category}
-                    </span>
-                    {item.department && (
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                        {item.department}
-                      </span>
-                    )}
-                  </div>
+              <tr key={item.id || idx} className={`border-b border-slate-800 ${status.bg} hover:bg-slate-900/60`}>
+                <td className="py-2 px-4">
+                  <div className="font-medium text-sm text-slate-100">{accountName}</div>
+                  {item.lineItem && item.category && item.category !== item.lineItem && (
+                    <div className="text-xs text-slate-500">{item.category}</div>
+                  )}
                 </td>
-                {months.map(month => {
+                <td className="py-2 px-3">
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full border border-slate-700 ${status.color}`}>
+                    {status.label}
+                  </span>
+                </td>
+                <td className="py-2 px-3 text-xs text-slate-400">{item.department || 'General'}</td>
+                {BUDGET_MONTH_KEYS.map((month) => {
                   const isEditing = editingCell?.id === item.id && editingCell?.month === month;
-                  const value = item.monthly[month];
+                  const budgetVal = item.monthly[month];
+                  const actualVal = item.monthlyActuals?.[month] || 0;
+                  const cellClass = getMonthCellStyle(
+                    actualVal,
+                    budgetVal,
+                    item.accountType,
+                    accountName,
+                  );
 
                   return (
                     <td
@@ -153,49 +183,45 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ data, onDataChange, currency 
                             value={editValue}
                             onChange={(e) => setEditValue(e.target.value)}
                             onKeyDown={handleKeyDown}
-                            className="w-full px-2 py-1 border border-blue-500 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"
+                            className="w-full px-2 py-1 border border-blue-500 rounded bg-slate-900 text-right text-slate-100"
                             autoFocus
                           />
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSave();
-                            }}
-                            className="p-1 text-green-600 hover:bg-green-50 rounded"
-                          >
+                          <button onClick={(e) => { e.stopPropagation(); handleSave(); }} className="p-1 text-emerald-400">
                             <Check size={14} />
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleCancel();
-                            }}
-                            className="p-1 text-red-600 hover:bg-red-50 rounded"
-                          >
+                          <button onClick={(e) => { e.stopPropagation(); handleCancel(); }} className="p-1 text-red-400">
                             <X size={14} />
                           </button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-end gap-1">
-                          <span>{formatCurrency(value)}</span>
+                          <span className={cellClass}>{formatCurrency(budgetVal)}</span>
                           {item.isEditable && (
-                            <Edit2 size={12} className="opacity-0 group-hover:opacity-100 text-blue-500 transition-opacity" />
+                            <Edit2 size={12} className="opacity-0 group-hover:opacity-100 text-blue-400" />
                           )}
                         </div>
                       )}
                     </td>
                   );
                 })}
-                <td className="py-2 px-4 text-right font-semibold bg-gray-50">
+                <td className="py-2 px-4 text-right font-semibold text-slate-100 bg-slate-900/50">
                   {formatCurrency(total)}
                 </td>
-                <td className="py-2 px-4 text-right text-gray-600 bg-gray-50">
-                  {priorYear > 0 ? formatCurrency(priorYear) : '-'}
+                <td className="py-2 px-4 text-right text-slate-400 bg-slate-900/50">
+                  {priorYear > 0 ? formatCurrency(priorYear) : '—'}
                 </td>
-                <td className={`py-2 px-4 text-right font-medium bg-gray-50 ${
-                  changePercent > 0 ? 'text-green-600' : changePercent < 0 ? 'text-red-600' : 'text-gray-600'
-                }`}>
-                  {priorYear > 0 ? `${changePercent > 0 ? '+' : ''}${changePercent.toFixed(1)}%` : '-'}
+                <td
+                  className={`py-2 px-4 text-right font-medium bg-slate-900/50 ${
+                    priorYear <= 0
+                      ? 'text-slate-500'
+                      : changePercent > 0
+                        ? 'text-emerald-400'
+                        : changePercent < 0
+                          ? 'text-red-400'
+                          : 'text-slate-400'
+                  }`}
+                >
+                  {priorYear > 0 ? `${changePercent > 0 ? '+' : ''}${changePercent.toFixed(1)}%` : '—'}
                 </td>
               </tr>
             );

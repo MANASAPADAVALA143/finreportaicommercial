@@ -1,17 +1,22 @@
-﻿/**
+/**
  * APInvoicesLayout.tsx
  * AP InvoiceFlow embedded inside FinReportAI â€” dark design, live data from InvoiceFlow Supabase.
  * Full sidebar matching standalone InvoiceFlow app.
  */
 import type React from 'react';
+import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { MarketProvider, useMarket } from '../../contexts/MarketContext';
+import { useAuth } from '../../context/AuthContext';
+import { ensureApCompanySynced, setApSyncAccessToken } from '../../lib/ap-invoice/workspaceCompanySync';
+import { clearCompanyCache } from '../../lib/ap-invoice/companyService';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
 import {
   LayoutDashboard, FileText, Upload, CheckCircle, Users,
   ShoppingCart, Package, ListTodo, TrendingUp, Landmark,
   Receipt, CalendarDays, BookOpen, Link2, Settings,
   BarChart3, Mail, AlertTriangle, ClipboardList, Building,
-  Database, CreditCard, Shield,
+  Database, CreditCard, Shield, MessageSquare, FileDown,
 } from 'lucide-react';
 
 type NavItem = { to: string; label: string; icon: React.ElementType; end?: boolean };
@@ -43,6 +48,8 @@ function useNavSections(isUAE: boolean): NavSection[] {
         { to: '/ap-invoices/po',           label: 'Purchase Orders',      icon: ShoppingCart },
         { to: '/ap-invoices/grn',          label: 'Goods Receipts',       icon: Package },
         { to: '/ap-invoices/vendors',      label: 'Vendors',              icon: Users },
+        { to: '/ap-invoices/bank-guarantees', label: 'Bank Guarantees',  icon: Shield },
+        { to: '/ap-invoices/vendor-risk',  label: 'Vendor Risk',        icon: AlertTriangle },
       ],
     },
     {
@@ -60,8 +67,10 @@ function useNavSections(isUAE: boolean): NavSection[] {
       label: 'AI & Compliance',
       items: [
         { to: '/ap-invoices/anomaly',      label: 'Anomaly Intelligence',  icon: AlertTriangle },
+        { to: '/ap-invoices/chat',         label: 'AP AI Chat',            icon: MessageSquare },
         { to: '/ap-invoices/month-end',    label: 'Month-End Close',       icon: ClipboardList },
         { to: '/ap-invoices/audit-log',    label: 'Audit Log',             icon: Shield },
+        { to: '/ap-invoices/audit-trail',  label: 'Audit Trail Export',    icon: FileDown },
         { to: '/ap-invoices/training',     label: 'AI Training Data',      icon: Database },
       ],
     },
@@ -69,6 +78,8 @@ function useNavSections(isUAE: boolean): NavSection[] {
       label: 'Setup',
       items: [
         { to: '/ap-invoices/company-config', label: 'Company Config',     icon: Building },
+        { to: '/ap-invoices/onboarding',     label: 'Onboarding',         icon: ClipboardList },
+        { to: '/ap-invoices/admin/clients',  label: 'Admin Clients',      icon: Users },
         { to: '/ap-invoices/integrations',   label: 'Integrations',       icon: Link2 },
         { to: '/ap-invoices/settings',       label: 'Settings',           icon: Settings },
       ],
@@ -77,25 +88,29 @@ function useNavSections(isUAE: boolean): NavSection[] {
 }
 
 const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors';
-const linkIdle   = 'text-slate-400 hover:bg-slate-800 hover:text-white';
+const linkIdle   = 'text-slate-300 hover:bg-slate-800 hover:text-white';
 const linkActive = 'bg-blue-700/80 text-white';
 
 function MarketToggle() {
-  const { market, setMarket, isUAE } = useMarket();
+  const { market, setMarket } = useMarket();
   return (
     <div className="flex items-center gap-1 bg-slate-800 rounded-full p-0.5 mt-2">
       <button
-        onClick={() => setMarket('uae')}
+        type="button"
+        onClick={() => void setMarket('uae')}
+        title="UAE mode — VAT, TRN, AED"
         className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          isUAE ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+          market === 'uae' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
         }`}
       >
         🇦🇪 UAE
       </button>
       <button
-        onClick={() => setMarket('india')}
+        type="button"
+        onClick={() => void setMarket('india')}
+        title="India mode — GST, GSTIN, INR"
         className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          !isUAE ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
+          market === 'india' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
         }`}
       >
         🇮🇳 India
@@ -104,16 +119,31 @@ function MarketToggle() {
   );
 }
 
+function ApWorkspaceSync() {
+  const { accessToken } = useAuth();
+  useEffect(() => {
+    setApSyncAccessToken(accessToken);
+    if (!getStoredWorkspaceId()) return;
+    clearCompanyCache();
+    void ensureApCompanySynced(accessToken);
+  }, [accessToken]);
+  return null;
+}
+
 function APInvoicesLayoutInner() {
   const { isUAE } = useMarket();
   return (
-    <div className="flex min-h-screen w-full bg-gray-950 text-gray-100">
-      {/* Left sub-nav */}
-      <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col overflow-y-auto">
-        {/* Brand */}
-        <div className="px-4 py-5 border-b border-slate-800">
+    /* 36px = GnanovaBanner height; min-h-0 lets flex children scroll */
+    <div className="flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
+      <ApWorkspaceSync />
+      {/* Left sub-nav — header/footer fixed, nav scrolls */}
+      <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col h-full min-h-0 overflow-hidden">
+        {/* Brand — pinned top */}
+        <div className="shrink-0 px-4 py-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">ðŸ“„</div>
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
+              <FileText className="w-4 h-4" />
+            </div>
             <div>
               <p className="text-sm font-bold text-white leading-tight">InvoiceFlow</p>
               <p className="text-[10px] text-slate-500">AP Processing</p>
@@ -121,17 +151,17 @@ function APInvoicesLayoutInner() {
           </div>
           <span className="inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full bg-green-900 text-green-300 border border-green-800 font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            Live Â· InvoiceFlow
+            Live · InvoiceFlow
           </span>
           <MarketToggle />
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-2 py-3 space-y-4">
+        {/* Nav — scrollable */}
+        <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-4 sidebar-scroll">
           {useNavSections(isUAE).map((section, si) => (
             <div key={si}>
               {section.label && (
-                <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                   {section.label}
                 </p>
               )}
@@ -152,22 +182,24 @@ function APInvoicesLayoutInner() {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="px-4 py-3 border-t border-slate-800">
+        {/* Footer — pinned bottom */}
+        <div className="shrink-0 px-4 py-3 border-t border-slate-800">
           <a
             href="https://apinvoiceflow.vercel.app"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[11px] text-slate-500 hover:text-blue-400 flex items-center gap-1 transition-colors"
           >
-            â†— Open full InvoiceFlow app
+            ↗ Open full InvoiceFlow app
           </a>
         </div>
       </aside>
 
-      {/* Page content */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
-        <Outlet />
+      {/* Page content — light canvas for readable cards & text */}
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-slate-100">
+        <div className="p-6 min-h-full">
+          <Outlet />
+        </div>
       </div>
     </div>
   );

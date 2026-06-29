@@ -1,5 +1,16 @@
-﻿// Helper to load FP&A data from localStorage
+// Helper to load FP&A data from localStorage
 // Each module reads only what it needs
+import { backendOrigin } from './backendOrigin';
+
+import {
+  BUDGET_MONTH_KEYS,
+  forwardFillMonthlyBudget,
+  inferBudgetDepartment,
+  getBudgetSection,
+} from './budgetUtils';
+
+const FPA_MONTH_KEYS = BUDGET_MONTH_KEYS;
+
 function getFirstStored(keys: string[]): any | null {
   for (const k of keys) {
     const raw = localStorage.getItem(k);
@@ -471,51 +482,91 @@ export const calculateRealKPIs = (actualData: any, budgetData: any) => {
 };
 
 // Convert budget data to line items for Budget Management module
+
+/** Normalize COA account_type (Income/Expense/revenue/etc.) → income | expense | other */
+export function normalizeFpaAccountType(raw: unknown, accountName = ''): 'income' | 'expense' | 'other' {
+  const t = String(raw || '').toLowerCase().trim();
+  const name = String(accountName || '').toLowerCase();
+  if (
+    t.includes('expense') || t.includes('cost') || t === 'cogs' || t.includes('opex') ||
+    t.includes('operating expense')
+  ) {
+    return 'expense';
+  }
+  if (t.includes('income') || t.includes('revenue')) return 'income';
+  if (/cost|expense|salary|salaries|cloud|infra|marketing|admin|overhead|payroll|depreciation|interest|staff|cogs|opex/i.test(name)) {
+    return 'expense';
+  }
+  if (/revenue|income|sales|license|service|subscri|maintenance/i.test(name)) return 'income';
+  return 'other';
+}
+
 export const convertBudgetToLineItems = (budgetData: any) => {
   if (!budgetData) return [];
 
   // â”€â”€ Fast path: use real uploaded lineItems when available â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // These are stored by BudgetManagement.handleFileUpload or master upload.
   if (budgetData.lineItems && Array.isArray(budgetData.lineItems) && budgetData.lineItems.length > 0) {
-    const MONTH_KEYS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     return budgetData.lineItems.map((item: any, idx: number) => {
-      // Reconstruct monthly object â€” prefer stored monthly array, else spread annual evenly
-      let monthly: Record<string, number> = { jan:0,feb:0,mar:0,apr:0,may:0,jun:0,jul:0,aug:0,sep:0,oct:0,nov:0,dec:0 };
+      let monthly: Record<(typeof BUDGET_MONTH_KEYS)[number], number> = {
+        jan: 0, feb: 0, mar: 0, apr: 0, may: 0, jun: 0, jul: 0, aug: 0, sep: 0, oct: 0, nov: 0, dec: 0,
+      };
       if (item.monthly && typeof item.monthly === 'object') {
         monthly = { ...monthly, ...item.monthly };
       } else if (Array.isArray(item.monthlyBudgets) && item.monthlyBudgets.length === 12) {
-        MONTH_KEYS.forEach((k, i) => { monthly[k] = Number(item.monthlyBudgets[i]) || 0; });
+        BUDGET_MONTH_KEYS.forEach((k, i) => {
+          monthly[k] = Number(item.monthlyBudgets[i]) || 0;
+        });
       } else {
-        // Spread annual evenly
         const annual = Number(item.budget || item.annual_budget || 0);
-        MONTH_KEYS.forEach(k => { monthly[k] = annual / 12; });
+        BUDGET_MONTH_KEYS.forEach((k) => {
+          monthly[k] = annual / 12;
+        });
       }
-      const annualBudget = MONTH_KEYS.reduce((s, k) => s + (monthly[k] || 0), 0);
+      monthly = { ...forwardFillMonthlyBudget(monthly) };
 
-      // Determine category (income / expense / other) â€” check accountType first then keywords
-      const accType = String(item.accountType || item.account_type || '').toLowerCase();
-      const name    = String(item.account || item.account_name || item.category || item.lineItem || '').toLowerCase();
-      const isExpenseItem = accType.includes('expense') || accType.includes('cost')
-        || /cost|expense|salary|salaries|cloud|infra|marketing|admin|overhead|payroll|depreciation|interest|support.staff|implementation.staff/.test(name);
-      const isIncomeItem  = accType.includes('income') || accType.includes('revenue')
-        || /^(total\s+)?(revenue|income|sales|license|service|subscription|maintenance)/.test(name);
+      let monthlyActuals: Record<string, number> | undefined;
+      if (item.monthlyActuals && typeof item.monthlyActuals === 'object' && !Array.isArray(item.monthlyActuals)) {
+        monthlyActuals = {
+          jan: 0, feb: 0, mar: 0, apr: 0, may: 0, jun: 0, jul: 0, aug: 0, sep: 0, oct: 0, nov: 0, dec: 0,
+        };
+        BUDGET_MONTH_KEYS.forEach((k) => {
+          monthlyActuals![k] = Number(item.monthlyActuals[k]) || 0;
+        });
+      } else if (Array.isArray(item.monthlyActuals) && item.monthlyActuals.length === 12) {
+        monthlyActuals = {
+          jan: 0, feb: 0, mar: 0, apr: 0, may: 0, jun: 0, jul: 0, aug: 0, sep: 0, oct: 0, nov: 0, dec: 0,
+        };
+        BUDGET_MONTH_KEYS.forEach((k, i) => {
+          monthlyActuals![k] = Number(item.monthlyActuals[i]) || 0;
+        });
+      }
+
+      const rawName = String(item.account || item.account_name || item.category || item.lineItem || `Item ${idx + 1}`);
+      const normalizedType = normalizeFpaAccountType(item.accountType || item.account_type, rawName);
+      const section = getBudgetSection(normalizedType, rawName);
+      const sectionLabel =
+        section === 'REVENUE' ? 'Revenue' : section === 'COGS' ? 'Cost of Goods Sold' : section === 'EXPENSE' ? 'Operating Expenses' : 'Other';
+      const annualBudget = BUDGET_MONTH_KEYS.reduce((s, k) => s + (Number(monthly[k]) || 0), 0);
+      const priorYear = Number(item.priorYearActual || item.fy_prior_actual || 0) || 0;
 
       return {
         id: `budget-item-${idx}`,
-        category: isIncomeItem ? 'Revenue' : isExpenseItem ? 'Operating Expenses' : 'Other',
-        lineItem: String(item.account || item.account_name || item.category || item.lineItem || `Item ${idx+1}`),
-        department: String(item.department || 'All Depts'),
+        category: sectionLabel,
+        lineItem: rawName,
+        department: inferBudgetDepartment(rawName, item.category, item.department),
         owner: String(item.owner || 'CFO'),
         monthly,
+        monthlyActuals,
         fy2025Budget: annualBudget,
-        fy2024Actual: Number(item.priorYearActual || item.fy_prior_actual || annualBudget * 0.92),
-        accountType: isIncomeItem ? 'income' : isExpenseItem ? 'expense' : 'other',
+        fy2024Actual: priorYear,
+        accountType: normalizedType,
         variance: 0,
         variancePct: 0,
         status: 'On Track' as const,
         isEditable: true,
         isHeader: false,
-        priorYearActual: Number(item.priorYearActual || item.fy_prior_actual || 0),
+        priorYearActual: priorYear,
         indent: 0,
       };
     });
@@ -1074,4 +1125,236 @@ export const getMissingDataMessage = (missing: string[]) => {
   
   return `Upload ${missingLabels.join(' and ')} to see this analysis`;
 };
+
+/** True when localStorage has non-zero FP&A line items or totals. */
+export function hasFpaLineData(): boolean {
+  const actual = loadFPAActual();
+  const budget = loadFPABudget();
+  const items = actual?.lineItems || budget?.lineItems || [];
+  if (Array.isArray(items) && items.length > 0) {
+    return items.some(
+      (i: any) => Number(i.actual || 0) !== 0 || Number(i.budget || 0) !== 0
+    );
+  }
+  const rev = Number(actual?.totalRevenue || budget?.totalRevenue || 0);
+  const exp = Number(actual?.totalExpenses || budget?.totalExpenses || 0);
+  return rev !== 0 || exp !== 0;
+}
+
+/** Dispatched after a successful master upload + localStorage sync. */
+export const FPA_MASTER_UPDATED_EVENT = 'fpa-master-updated';
+
+const FPA_MASTER_JUNK_NAMES = new Set([
+  'section',
+  'pl',
+  'bs',
+  'hc',
+  'arr',
+  'module',
+  'modules',
+  'description',
+  'instructions',
+]);
+
+/** Rows from template/instruction sheets (not real accounts). */
+export function isFpaMasterJunkRow(r: any): boolean {
+  const name = String(r.account_name || r.account || '').trim().toLowerCase();
+  if (!name) return true;
+  return FPA_MASTER_JUNK_NAMES.has(name);
+}
+
+export function hasFpaMasterAmounts(r: any): boolean {
+  const act = Number(r.annual_actual || 0);
+  const bud = Number(r.annual_budget || 0);
+  const ma: any[] = r.monthly_actuals || [];
+  const mb: any[] = r.monthly_budgets || [];
+  if (act !== 0 || bud !== 0) return true;
+  if (ma.some((v) => Number(v) !== 0)) return true;
+  if (mb.some((v) => Number(v) !== 0)) return true;
+  return false;
+}
+
+/** PL rows with real budget/actual values (excludes template label rows). */
+export function filterUsablePlRows(rows: any[]): any[] {
+  return rows.filter((r) => !isFpaMasterJunkRow(r) && hasFpaMasterAmounts(r));
+}
+
+export function buildFpaStorageFromPlRows(
+  rows: any[],
+  options?: { currency?: string; fileName?: string }
+) {
+  const usable = filterUsablePlRows(rows);
+  const source = usable.length > 0 ? usable : rows.filter((r) => !isFpaMasterJunkRow(r));
+  const lineItems = source.map((r: any) => ({
+    account: r.account_name,
+    category: r.account_name,
+    budget: Number(r.annual_budget || 0),
+    actual: Number(r.annual_actual || 0),
+    monthly: (() => {
+      const o: Record<string, number> = {};
+      FPA_MONTH_KEYS.forEach((k, i) => {
+        o[k] = Number(r.monthly_budgets?.[i] || 0);
+      });
+      return forwardFillMonthlyBudget(o);
+    })(),
+    monthlyActuals: (() => {
+      const o: Record<string, number> = {};
+      FPA_MONTH_KEYS.forEach((k, i) => {
+        o[k] = Number(r.monthly_actuals?.[i] || 0);
+      });
+      return o;
+    })(),
+    monthlyBudgets: r.monthly_budgets || [],
+    accountType: normalizeFpaAccountType(r.account_type, r.account_name),
+    department: inferBudgetDepartment(r.account_name || '', r.category, r.department),
+    owner: r.owner || 'CFO',
+    priorYearActual: Number(r.fy_prior_actual || 0),
+    opening_cash: Number(r.opening_cash || 0),
+  }));
+
+  const totalRevAct = lineItems
+    .filter((r: any) => r.accountType === 'income')
+    .reduce((s: number, r: any) => s + r.actual, 0);
+  const totalExpAct = lineItems
+    .filter((r: any) => r.accountType === 'expense')
+    .reduce((s: number, r: any) => s + r.actual, 0);
+  const totalRevBud = lineItems
+    .filter((r: any) => r.accountType === 'income')
+    .reduce((s: number, r: any) => s + r.budget, 0);
+  const totalExpBud = lineItems
+    .filter((r: any) => r.accountType === 'expense')
+    .reduce((s: number, r: any) => s + r.budget, 0);
+  const openingCash = source.find((r: any) => Number(r.opening_cash || 0) > 0)?.opening_cash || 0;
+
+  const actualPayload = {
+    totalRevenue: totalRevAct,
+    totalExpenses: totalExpAct,
+    netProfit: totalRevAct - totalExpAct,
+    ebitda: (totalRevAct - totalExpAct) * 1.15,
+    cashAndEquivalents: openingCash,
+    rowCount: source.length,
+    lineItems,
+    uploadedAt: new Date().toISOString(),
+  };
+  const budgetPayload = {
+    totalRevenue: totalRevBud,
+    totalExpenses: totalExpBud,
+    netProfit: totalRevBud - totalExpBud,
+    ebitda: (totalRevBud - totalExpBud) * 1.15,
+    cashAndEquivalents: openingCash,
+    rowCount: source.length,
+    lineItems,
+    uploadedAt: new Date().toISOString(),
+  };
+  const scenarioPayload = {
+    totalRevenue: totalRevAct,
+    domesticRevenue: totalRevAct * 0.7,
+    exportRevenue: totalRevAct * 0.2,
+    serviceRevenue: totalRevAct * 0.1,
+    costOfGoodsSold:
+      lineItems
+        .filter((r: any) => /cogs|cost.of.rev/i.test(r.account))
+        .reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.35,
+    payroll:
+      lineItems
+        .filter((r: any) => /salary|payroll|staff/i.test(r.account))
+        .reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.4,
+    adminExpenses:
+      lineItems
+        .filter((r: any) => /admin|overhead/i.test(r.account))
+        .reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.1,
+    distributionCosts: 0,
+    marketingCosts:
+      lineItems
+        .filter((r: any) => /marketing/i.test(r.account))
+        .reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.08,
+    rentExpense: 0,
+    depreciation: 0,
+    interestExpense: 0,
+    otherExpenses: 0,
+    totalOperatingExpenses: totalExpAct,
+    cashAndEquivalents: openingCash,
+    totalCurrentAssets: openingCash * 2.5,
+    totalAssets: openingCash * 5,
+    totalCurrentLiabilities: totalExpAct * 0.15,
+    totalLiabilities: totalExpAct * 0.3,
+    totalEquity: openingCash * 3,
+    fileName: options?.fileName || 'master_upload',
+    uploadedAt: new Date().toISOString(),
+  };
+
+  const currencies = [...new Set(source.map((r: any) => String(r.currency || '').toUpperCase()).filter(Boolean))];
+  const currency =
+    options?.currency ||
+    (currencies.includes('AED') ? 'AED' : currencies.includes('INR') ? 'INR' : currencies[0] || 'AED');
+
+  return { actualPayload, budgetPayload, scenarioPayload, currency };
+}
+
+export function persistFpaMasterPayloads(payloads: {
+  actualPayload: any;
+  budgetPayload: any;
+  scenarioPayload: any;
+  currency: string;
+}) {
+  const { actualPayload, budgetPayload, scenarioPayload, currency } = payloads;
+  localStorage.setItem('fpa_actual', JSON.stringify(actualPayload));
+  localStorage.setItem('fpa_actual_tb', JSON.stringify(actualPayload));
+  localStorage.setItem('fpa_budget', JSON.stringify(budgetPayload));
+  localStorage.setItem('fpa_budget_tb', JSON.stringify(budgetPayload));
+  localStorage.setItem('finreportai_fpa_data', JSON.stringify(scenarioPayload));
+  localStorage.setItem('fpa_currency', currency);
+  if (currency === 'INR') {
+    localStorage.setItem('fpa_india_actual', JSON.stringify(actualPayload));
+    localStorage.setItem('fpa_india_budget', JSON.stringify(budgetPayload));
+  }
+}
+
+/** Pull master PL rows from API → localStorage (shared by hub + all FP&A modules). */
+export async function syncFpaMasterFromApi(companyId = 'default'): Promise<{
+  ok: boolean;
+  rowCount: number;
+  usableRowCount: number;
+  message: string;
+}> {
+  const base = backendOrigin();
+  if (!base) {
+    return { ok: false, rowCount: 0, usableRowCount: 0, message: 'Backend API not configured' };
+  }
+  try {
+    const res = await fetch(
+      `${base}/api/fpa/master-data?section=PL&company_id=${encodeURIComponent(companyId)}`
+    );
+    if (!res.ok) {
+      return { ok: false, rowCount: 0, usableRowCount: 0, message: `Master data fetch failed (${res.status})` };
+    }
+    const pl = await res.json();
+    if (!pl.rows?.length) {
+      return { ok: false, rowCount: 0, usableRowCount: 0, message: 'No PL rows found — upload master data first' };
+    }
+    const usable = filterUsablePlRows(pl.rows);
+    const built = buildFpaStorageFromPlRows(pl.rows);
+    persistFpaMasterPayloads(built);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(FPA_MASTER_UPDATED_EVENT, { detail: { companyId, usableRowCount: usable.length } }));
+    }
+    if (!usable.length) {
+      return {
+        ok: false,
+        rowCount: pl.rows.length,
+        usableRowCount: 0,
+        message:
+          'Master file uploaded but no rows have budget/actual values. Use account names (Revenue, Salaries…) with Budget & Actual columns.',
+      };
+    }
+    return {
+      ok: true,
+      rowCount: pl.rows.length,
+      usableRowCount: usable.length,
+      message: `Synced ${usable.length} variance lines from master upload`,
+    };
+  } catch (e: any) {
+    return { ok: false, rowCount: 0, usableRowCount: 0, message: e?.message || String(e) };
+  }
+}
 

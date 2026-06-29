@@ -1,8 +1,9 @@
-﻿import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/ap-invoice/supabase';
 import { useMarket } from '../../contexts/MarketContext';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
+import { calculateAdvanceVat } from '../../lib/ap-invoice/uaeVatService';
 import { detectAnomalies } from '../../utils/anomalyDetection';
 import { getRequiredApprovalLevel } from '../../utils/approvalWorkflow';
 import { formatCurrency } from '../../utils/currency';
@@ -13,6 +14,10 @@ import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
 import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeWayMatchService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
+import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
+import { useAuth } from '../../context/AuthContext';
+import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
@@ -35,7 +40,7 @@ import {
   TableHeader,
   TableRow,
 } from '../../components/ui/table';
-import { Upload, X, Plus, Trash2, FileText, CheckCircle, Download, FileSpreadsheet, Camera } from 'lucide-react';
+import { Upload, X, Plus, Trash2, FileText, CheckCircle, Download, FileSpreadsheet, Camera, AlertTriangle } from 'lucide-react';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal, type PreviewLineItem } from '@/components/invoices/InvoiceExtractionPreviewModal';
 import { uploadInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
@@ -50,6 +55,15 @@ import {
   computeFieldCompletenessScore,
   getEffectiveExtractionScore,
 } from '../../utils/extractionConfidence';
+import { safeStr, safeNum, apiErrorMessage } from '../../utils/safeRender';
+import { classifyAPInvoiceEmbedded } from '../../lib/ap-invoice/gulfTaxService';
+import { notifyApInvoiceUploaded } from '../../services/notificationService';
+import {
+  findBulkExcelHeaderRowIndex,
+  normalizeBulkRow,
+  resolveBulkDefaultCurrency,
+  sheetToBulkJsonRows,
+} from '../../lib/ap-invoice/bulkExcelParse';
 
 type LineItem = {
   id: string;
@@ -85,13 +99,21 @@ function mapTaxCodeToLegacyType(
 
 export function InvoiceUpload() {
   const navigate = useNavigate();
+  const { accessToken } = useAuth();
   const { toast } = useToast();
   const { baseCurrency } = useCompanySettings();
   const { isUAE, config } = useMarket();
+
+  const resolveApCompanyId = async (): Promise<string> => {
+    return resolveApSupabaseCompanyId(accessToken);
+  };
   const [vatTreatment, setVatTreatment] = useState('standard');
   const [reverseCharge, setReverseCharge] = useState(false);
   const [designatedZone, setDesignatedZone] = useState(false);
   const [vendorTrn, setVendorTrn] = useState('');
+  const [isAdvancePayment, setIsAdvancePayment] = useState(false);
+  const [contractValue, setContractValue] = useState('');
+  const [deliveryDate, setDeliveryDate] = useState('');
   const [noCompany, setNoCompany] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -166,6 +188,7 @@ export function InvoiceUpload() {
   const [scanPreviewConfidence, setScanPreviewConfidence] = useState<number | undefined>();
   const [scanPreviewLineItems, setScanPreviewLineItems] = useState<PreviewLineItem[]>([]);
   const [scanPreviewFile, setScanPreviewFile] = useState<File | null>(null);
+  const [scanVatTreatment, setScanVatTreatment] = useState('review_required');
   const [savingFromScan, setSavingFromScan] = useState(false);
 
   // Bulk upload state
@@ -174,6 +197,7 @@ export function InvoiceUpload() {
   const [bulkErrors, setBulkErrors] = useState<Record<number, string[]>>({});
   const [bulkPreviewRows, setBulkPreviewRows] = useState<Array<{ rowNum: number; data: any; errors: string[] }>>([]);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkGulfTaxCount, setBulkGulfTaxCount] = useState(0);
   const [bulkResults, setBulkResults] = useState<{
     success: number;
     failed: number;
@@ -231,7 +255,33 @@ export function InvoiceUpload() {
 
   // Load the n8n (or other) API endpoint configured in Settings
   useEffect(() => {
+    const applyWebhookSettings = (apiEndpointVal: string, classifyVal: string) => {
+      const envWebhook = import.meta.env.VITE_N8N_WEBHOOK_URL?.trim();
+      if (apiEndpointVal) {
+        setApiEndpoint(apiEndpointVal);
+      } else if (envWebhook) {
+        setApiEndpoint(envWebhook);
+      } else {
+        console.warn(
+          'No extraction webhook: set app_settings.api_endpoint in Settings, VITE_N8N_WEBHOOK_URL in .env, or N8N_WEBHOOK_URL on the backend.',
+        );
+      }
+      setApiEndpointClassifyJson(classifyVal || null);
+    };
+
     const loadApiEndpoint = async () => {
+      try {
+        const apiBase = (import.meta.env.VITE_API_URL ?? '').trim().replace(/\/$/, '') || 'http://localhost:8001';
+        const res = await fetch(`${apiBase}/api/ap/app-settings`);
+        if (res.ok) {
+          const body = (await res.json()) as Record<string, string>;
+          applyWebhookSettings(body.api_endpoint ?? '', body.api_endpoint_classify_json ?? '');
+          return;
+        }
+      } catch {
+        /* backend offline — fall back to Supabase / env */
+      }
+
       try {
         const { data, error } = await supabase
           .from('app_settings')
@@ -239,39 +289,29 @@ export function InvoiceUpload() {
           .in('setting_key', ['api_endpoint', 'api_endpoint_classify_json']);
 
         if (error) {
-          console.error('Error loading API endpoint:', error);
+          const msg = error.message ?? String(error);
+          if (!msg.includes('schema cache') && !msg.includes('does not exist')) {
+            console.warn('Error loading API endpoint:', msg);
+          }
+          applyWebhookSettings('', '');
           return;
         }
 
         const apiRow = data?.find((r) => r.setting_key === 'api_endpoint');
         const classifyRow = data?.find((r) => r.setting_key === 'api_endpoint_classify_json');
-        const envWebhook = import.meta.env.VITE_N8N_WEBHOOK_URL?.trim();
-        if (apiRow?.setting_value) {
-          console.log('âœ… API endpoint loaded from app_settings:', apiRow.setting_value);
-          setApiEndpoint(apiRow.setting_value);
-        } else if (envWebhook) {
-          console.log('âœ… API endpoint from VITE_N8N_WEBHOOK_URL (app_settings empty):', envWebhook);
-          setApiEndpoint(envWebhook);
-        } else {
-          console.warn(
-            'âš ï¸ No extraction webhook: set app_settings.api_endpoint in Settings, or add VITE_N8N_WEBHOOK_URL to .env'
-          );
-        }
-        if (classifyRow?.setting_value) {
-          setApiEndpointClassifyJson(classifyRow.setting_value);
-        } else {
-          setApiEndpointClassifyJson(null);
-        }
+        applyWebhookSettings(apiRow?.setting_value ?? '', classifyRow?.setting_value ?? '');
       } catch (error) {
-        console.error('Error loading API endpoint from settings:', error);
+        console.warn('Error loading API endpoint from settings:', error);
+        applyWebhookSettings('', '');
       }
     };
 
     void loadApiEndpoint();
 
-    // Check company exists â€” clear cache first to get a fresh result
+    // Sync workspace → Supabase company; only block upload when no workspace in banner
     clearCompanyCache();
-    void getMyCompany().then((c) => setNoCompany(!c?.id));
+    setNoCompany(!getStoredWorkspaceId());
+    void ensureApCompanySynced(accessToken).then(() => getMyCompany());
 
     // Reload when page becomes visible (in case settings were updated in another tab)
     const handleVisibilityChange = () => {
@@ -282,7 +322,7 @@ export function InvoiceUpload() {
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+  }, [accessToken]);
 
   /** Maps n8n webhook response to extractedData and auto-fills form. Reads flat structure from n8n. */
   function handleWebhookResponse(data: Record<string, unknown>) {
@@ -606,7 +646,26 @@ export function InvoiceUpload() {
       setScanPreviewData(normalized);
       setScanPreviewConfidence(rawConfidence != null ? Number(rawConfidence) : undefined);
       setScanPreviewLineItems(extractedLines);
-      setScanPreviewFile(file);   // keep file so we can upload it on save
+      setScanPreviewFile(file);
+
+      let ocrVatTreatment = 'review_required';
+      if (isUAE) {
+        try {
+          const gt = await classifyAPInvoiceEmbedded({
+            invoice_number: normalized.invoice_number || String(invoiceData.invoice_number || `OCR-${Date.now()}`),
+            vendor_name: normalized.vendor_name || String(invoiceData.vendor_name || 'Unknown Vendor'),
+            total_amount: normalized.total_amount || Number(invoiceData.total_amount) || 0,
+            invoice_date: normalized.invoice_date || String(invoiceData.invoice_date || new Date().toISOString().slice(0, 10)),
+            description: descriptionFromBatchRow(invoiceData as Record<string, unknown>),
+            trn_number: String(invoiceData.vendor_trn ?? invoiceData.trn ?? ''),
+            company_id: (await resolveApCompanyId()) || undefined,
+          });
+          ocrVatTreatment = String(gt.vat_treatment || 'standard_rated');
+        } catch (classifyErr) {
+          console.warn('VAT classify after OCR failed', classifyErr);
+        }
+      }
+      setScanVatTreatment(ocrVatTreatment);
       setScanPreviewOpen(true);
     } catch (error: any) {
       console.error('âŒ Error extracting invoice from file:', error);
@@ -630,13 +689,13 @@ export function InvoiceUpload() {
   };
 
   /** Called when user clicks "Save to invoice list" in the scan review modal */
-  const handleSaveFromScanPreview = async (values: NormalizedExtractedInvoice) => {
+  const handleSaveFromScanPreview = async (values: NormalizedExtractedInvoice, vatTreatment?: string) => {
     setSavingFromScan(true);
     try {
-      const { getMyCompany } = await import('../../lib/ap-invoice/companyService');
-      const company = await getMyCompany();
+      const companyId = await resolveApCompanyId();
       const invKind: 'purchase' | 'sales' = values.invoice_kind;
       const today = new Date().toISOString().slice(0, 10);
+      const treatment = vatTreatment || scanVatTreatment || 'review_required';
       const row = {
         invoice_number: values.invoice_number.trim() || `SCAN-${Date.now()}`,
         invoice_date: values.invoice_date.slice(0, 10) || today,
@@ -651,12 +710,13 @@ export function InvoiceUpload() {
         currency: values.currency || 'INR',
         gstin: values.gstin.trim() || null,
         tax_amount: values.tax_amount,
+        vat_treatment: treatment,
         status: 'Processing' as const,
-        source: 'camera' as const,   // 'camera' is a valid enum value; 'scan' is not
+        source: 'camera' as const,
         invoice_type: invKind,
         ar_due_date: invKind === 'sales' ? values.due_date.slice(0, 10) : null,
         payment_received: false,
-        company_id: company?.id ?? null,
+        company_id: companyId ?? null,
         file_url: scanPreviewFile
           ? await uploadInvoiceFile(scanPreviewFile, 'scan').then((r) => r.url).catch(() => null)
           : null,
@@ -669,7 +729,7 @@ export function InvoiceUpload() {
         .from('invoices')
         .select('id, invoice_number')
         .eq('invoice_number', invoiceNum)
-        .eq('company_id', company?.id ?? '')
+        .eq('company_id', companyId ?? '')
         .maybeSingle();
       if (existing) {
         toast({
@@ -714,6 +774,7 @@ export function InvoiceUpload() {
       setScanPreviewData(null);
       setScanPreviewLineItems([]);
       setScanPreviewFile(null);
+      setScanVatTreatment('review_required');
     } catch (err) {
       toast({
         title: 'Save failed',
@@ -911,7 +972,7 @@ export function InvoiceUpload() {
     const batchConfScores: number[] = [];
 
     try {
-      const companyId = await requireCompanyId();
+      const companyId = await resolveApCompanyId();
       const lim0 = await checkInvoiceLimit();
       if (!lim0.allowed) {
         toast({ title: 'Monthly limit reached', description: lim0.message, variant: 'destructive' });
@@ -1373,42 +1434,14 @@ export function InvoiceUpload() {
     XLSX.writeFile(wb, 'invoice_bulk_upload_template.xlsx');
   };
 
-  // Map common column header variations to expected keys (case-insensitive)
-  const normalizeBulkRow = (row: any): any => {
-    const keyMap: Record<string, string> = {
-      'invoice_number': 'invoice_number', 'invoice number': 'invoice_number', 'invoice #': 'invoice_number', 'inv no': 'invoice_number', 'invoice no': 'invoice_number',
-      'invoice_date': 'invoice_date', 'invoice date': 'invoice_date', 'date': 'invoice_date', 'inv date': 'invoice_date',
-      'due_date': 'due_date', 'due date': 'due_date', 'payment due': 'due_date',
-      'vendor_name': 'vendor_name', 'vendor name': 'vendor_name', 'vendor': 'vendor_name', 'supplier': 'vendor_name',
-      'vendor_email': 'vendor_email', 'vendor email': 'vendor_email', 'email': 'vendor_email',
-      'vendor_phone': 'vendor_phone', 'vendor phone': 'vendor_phone', 'phone': 'vendor_phone',
-      'vendor_address': 'vendor_address', 'vendor address': 'vendor_address', 'address': 'vendor_address',
-      'total_amount': 'total_amount', 'total amount': 'total_amount', 'amount': 'total_amount', 'total': 'total_amount',
-      'net_amount': 'total_amount', 'net amount': 'total_amount', 'invoice amount': 'total_amount',
-      'currency': 'currency', 'curr': 'currency',
-      'description': 'description', 'notes': 'description', 'remarks': 'description',
-      'vat_amount': 'vat_amount', 'vat amount': 'vat_amount', 'tax amount': 'vat_amount', 'tax_amount': 'vat_amount',
-      'vat_rate': 'vat_rate', 'vat rate': 'vat_rate', 'tax rate': 'vat_rate',
-      'vendor_trn': 'vendor_trn', 'vendor trn': 'vendor_trn', 'trn': 'vendor_trn', 'supplier trn': 'vendor_trn',
-      'vat_treatment': 'vat_treatment', 'vat treatment': 'vat_treatment', 'tax treatment': 'vat_treatment',
-      'po_number': 'po_number', 'po number': 'po_number', 'purchase order': 'po_number', 'po #': 'po_number',
-      'gstin': 'gstin', 'vendor gstin': 'gstin', 'supplier gstin': 'gstin',
-    };
-    const normalized: any = {};
-    for (const [rawKey, value] of Object.entries(row)) {
-      const key = String(rawKey || '').trim().toLowerCase();
-      const mappedKey = keyMap[key] ?? key.replace(/\s+/g, '_');
-      normalized[mappedKey] = value;
-    }
-    return normalized;
-  };
-
   const parseBulkFile = async (file: File) => {
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+      const headerRowIndex = findBulkExcelHeaderRowIndex(firstSheet);
+      const jsonData = sheetToBulkJsonRows(firstSheet);
+      const defaultCurrency = config.currency || resolveBulkDefaultCurrency(isUAE);
 
       if (!jsonData || jsonData.length === 0) {
         throw new Error('File is empty or has no data');
@@ -1419,8 +1452,8 @@ export function InvoiceUpload() {
       const errors: Record<number, string[]> = {};
       const allRowsForPreview: Array<{ rowNum: number; data: any; errors: string[] }> = [];
 
-      jsonData.forEach((row: any, index: number) => {
-        const rowNum = index + 2; // +2 because index is 0-based and Excel rows start at 2 (header is row 1)
+      jsonData.forEach((row, index: number) => {
+        const rowNum = headerRowIndex + index + 2; // Excel row number (1-based; +1 for header row)
         const rowNorm = normalizeBulkRow(row);
         const rowErrors: string[] = [];
 
@@ -1506,8 +1539,10 @@ export function InvoiceUpload() {
             vendor_phone: rowNorm.vendor_phone ? String(rowNorm.vendor_phone).trim() : null,
             vendor_address: rowNorm.vendor_address ? String(rowNorm.vendor_address).trim() : null,
             total_amount: totalAmount,
-            currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : 'INR',
+            currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : defaultCurrency,
             description: rowNorm.description ? String(rowNorm.description).trim() : '',
+            gl_code: rowNorm.gl_code ? String(rowNorm.gl_code).trim() : null,
+            reference: rowNorm.reference ? String(rowNorm.reference).trim() : null,
             // 3-way match fields
             po_number: rowNorm.po_number ? String(rowNorm.po_number).trim() : null,
             // UAE VAT fields
@@ -1529,7 +1564,7 @@ export function InvoiceUpload() {
             due_date: parsedDueDate || (rowNorm.due_date ? String(rowNorm.due_date) : '-'),
             vendor_name: rowNorm.vendor_name ? String(rowNorm.vendor_name).trim() : '-',
             total_amount: !isNaN(totalAmount) && totalAmount > 0 ? totalAmount : (rowNorm.total_amount ?? '-'),
-            currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : 'INR',
+            currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : defaultCurrency,
           },
           errors: rowErrors,
         });
@@ -1597,6 +1632,7 @@ export function InvoiceUpload() {
     }
 
     setBulkUploading(true);
+    setBulkGulfTaxCount(0);
     const results = {
       success: 0,
       failed: 0,
@@ -1617,7 +1653,8 @@ export function InvoiceUpload() {
     try {
       // Clear cache so we always get a fresh company lookup
       clearCompanyCache();
-      const companyId = await requireCompanyId();
+      await ensureApCompanySynced(accessToken);
+      const companyId = await resolveApCompanyId();
       const limBulk = await checkInvoiceLimit();
       if (!limBulk.allowed) {
         toast({ title: 'Monthly limit reached', description: limBulk.message, variant: 'destructive' });
@@ -1648,6 +1685,36 @@ export function InvoiceUpload() {
           const approvalLevel = getRequiredApprovalLevel(invoiceData.total_amount);
           const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
 
+          // UAE: classify each invoice with embedded GulfTax before insert
+          let gulfTaxFields: Record<string, unknown> = {};
+          if (isUAE) {
+            try {
+              const gt = await classifyAPInvoiceEmbedded({
+                invoice_number: invoiceData.invoice_number,
+                vendor_name: invoiceData.vendor_name,
+                total_amount: invoiceData.total_amount,
+                invoice_date: invoiceData.invoice_date,
+                description: invoiceData.description || '',
+                trn_number: invoiceData.vendor_trn || '',
+                company_id: companyId,
+              });
+              gulfTaxFields = {
+                vat_treatment: String(gt.vat_treatment || 'standard_rated'),
+                vat_rate: Number(gt.vat_rate || 0),
+                vat_amount: Number(gt.vat_amount_aed || 0),
+                tax_amount: Number(gt.vat_amount_aed || 0),
+                tax_type: 'VAT',
+                tax_rate: Number(gt.vat_rate || 0),
+                gulftax_decision: gt.decision,
+                gulftax_risk_score: gt.risk_score,
+                gulftax_confidence: gt.confidence_score,
+              };
+              setBulkGulfTaxCount((c) => c + 1);
+            } catch (gtErr) {
+              console.warn('GulfTax classify skipped for row', rowNum, gtErr);
+            }
+          }
+
           // Upsert invoice (re-upload same invoice_number updates instead of failing unique constraint)
           // jsonb columns need arrays, not strings â€” risk_flags: [] not '[]'
           const upsertPayload = {
@@ -1661,14 +1728,12 @@ export function InvoiceUpload() {
             vendor_address: invoiceData.vendor_address || null,
             total_amount: invoiceData.total_amount,
             subtotal_amount: invoiceData.total_amount, // Assume no tax for bulk upload
-            tax_code: 'NONE',
-            tax_breakdown: '[]',
             invoice_language: 'en',
             exchange_rate_to_base: 1,
             tax_type: 'None',
             tax_rate: 0,
             tax_amount: 0,
-            currency: invoiceData.currency || 'INR',
+            currency: invoiceData.currency || config.currency || resolveBulkDefaultCurrency(isUAE),
             status: initialStatus,
             processing_time_seconds: Math.floor((Date.now() - startTime) / 1000),
             approval_level: approvalLevel,
@@ -1683,6 +1748,7 @@ export function InvoiceUpload() {
             ...(invoiceData.vat_amount ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) } : {}),
             ...(invoiceData.vat_rate ? { vat_rate: parseAmount(invoiceData.vat_rate) } : {}),
             ...(invoiceData.vat_treatment ? { vat_treatment: String(invoiceData.vat_treatment) } : {}),
+            ...gulfTaxFields,
             // India GST fields
             ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
@@ -1691,13 +1757,10 @@ export function InvoiceUpload() {
 
           console.log('Inserting row:', JSON.stringify(upsertPayload, null, 2));
 
-          const { data: invoice, error: invoiceError } = await supabase
-            .from('invoices')
-            .upsert(upsertPayload, { onConflict: 'invoice_number' })
-            .select()
-            .single();
+          const { data: invoice, error: invoiceError } = await upsertInvoiceRow(upsertPayload);
 
           if (invoiceError) {
+            logSupabaseInvoiceError(`ROW FAILED: ${invoiceData.invoice_number}`, invoiceError, upsertPayload);
             console.error(
               'ROW FAILED:',
               invoiceData.invoice_number,
@@ -1746,7 +1809,7 @@ export function InvoiceUpload() {
                 existingInvoices
               );
 
-              await supabase
+              const { error: riskUpdateError } = await supabase
                 .from('invoices')
                 .update({
                   risk_score: anomalyResult.risk_score,
@@ -1754,6 +1817,13 @@ export function InvoiceUpload() {
                   updated_at: new Date().toISOString(),
                 })
                 .eq('id', invoice.id);
+              if (riskUpdateError) {
+                logSupabaseInvoiceError(
+                  `Anomaly PATCH failed: ${invoiceData.invoice_number}`,
+                  riskUpdateError,
+                  { id: invoice.id, company_id: companyId },
+                );
+              }
             } catch (anomalyError) {
               console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
             }
@@ -1785,15 +1855,26 @@ export function InvoiceUpload() {
       setBulkUploading(false);
 
       const classificationRunning = savedInvoices.length > 0 && apiEndpoint;
+      if (results.success === 0) {
+        toast({
+          title: 'Import failed',
+          description:
+            results.errors[0]?.error ||
+            'No invoices were saved. Check browser console (F12) for details.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       toast({
         title: 'Bulk Upload Complete',
         description: classificationRunning
-          ? `Successfully imported ${results.success} invoice(s). AI classification running in backgroundâ€¦`
+          ? `Successfully imported ${results.success} invoice(s). AI classification running in background…`
           : `Successfully imported ${results.success} invoice(s). ${results.failed > 0 ? `${results.failed} failed.` : ''}`,
         variant: results.failed > 0 ? 'destructive' : 'default',
       });
 
-      navigate('/invoices');
+      navigate('/ap-invoices/list');
 
       if (classificationRunning) {
         const N8N_JSON_URL =
@@ -1809,17 +1890,20 @@ export function InvoiceUpload() {
     } catch (error: any) {
       console.error('Bulk upload error:', error?.message, error?.details, error);
       const msg = error?.message || '';
-      if (msg.includes('company') || msg.includes('MULTI-TENANT')) {
+      const hasWorkspace = !!getStoredWorkspaceId();
+      if (!hasWorkspace) {
         toast({
-          title: 'No workspace found',
-          description: 'Complete onboarding first to link your account to a company.',
+          title: 'No workspace selected',
+          description: 'Select or create a workspace in the top banner first.',
           variant: 'destructive',
         });
-        navigate('/onboarding');
+        navigate('/workspaces/create');
       } else {
         toast({
           title: 'Bulk Upload Error',
-          description: [msg, error?.details].filter(Boolean).join(' â€” ') || 'Failed to process bulk upload',
+          description:
+            msg ||
+            'Could not link workspace to AP company. Ensure backend is running on :8001 and run supabase/migrations/003_companies_workspace_id.sql',
           variant: 'destructive',
         });
       }
@@ -1998,7 +2082,7 @@ export function InvoiceUpload() {
     const queueConfScores: number[] = [];
 
     try {
-      const companyIdQ = await requireCompanyId();
+      const companyIdQ = await resolveApCompanyId();
       const limQ = await checkInvoiceLimit();
       if (!limQ.allowed) {
         toast({ title: 'Monthly limit reached', description: limQ.message, variant: 'destructive' });
@@ -2260,7 +2344,7 @@ export function InvoiceUpload() {
         setUploading(false);
         return;
       }
-      const companyId = await requireCompanyId();
+      const companyId = await resolveApCompanyId();
 
       const invoiceDate = toStorageFormat(dataToUse.invoice_date);
       const dueDate = toStorageFormat(dataToUse.due_date);
@@ -2322,6 +2406,33 @@ export function InvoiceUpload() {
       const ocrConfidenceSaved = ocrCols.ocr_confidence ?? ocrCompleteness;
       const ocrFieldsSaved =
         Object.keys(ocrCols.ocr_confidence_fields).length > 0 ? ocrCols.ocr_confidence_fields : {};
+
+      let uaeAdvanceFields: Record<string, unknown> = {};
+      if (isUAE) {
+        uaeAdvanceFields = {
+          vendor_trn: vendorTrn.trim() || null,
+          vat_treatment: vatTreatment,
+          vat_amount: taxAmount,
+          is_advance_payment: isAdvancePayment,
+          contract_value: isAdvancePayment && contractValue ? Number(contractValue) : null,
+          delivery_date: isAdvancePayment && deliveryDate ? deliveryDate : null,
+        };
+        if (isAdvancePayment && contractValue && totalAmount > 0) {
+          try {
+            const calc = await calculateAdvanceVat({
+              invoice_amount: totalAmount,
+              contract_value: Number(contractValue),
+              invoice_date: invoiceDate,
+              delivery_date: deliveryDate || invoiceDate,
+            });
+            uaeAdvanceFields.advance_vat_amount = calc.vat_on_advance;
+            uaeAdvanceFields.remaining_vat_amount = calc.vat_at_delivery;
+            uaeAdvanceFields.vat_amount = calc.vat_on_advance;
+          } catch {
+            /* keep user-entered tax amount */
+          }
+        }
+      }
 
       const insertPayload = {
           company_id: companyId,
@@ -2389,6 +2500,7 @@ export function InvoiceUpload() {
           risk_level: riskLevel ?? 'Low',
           risk_flag_count: riskFlagCount,
           risk_details: typeof riskFlags === 'string' ? riskFlags : (Array.isArray(riskFlags) ? JSON.stringify(riskFlags) : '[]'),
+          ...uaeAdvanceFields,
         };
       console.log('SUPABASE PAYLOAD:', JSON.stringify(insertPayload, null, 2));
 
@@ -2403,6 +2515,16 @@ export function InvoiceUpload() {
         throw error;
       }
       console.log('SAVED TO SUPABASE:', newInvoice);
+
+      if (totalAmount >= 500) {
+        void notifyApInvoiceUploaded({
+          vendor_name: dataToUse.vendor_name,
+          total_amount: totalAmount,
+          invoice_number: dataToUse.invoice_number,
+          invoice_id: newInvoice.id,
+          currency: dataToUse.currency || 'AED',
+        });
+      }
 
       setUploadProgress(35);
 
@@ -2594,7 +2716,7 @@ export function InvoiceUpload() {
         description: `Invoice uploaded successfully. ${confMsg}.${matchHint}`.trim(),
       });
 
-      navigate(effAfterSave < 70 ? '/invoices?tab=needs-review' : '/invoices');
+      navigate(effAfterSave < 70 ? '/ap-invoices/list?tab=needs-review' : '/ap-invoices/list');
     } catch (error: any) {
       console.error('âŒ Error uploading invoice:', error);
       
@@ -2666,7 +2788,7 @@ export function InvoiceUpload() {
                 <Button
                   className="flex-1 bg-[#0A4B8F]"
                   onClick={() => {
-                    navigate('/invoices');
+                    navigate('/ap-invoices/list');
                   }}
                 >
                   View Invoices
@@ -2690,38 +2812,43 @@ export function InvoiceUpload() {
 
       {noCompany && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 flex items-start gap-3">
-          <div className="mt-0.5 h-5 w-5 shrink-0 text-amber-600">âš ï¸</div>
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
           <div>
-            <p className="font-medium text-amber-900">No company set up yet</p>
+            <p className="font-medium text-amber-900">No workspace selected</p>
             <p className="text-sm text-amber-700 mt-1">
-              You need to complete onboarding before uploading invoices.{' '}
+              Select a workspace in the top banner or{' '}
               <button
-                onClick={() => navigate('/onboarding')}
+                onClick={() => navigate('/workspaces/create')}
                 className="underline font-semibold hover:text-amber-900"
               >
-                Complete onboarding â†’
+                create one →
               </button>
+              {' '}before uploading invoices.
             </p>
           </div>
         </div>
       )}
 
       <Tabs defaultValue="scan" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
-          <TabsTrigger value="scan" className="text-xs sm:text-sm">
-            <span className="sm:hidden">ðŸ“· Scan</span>
-            <span className="hidden sm:inline">ðŸ“· Scan Invoice</span>
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 h-auto gap-1">
+          <TabsTrigger value="scan" className="text-xs sm:text-sm py-2">
+            <Camera className="h-4 w-4 shrink-0" />
+            <span className="sm:hidden">Scan</span>
+            <span className="hidden sm:inline">Scan Invoice</span>
           </TabsTrigger>
-          <TabsTrigger value="single" className="text-xs sm:text-sm">
-            <span className="sm:hidden">ðŸ“¤ Upload</span>
+          <TabsTrigger value="single" className="text-xs sm:text-sm py-2">
+            <Upload className="h-4 w-4 shrink-0" />
+            <span className="sm:hidden">Upload</span>
             <span className="hidden sm:inline">Single Upload</span>
           </TabsTrigger>
-          <TabsTrigger value="bulk" className="text-xs sm:text-sm">
-            <span className="sm:hidden">ðŸ“Š Excel</span>
+          <TabsTrigger value="bulk" className="text-xs sm:text-sm py-2">
+            <FileSpreadsheet className="h-4 w-4 shrink-0" />
+            <span className="sm:hidden">Excel</span>
             <span className="hidden sm:inline">Bulk (Excel/CSV)</span>
           </TabsTrigger>
-          <TabsTrigger value="multi-pdf" className="text-xs sm:text-sm">
-            <span className="sm:hidden">ðŸ“„ Multi PDF</span>
+          <TabsTrigger value="multi-pdf" className="text-xs sm:text-sm py-2">
+            <FileText className="h-4 w-4 shrink-0" />
+            <span className="sm:hidden">Multi PDF</span>
             <span className="hidden sm:inline">Multiple PDFs</span>
           </TabsTrigger>
         </TabsList>
@@ -2774,7 +2901,9 @@ export function InvoiceUpload() {
             confidence={scanPreviewConfidence}
             saving={savingFromScan}
             lineItems={scanPreviewLineItems}
-            onSave={handleSaveFromScanPreview}
+            vatTreatment={scanVatTreatment}
+            onVatTreatmentChange={setScanVatTreatment}
+            onSave={(values, vat) => void handleSaveFromScanPreview(values, vat)}
           />
         </TabsContent>
 
@@ -3180,6 +3309,39 @@ export function InvoiceUpload() {
                   Designated Zone transaction
                 </label>
               </div>
+              <div className="border-t pt-4 space-y-3">
+                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isAdvancePayment}
+                    onChange={(e) => setIsAdvancePayment(e.target.checked)}
+                    className="rounded"
+                  />
+                  Is this an Advance Payment?
+                </label>
+                {isAdvancePayment && (
+                  <div className="grid gap-4 md:grid-cols-2 p-3 rounded-lg border border-[#C8A951]/50 bg-[#f8f6ef]">
+                    <div className="space-y-2">
+                      <Label>Full Contract / Order Value (AED)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={contractValue}
+                        onChange={(e) => setContractValue(e.target.value)}
+                        placeholder="10000"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Expected Delivery Date</Label>
+                      <Input
+                        type="date"
+                        value={deliveryDate}
+                        onChange={(e) => setDeliveryDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}
@@ -3307,7 +3469,7 @@ export function InvoiceUpload() {
               <div>
                 <div style={{ fontSize: '11px', color: '#6b7280' }}>IFRS Category</div>
                 <div style={{ fontSize: '14px', fontWeight: '700', color: '#1a56db' }}>
-                  {extractedData?.ifrs_category ?? ifrsData.ifrs_category}
+                  {safeStr(extractedData?.ifrs_category ?? ifrsData.ifrs_category)}
                 </div>
               </div>
               <div>
@@ -3341,7 +3503,7 @@ export function InvoiceUpload() {
                     : (extractedData?.risk_level ?? 'Low') === 'Medium'
                       ? 'ðŸŸ¡'
                       : 'ðŸŸ¢'}{' '}
-                  {extractedData?.risk_level ?? 'Low'}
+                  {safeStr(extractedData?.risk_level ?? 'Low')}
                 </div>
               </div>
             </div>
@@ -3368,7 +3530,7 @@ export function InvoiceUpload() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => navigate('/invoices')}
+            onClick={() => navigate('/ap-invoices/list')}
             disabled={uploading}
           >
             Cancel
@@ -3397,6 +3559,14 @@ export function InvoiceUpload() {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
+              {isUAE && (
+                <div className="rounded-lg border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900">
+                  GulfTax AI classifies each invoice for UAE VAT treatment during bulk import.
+                  {bulkGulfTaxCount > 0 && (
+                    <span className="ml-2 font-medium">{bulkGulfTaxCount} classified.</span>
+                  )}
+                </div>
+              )}
               {/* File Upload Area */}
               <div
                 className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
@@ -3476,13 +3646,13 @@ export function InvoiceUpload() {
                                 className={hasErrors ? 'bg-red-50' : ''}
                               >
                                 <TableCell className="font-medium">{rowNum}</TableCell>
-                                <TableCell>{data.invoice_number}</TableCell>
-                                <TableCell>{data.invoice_date}</TableCell>
-                                <TableCell>{data.vendor_name}</TableCell>
+                                <TableCell>{safeStr(data.invoice_number)}</TableCell>
+                                <TableCell>{safeStr(data.invoice_date)}</TableCell>
+                                <TableCell>{safeStr(data.vendor_name)}</TableCell>
                                 <TableCell>
-                                  {data.currency} {typeof data.total_amount === 'number' ? Number(data.total_amount).toLocaleString() : data.total_amount}
+                                  {safeStr(data.currency)} {typeof data.total_amount === 'number' ? safeNum(data.total_amount).toLocaleString() : safeStr(data.total_amount)}
                                 </TableCell>
-                                <TableCell>{data.currency}</TableCell>
+                                <TableCell>{safeStr(data.currency)}</TableCell>
                                 <TableCell>
                                   {hasErrors ? (
                                     <div className="text-xs text-red-600">
@@ -3846,4 +4016,4 @@ export function InvoiceUpload() {
   );
 }
 
-
+export default InvoiceUpload;

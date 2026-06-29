@@ -1,4 +1,6 @@
-﻿import { supabase } from './supabase';
+import { supabase } from './supabase';
+import { getMyCompany } from './companyService';
+import { isInvoiceOpenForPayment, isInvoiceOverdueByDate } from './paymentService';
 
 export interface AgingBucket {
   label: string;
@@ -28,44 +30,79 @@ export interface DpoMetrics {
   on_time_payment_rate: number;
 }
 
-function isInvoiceUnpaid(payment_status: string | null | undefined, status: string | null | undefined): boolean {
-  if (status === 'Paid') return false;
-  return payment_status !== 'paid';
+function todayIso(): string {
+  return new Date().toISOString().split('T')[0];
 }
 
-function isInvoicePaid(payment_status: string | null | undefined, status: string | null | undefined): boolean {
-  return status === 'Paid' || payment_status === 'paid';
+function daysOverdueFromDueDate(due_date: string | null | undefined, today: string): number {
+  if (!due_date) return 0;
+  return Math.floor((new Date(today).getTime() - new Date(due_date).getTime()) / 86400000);
 }
 
-/** Aging bucket summary â€” current + three overdue bands */
-export async function getAgingSummary(): Promise<AgingBucket[]> {
-  const today = new Date().toISOString().split('T')[0];
+function bucketKeyForRow(due_date: string | null, today: string): string {
+  const daysOverdue = daysOverdueFromDueDate(due_date, today);
+  if (daysOverdue <= 0) return 'current';
+  if (daysOverdue <= 30) return '1_30';
+  if (daysOverdue <= 60) return '31_60';
+  return 'over_60';
+}
 
-  const { data, error } = await supabase
+type AgingRow = {
+  id?: string;
+  invoice_number?: string | null;
+  vendor_name?: string | null;
+  total_amount?: number | null;
+  invoice_date?: string | null;
+  due_date?: string | null;
+  payment_status?: string | null;
+  status?: string | null;
+};
+
+/**
+ * Open AP for aging: NOT paid/cancelled, has due_date, bucketed by calendar — not payment_status=overdue.
+ * Includes pending, overdue, processing, scheduled, frozen, null.
+ */
+async function fetchOpenInvoices(select: string): Promise<AgingRow[]> {
+  const company = await getMyCompany();
+  const companyId = company?.id ?? null;
+
+  let q = supabase
     .from('invoices')
-    .select('total_amount, due_date, payment_status, status')
-    .not('total_amount', 'is', null);
+    .select(select)
+    .neq('status', 'Paid')
+    .not('due_date', 'is', null)
+    .not('payment_status', 'in', '(paid,cancelled)')
+    .order('due_date', { ascending: true });
 
-  if (error) throw error;
-  const rows = (data ?? []).filter((r) => isInvoiceUnpaid(r.payment_status, r.status));
+  if (companyId) q = q.eq('company_id', companyId);
+
+  const { data, error } = await q;
+  if (error) {
+    console.error('[ap_aging] query error:', error.message, { companyId });
+    throw error;
+  }
+
+  const rows = ((data ?? []) as AgingRow[]).filter((row) => isInvoiceOpenForPayment(row));
+  const sum = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+  console.info('[ap_aging] company_id:', companyId, 'rows:', rows.length, 'total AED:', sum);
+  return rows;
+}
+
+/** Aging bucket summary — current + three overdue bands */
+export async function getAgingSummary(): Promise<AgingBucket[]> {
+  const today = todayIso();
+  const rows = await fetchOpenInvoices('total_amount, due_date, payment_status, status');
 
   const buckets = {
     current: { label: 'Current', key: 'current', count: 0, amount: 0 },
-    days_1_30: { label: '1â€“30 days', key: '1_30', count: 0, amount: 0 },
-    days_31_60: { label: '31â€“60 days', key: '31_60', count: 0, amount: 0 },
+    days_1_30: { label: '1–30 days', key: '1_30', count: 0, amount: 0 },
+    days_31_60: { label: '31–60 days', key: '31_60', count: 0, amount: 0 },
     over_60: { label: '60+ days', key: 'over_60', count: 0, amount: 0 },
   };
 
   for (const row of rows) {
     const amt = Number(row.total_amount ?? 0);
-    if (!row.due_date) {
-      buckets.current.amount += amt;
-      buckets.current.count++;
-      continue;
-    }
-    const daysOverdue = Math.floor(
-      (new Date(today).getTime() - new Date(row.due_date).getTime()) / 86400000
-    );
+    const daysOverdue = daysOverdueFromDueDate(row.due_date ?? null, today);
     if (daysOverdue <= 0) {
       buckets.current.amount += amt;
       buckets.current.count++;
@@ -109,45 +146,24 @@ export async function getAgingSummary(): Promise<AgingBucket[]> {
   ];
 }
 
-function bucketKeyForRow(due_date: string | null, today: string): string {
-  if (!due_date) return 'current';
-  const daysOverdue = Math.floor(
-    (new Date(today).getTime() - new Date(due_date).getTime()) / 86400000
-  );
-  if (daysOverdue <= 0) return 'current';
-  if (daysOverdue <= 30) return '1_30';
-  if (daysOverdue <= 60) return '31_60';
-  return 'over_60';
-}
-
 /** Unpaid invoices with aging for the detail table */
 export async function getAgingInvoices(bucket?: string): Promise<AgingInvoice[]> {
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso();
+  const rows = await fetchOpenInvoices(
+    'id, invoice_number, vendor_name, total_amount, invoice_date, due_date, payment_status, status',
+  );
 
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, vendor_name, total_amount, invoice_date, due_date, payment_status, status')
-    .order('due_date', { ascending: true, nullsFirst: false });
-
-  if (error) throw error;
-
-  const unpaid = (data ?? []).filter((r) => isInvoiceUnpaid(r.payment_status, r.status));
-
-  return unpaid
+  return rows
     .map((row) => {
-      const daysOverdue = row.due_date
-        ? Math.floor(
-            (new Date(today).getTime() - new Date(row.due_date).getTime()) / 86400000
-          )
-        : 0;
-      const aging_bucket = bucketKeyForRow(row.due_date, today);
+      const daysOverdue = daysOverdueFromDueDate(row.due_date ?? null, today);
+      const aging_bucket = bucketKeyForRow(row.due_date ?? null, today);
       return {
-        id: row.id,
-        invoice_number: row.invoice_number,
-        vendor_name: row.vendor_name,
+        id: row.id!,
+        invoice_number: row.invoice_number ?? null,
+        vendor_name: row.vendor_name ?? null,
         amount: Number(row.total_amount ?? 0),
-        invoice_date: row.invoice_date,
-        due_date: row.due_date,
+        invoice_date: row.invoice_date ?? null,
+        due_date: row.due_date ?? null,
         payment_status: row.payment_status ?? null,
         days_overdue: Math.max(0, daysOverdue),
         aging_bucket,
@@ -156,80 +172,80 @@ export async function getAgingInvoices(bucket?: string): Promise<AgingInvoice[]>
     .filter((row) => !bucket || row.aging_bucket === bucket);
 }
 
-/** DPO â‰ˆ (outstanding / purchases in window) Ã— days in window */
+/** DPO ≈ (outstanding / purchases in window) × days in window */
 export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const since = new Date(Date.now() - periodDays * 86400000).toISOString().split('T')[0];
+  const today = todayIso();
+  const company = await getMyCompany();
+  const companyId = company?.id ?? null;
 
-  const { data, error } = await supabase
+  let periodQ = supabase
     .from('invoices')
-    .select('total_amount, invoice_date, due_date, payment_status, paid_at, status')
+    .select('total_amount, invoice_date, due_date, payment_status, status')
     .gte('invoice_date', since);
+  let allQ = supabase
+    .from('invoices')
+    .select('total_amount, invoice_date, due_date, payment_status, status');
+  if (companyId) {
+    periodQ = periodQ.eq('company_id', companyId);
+    allQ = allQ.eq('company_id', companyId);
+  }
 
-  if (error) throw error;
-  const rows = data ?? [];
+  const [{ data: periodRows, error: periodErr }, { data: allRows, error: allErr }, openRows] =
+    await Promise.all([periodQ, allQ, fetchOpenInvoices('total_amount, due_date, payment_status, status')]);
 
-  const totalOutstanding = rows
-    .filter((r) => isInvoiceUnpaid(r.payment_status, r.status))
+  if (periodErr) throw periodErr;
+  if (allErr) throw allErr;
+
+  const rows = periodRows ?? [];
+  const all = allRows ?? [];
+
+  const totalOutstanding = openRows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+
+  const totalOverdue = openRows
+    .filter((r) => isInvoiceOverdueByDate(r, today))
     .reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
 
-  const totalOverdue = rows
-    .filter((r) => r.payment_status === 'overdue' && isInvoiceUnpaid(r.payment_status, r.status))
-    .reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+  let totalPurchases = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+  let dpoWindowDays = periodDays;
 
-  const totalPurchases = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+  if (totalPurchases === 0 && totalOutstanding > 0) {
+    totalPurchases = all.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+    dpoWindowDays = 365;
+  }
 
   const dpo =
-    totalPurchases > 0 ? Math.round((totalOutstanding / totalPurchases) * periodDays) : 0;
+    totalPurchases > 0 ? Math.round((totalOutstanding / totalPurchases) * dpoWindowDays) : 0;
 
-  const paidRows = rows.filter(
-    (r) => isInvoicePaid(r.payment_status, r.status) && r.paid_at && r.invoice_date
-  );
-  const avgPaymentDays =
-    paidRows.length > 0
-      ? Math.round(
-          paidRows.reduce((s, r) => {
-            return (
-              s +
-              Math.floor(
-                (new Date(r.paid_at!).getTime() - new Date(r.invoice_date!).getTime()) / 86400000
-              )
-            );
-          }, 0) / paidRows.length
-        )
-      : 0;
-
-  const onTimeRows = paidRows.filter(
-    (r) => r.due_date && r.paid_at && new Date(r.paid_at) <= new Date(r.due_date)
-  );
-  const onTimeRate =
-    paidRows.length > 0 ? Math.round((onTimeRows.length / paidRows.length) * 100) : 0;
+  console.info('[ap_aging] DPO metrics', {
+    companyId,
+    totalOutstanding,
+    totalOverdue,
+    dpo,
+    openCount: openRows.length,
+  });
 
   return {
     dpo,
-    avg_payment_days: avgPaymentDays,
+    avg_payment_days: 0,
     total_outstanding: totalOutstanding,
     total_overdue: totalOverdue,
-    on_time_payment_rate: onTimeRate,
+    on_time_payment_rate: 0,
   };
 }
 
 export async function getAgingByVendor(): Promise<
   { vendor: string; outstanding: number; overdue: number; current: number; count: number }[]
 > {
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('vendor_name, total_amount, payment_status, due_date, status');
-
-  if (error) throw error;
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayIso();
+  const rows = await fetchOpenInvoices('vendor_name, total_amount, payment_status, due_date, status');
 
   const byVendor: Record<
     string,
     { vendor: string; outstanding: number; overdue: number; current: number; count: number }
   > = {};
 
-  for (const row of data ?? []) {
-    if (!isInvoiceUnpaid(row.payment_status, row.status)) continue;
+  for (const row of rows) {
     const v = row.vendor_name ?? 'Unknown';
     const amt = Number(row.total_amount ?? 0);
     if (!byVendor[v]) {
@@ -237,7 +253,7 @@ export async function getAgingByVendor(): Promise<
     }
     byVendor[v].outstanding += amt;
     byVendor[v].count++;
-    const pastDue = row.due_date && new Date(row.due_date) < new Date(today);
+    const pastDue = isInvoiceOverdueByDate(row, today);
     if (pastDue) byVendor[v].overdue += amt;
     else byVendor[v].current += amt;
   }
@@ -275,8 +291,7 @@ export function exportAgingCsv(invoices: AgingInvoice[]) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `ap-aging-${new Date().toISOString().split('T')[0]}.csv`;
+  a.download = `ap-aging-${todayIso()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
-

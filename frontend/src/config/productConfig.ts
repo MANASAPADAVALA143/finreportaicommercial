@@ -30,54 +30,27 @@ export interface NavSection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AP Invoices — EMBEDDED natively inside FinReportAI (same dark design)
-// Data comes from InvoiceFlow's Supabase project (VITE_AP_SUPABASE_URL).
-// No redirect — these are real React pages inside FinReportAI.
+// AP Invoices — native FinReportAI module (ftlycgfgbboxapxhlpad Supabase)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const apInvoiceSection: NavSection = {
   heading:      'AP Invoices',
   headingColor: 'text-blue-400',
   items: [
-    { label: 'AP Dashboard',    path: '/ap-invoices',            icon: 'LayoutDashboard' },
-    { label: 'All Invoices',    path: '/ap-invoices/list',       icon: 'FileText' },
-    { label: 'Upload Invoice',  path: '/ap-invoices/upload',     icon: 'Upload' },
-    { label: 'Approvals',       path: '/ap-invoices/approvals',  icon: 'CheckCircle' },
-    { label: 'Vendors',         path: '/ap-invoices/vendors',    icon: 'Users' },
+    { label: 'AP Dashboard',    path: '/ap-invoices',              icon: 'LayoutDashboard' },
+    { label: 'All Invoices',    path: '/ap-invoices/list',         icon: 'FileText' },
+    { label: 'Upload Invoice',  path: '/ap-invoices/upload',       icon: 'Upload' },
+    { label: 'Approvals',       path: '/ap-invoices/approvals',    icon: 'CheckCircle' },
+    { label: 'Vendors',         path: '/ap-invoices/vendors',      icon: 'Users' },
+    { label: 'Purchase Orders', path: '/ap-invoices/po',           icon: 'ShoppingCart' },
+    { label: 'Goods Receipts',  path: '/ap-invoices/grn',          icon: 'Package' },
+    { label: 'GL Accounts',     path: '/ap-invoices/gl-accounts',  icon: 'BookOpen' },
+    { label: 'Bank Recon',      path: '/ap-invoices/bank-recon',   icon: 'RefreshCcw' },
+    { label: 'AP Aging',        path: '/ap-invoices/aging',        icon: 'Clock' },
+    { label: 'GST Recon',       path: '/ap-invoices/gst-recon',    icon: 'Receipt' },
+    { label: 'Payment Log',     path: '/ap-invoices/payment-log',  icon: 'CreditCard' },
   ],
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// InvoiceFlow items — AP Automation (legacy external links — kept for reference)
-// These open InvoiceFlow (separate app) in a new tab.
-// In local dev InvoiceFlow runs on port 5175; in production it's on Railway.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const INVOICEFLOW_URL =
-  (import.meta.env.VITE_INVOICEFLOW_URL as string | undefined) ??
-  'https://apinvoice-production.up.railway.app';
-
-/** Shorthand — build a fully-qualified InvoiceFlow URL */
-const ap = (route: string) => `${INVOICEFLOW_URL}${route}`;
-
-const invoiceflowSections: NavSection[] = [
-  {
-    heading: 'AP Automation',
-    items: [
-      { label: 'Invoice List',      path: ap('/invoices'),        icon: 'FileText',    external: true },
-      { label: 'Approvals',         path: ap('/approvals'),       icon: 'CheckCircle', external: true },
-      { label: 'Upload Invoice',    path: ap('/upload'),          icon: 'Upload',      external: true },
-      { label: 'Vendors',           path: ap('/vendors'),         icon: 'Users',       external: true },
-      { label: 'Purchase Orders',   path: ap('/purchase-orders'), icon: 'ShoppingCart',external: true },
-      { label: 'Goods Receipts',    path: ap('/goods-receipts'),  icon: 'Package',     external: true },
-      { label: 'GL Accounts',       path: ap('/gl-accounts'),     icon: 'BookOpen',    external: true },
-      { label: 'Bank Recon',        path: ap('/bank-recon'),      icon: 'RefreshCcw',  external: true },
-      { label: 'AP Aging',          path: ap('/reports/aging'),   icon: 'Clock',       external: true },
-      { label: 'GST Recon',         path: ap('/gst-recon'),       icon: 'Receipt',     external: true },
-      { label: 'Payment Log',       path: ap('/payment-log'),     icon: 'CreditCard',  external: true },
-    ],
-  },
-];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FinReportAI items — R2R + FP&A + CFO
@@ -134,10 +107,13 @@ const finreportaiSections: NavSection[] = [
     heading:      'UAE Accounting',
     headingColor: 'text-green-500',
     items: [
+      { label: 'Company Setup',       path: '/company-setup',                 icon: 'Settings' },
       { label: 'UAE Overview',        path: '/uae-full',                      icon: 'Globe' },
       { label: 'Chart of Accounts',   path: '/uae-full/coa',                  icon: 'BookOpen' },
       { label: 'Journal Entries',     path: '/uae-full/journals',             icon: 'FileText' },
+      { label: 'Classify Accounts',   path: '/uae-full/classify-accounts',    icon: 'Tags' },
       { label: 'Sales Invoices',      path: '/uae-full/invoices',             icon: 'Receipt' },
+      { label: 'AR Invoices',         path: '/uae-full/ar',                   icon: 'Receipt' },
       { label: 'Bank Reconciliation', path: '/uae-full/bank-recon',           icon: 'Landmark' },
       { label: 'Fixed Assets',        path: '/uae-full/fixed-assets',         icon: 'Building2' },
       { label: 'Accruals',            path: '/uae-full/accruals',             icon: 'AlertCircle' },
@@ -188,7 +164,6 @@ const caFirmSection: NavSection = {
 
 const combinedSections: NavSection[] = [
   apInvoiceSection,
-  ...invoiceflowSections,
   ...finreportaiSections,
   caFirmSection,
 ];
@@ -198,7 +173,7 @@ const combinedSections: NavSection[] = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const sidebarConfig: Record<ProductKey, NavSection[]> = {
-  invoiceflow: [apInvoiceSection, ...invoiceflowSections],
+  invoiceflow: [apInvoiceSection],
   finreportai: [apInvoiceSection, ...finreportaiSections, caFirmSection],
   combined:    combinedSections,
 };

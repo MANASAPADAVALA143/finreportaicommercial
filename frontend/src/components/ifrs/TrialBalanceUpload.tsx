@@ -1,9 +1,13 @@
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import toast from "react-hot-toast";
-import { Upload, FileSpreadsheet } from "lucide-react";
+import { Upload, FileSpreadsheet, Sparkles } from "lucide-react";
 import { ifrsService } from "../../services/ifrs.service";
 import { formatApiError } from "../../utils/apiError";
+import { useSyncIfrsTenant } from "../../hooks/useSyncIfrsTenant";
+
+export const SAMPLE_TB_FILENAME = "sample-trial-balance.csv";
+export const SAMPLE_TB_COMPANY_NAME = "[SAMPLE] Prism Manufacturing Demo";
 
 type PreviewRow = { gl_code: string; gl_description: string; debit: number; credit: number };
 
@@ -34,6 +38,7 @@ function normalize(row: Record<string, unknown>): PreviewRow | null {
 }
 
 export default function TrialBalanceUpload({ onUploaded }: Props) {
+  useSyncIfrsTenant();
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<PreviewRow[]>([]);
@@ -79,6 +84,28 @@ export default function TrialBalanceUpload({ onUploaded }: Props) {
     }
   };
 
+  const uploadSampleData = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/${SAMPLE_TB_FILENAME}`);
+      if (!response.ok) {
+        throw new Error("Sample trial balance file not found in /public");
+      }
+      const blob = await response.blob();
+      const sampleFile = new File([blob], SAMPLE_TB_FILENAME, { type: "text/csv" });
+      setFile(sampleFile);
+      await parsePreview(sampleFile);
+      const res = await ifrsService.uploadTrialBalance(sampleFile, SAMPLE_TB_COMPANY_NAME);
+      setSummary({ lines: res.lines_count, id: res.trial_balance_id });
+      toast.success("Sample trial balance uploaded via server pipeline. AI mapping started.");
+      onUploaded(res.trial_balance_id);
+    } catch (e: unknown) {
+      toast.error(formatApiError(e) || "Sample upload failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div
@@ -99,6 +126,21 @@ export default function TrialBalanceUpload({ onUploaded }: Props) {
           accept=".csv,.xlsx,.xls"
           onChange={(e) => void onFile(e.target.files?.[0] || null)}
         />
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <button
+            type="button"
+            onClick={() => void uploadSampleData()}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+          >
+            <Sparkles className="h-4 w-4" />
+            {loading ? "Uploading sample…" : "Use sample data"}
+          </button>
+          <p className="mt-2 text-xs text-slate-500">
+            Uploads <span className="font-mono">{SAMPLE_TB_FILENAME}</span> through the real server pipeline
+            (tagged <span className="font-mono">{SAMPLE_TB_COMPANY_NAME}</span>)
+          </p>
+        </div>
       </div>
 
       {file && (

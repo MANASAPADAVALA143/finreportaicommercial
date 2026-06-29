@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -40,7 +40,7 @@ export function GstReconSummaryCard() {
   const border = hasMismatch ? 'border-l-amber-500' : allMatched ? 'border-l-green-500' : 'border-l-gray-300';
 
   return (
-    <Card className={`shadow-sm border-l-4 ${border} bg-white`}>
+    <Card className={`shadow-sm border border-slate-200 border-l-4 ${border} bg-white`}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <Receipt className="h-4 w-4 text-[#0A4B8F]" />

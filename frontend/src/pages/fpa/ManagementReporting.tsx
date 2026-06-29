@@ -23,16 +23,29 @@ import {
 } from '../../data/reportMockData';
 import { callAI } from '../../services/aiProvider';
 import { loadFPAActual, loadFPABudget, loadFPAForecast, checkDataAvailability, getMissingDataMessage, generateBoardPackSections } from '../../utils/fpaDataLoader';
+import { useCompany } from '../../context/CompanyContext';
+import PeriodSelector from '../../components/PeriodSelector';
+import { fetchGLSummary, getCurrentPeriod, type GLSummary } from '../../services/glSummary.service';
 
 const ManagementReporting: React.FC = () => {
   const navigate = useNavigate();
+  const { activeCompanyId } = useCompany();
+  const workspaceId = localStorage.getItem('gnanova_workspace_id');
   
-  // Check data availability
   const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);
   const [actualData, setActualData] = useState<any>(null);
   const [budgetData, setBudgetData] = useState<any>(null);
   const [forecastData, setForecastData] = useState<any>(null);
   const [realSections, setRealSections] = useState<BoardPackSection[]>([]);
+  const [glSummary, setGlSummary] = useState<GLSummary | null>(null);
+  const [periodRange, setPeriodRange] = useState(getCurrentPeriod);
+
+  useEffect(() => {
+    if (!activeCompanyId) return;
+    void fetchGLSummary(activeCompanyId, workspaceId, periodRange.start, periodRange.end)
+      .then(s => setGlSummary(s.has_data ? s : null))
+      .catch(() => setGlSummary(null));
+  }, [activeCompanyId, workspaceId, periodRange]);
 
   useEffect(() => {
     const actual = loadFPAActual();
@@ -61,11 +74,10 @@ const ManagementReporting: React.FC = () => {
   const [generatingCommentary, setGeneratingCommentary] = useState<string | null>(null);
 
   const formatCurrency = (value: number): string => {
-    const crore = value / 10000000;
-    const lakh = value / 100000;
-    if (Math.abs(crore) >= 1) return `₹${crore.toFixed(1)}Cr`;
-    return `₹${lakh.toFixed(1)}L`;
+    return `AED ${value.toLocaleString('en-AE', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   };
+
+  const pctOfRev = (n: number, rev: number) => (rev > 0 ? `${((n / rev) * 100).toFixed(1)}%` : '—');
 
   const moveSection = (index: number, direction: 'up' | 'down') => {
     const newSections = [...sections];
@@ -142,7 +154,7 @@ const ManagementReporting: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6">
       {/* Data Missing Warning Banner */}
-      {!dataCheck.available && (
+      {!dataCheck.available && !glSummary && (
         <div className="bg-yellow-50 border-b-2 border-yellow-400 px-6 py-4 rounded-lg mb-6">
           <div className="max-w-[1800px] mx-auto flex items-center gap-3">
             <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0" />
@@ -163,6 +175,55 @@ const ManagementReporting: React.FC = () => {
           </div>
         </div>
       )}
+
+      {glSummary ? (
+        <div className="max-w-[1800px] mx-auto mb-6 bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">P&L — Generated from UAE GL</h2>
+              <p className="text-sm text-gray-500">{glSummary.period.start} to {glSummary.period.end} · {glSummary.je_count} JEs</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <PeriodSelector workspaceId={workspaceId} onPeriodChange={(s, e) => setPeriodRange({ start: s, end: e })} />
+              <button type="button" onClick={() => handleExport('pdf')} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm flex items-center gap-1">
+                <Download size={14} /> Export PDF
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto w-full">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-gray-500">
+                  <th className="py-2">Row</th>
+                  <th className="py-2 text-right">Amount AED</th>
+                  <th className="py-2 text-right">% of Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ['Revenue', glSummary.revenue, '100%'],
+                  ['Cost of Sales', glSummary.cogs, pctOfRev(glSummary.cogs, glSummary.revenue)],
+                  ['Gross Profit', glSummary.gross_profit, `${glSummary.gross_margin.toFixed(1)}%`],
+                  ['Operating Expenses', glSummary.opex, pctOfRev(glSummary.opex, glSummary.revenue)],
+                  ['EBITDA', glSummary.ebitda, `${glSummary.ebitda_margin.toFixed(1)}%`],
+                  ['Other Income', glSummary.other_income, pctOfRev(glSummary.other_income, glSummary.revenue)],
+                  ['Net Profit', glSummary.net_profit, `${glSummary.net_margin.toFixed(1)}%`],
+                ].map(([row, amt, pct]) => (
+                  <tr key={String(row)} className="border-b border-gray-100">
+                    <td className="py-2 font-medium text-gray-800">{row}</td>
+                    <td className="py-2 text-right">{formatCurrency(Number(amt))}</td>
+                    <td className="py-2 text-right text-gray-500">{pct}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : !dataCheck.available ? (
+        <div className="max-w-[1800px] mx-auto mb-6 text-center py-12 text-gray-500 bg-white rounded-xl border">
+          Post journal entries to generate management accounts automatically
+        </div>
+      ) : null}
       
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">

@@ -11,6 +11,8 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { Link } from 'react-router-dom';
+import { useCompany } from '../../context/CompanyContext';
 import { MatchRateGauge } from '../../components/rev-rec/MatchRateGauge';
 import { R2RServiceNav } from '../../components/rev-rec/R2RServiceNav';
 import {
@@ -24,11 +26,19 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-async function callRevRec<T = unknown>(endpoint: string, body: unknown): Promise<T> {
+async function callRevRec<T = unknown>(endpoint: string, body: unknown, companyId?: string | null): Promise<T> {
+  const cid = companyId ?? localStorage.getItem('active_company_id');
+  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Workspace-ID': wsId,
+    'X-Tenant-ID': wsId,
+  };
+  if (cid) headers['X-Company-ID'] = cid;
   const res = await fetch(`${API_BASE}/api/rev-rec/${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers,
+    body: JSON.stringify({ company_id: cid, ...body as object }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
@@ -147,6 +157,7 @@ function coerceBillingSystem(s: string): string {
 }
 
 export default function RevRecReconciliationPage() {
+  const { activeCompanyId } = useCompany();
   const navigate = useNavigate();
   const [period, setPeriod] = useState(() => {
     const now = new Date();
@@ -325,7 +336,7 @@ export default function RevRecReconciliationPage() {
     setRollForwardLoading(true);
     try {
       const body = { period, ...rollForwardInput, contract_schedules: [] };
-      const data = await callRevRec<Record<string, unknown>>('roll-forward', body);
+      const data = await callRevRec<Record<string, unknown>>('roll-forward', body, activeCompanyId);
       setRollForwardResult(data);
       toast.success('Roll-forward complete');
     } catch (e) {

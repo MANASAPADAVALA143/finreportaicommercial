@@ -2,6 +2,8 @@
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useState } from 'react';
+import { syncFpaMasterFromApi } from '../../utils/fpaDataLoader';
+import { useClient } from '../../context/ClientContext';
 import {
   BarChart3,
   TrendingUp,
@@ -22,6 +24,8 @@ import { backendOrigin } from '../../utils/backendOrigin';
 
 export const FPASuite = () => {
   const navigate = useNavigate();
+  const { activeClient } = useClient();
+  const companyId = activeClient?.companyId || 'default';
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showMasterUpload, setShowMasterUpload] = useState(false);
   const [masterUploading, setMasterUploading] = useState(false);
@@ -29,77 +33,51 @@ export const FPASuite = () => {
   const [masterFile, setMasterFile] = useState<File | null>(null);
   const [exportingWorkbook, setExportingWorkbook] = useState(false);
 
+  const downloadMasterTemplate = () => {
+    const rows = [
+      'section,account_name,account_type,department,budget,actual,currency',
+      'PL,Product Revenue,income,Sales,1200000,1350000,AED',
+      'PL,Service Revenue,income,Services,800000,760000,AED',
+      'PL,Salaries & Wages,expense,HR,950000,950000,AED',
+      'PL,Marketing,expense,Marketing,400000,480000,AED',
+      'PL,Office Rent,expense,Admin,300000,300000,AED',
+      'PL,IT Infrastructure,expense,Technology,250000,275000,AED',
+    ];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'FPA_Master_Template.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleMasterUpload = async () => {
     if (!masterFile) return;
     setMasterUploading(true);
     try {
       const form = new FormData();
       form.append('file', masterFile);
-      form.append('company_id', 'default');
+      form.append('company_id', companyId);
       form.append('replace_existing', 'true');
       const base = backendOrigin();
       const res = await fetch(`${base}/api/fpa/upload-master`, { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Upload failed');
       setMasterStatus(data.message);
-      const currency = data.currencies?.includes('AED') ? 'AED' : data.currencies?.includes('INR') ? 'INR' : (data.currencies?.[0] || 'AED');
-      localStorage.setItem('fpa_currency', currency);
 
-      // Populate localStorage for ALL modules from the master data
-      if (data.section_counts?.PL) {
-        const pl = await fetch(`${base}/api/fpa/master-data?section=PL&company_id=default`).then(r => r.json());
-        if (pl.rows?.length) {
-          // Build full lineItems with monthly data for Budget Management + Forecasting
-          const lineItems = pl.rows.map((r: any) => ({
-            account: r.account_name, category: r.account_name,
-            budget: r.annual_budget, actual: r.annual_actual,
-            monthly: (() => { const mk = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']; const o: any = {}; mk.forEach((k,i) => { o[k] = r.monthly_budgets?.[i] || 0; }); return o; })(),
-            monthlyActuals: r.monthly_actuals || [],
-            monthlyBudgets: r.monthly_budgets || [],
-            accountType: r.account_type || (r.annual_actual > 0 && /revenue|income|sales/i.test(r.account_name) ? 'income' : 'expense'),
-            department: r.department || 'All Depts', owner: r.owner || 'CFO',
-            priorYearActual: r.fy_prior_actual || 0, opening_cash: r.opening_cash || 0,
-          }));
-          const totalRevAct = lineItems.filter((r: any) => r.accountType === 'income').reduce((s: number, r: any) => s + r.actual, 0);
-          const totalExpAct = lineItems.filter((r: any) => r.accountType === 'expense').reduce((s: number, r: any) => s + r.actual, 0);
-          const totalRevBud = lineItems.filter((r: any) => r.accountType === 'income').reduce((s: number, r: any) => s + r.budget, 0);
-          const totalExpBud = lineItems.filter((r: any) => r.accountType === 'expense').reduce((s: number, r: any) => s + r.budget, 0);
-          const openingCash = pl.rows.find((r: any) => r.opening_cash > 0)?.opening_cash || 0;
-
-          const actualPayload  = { totalRevenue: totalRevAct, totalExpenses: totalExpAct, netProfit: totalRevAct - totalExpAct, ebitda: (totalRevAct-totalExpAct)*1.15, cashAndEquivalents: openingCash, rowCount: pl.count, lineItems, uploadedAt: new Date().toISOString() };
-          const budgetPayload  = { totalRevenue: totalRevBud, totalExpenses: totalExpBud, netProfit: totalRevBud - totalExpBud, ebitda: (totalRevBud-totalExpBud)*1.15, cashAndEquivalents: openingCash, rowCount: pl.count, lineItems, uploadedAt: new Date().toISOString() };
-
-          localStorage.setItem('fpa_actual',    JSON.stringify(actualPayload));
-          localStorage.setItem('fpa_actual_tb', JSON.stringify(actualPayload));
-          localStorage.setItem('fpa_budget',    JSON.stringify(budgetPayload));
-          localStorage.setItem('fpa_budget_tb', JSON.stringify(budgetPayload));
-
-          // ScenarioPlanning.tsx reads from 'finreportai_fpa_data'
-          const scenarioPayload = {
-            totalRevenue: totalRevAct, domesticRevenue: totalRevAct * 0.7, exportRevenue: totalRevAct * 0.2, serviceRevenue: totalRevAct * 0.1,
-            costOfGoodsSold: lineItems.filter((r: any) => /cogs|cost.of.rev/i.test(r.account)).reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.35,
-            payroll: lineItems.filter((r: any) => /salary|payroll|staff/i.test(r.account)).reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.4,
-            adminExpenses: lineItems.filter((r: any) => /admin|overhead/i.test(r.account)).reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.1,
-            distributionCosts: 0, marketingCosts: lineItems.filter((r: any) => /marketing/i.test(r.account)).reduce((s: number, r: any) => s + r.actual, 0) || totalExpAct * 0.08,
-            rentExpense: 0, depreciation: 0, interestExpense: 0, otherExpenses: 0,
-            totalOperatingExpenses: totalExpAct, cashAndEquivalents: openingCash,
-            totalCurrentAssets: openingCash * 2.5, totalAssets: openingCash * 5,
-            totalCurrentLiabilities: totalExpAct * 0.15, totalLiabilities: totalExpAct * 0.3, totalEquity: openingCash * 3,
-            fileName: masterFile?.name || 'master_upload.csv', uploadedAt: new Date().toISOString(),
-          };
-          localStorage.setItem('finreportai_fpa_data', JSON.stringify(scenarioPayload));
-
-          // India-specific: save under india keys if currency is INR
-          if (currency === 'INR') {
-            localStorage.setItem('fpa_india_actual', JSON.stringify(actualPayload));
-            localStorage.setItem('fpa_india_budget', JSON.stringify(budgetPayload));
-          }
-        }
-      }
+      const sync = await syncFpaMasterFromApi(companyId);
       setShowMasterUpload(false);
       setMasterFile(null);
-      // Brief toast then modules auto-populate
-      alert(`✅ Master data uploaded!\n\n${data.message}\n\nAll FP&A modules now have your data. Open any module to see live figures.`);
+      if (sync.ok) {
+        alert(
+          `✅ Master data uploaded!\n\n${data.message}\n\n${sync.message}. Open Variance Analysis to see your figures.`
+        );
+      } else {
+        alert(
+          `⚠️ File saved on server but modules could not load data.\n\n${data.message}\n\n${sync.message}\n\nTip: include Account, Budget, Actual columns (or jan_act/dec_act monthly columns).`
+        );
+      }
     } catch (e: any) {
       alert('Upload failed: ' + e.message);
     } finally {
@@ -431,19 +409,13 @@ export const FPASuite = () => {
 
             {/* Section routing info */}
             <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-5 text-xs space-y-1">
-              <p className="font-semibold text-emerald-800 mb-2">Your file's `section` column routes data to:</p>
-              {[
-                ['PL', 'Variance Analysis, Budget, Forecasting, Scenario, Board Pack'],
-                ['BS', 'Balance Sheet, 3-Statement Model, KPI Dashboard'],
-                ['HC', 'Headcount Planning module'],
-                ['ARR', 'ARR Dashboard'],
-              ].map(([s, desc]) => (
-                <div key={s} className="flex gap-2">
-                  <span className="font-bold text-emerald-700 w-8">{s}</span>
-                  <span className="text-gray-600">{desc}</span>
-                </div>
-              ))}
-              <p className="text-gray-500 mt-2">Monthly actuals: <code>jan_act…dec_act</code> &nbsp;|&nbsp; Quarterly: <code>q1_act…q4_act</code></p>
+              <p className="font-semibold text-emerald-800 mb-2">Required columns for Variance Analysis:</p>
+              <p className="text-gray-700"><code>section</code> (use PL) · <code>account_name</code> · <code>budget</code> · <code>actual</code></p>
+              <p className="text-gray-500 mt-2">Optional: <code>department</code>, <code>account_type</code>, monthly <code>jan_act…dec_act</code></p>
+              <button type="button" onClick={downloadMasterTemplate}
+                className="mt-2 text-emerald-700 font-semibold hover:underline">
+                ↓ Download master template (CSV)
+              </button>
             </div>
 
             {/* File picker */}

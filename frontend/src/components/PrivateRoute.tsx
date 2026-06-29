@@ -1,27 +1,36 @@
-﻿import { Navigate, useLocation } from 'react-router-dom';
+﻿import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-interface Props {
-  children: JSX.Element;
-  roles?: Array<'super_admin' | 'cfo' | 'finance_manager' | 'accountant' | 'auditor'>;
+function parseJwtExp(token: string): number | null {
+  try {
+    const body = token.split('.')[1];
+    const json = JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' ? json.exp : null;
+  } catch {
+    return null;
+  }
 }
 
-export default function PrivateRoute({ children, roles: _roles }: Props) {
-  // TEMP: Auth bypassed for local demo — remove this line and uncomment below when auth is ready
-  return children;
-
-  /* --- Uncomment when auth is re-enabled ---
-  const { isAuthenticated, user } = useAuth();
+export default function PrivateRoute() {
+  const { isAuthenticated, accessToken, bootstrapping } = useAuth();
   const location = useLocation();
 
-  if (!isAuthenticated || !user) {
+  if (bootstrapping) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <p className="text-slate-400 text-sm">Loading session…</p>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !accessToken) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
-  if (_roles && _roles.length > 0 && !_roles.includes(user.role)) {
-    return <Navigate to="/dashboard" replace />;
+  const exp = parseJwtExp(accessToken);
+  if (exp && exp * 1000 < Date.now()) {
+    return <Navigate to="/login" replace state={{ from: location.pathname, expired: true }} />;
   }
 
-  return children;
-  --- */
+  return <Outlet />;
 }

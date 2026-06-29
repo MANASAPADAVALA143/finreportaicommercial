@@ -19,6 +19,7 @@ from app.models.ifrs_statement import (
     GLMapping,
     IFRSStatementKind,
     MappingSourceEnum,
+    MappingTemplate,
     TrialBalance,
     TrialBalanceLine,
     AccountTypeEnum,
@@ -50,7 +51,7 @@ Foreign currency translation reserve; Revaluation reserve
 
 ### financial_position — Non-current Liabilities
 Borrowings — non-current; Lease liabilities — non-current; Deferred tax liabilities;
-Employee benefit obligations; Provisions
+Employee benefit obligations; Provisions; Other non-current liabilities
 
 ### financial_position — Current Liabilities
 Trade and other payables; Borrowings — current; Lease liabilities — current; Contract liabilities;
@@ -421,6 +422,114 @@ def apply_ai_mappings_only_missing(
             mapped_ids.add(line.id)
             created += 1
     db.commit()
+    return created
+
+
+def _load_default_template_entries(db: Session, tenant_id: str) -> list[dict[str, Any]]:
+    """Most recent is_default template for tenant."""
+    tmpl = (
+        db.query(MappingTemplate)
+        .filter(
+            MappingTemplate.tenant_id == tenant_id,
+            MappingTemplate.is_default.is_(True),
+        )
+        .order_by(MappingTemplate.created_at.desc())
+        .first()
+    )
+    if not tmpl or not tmpl.entries:
+        return []
+    return list(tmpl.entries)
+
+
+def clear_unlocked_gl_mappings(db: Session, trial_balance_id: int) -> None:
+    """Remove unlocked mappings before a full remap (preserves locked human rows)."""
+    db.query(GLMapping).filter(
+        GLMapping.trial_balance_id == trial_balance_id,
+        GLMapping.locked.is_(False),
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
+def apply_template_mappings_first(
+    db: Session,
+    tenant_id: str,
+    trial_balance: TrialBalance,
+    lines: list[TrialBalanceLine],
+) -> int:
+    """
+    Pre-fill GL mappings from tenant default mapping_templates before Claude.
+    Skips lines that already have a mapping row (e.g. locked / tally).
+    """
+    entries = _load_default_template_entries(db, tenant_id)
+    if not entries:
+        logger.info("No default mapping template for tenant=%s", tenant_id)
+        return 0
+
+    by_code: dict[str, dict[str, Any]] = {}
+    for ent in entries:
+        if not isinstance(ent, dict):
+            continue
+        code = _canonical_gl_code(ent.get("gl_code"))
+        if code and code not in by_code:
+            by_code[code] = ent
+        raw = str(ent.get("gl_code", "")).strip()
+        if raw and raw not in by_code:
+            by_code[raw] = ent
+
+    mapped_line_ids = {
+        r[0]
+        for r in db.query(GLMapping.trial_balance_line_id)
+        .filter(GLMapping.trial_balance_id == trial_balance.id)
+        .all()
+    }
+
+    created = 0
+    for line in lines:
+        if line.id in mapped_line_ids:
+            continue
+        can = _canonical_gl_code(line.gl_code)
+        raw = str(line.gl_code).strip()
+        ent = by_code.get(can) or by_code.get(raw)
+        if not ent:
+            continue
+        stmt = _coerce_statement(str(ent.get("ifrs_statement", "financial_position")))
+        gm = GLMapping(
+            tenant_id=tenant_id,
+            company_id=None,
+            trial_balance_id=trial_balance.id,
+            trial_balance_line_id=line.id,
+            gl_code=line.gl_code,
+            gl_description=line.gl_description,
+            ifrs_statement=stmt,
+            ifrs_line_item=str(ent.get("ifrs_line_item", "Unclassified"))[:512],
+            ifrs_section=str(ent.get("ifrs_section", "General"))[:512],
+            ifrs_sub_section=(
+                str(ent["ifrs_sub_section"])[:512]
+                if ent.get("ifrs_sub_section") not in (None, "")
+                else None
+            ),
+            mapping_source=MappingSourceEnum.template_suggested,
+            ai_confidence_score=0.98,
+            ai_reasoning="Pre-filled from company onboarding mapping template",
+            is_confirmed=False,
+            needs_review=False,
+            validator_checked=False,
+            validator_passed=False,
+            is_contra=False,
+            locked=False,
+        )
+        db.add(gm)
+        mapped_line_ids.add(line.id)
+        created += 1
+
+    if created:
+        db.commit()
+        logger.info(
+            "Template pre-fill: %d mappings from default template for trial_balance_id=%s tenant=%s",
+            created,
+            trial_balance.id,
+            tenant_id,
+        )
     return created
 
 

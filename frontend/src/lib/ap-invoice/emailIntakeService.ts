@@ -1,5 +1,6 @@
-﻿import { supabase } from './supabase';
+import { supabase } from './supabase';
 import { logAction } from './auditService';
+import { recalcVendorRiskAsync } from './vendorMasterService';
 import { requireCompanyId } from './companyService';
 import { runAutoMatch } from './threeWayMatchService';
 
@@ -125,6 +126,7 @@ export async function processEmailIntake(payload: EmailIntakePayload): Promise<{
         subject: payload.subject,
         confidence: ext.confidence,
       });
+      recalcVendorRiskAsync(invoice.vendor_name);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`${attachment.filename}: ${msg}`);
@@ -148,4 +150,3 @@ export async function processEmailIntake(payload: EmailIntakePayload): Promise<{
 
   return { invoices_created, errors };
 }
-

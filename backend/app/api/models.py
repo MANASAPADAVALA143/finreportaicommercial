@@ -39,7 +39,7 @@ class JournalEntry(Base):
     status = Column(String, default="approved")  # approved, pending, rejected
     fraud_score = Column(Float, default=0.0)
     anomaly_detected = Column(Boolean, default=False)
-    metadata = Column(JSON)
+    entry_metadata = Column("metadata", JSON)
     
     # Audit fields
     created_at = Column(DateTime(timezone=True), server_default=func.now())

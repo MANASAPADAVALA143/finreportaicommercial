@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
 import {
   Dialog,
@@ -19,6 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { NormalizedExtractedInvoice } from '@/lib/ap-invoice/cameraService';
+import { VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
+import { formatCurrency } from '@/utils/currency';
 
 export type PreviewLineItem = {
   description: string;
@@ -46,8 +48,14 @@ export function InvoiceExtractionPreviewModal({
   lineItems,
   onSave,
 }: Props) {
-  const { config } = useMarket();
+  const { config, isUAE } = useMarket();
   const [v, setV] = useState<NormalizedExtractedInvoice | null>(null);
+
+  const updateVatFromTotal = (total: number, rate: number) => {
+    const vat = rate > 0 ? Math.round((total / (1 + rate / 100) * (rate / 100)) * 100) / 100 : 0;
+    const net = Math.round((total - vat) * 100) / 100;
+    return { vat_amount: vat, net_amount: net };
+  };
 
   useEffect(() => {
     if (open && initial) setV({ ...initial });
@@ -82,8 +90,8 @@ export function InvoiceExtractionPreviewModal({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="purchase">AP â€” purchase (vendor bill)</SelectItem>
-                <SelectItem value="sales">AR â€” sales (customer bill)</SelectItem>
+                <SelectItem value="purchase">AP — purchase (vendor bill)</SelectItem>
+                <SelectItem value="sales">AR — sales (customer bill)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -151,7 +159,16 @@ export function InvoiceExtractionPreviewModal({
                 type="number"
                 step="0.01"
                 value={Number.isFinite(v.total_amount) ? v.total_amount : 0}
-                onChange={(e) => setV({ ...v, total_amount: Number(e.target.value) || 0 })}
+                onChange={(e) => {
+                  const total = Number(e.target.value) || 0;
+                  const rate = v.vat_rate ?? (isUAE ? 5 : 0);
+                  if (isUAE && rate > 0) {
+                    const { vat_amount, net_amount } = updateVatFromTotal(total, rate);
+                    setV({ ...v, total_amount: total, vat_amount, net_amount, tax_amount: vat_amount });
+                  } else {
+                    setV({ ...v, total_amount: total });
+                  }
+                }}
               />
             </div>
             <div className="grid gap-1">
@@ -165,7 +182,74 @@ export function InvoiceExtractionPreviewModal({
             </div>
           </div>
 
-          {/* Line items â€” read-only preview */}
+          {isUAE && (
+            <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-3 space-y-3">
+              <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">UAE VAT</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="grid gap-1">
+                  <Label htmlFor="ex-vat_rate">VAT Rate (%)</Label>
+                  <Input
+                    id="ex-vat_rate"
+                    type="number"
+                    step="0.01"
+                    value={v.vat_rate ?? 5}
+                    onChange={(e) => {
+                      const rate = Number(e.target.value) || 0;
+                      const { vat_amount, net_amount } = updateVatFromTotal(v.total_amount, rate);
+                      setV({ ...v, vat_rate: rate, vat_amount, net_amount, tax_amount: vat_amount });
+                    }}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="ex-vat_treatment">VAT Treatment</Label>
+                  <select
+                    id="ex-vat_treatment"
+                    value={v.vat_treatment ?? 'standard'}
+                    onChange={(e) => setV({ ...v, vat_treatment: e.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-white px-3 py-1 text-sm"
+                  >
+                    {VAT_TREATMENT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="ex-vat_amount">VAT Amount ({config.currency})</Label>
+                  <Input
+                    id="ex-vat_amount"
+                    type="number"
+                    step="0.01"
+                    value={v.vat_amount ?? 0}
+                    onChange={(e) => {
+                      const vat = Number(e.target.value) || 0;
+                      const net = Math.round((v.total_amount - vat) * 100) / 100;
+                      setV({ ...v, vat_amount: vat, net_amount: net, tax_amount: vat });
+                    }}
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <Label htmlFor="ex-net">Net Amount ({config.currency})</Label>
+                  <Input
+                    id="ex-net"
+                    type="number"
+                    step="0.01"
+                    value={v.net_amount ?? 0}
+                    onChange={(e) => {
+                      const net = Number(e.target.value) || 0;
+                      const vat = Math.round((v.total_amount - net) * 100) / 100;
+                      setV({ ...v, net_amount: net, vat_amount: vat, tax_amount: vat });
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-blue-700">
+                Total {formatCurrency(v.total_amount, config.currency)} = Net + VAT
+                {v.vat_rate ? ` (${v.vat_rate}% standard)` : ''}
+              </p>
+            </div>
+          )}
+
+          {/* Line items — read-only preview */}
           {lineItems && lineItems.length > 0 && (
             <div className="grid gap-1">
               <Label>Line items ({lineItems.length})</Label>
@@ -182,7 +266,7 @@ export function InvoiceExtractionPreviewModal({
                   <tbody>
                     {lineItems.map((li, i) => (
                       <tr key={i} className="border-t">
-                        <td className="px-2 py-1.5 text-left">{li.description || 'â€”'}</td>
+                        <td className="px-2 py-1.5 text-left">{li.description || '—'}</td>
                         <td className="px-2 py-1.5 text-right">{li.quantity}</td>
                         <td className="px-2 py-1.5 text-right">{li.unit_price.toLocaleString()}</td>
                         <td className="px-2 py-1.5 text-right font-medium">{li.total.toLocaleString()}</td>
@@ -201,11 +285,10 @@ export function InvoiceExtractionPreviewModal({
             Cancel
           </Button>
           <Button type="button" disabled={saving} onClick={() => onSave(v)}>
-            {saving ? 'Savingâ€¦' : 'Save to invoice list'}
+            {saving ? 'Saving…' : 'Save to invoice list'}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
-

@@ -1,0 +1,11 @@
+# Railway — set Root Directory to `backend` in the service settings.
+# Uses Dockerfile in this folder (not Nixpacks).
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 600
+restartPolicyType = "on_failure"

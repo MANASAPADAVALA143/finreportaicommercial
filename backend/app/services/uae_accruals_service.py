@@ -1,13 +1,18 @@
-﻿"""UAE Accruals AI Engine — suggest, post, reverse."""
+"""UAE Accruals AI Engine — suggest, post, reverse."""
 from __future__ import annotations
-import json
+import uuid
 import logging
-from datetime import date, datetime
+from datetime import date
 from collections import defaultdict
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from app.models.uae_accounting_full import UAEAccrual, UAEJournalEntry, UAEJournalLine
 
 logger = logging.getLogger(__name__)
+
+SALARY_ACCOUNT_CODES = frozenset({"7101", "6100", "6110"})
+SALARY_KEYWORDS = ("salary", "salaries", "wage", "wages", "payroll")
+INTEREST_KEYWORDS = ("interest", "finance charge", "loan interest")
 
 
 def _get_period_last_day(period: str) -> date:
@@ -31,6 +36,73 @@ def _3_months_ago(period: str) -> str:
         month += 12
         year -= 1
     return f"{year}-{month:02d}"
+
+
+def _is_salary_line(line: UAEJournalLine, je: UAEJournalEntry) -> bool:
+    code = (line.account_code or "").strip()
+    if code in SALARY_ACCOUNT_CODES:
+        return True
+    desc = (je.description or "").lower()
+    acct = (line.account_name or "").lower()
+    return any(k in desc for k in SALARY_KEYWORDS) or any(k in acct for k in SALARY_KEYWORDS)
+
+
+def _sum_salary_for_period(tenant_id: str, period: str, db: Session) -> float:
+    """Sum salary debits from posted or draft JEs in the period."""
+    rows = (
+        db.query(UAEJournalLine, UAEJournalEntry)
+        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+        .filter(
+            UAEJournalEntry.tenant_id == tenant_id,
+            UAEJournalEntry.period == period,
+            UAEJournalEntry.status.in_(["posted", "draft"]),
+        )
+        .all()
+    )
+    total = 0.0
+    for line, je in rows:
+        debit = float(line.debit or 0)
+        if debit > 0 and _is_salary_line(line, je):
+            total += debit
+    return total
+
+
+def persist_accrual_suggestions(
+    tenant_id: str, period: str, suggestions: list[dict], db: Session
+) -> int:
+    """Save new suggestions to uae_accruals; skip duplicates for same period + description."""
+    created = 0
+    for s in suggestions:
+        desc = s["description"]
+        exists = db.query(UAEAccrual).filter(
+            UAEAccrual.tenant_id == tenant_id,
+            UAEAccrual.period == period,
+            UAEAccrual.description == desc,
+            UAEAccrual.status != "reversed",
+        ).first()
+        if exists:
+            continue
+        accrual = UAEAccrual(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            period=period,
+            description=desc,
+            amount=s["amount"],
+            debit_account_code=s["debit_account_code"],
+            credit_account_code=s["credit_account_code"],
+            accrual_type=s.get("type", "other"),
+            mandatory=s.get("mandatory", False),
+            ai_suggested=s.get("ai_suggested", True),
+            ai_basis=s.get("ai_basis"),
+            ai_confidence=s.get("ai_confidence"),
+            reversal_period=s.get("reversal_period"),
+            status="suggested",
+        )
+        db.add(accrual)
+        created += 1
+    if created:
+        db.commit()
+    return created
 
 
 def suggest_accruals(tenant_id: str, period: str, db: Session) -> list[dict]:
@@ -105,32 +177,79 @@ def suggest_accruals(tenant_id: str, period: str, db: Session) -> list[dict]:
                 })
 
     # ── EOSB — UAE mandatory accrual ─────────────────────────────────────────
-    salary_lines = (
-        db.query(UAEJournalLine, UAEJournalEntry)
-        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
-        .filter(
-            UAEJournalEntry.tenant_id == tenant_id,
-            UAEJournalEntry.period == period,
-            UAEJournalLine.account_code == "7101",
-            UAEJournalEntry.status == "posted",
-        )
-        .all()
-    )
-    monthly_salary = sum(float(l.debit or 0) for l, _ in salary_lines)
+    monthly_salary = _sum_salary_for_period(tenant_id, period, db)
     if monthly_salary > 0:
-        eosb_monthly = monthly_salary / 12  # 1 month per year gratuity
-        suggestions.append({
-            "type": "eosb",
-            "description": f"End of Service Benefits Accrual - {period}",
-            "amount": round(eosb_monthly, 2),
-            "debit_account_code": "7102",
-            "credit_account_code": "4010",
-            "ai_confidence": 95,
-            "ai_basis": f"UAE Labour Law: 1/12 of monthly salaries (AED {monthly_salary:,.0f})",
-            "reversal_period": None,
-            "mandatory": True,
-            "ai_suggested": True,
-        })
+        eosb_desc = f"End of Service Benefits Accrual - {period}"
+        already_eosb = db.query(UAEAccrual).filter(
+            UAEAccrual.tenant_id == tenant_id,
+            UAEAccrual.period == period,
+            UAEAccrual.mandatory.is_(True),
+            UAEAccrual.status != "reversed",
+        ).count()
+        if already_eosb == 0:
+            eosb_monthly = monthly_salary / 12  # 1 month per year gratuity
+            suggestions.append({
+                "type": "eosb",
+                "description": eosb_desc,
+                "amount": round(eosb_monthly, 2),
+                "debit_account_code": "7102",
+                "credit_account_code": "4010",
+                "ai_confidence": 95,
+                "ai_basis": f"UAE Labour Law: 1/12 of monthly salaries (AED {monthly_salary:,.0f})",
+                "reversal_period": None,
+                "mandatory": True,
+                "ai_suggested": True,
+            })
+
+    # ── Accrued interest — if prior months had interest but not yet this period ─
+    interest_posted = db.query(UAEJournalEntry).filter(
+        UAEJournalEntry.tenant_id == tenant_id,
+        UAEJournalEntry.period == period,
+        UAEJournalEntry.status == "posted",
+        or_(*[UAEJournalEntry.description.ilike(f"%{kw}%") for kw in INTEREST_KEYWORDS]),
+    ).count()
+    if interest_posted == 0:
+        prior_interest = (
+            db.query(UAEJournalEntry)
+            .filter(
+                UAEJournalEntry.tenant_id == tenant_id,
+                UAEJournalEntry.period >= _3_months_ago(period),
+                UAEJournalEntry.period < period,
+                UAEJournalEntry.status == "posted",
+                or_(*[UAEJournalEntry.description.ilike(f"%{kw}%") for kw in INTEREST_KEYWORDS]),
+            )
+            .all()
+        )
+        if prior_interest:
+            amounts = []
+            for je in prior_interest:
+                total = sum(float(l.debit or 0) for l in je.lines if float(l.debit or 0) > 0)
+                if total > 0:
+                    amounts.append(total)
+            if amounts:
+                avg = sum(amounts) / len(amounts)
+                dr_acct = "7200"
+                cr_acct = "2105"
+                for je in prior_interest:
+                    for l in je.lines:
+                        if float(l.debit or 0) > 0:
+                            dr_acct = l.account_code or dr_acct
+                        elif float(l.credit or 0) > 0:
+                            cr_acct = l.account_code or cr_acct
+                        break
+                    break
+                suggestions.append({
+                    "type": "interest",
+                    "description": f"Accrued bank loan interest - {period}",
+                    "amount": round(avg, 2),
+                    "debit_account_code": dr_acct,
+                    "credit_account_code": cr_acct,
+                    "ai_confidence": 80,
+                    "ai_basis": f"Interest JE not yet posted for {period}; avg AED {avg:,.2f} from prior months",
+                    "reversal_period": _next_period(period),
+                    "mandatory": False,
+                    "ai_suggested": True,
+                })
 
     return sorted(suggestions, key=lambda x: x["ai_confidence"], reverse=True)
 

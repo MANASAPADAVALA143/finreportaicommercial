@@ -1,10 +1,10 @@
-﻿import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env â€” app will load but data features will fail until set.');
+  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env — app will load but data features will fail until set.');
 }
 
 export const supabase: SupabaseClient = createClient(
@@ -30,7 +30,7 @@ export type Invoice = {
   ifrs_category: string | null;
   /** IFRS / classification confidence from n8n (legacy semantic). */
   ifrs_confidence: number | null;
-  /** Overall extraction / OCR confidence (0â€“100); may mirror IFRS or come from n8n OCR fields. */
+  /** Overall extraction / OCR confidence (0–100); may mirror IFRS or come from n8n OCR fields. */
   ocr_confidence?: number | null;
   /** Optional per-field scores from n8n, e.g. { "vendor_name": 95, "total_amount": 88 }. */
   ocr_confidence_fields?: Record<string, number> | string | null;
@@ -110,11 +110,24 @@ export type Invoice = {
   sgst?: number | null;
   igst?: number | null;
   gst_recon_status?: 'unmatched' | 'matched' | 'mismatch' | 'ignored' | null;
+  /** UAE FTA fields */
+  vat_amount?: number | null;
+  vat_rate?: number | null;
+  vat_treatment?: string | null;
+  vendor_trn?: string | null;
+  is_advance_payment?: boolean | null;
+  contract_value?: number | null;
+  delivery_date?: string | null;
+  advance_vat_amount?: number | null;
+  remaining_vat_amount?: number | null;
+  gulftax_decision?: string | null;
+  gulftax_risk_score?: number | null;
+  gulftax_confidence?: number | null;
   /** Set when reconciled to a bank line (Bank Recon / AI). */
   bank_reconciled?: boolean | null;
   bank_ref?: string | null;
   reconciled_at?: string | null;
-  payment_status?: 'unpaid' | 'scheduled' | 'paid' | 'overdue' | null;
+  payment_status?: 'unpaid' | 'scheduled' | 'paid' | 'overdue' | 'frozen' | null;
   scheduled_payment_date?: string | null;
   payment_reference?: string | null;
   /** UTR / NEFT / IMPS / cheque reference (primary display for bank recon). */
@@ -184,8 +197,64 @@ export type Vendor = {
   id: string;
   name: string;
   gstin: string | null;
+  company_id?: string | null;
+  risk_score?: number | null;
+  risk_level?: 'low' | 'medium' | 'high' | 'critical' | null;
+  risk_flags?: string[] | null;
+  bank_account_number?: string | null;
+  bank_name?: string | null;
+  bank_iban?: string | null;
+  bank_swift?: string | null;
+  bank_last_changed_at?: string | null;
+  bank_change_count?: number | null;
+  bank_verification_status?: 'verified' | 'pending_verification' | 'flagged' | null;
+  total_invoices_count?: number | null;
+  total_invoices_amount?: number | null;
+  avg_invoice_amount?: number | null;
+  last_invoice_date?: string | null;
+  duplicate_invoice_count?: number | null;
+  payment_terms?: number | null;
+  vendor_since?: string | null;
+  blacklisted?: boolean | null;
+  blacklist_reason?: string | null;
+  trn_verified?: boolean | null;
   created_at: string;
   updated_at: string;
+};
+
+export type VendorHistory = {
+  id: string;
+  vendor_id: string | null;
+  company_id: string | null;
+  changed_by: string | null;
+  change_type: string;
+  field_changed: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  change_reason: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  requires_approval: boolean | null;
+  created_at: string;
+};
+
+export type ApAlert = {
+  id: string;
+  company_id: string | null;
+  alert_type: string;
+  priority: string;
+  vendor_id: string | null;
+  vendor_name: string | null;
+  title: string;
+  message: string;
+  metadata?: Record<string, unknown> | null;
+  status: 'open' | 'resolved' | 'dismissed';
+  requires_dual_approval?: boolean | null;
+  approved_by_ap?: string | null;
+  approved_by_cfo?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  created_at: string;
 };
 
 export type Gstr2bEntry = {
@@ -329,3 +398,62 @@ export type GLAccount = {
   updated_at: string;
 };
 
+/** Module 2 — Bank guarantees */
+export type BankGuarantee = {
+  id: string;
+  company_id?: string | null;
+  vendor_id?: string | null;
+  vendor_name?: string | null;
+  bg_number: string;
+  bg_type?: 'performance' | 'advance_payment' | 'retention' | 'bid_bond' | string | null;
+  issuing_bank?: string | null;
+  beneficiary?: string | null;
+  amount_aed?: number | null;
+  currency?: string | null;
+  issue_date?: string | null;
+  expiry_date: string;
+  status?: 'active' | 'expired' | 'renewed' | 'cancelled' | 'claimed' | string | null;
+  renewal_required?: boolean | null;
+  reminder_sent_30d?: boolean | null;
+  reminder_sent_15d?: boolean | null;
+  reminder_sent_7d?: boolean | null;
+  notes?: string | null;
+  document_url?: string | null;
+  created_at?: string;
+};
+
+/** Module 3 — Persisted invoice anomalies */
+export type InvoiceAnomaly = {
+  id: string;
+  invoice_id?: string | null;
+  company_id?: string | null;
+  anomaly_type?: 'statistical' | 'ml' | 'rule_based' | string | null;
+  detection_method?: string | null;
+  severity?: 'low' | 'medium' | 'high' | 'critical' | string | null;
+  risk_score?: number | null;
+  flag_code?: string | null;
+  flag_reason?: string | null;
+  flag_details?: Record<string, unknown> | null;
+  status?: 'open' | 'investigating' | 'resolved' | 'false_positive' | string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  resolution_notes?: string | null;
+  created_at?: string;
+};
+
+/** Module 4 — Comprehensive AP audit log */
+export type ApAuditLogEntry = {
+  id: string;
+  company_id?: string | null;
+  entity_type: string;
+  entity_id?: string | null;
+  action: string;
+  action_by?: string | null;
+  action_by_role?: string | null;
+  old_values?: Record<string, unknown> | null;
+  new_values?: Record<string, unknown> | null;
+  ip_address?: string | null;
+  user_agent?: string | null;
+  notes?: string | null;
+  created_at: string;
+};

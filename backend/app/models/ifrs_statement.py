@@ -55,6 +55,7 @@ class MappingSourceEnum(str, enum.Enum):
     user_confirmed = "user_confirmed"
     user_overridden = "user_overridden"
     tally_suggested = "tally_suggested"
+    template_suggested = "template_suggested"
 
 
 def _enum_str(e: type[enum.Enum]) -> SAEnum:
@@ -197,6 +198,7 @@ class MappingTemplate(Base):
     template_name = Column(String(256), nullable=False)
     industry = Column(String(128), nullable=True)
     is_default = Column(Boolean, nullable=False, default=False)
+    is_system_template = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     # Serialised GL → IFRS rows for reuse (Week 1 save-template)
     entries = Column(_json_type, nullable=True)

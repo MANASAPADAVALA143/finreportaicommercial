@@ -1,5 +1,7 @@
 import { useSuite } from '../context/SuiteContext';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { visibleSuiteIds } from '../config/productRole';
 
 const SUITES = [
   {
@@ -30,14 +32,19 @@ const SUITES = [
 
 export function SuiteSwitcher() {
   const { activeSuite, setSuite } = useSuite();
+  const { productRole } = useAuth();
   const navigate = useNavigate();
+
+  const visible = visibleSuiteIds(productRole);
+  const suites = SUITES.filter((s) => visible.includes(s.id));
 
   const handleSwitch = (suite: (typeof SUITES)[0]) => {
     setSuite(suite.id);
     navigate(suite.defaultPath);
   };
 
-  const active = SUITES.find(s => s.id === activeSuite)!;
+  const active = suites.find(s => s.id === activeSuite) ?? suites[0];
+  if (!active || suites.length === 0) return null;
 
   return (
     <div className="px-3 py-2 border-b border-white/10">
@@ -55,8 +62,8 @@ export function SuiteSwitcher() {
       </div>
 
       {/* Switch buttons */}
-      <div className="grid grid-cols-3 gap-1">
-        {SUITES.map(suite => (
+      <div className={`grid gap-1 ${suites.length === 3 ? 'grid-cols-3' : suites.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {suites.map(suite => (
           <button
             key={suite.id}
             onClick={() => handleSwitch(suite)}

@@ -7,7 +7,7 @@ const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:800
 const BASE = `${API_BASE}/api/india/full`;
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId') ?? 'demo';
+  const tenantId = localStorage.getItem('tenantId');
   return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, ...extra };
 }
 

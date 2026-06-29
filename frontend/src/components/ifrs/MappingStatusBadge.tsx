@@ -8,6 +8,9 @@ export default function MappingStatusBadge({ confidence = 0, source = "ai_sugges
   if (is_confirmed || source === "user_confirmed" || source === "user_overridden") {
     return <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Manual</span>;
   }
+  if (source === "template_suggested") {
+    return <span className="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800">Template ✓</span>;
+  }
   const pct = Math.round((confidence || 0) * 100);
   if (pct >= 85) {
     return <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">AI ✓ {pct}%</span>;

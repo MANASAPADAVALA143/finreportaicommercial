@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, XCircle, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { cfoGet, cfoPost } from '../../services/cfoDesk.service';
 
 const C = {
   bg: '#060A12', surface: '#0B1120', panel: '#0F1829', border: '#1A2640',
@@ -11,11 +10,37 @@ const C = {
 
 type Workstream = { name: string; status: 'complete' | 'in_progress' | 'blocked'; owner: string };
 type Blocker = { severity: 'critical' | 'high' | 'medium'; text: string };
-type Entity = { code: string; name: string; label: string; flag: string; readiness: number; workstreams: Workstream[]; blockers: Blocker[] };
+type Entity = {
+  code: string; name: string; label: string; flag: string; readiness: number;
+  workstreams: Workstream[]; blockers: Blocker[];
+  current_ratio?: number | null; cash_balance?: number; revenue_mtd?: number;
+  outstanding_ap?: number; outstanding_ar?: number; health_status?: string;
+  dso_days?: number; dso_vs_benchmark?: number;
+  ifrs16_rou_assets?: number; ifrs16_lease_liability?: number;
+  ifrs15_contract_assets?: number; ifrs15_contract_liabilities?: number;
+  ifrs9_ecl_provision?: number;
+};
 type Summary = { period: string; entities: Entity[]; group_readiness: number; total_blockers: number; critical_blockers: number; target_readiness: number; consolidation_deadline: string; days_to_deadline: number };
 
-const PERIODS = ['2026-02', '2026-03', '2026-04'];
-const PERIOD_LABELS: Record<string, string> = { '2026-02': 'Feb 2026', '2026-03': 'Mar 2026', '2026-04': 'Apr 2026' };
+const THIS_PERIOD = new Date().toISOString().slice(0, 7);
+const PERIOD_LABELS: Record<string, string> = {};
+
+function monthLabel(ym: string) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+}
+
+function recentPeriods(count = 3): string[] {
+  const out: string[] = [];
+  const d = new Date();
+  for (let i = count - 1; i >= 0; i--) {
+    const x = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    const ym = `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`;
+    PERIOD_LABELS[ym] = monthLabel(ym);
+    out.push(ym);
+  }
+  return out;
+}
 
 function readinessColor(r: number) { return r >= 85 ? C.teal : r >= 65 ? C.amber : C.red; }
 function readinessIcon(r: number) { return r >= 85 ? '✅' : r >= 65 ? '🟡' : '🔴'; }
@@ -49,24 +74,23 @@ export default function EntityHealth() {
   const [data, setData] = useState<Summary | null>(null);
   const [insight, setInsight] = useState('');
   const [insightLoading, setInsightLoading] = useState(false);
-  const [periodIdx, setPeriodIdx] = useState(PERIODS.length - 1);
+  const periods = recentPeriods(3);
+  const [periodIdx, setPeriodIdx] = useState(periods.length - 1);
 
-  const period = PERIODS[periodIdx];
+  const period = periods[periodIdx] ?? THIS_PERIOD;
 
   useEffect(() => { void load(); }, [period]);
 
   async function load() {
     try {
-      const r = await fetch(`${API}/api/entity-health/summary?period=${period}`);
-      setData(await r.json() as Summary);
+      setData(await cfoGet<Summary>('/api/entity-health/summary', { period }));
     } catch { /* ignore */ }
   }
 
   async function loadInsight() {
     setInsightLoading(true);
     try {
-      const r = await fetch(`${API}/api/entity-health/ai-insight?period=${period}`, { method: 'POST' });
-      const d = await r.json() as { insight: string };
+      const d = await cfoPost<{ insight: string }>('/api/entity-health/ai-insight', { period });
       setInsight(d.insight);
     } catch { setInsight('Failed to load insight.'); }
     setInsightLoading(false);
@@ -90,7 +114,7 @@ export default function EntityHealth() {
           <ChevronLeft size={14} />
         </button>
         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 100, textAlign: 'center' }}>{PERIOD_LABELS[period]}</span>
-        <button onClick={() => setPeriodIdx(i => Math.min(PERIODS.length - 1, i + 1))} disabled={periodIdx === PERIODS.length - 1}
+        <button onClick={() => setPeriodIdx(i => Math.min(periods.length - 1, i + 1))} disabled={periodIdx === periods.length - 1}
           style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 4, color: C.textDim, padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
           <ChevronRight size={14} />
         </button>
@@ -139,6 +163,40 @@ export default function EntityHealth() {
             <div style={{ background: C.panel, borderRadius: 2, height: 4, marginBottom: 16, overflow: 'hidden' }}>
               <div style={{ width: `${e.readiness}%`, height: '100%', background: readinessColor(e.readiness), borderRadius: 2, transition: 'width .5s' }} />
             </div>
+
+            {e.health_status && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16, fontSize: 12 }}>
+                <span>Health: <strong style={{ color: e.health_status === 'Good' ? C.teal : e.health_status === 'Alert' ? C.red : C.amber }}>{e.health_status}</strong></span>
+                {e.current_ratio != null && <span>Current ratio: <strong>{e.current_ratio}x</strong></span>}
+                {e.cash_balance != null && <span>Cash: <strong>AED {Number(e.cash_balance).toLocaleString()}</strong></span>}
+                {e.revenue_mtd != null && <span>Revenue MTD: <strong>AED {Number(e.revenue_mtd).toLocaleString()}</strong></span>}
+                {e.outstanding_ar != null && <span>AR: <strong>AED {Number(e.outstanding_ar).toLocaleString()}</strong></span>}
+                {e.outstanding_ap != null && <span>AP: <strong>AED {Number(e.outstanding_ap).toLocaleString()}</strong></span>}
+                {e.dso_days != null && e.dso_days > 0 && (
+                  <span>
+                    DSO: <strong style={{ color: (e.dso_vs_benchmark ?? 0) > 0 ? C.red : C.teal }}>{e.dso_days} days</strong>
+                    {e.dso_vs_benchmark != null && (
+                      <span style={{ color: C.textDim, marginLeft: 4 }}>
+                        ({e.dso_vs_benchmark > 0 ? '+' : ''}{e.dso_vs_benchmark} vs benchmark)
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {(e.ifrs16_rou_assets != null || e.ifrs9_ecl_provision != null) && (
+              <div style={{ marginBottom: 16, padding: '10px 12px', background: C.panel, borderRadius: 4, fontSize: 11 }}>
+                <div style={{ color: C.teal, letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 6 }}>IFRS Position</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                  {e.ifrs16_rou_assets != null && <span>ROU Assets: <strong>AED {Number(e.ifrs16_rou_assets).toLocaleString()}</strong></span>}
+                  {e.ifrs16_lease_liability != null && <span>Lease Liability: <strong>AED {Number(e.ifrs16_lease_liability).toLocaleString()}</strong></span>}
+                  {e.ifrs15_contract_assets != null && <span>Contract Assets: <strong>AED {Number(e.ifrs15_contract_assets).toLocaleString()}</strong></span>}
+                  {e.ifrs15_contract_liabilities != null && <span>Contract Liabilities: <strong>AED {Number(e.ifrs15_contract_liabilities).toLocaleString()}</strong></span>}
+                  {e.ifrs9_ecl_provision != null && <span>ECL Provision: <strong>AED {Number(e.ifrs9_ecl_provision).toLocaleString()}</strong></span>}
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
               {/* Workstreams */}

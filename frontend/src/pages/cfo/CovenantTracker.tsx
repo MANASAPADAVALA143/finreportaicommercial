@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { Sparkles, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { cfoGet, cfoPost, fmtMoney } from '../../services/cfoDesk.service';
 
 const C = {
   bg: '#060A12', surface: '#0B1120', panel: '#0F1829', border: '#1A2640',
@@ -31,8 +30,9 @@ function TrendIcon({ t }: { t: string }) {
   return <Minus size={13} style={{ color: '#94A3B8' }} />;
 }
 
-function fmt(v: number, unit: string) {
-  if (unit === '€') return v >= 1000000 ? `€${(v / 1000000).toFixed(2)}M` : `€${(v / 1000).toFixed(0)}K`;
+function fmt(v: number, unit: string, currency = 'AED') {
+  if (unit === '×') return `${v}${unit}`;
+  if (unit === '€' || unit === 'AED') return fmtMoney(v, unit === '€' ? 'EUR' : currency);
   return `${v}${unit}`;
 }
 
@@ -122,21 +122,22 @@ export default function CovenantTracker() {
   const [data, setData] = useState<Summary | null>(null);
   const [insight, setInsight] = useState('');
   const [insightLoading, setInsightLoading] = useState(false);
+  const [currency, setCurrency] = useState('AED');
 
   useEffect(() => { void load(); }, []);
 
   async function load() {
     try {
-      const r = await fetch(`${API}/api/covenants/summary`);
-      setData(await r.json() as Summary);
+      const d = await cfoGet<Summary & { currency?: string }>('/api/covenants/summary');
+      setCurrency(d.currency || 'AED');
+      setData(d);
     } catch { /* ignore */ }
   }
 
   async function loadInsight() {
     setInsightLoading(true);
     try {
-      const r = await fetch(`${API}/api/covenants/ai-insight`, { method: 'POST' });
-      const d = await r.json() as { insight: string };
+      const d = await cfoPost<{ insight: string }>('/api/covenants/ai-insight');
       setInsight(d.insight);
     } catch { setInsight('Failed to load insight.'); }
     setInsightLoading(false);

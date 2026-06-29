@@ -1,8 +1,9 @@
 // ==================== COMPANY ONBOARDING — IFRS SETUP ====================
 // "Map Once, Use Forever" — One-time Chart of Accounts mapping
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -23,22 +24,29 @@ import {
 } from "lucide-react";
 import Papa from "papaparse";
 import {
-  saveCompanyMappings,
   IFRS_LINE_ITEMS,
-  INDUSTRY_TEMPLATES,
+  CANONICAL_INDUSTRY_TEMPLATES,
   getAISuggestions
 } from "../../services/mappingService";
-import type { ChartOfAccountsRow, CompanyInfo } from "../../types/ifrs";
+import { ifrsService } from "../../services/ifrs.service";
+import { translateOnboardingMappings } from "../../utils/ifrsDotPathTranslate";
+import { formatApiError } from "../../utils/apiError";
+import { useClient } from "../../context/ClientContext";
+import { useSyncIfrsTenant } from "../../hooks/useSyncIfrsTenant";
+import type { ChartOfAccountsRow } from "../../types/ifrs";
 
 // ==================== MAIN COMPONENT ====================
 
 export const CompanyOnboarding = () => {
   const navigate = useNavigate();
-  
+  const { activeClient } = useClient();
+  const tenantId = useSyncIfrsTenant();
+
   // Company Info
-  const [companyName, setCompanyName] = useState("");
-  const [companyId, setCompanyId] = useState("");
-  const [currency, setCurrency] = useState<"USD" | "EUR" | "GBP" | "INR" | "AED" | "SGD">("USD");
+  const [companyName, setCompanyName] = useState(activeClient?.name || "");
+  const [currency, setCurrency] = useState<"USD" | "EUR" | "GBP" | "INR" | "AED" | "SGD">(
+    (activeClient?.currency as "USD" | "EUR" | "GBP" | "INR" | "AED" | "SGD") || "USD"
+  );
   const [yearEnd, setYearEnd] = useState<string>("Dec");
   
   // Tab Selection
@@ -56,13 +64,17 @@ export const CompanyOnboarding = () => {
   
   // Error State
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [selectedIndustryId, setSelectedIndustryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeClient?.name) setCompanyName(activeClient.name);
+    if (activeClient?.currency) {
+      setCurrency(activeClient.currency as typeof currency);
+    }
+  }, [activeClient?.name, activeClient?.currency]);
 
   // ==================== HANDLERS ====================
-
-  const generateCompanyId = () => {
-    const id = `CO${Date.now().toString(36).toUpperCase()}`;
-    setCompanyId(id);
-  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -82,8 +94,8 @@ export const CompanyOnboarding = () => {
   };
 
   const parseAndUploadCoA = async () => {
-    if (!file || !companyName || !companyId) {
-      setError("Please fill in company details and select a file");
+    if (!file || !companyName) {
+      setError("Please fill in company name and select a file");
       return;
     }
 
@@ -175,9 +187,10 @@ export const CompanyOnboarding = () => {
   };
 
   const handleTemplateSelect = (templateId: string) => {
-    const template = INDUSTRY_TEMPLATES.find(t => t.id === templateId);
+    const template = CANONICAL_INDUSTRY_TEMPLATES.find(t => t.id === templateId);
     if (!template) return;
 
+    setSelectedIndustryId(templateId);
     setMappings(template.mappings as unknown as Record<string, string>);
 
     // Generate sample chart of accounts from template
@@ -191,9 +204,9 @@ export const CompanyOnboarding = () => {
     setShowPreview(true);
   };
 
-  const handleSave = () => {
-    if (!companyName || !companyId) {
-      setError("Please provide company name and ID");
+  const handleSave = async () => {
+    if (!companyName) {
+      setError("Please provide company name");
       return;
     }
 
@@ -202,15 +215,50 @@ export const CompanyOnboarding = () => {
       return;
     }
 
+    const { entries, failures, skippedGlCodes } = translateOnboardingMappings(chartOfAccounts, mappings);
+    if (failures.length > 0) {
+      const unmapped = failures.map((f) => f.dot_path).join(", ");
+      setError(
+        `${failures.length} mapping(s) could not be translated to IFRS master lines: ${unmapped}. Fix or remove them before saving.`
+      );
+      return;
+    }
+    if (skippedGlCodes.length > 0) {
+      const skipped = skippedGlCodes.map((s) => `${s.glCode} (${s.accountName})`).join(", ");
+      setError(
+        `${skippedGlCodes.length} GL account(s) have no IFRS mapping and would be omitted: ${skipped}. Map every account before saving.`
+      );
+      return;
+    }
+    if (entries.length === 0) {
+      setError("No valid template entries after translation.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
     try {
-      saveCompanyMappings(companyId, companyName, mappings);
-      
-      // Show success and redirect
-      alert(`✅ Success! ${Object.keys(mappings).length} accounts mapped for ${companyName}.\n\nYou will never need to do this again. Every monthly Trial Balance upload will be 100% automatic.`);
-      
-      navigate("/ifrs-generator");
-    } catch (err: any) {
-      setError(`Failed to save: ${err.message}`);
+      const industryTemplate = selectedIndustryId
+        ? CANONICAL_INDUSTRY_TEMPLATES.find((t) => t.id === selectedIndustryId)
+        : undefined;
+      const result = await ifrsService.saveTemplateFromCoa({
+        template_name: industryTemplate
+          ? `${companyName} — ${industryTemplate.name}`
+          : `${companyName} — CoA template`,
+        industry: industryTemplate?.industry,
+        is_default: true,
+        company_name: companyName,
+        currency,
+        entries,
+      });
+      toast.success(
+        `Saved ${result.entries_saved} mappings for tenant ${tenantId}. Trial balance uploads will pre-fill from this template.`
+      );
+      navigate("/ifrs-statement");
+    } catch (err: unknown) {
+      setError(formatApiError(err) || "Failed to save template");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -244,7 +292,7 @@ export const CompanyOnboarding = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => navigate("/dashboard")}
+                onClick={() => navigate("/ifrs-statement")}
                 className="p-2 hover:bg-gray-100 rounded-lg transition"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -305,23 +353,17 @@ export const CompanyOnboarding = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Company ID *
+                Tenant ID (from workspace)
               </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  placeholder="Unique identifier"
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-                <button
-                  onClick={generateCompanyId}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition text-sm font-medium"
-                >
-                  Generate
-                </button>
-              </div>
+              <input
+                type="text"
+                value={tenantId}
+                readOnly
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-600"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Mappings are saved for this tenant and used when you upload a trial balance on IFRS Statement.
+              </p>
             </div>
 
             <div>
@@ -506,7 +548,7 @@ export const CompanyOnboarding = () => {
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-4">
-                  {INDUSTRY_TEMPLATES.map((template) => {
+                  {CANONICAL_INDUSTRY_TEMPLATES.map((template) => {
                     const IconComponent = 
                       template.icon === "Factory" ? Factory :
                       template.icon === "ShoppingCart" ? ShoppingCart :
@@ -634,11 +676,11 @@ export const CompanyOnboarding = () => {
                 </button>
                 <button
                   onClick={handleSave}
-                  disabled={Object.keys(mappings).length === 0}
+                  disabled={Object.keys(mappings).length === 0 || saving}
                   className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   <CheckCircle className="w-5 h-5" />
-                  Save & Complete Setup
+                  {saving ? "Saving to server…" : "Save & Complete Setup"}
                 </button>
               </div>
             </div>

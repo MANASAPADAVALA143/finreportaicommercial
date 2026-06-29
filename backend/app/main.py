@@ -27,7 +27,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import inspect, text
 from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
+from app.middleware.product_role_middleware import ProductRoleMiddleware
 from app.core.database import get_db
+from app.routers import consolidation as consolidation_router
 from app.routers import month_end_close as month_end_close_router
 from app.routers import ar_collections_enhanced as ar_enhanced
 from app.routers import earnings_review as earnings_review_router
@@ -35,6 +37,10 @@ from app.routers import gl_reconciliation as gl_reconciliation_router
 from app.routers import model_builder as model_builder_router
 from app.routers import auth as rbac_auth_router
 from app.routers import users as rbac_users_router
+from app.routers import gulftax_team as gulftax_team_router
+from app.routers import workspaces as workspaces_router
+from app.routers import company_setup as company_setup_router
+from app.routers import ap_settings as ap_settings_router
 from app.api.routes import (
     fpa_master_upload,
     upload_routes,
@@ -57,6 +63,7 @@ from app.api.routes import (
     bank_recon,
     erp_integration,
     erp_connections,
+    ap_integrations,
     bookkeeping,
     r2r_pattern,
     r2r_learning_routes,
@@ -77,11 +84,37 @@ from app.api.routes import (
     ca_bank_router,
     tally_push,
     ifrs_export,
+    ifrs16_routes,
     uae_accounting,
     uae_full_routes,
+    uae_ar_routes,
+    uae_controls_routes,
     india_routes,
     pipeline as pipeline_router,
+    o2c_routes,
+    crm_routes,
+    training_routes,
+    agent_extract,
+    ap_anomaly,
+    ap_insights,
+    audit_log_routes,
+    cit_return,
+    gl_summary,
+    notifications_routes,
+    uae_account_classification,
+    uae_fs_routes,
+    uae_journals_routes,
+    journal_entries,
+    analytics,
+    ap_invoices_rds,
+    vat_advanced_rds,
+    system_routes,
 )
+from app.modules.ifrs9.router import router as ifrs9_router
+from app.middleware.request_logging import RequestLoggingMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
 from app.board_pack_generator import generate_pdf
@@ -138,9 +171,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(RequestLoggingMiddleware)
+
 # CORS — explicit list + regex for localhost ports and Excel / Microsoft 365 web clients
+_cors_origins = list(settings.BACKEND_CORS_ORIGINS)
+if settings.FRONTEND_URL:
+    _frontend = settings.FRONTEND_URL.strip().rstrip("/")
+    if _frontend and _frontend not in _cors_origins:
+        _cors_origins.append(_frontend)
 _cors_kwargs: dict = {
-    "allow_origins": list(settings.BACKEND_CORS_ORIGINS),
+    "allow_origins": _cors_origins,
     "allow_credentials": True,
     "allow_methods": ["*"],
     "allow_headers": ["*"],
@@ -152,6 +195,7 @@ _cors_kwargs["allow_origin_regex"] = (
     r"|https://[a-zA-Z0-9.\-]+\.vercel\.app"
 )
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
+app.add_middleware(ProductRoleMiddleware)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 
@@ -198,6 +242,14 @@ app.include_router(gl_reconciliation_router.router)
 app.include_router(model_builder_router.router)
 app.include_router(rbac_auth_router.router)
 app.include_router(rbac_users_router.router)
+app.include_router(gulftax_team_router.router)
+app.include_router(workspaces_router.router)
+app.include_router(company_setup_router.router)
+app.include_router(ap_settings_router.router)
+app.include_router(ap_integrations.router)
+app.include_router(o2c_routes.router)
+app.include_router(crm_routes.router)
+app.include_router(training_routes.router)
 app.include_router(entity_health.router)
 app.include_router(payment_calendar.router)
 app.include_router(covenant_tracker.router)
@@ -205,14 +257,40 @@ app.include_router(ar_collections.router)
 app.include_router(ca_bank_router.router)
 app.include_router(tally_push.router)
 app.include_router(ifrs_export.router, prefix="/api/ifrs")
+app.include_router(ifrs16_routes.router)
 app.include_router(uae_accounting.router)
 app.include_router(uae_full_routes.router)
+app.include_router(uae_full_routes.fx_router)
+app.include_router(uae_ar_routes.router)
+app.include_router(uae_controls_routes.router)
 app.include_router(india_routes.router)
 app.include_router(pipeline_router.router)
+app.include_router(agent_extract.router)
+app.include_router(ap_anomaly.router)
+app.include_router(ap_insights.router)
+app.include_router(audit_log_routes.router)
+app.include_router(cit_return.router)
+app.include_router(gl_summary.router)
+app.include_router(notifications_routes.router)
+app.include_router(uae_account_classification.router)
+app.include_router(uae_fs_routes.router)
+app.include_router(uae_journals_routes.router)
+app.include_router(journal_entries.router)
+app.include_router(analytics.router)
+app.include_router(consolidation_router.router)
+app.include_router(ifrs9_router)
+app.include_router(ap_invoices_rds.router)
+app.include_router(vat_advanced_rds.router)
+app.include_router(system_routes.router)
 
 # GulfTax AI — embedded (replaces external localhost:8000 service)
 from app.modules.gulftax.router import router as gulftax_router
+from app.modules.gulftax.gulftax_einvoicing import router as gulftax_einvoicing_router
+from app.modules.gulftax.ported_mount import register_gulftax_ported_routers
+
 app.include_router(gulftax_router)
+app.include_router(gulftax_einvoicing_router)
+register_gulftax_ported_routers(app)
 
 if settings.ENABLE_FASTAPI_MCP:
     try:

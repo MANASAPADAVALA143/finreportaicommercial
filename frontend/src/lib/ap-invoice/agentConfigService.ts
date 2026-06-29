@@ -1,4 +1,4 @@
-﻿import { getCompanyConfig } from './companyService';
+import { getCompanyConfig } from './companyService';
 
 export type AgentAutonomyConfig = {
   high_value_threshold_inr: number;
@@ -39,4 +39,3 @@ export async function getAgentAutonomyConfig(): Promise<AgentAutonomyConfig> {
   const row = await getCompanyConfig();
   return coerceAgentConfig(row?.agent_config);
 }
-

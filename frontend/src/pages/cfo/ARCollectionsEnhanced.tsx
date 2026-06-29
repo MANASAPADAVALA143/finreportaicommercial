@@ -7,6 +7,7 @@ import {
   Upload, RefreshCw, AlertTriangle, CheckCircle, TrendingDown,
   Mail, Shield, BarChart2, ArrowLeft, Download, Zap, ChevronDown, ChevronRight,
 } from 'lucide-react';
+import { runCollectionsDunning } from '../../services/arService';
 
 const API = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001');
 
@@ -263,6 +264,23 @@ function PredictionTab() {
 // ── 3. Dunning Email Tab ──────────────────────────────────────────────────────
 
 function DunningTab() {
+  const companyId = localStorage.getItem('active_company_id') ?? '';
+  const [chaseResult, setChaseResult] = useState<string[] | null>(null);
+  const [chaseLoading, setChaseLoading] = useState(false);
+
+  const runChase = async () => {
+    if (!companyId) return;
+    setChaseLoading(true);
+    try {
+      const res = await runCollectionsDunning(companyId);
+      setChaseResult(res.summary.length ? res.summary : [`No emails sent (${res.sent_count})`]);
+    } catch (e: unknown) {
+      setChaseResult([e instanceof Error ? e.message : 'Failed']);
+    } finally {
+      setChaseLoading(false);
+    }
+  };
+
   const [form, setForm] = useState({
     customer_name: 'ADNOC Digital PJSC',
     invoice_id: 'AR-2025-001',
@@ -293,10 +311,29 @@ function DunningTab() {
   const labelCls = 'block text-xs text-gray-400 mb-1';
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="space-y-6">
+      <div className="rounded-xl border border-amber-800/50 bg-amber-950/20 p-4">
+        <h3 className="text-sm font-semibold text-amber-200 mb-2">Automated Collections Chase</h3>
+        <p className="text-xs text-gray-400 mb-3">Send level 1–4 dunning emails to overdue AR invoices (max once per 7 days per invoice).</p>
+        <button
+          type="button"
+          disabled={chaseLoading || !companyId}
+          onClick={() => void runChase()}
+          className="flex items-center gap-2 bg-amber-700 hover:bg-amber-600 px-4 py-2 rounded-lg text-sm disabled:opacity-50"
+        >
+          <Mail size={14} /> {chaseLoading ? 'Running…' : 'Run Collections Chase'}
+        </button>
+        {chaseResult && (
+          <ul className="mt-3 text-xs text-gray-300 space-y-1">
+            {chaseResult.map((line) => <li key={line}>• {line}</li>)}
+          </ul>
+        )}
+      </div>
+
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Form */}
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold text-gray-300">Generate Dunning Email</h3>
+        <h3 className="text-sm font-semibold text-gray-300">Generate Dunning Email (draft)</h3>
         <div className="grid grid-cols-3 gap-2">
           {[1, 2, 3].map(l => (
             <button key={l} onClick={() => setForm(f => ({ ...f, dunning_level: l }))}
@@ -357,6 +394,7 @@ function DunningTab() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }

@@ -19,3 +19,23 @@ code {
 * {
   box-sizing: border-box;
 }
+
+/* Visible scrollbar for dark sidebars */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #475569 #1e293b;
+}
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+  border-radius: 3px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}

@@ -1,44 +1,58 @@
-﻿"""Password hashing + JWT helpers for RBAC."""
+"""Password hashing + JWT helpers for RBAC."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import uuid
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.users import Company, User, UserRole
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 ACCESS_HOURS = 8
 REFRESH_DAYS = 7
 
 _revoked_refresh_jti: set[str] = set()
 _active_refresh_jti: dict[str, str] = {}
+_revoked_reset_jti: set[str] = set()
+
+RESET_HOURS = 1
+
+
+def _is_bcrypt_hash(value: str) -> bool:
+    return value.startswith(("$2a$", "$2b$", "$2y$"))
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a plaintext password once with bcrypt."""
+    if _is_bcrypt_hash(password):
+        return password
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def _encode(payload: dict) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_access_token(user_id: str, role: str, company_id: str) -> str:
+def create_access_token(user_id: str, role: str, company_id: str, product_role: str = "full_access") -> str:
     exp = datetime.now(timezone.utc) + timedelta(hours=ACCESS_HOURS)
     payload = {
         "sub": user_id,
         "role": role,
         "company_id": company_id,
+        "product_role": product_role,
         "type": "access",
         "exp": exp,
     }
@@ -80,7 +94,31 @@ def decode_token(token: str) -> dict:
         active = _active_refresh_jti.get(uid)
         if active and jti and active != jti:
             raise ValueError("Refresh token superseded")
+    if payload.get("type") == "password_reset":
+        jti = str(payload.get("jti", ""))
+        if jti and jti in _revoked_reset_jti:
+            raise ValueError("Reset link already used")
     return payload
+
+
+def create_password_reset_token(user_id: str) -> str:
+    exp = datetime.now(timezone.utc) + timedelta(hours=RESET_HOURS)
+    jti = str(uuid.uuid4())
+    payload = {"sub": user_id, "type": "password_reset", "jti": jti, "exp": exp}
+    return _encode(payload)
+
+
+def consume_password_reset_token(token: str) -> str:
+    payload = decode_token(token)
+    if payload.get("type") != "password_reset":
+        raise ValueError("Invalid reset token")
+    jti = str(payload.get("jti", ""))
+    if jti:
+        _revoked_reset_jti.add(jti)
+    user_id = str(payload.get("sub", ""))
+    if not user_id:
+        raise ValueError("Invalid reset token")
+    return user_id
 
 
 def ensure_seed_data() -> None:
@@ -105,5 +143,11 @@ def ensure_seed_data() -> None:
             )
             db.add(user)
         db.commit()
+
+        try:
+            from app.services.workspace_service import seed_abc_trading_workspace
+            seed_abc_trading_workspace(db, user)
+        except Exception:
+            pass
     finally:
         db.close()

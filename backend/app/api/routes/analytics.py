@@ -226,7 +226,7 @@ async def get_anomalies(
                 "amount": e.debit + e.credit,
                 "fraud_score": e.fraud_score,
                 "description": e.description,
-                "risk_factors": e.metadata.get("fraud_analysis", {}).get("risk_factors", [])
+                "risk_factors": (e.entry_metadata or {}).get("fraud_analysis", {}).get("risk_factors", [])
             }
             for e in anomalies
         ]

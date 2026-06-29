@@ -22,11 +22,14 @@ export interface MonthlyBudget {
 export interface BudgetLineItem {
   id: string;
   category: string;
+  lineItem?: string;
+  accountType?: 'income' | 'expense' | 'other';
   isHeader: boolean;
   isEditable: boolean;
   monthly: MonthlyBudget;
+  monthlyActuals?: MonthlyBudget;
   priorYearActual?: number;
-  department?: DepartmentType;
+  department?: DepartmentType | string;
   indent?: number;
 }
 

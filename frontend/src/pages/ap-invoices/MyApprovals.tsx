@@ -1,5 +1,6 @@
-﻿import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Invoice, InvoiceApprovalRow } from '../../lib/ap-invoice/supabase';
+import { supabase } from '../../lib/ap-invoice/supabase';
 import { useToast } from '../../hooks/use-toast';
 import { useWorkEmail } from '../../hooks/useWorkEmail';
 import {
@@ -7,6 +8,8 @@ import {
   fetchMyApprovalHistory,
   processApprovalAction,
 } from '../../lib/ap-invoice/approvalService';
+import { postApprovedInvoiceToGL } from '../../lib/ap-invoice/glPostService';
+import { useCompany } from '../../context/CompanyContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -31,6 +34,7 @@ type TabKey = 'pending' | 'approved' | 'rejected';
 export function MyApprovals() {
   const { toast } = useToast();
   const { dateFormat } = useCompanySettings();
+  const { activeCompanyId } = useCompany();
   const { email, setEmail } = useWorkEmail();
   const [tab, setTab] = useState<TabKey>('pending');
   const [pending, setPending] = useState<Array<{ approval: InvoiceApprovalRow; invoice: Invoice }>>([]);
@@ -38,6 +42,8 @@ export function MyApprovals() {
   const [rejected, setRejected] = useState<Array<{ approval: InvoiceApprovalRow; invoice: Invoice }>>([]);
   const [loading, setLoading] = useState(false);
   const [inlineComment, setInlineComment] = useState<Record<string, string>>({});
+  const [jePosted, setJePosted] = useState<Record<string, { reference: string }>>({});
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!email.trim()) {
@@ -56,6 +62,15 @@ export function MyApprovals() {
       setPending(p);
       setApproved(a);
       setRejected(r);
+
+      const jeMap: Record<string, { reference: string }> = {};
+      for (const row of [...a]) {
+        const inv = row.invoice;
+        if (inv.je_posted && inv.je_reference) {
+          jeMap[inv.id] = { reference: inv.je_reference };
+        }
+      }
+      setJePosted(jeMap);
     } catch (e) {
       console.error(e);
       toast({
@@ -70,23 +85,80 @@ export function MyApprovals() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, activeCompanyId]);
 
-  async function act(approvalId: string, action: 'approved' | 'rejected') {
+  async function act(approvalId: string, invoiceId: string, action: 'approved' | 'rejected') {
     const c = inlineComment[approvalId]?.trim() || '';
     if (action === 'rejected' && !c) {
       toast({ title: 'Add a rejection reason', variant: 'destructive' });
       return;
     }
     if (!email.trim()) return;
+    if (action === 'approved') setApprovingId(approvalId);
+    try {
     const res = await processApprovalAction(approvalId, email.trim(), action, c || null);
     if (!res.ok) {
       toast({ title: 'Failed', description: res.message, variant: 'destructive' });
       return;
     }
-    toast({ title: action === 'approved' ? 'Approved' : 'Rejected' });
+
+    if (action === 'approved') {
+      const { data: inv, error: invErr } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .single();
+
+      if (!invErr && inv && inv.approval_status === 'approved' && inv.status === 'Approved') {
+        try {
+          const gl = await postApprovedInvoiceToGL(inv as Invoice, activeCompanyId);
+          if (gl.je_posted) {
+            toast({
+              title: 'Approved — journal entry posted to GL',
+              description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
+            });
+            if (gl.je_reference) {
+              setJePosted((prev) => ({ ...prev, [invoiceId]: { reference: gl.je_reference! } }));
+            }
+          } else {
+            toast({
+              title: 'Approved — GL post incomplete',
+              description: 'Approval saved but journal entry was not posted. Retry from invoice list.',
+              variant: 'destructive',
+            });
+          }
+        } catch (e) {
+          toast({
+            title: 'Approved — GL post failed, retry manually',
+            description: e instanceof Error ? e.message : 'Could not post to UAE GL',
+            variant: 'destructive',
+          });
+        }
+      } else {
+        toast({ title: 'Approved', description: 'Forwarded to next approver or saved.' });
+      }
+    } else {
+      toast({ title: 'Rejected' });
+    }
+
     setInlineComment((prev) => ({ ...prev, [approvalId]: '' }));
     void load();
+    } finally {
+      if (action === 'approved') setApprovingId(null);
+    }
+  }
+
+  function renderJePill(invoiceId: string) {
+    const je = jePosted[invoiceId];
+    if (!je) return null;
+    return (
+      <span
+        className="ml-2 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-800 border border-green-200"
+        title={je.reference ? `JE ${je.reference}` : 'Posted to GL'}
+      >
+        JE ✓
+      </span>
+    );
   }
 
   function renderRows(rows: Array<{ approval: InvoiceApprovalRow; invoice: Invoice }>, showActions: boolean) {
@@ -103,6 +175,7 @@ export function MyApprovals() {
         <TableHeader>
           <TableRow>
             <TableHead>Vendor</TableHead>
+            <TableHead>Invoice</TableHead>
             <TableHead>Amount</TableHead>
             <TableHead>Submitted by</TableHead>
             <TableHead>Submitted</TableHead>
@@ -115,12 +188,16 @@ export function MyApprovals() {
           {rows.map(({ approval, invoice }) => (
             <TableRow key={approval.id}>
               <TableCell className="font-medium">{invoice.vendor_name}</TableCell>
+              <TableCell className="text-sm">
+                {invoice.invoice_number}
+                {renderJePill(invoice.id)}
+              </TableCell>
               <TableCell>{formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')}</TableCell>
-              <TableCell className="text-sm text-gray-600">{invoice.approval_submitted_by || 'â€”'}</TableCell>
+              <TableCell className="text-sm text-gray-600">{invoice.approval_submitted_by || '—'}</TableCell>
               <TableCell className="text-sm">
                 {invoice.submitted_for_approval_at
                   ? format(new Date(invoice.submitted_for_approval_at), 'MMM d, yyyy')
-                  : 'â€”'}
+                  : '—'}
               </TableCell>
               <TableCell className="text-sm">{displayDate(invoice.due_date, dateFormat)}</TableCell>
               {showActions && (
@@ -135,10 +212,15 @@ export function MyApprovals() {
                       }
                     />
                     <div className="flex gap-2">
-                      <Button size="sm" className="bg-green-600" onClick={() => void act(approval.id, 'approved')}>
-                        Approve
+                      <Button
+                        size="sm"
+                        className="bg-green-600"
+                        disabled={approvingId === approval.id}
+                        onClick={() => void act(approval.id, invoice.id, 'approved')}
+                      >
+                        {approvingId === approval.id ? 'Approving...' : 'Approve'}
                       </Button>
-                      <Button size="sm" variant="destructive" onClick={() => void act(approval.id, 'rejected')}>
+                      <Button size="sm" variant="destructive" onClick={() => void act(approval.id, invoice.id, 'rejected')}>
                         Reject
                       </Button>
                     </div>
@@ -147,7 +229,7 @@ export function MyApprovals() {
               )}
               {!showActions && (
                 <TableCell className="text-xs text-gray-600">
-                  {approval.actioned_at ? format(new Date(approval.actioned_at), 'PPp') : 'â€”'}
+                  {approval.actioned_at ? format(new Date(approval.actioned_at), 'PPp') : '—'}
                 </TableCell>
               )}
             </TableRow>
@@ -206,4 +288,3 @@ export function MyApprovals() {
     </div>
   );
 }
-

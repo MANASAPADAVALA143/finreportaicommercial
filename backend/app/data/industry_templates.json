@@ -1,0 +1,70 @@
+{
+  "templates": [
+    {
+      "id": "manufacturing",
+      "name": "Manufacturing",
+      "industry": "Manufacturing & Production",
+      "description": "Pre-configured mappings for manufacturing companies with inventory, COGS, and production costs",
+      "icon": "Factory",
+      "accountCount": 180,
+      "mappings": {
+        "1001": "financialPosition.assets.current.cashAndEquivalents",
+        "1002": "financialPosition.assets.current.tradeReceivables",
+        "1003": "financialPosition.assets.current.inventories",
+        "2001": "financialPosition.assets.nonCurrent.propertyPlantEquipment",
+        "3001": "financialPosition.liabilities.current.tradePayables",
+        "4001": "financialPosition.liabilities.nonCurrent.borrowings",
+        "5001": "financialPosition.equity.shareCapital",
+        "6001": "profitLoss.revenue",
+        "7001": "profitLoss.costOfSales",
+        "7002": "profitLoss.operatingExpenses.employeeBenefits",
+        "7007": "profitLoss.operatingExpenses.depreciation"
+      }
+    },
+    {
+      "id": "retail",
+      "name": "Retail & E-commerce",
+      "industry": "Retail Trade",
+      "description": "Optimized for retail businesses with focus on inventory, sales, and customer receivables",
+      "icon": "ShoppingCart",
+      "accountCount": 150,
+      "mappings": {
+        "1001": "financialPosition.assets.current.cashAndEquivalents",
+        "1002": "financialPosition.assets.current.tradeReceivables",
+        "1003": "financialPosition.assets.current.inventories",
+        "6001": "profitLoss.revenue",
+        "7001": "profitLoss.costOfSales",
+        "7006": "profitLoss.operatingExpenses.distribution"
+      }
+    },
+    {
+      "id": "services",
+      "name": "Professional Services",
+      "industry": "Services",
+      "description": "Designed for service-based businesses with minimal inventory and focus on employee costs",
+      "icon": "Briefcase",
+      "accountCount": 120,
+      "mappings": {
+        "1001": "financialPosition.assets.current.cashAndEquivalents",
+        "1002": "financialPosition.assets.current.tradeReceivables",
+        "6001": "profitLoss.revenue",
+        "7002": "profitLoss.operatingExpenses.employeeBenefits",
+        "7005": "profitLoss.operatingExpenses.administrative"
+      }
+    },
+    {
+      "id": "technology",
+      "name": "Technology & SaaS",
+      "industry": "Technology",
+      "description": "Tailored for tech companies with software development, R&D, and subscription revenue",
+      "icon": "Cpu",
+      "accountCount": 140,
+      "mappings": {
+        "1001": "financialPosition.assets.current.cashAndEquivalents",
+        "2002": "financialPosition.assets.nonCurrent.intangibleAssets",
+        "6001": "profitLoss.revenue",
+        "7002": "profitLoss.operatingExpenses.employeeBenefits"
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   getAgingSummary,
@@ -8,17 +8,17 @@ import {
   exportAgingCsv,
   type AgingBucket,
   type AgingInvoice,
-} from '../../lib/ap-invoice/agingService';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { Button } from '../../components/ui/button';
-import { Badge } from '../../components/ui/badge';
+} from '@/lib/ap-invoice/agingService';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../components/ui/select';
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -26,7 +26,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
+} from '@/components/ui/table';
 import {
   BarChart,
   Bar,
@@ -38,9 +38,11 @@ import {
   Legend,
   Cell,
 } from 'recharts';
-import { formatCurrency } from '../../utils/currency';
-import { displayDate } from '../../utils/dateUtils';
-import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { formatCurrency } from '@/utils/currency';
+import { displayDate } from '@/utils/dateUtils';
+import { useCompanySettings } from '@/hooks/useCompanySettings';
+import { useMarket } from '@/contexts/MarketContext';
+import { markOverdueInvoices } from '@/lib/ap-invoice/paymentService';
 import { Download, Printer, Loader2, ArrowUpDown } from 'lucide-react';
 
 type SortKey = 'amount' | 'due_date' | 'days_overdue';
@@ -55,7 +57,14 @@ function bucketFilterKey(cardKey: string): string | undefined {
 
 export default function ApAging() {
   const navigate = useNavigate();
-  const { baseCurrency, dateFormat } = useCompanySettings();
+  const { baseCurrency: settingsCurrency, settings, dateFormat } = useCompanySettings();
+  const { config, isUAE, market } = useMarket();
+  const baseCurrency = useMemo(() => {
+    if (isUAE || market === 'uae') return 'AED';
+    const country = (settings?.country ?? '').toUpperCase();
+    if (country === 'AE' || country === 'UAE' || settingsCurrency === 'AED') return 'AED';
+    return settingsCurrency ?? config.currency;
+  }, [isUAE, market, settings?.country, settingsCurrency, config.currency]);
   const [periodDays, setPeriodDays] = useState<number>(90);
   const [buckets, setBuckets] = useState<AgingBucket[]>([]);
   const [invoices, setInvoices] = useState<AgingInvoice[]>([]);
@@ -74,28 +83,24 @@ export default function ApAging() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sum, inv, vnd, dpoM] = await Promise.all([
+      await markOverdueInvoices().catch((e) => console.warn('markOverdueInvoices:', e));
+      const results = await Promise.allSettled([
         getAgingSummary(),
         getAgingInvoices(bucketFilterKey(selectedBucket)),
         getAgingByVendor(),
         getDpoMetrics(periodDays),
       ]);
-      setBuckets(sum);
-      setInvoices(inv);
-      setVendorRows(vnd);
-      setDpo(dpoM);
+      const [sumR, invR, vndR, dpoR] = results;
+      if (sumR.status === 'fulfilled') setBuckets(sumR.value);
+      else console.error('getAgingSummary:', sumR.reason);
+      if (invR.status === 'fulfilled') setInvoices(invR.value);
+      else console.error('getAgingInvoices:', invR.reason);
+      if (vndR.status === 'fulfilled') setVendorRows(vndR.value);
+      else console.error('getAgingByVendor:', vndR.reason);
+      if (dpoR.status === 'fulfilled') setDpo(dpoR.value);
+      else console.error('getDpoMetrics:', dpoR.reason);
     } catch (e) {
       console.error(e);
-      setBuckets([]);
-      setInvoices([]);
-      setVendorRows([]);
-      setDpo({
-        dpo: 0,
-        avg_payment_days: 0,
-        total_outstanding: 0,
-        total_overdue: 0,
-        on_time_payment_rate: 0,
-      });
     } finally {
       setLoading(false);
       setFirstLoadDone(true);
@@ -120,7 +125,7 @@ export default function ApAging() {
   const vendorChartData = useMemo(
     () =>
       vendorRows.map((r) => ({
-        name: r.vendor.length > 28 ? `${r.vendor.slice(0, 28)}â€¦` : r.vendor,
+        name: r.vendor.length > 28 ? `${r.vendor.slice(0, 28)}…` : r.vendor,
         current: r.current,
         overdue: r.overdue,
       })),
@@ -269,7 +274,7 @@ export default function ApAging() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total overdue (flagged)
+              Total overdue
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -280,7 +285,7 @@ export default function ApAging() {
             >
               {formatCurrency(dpo?.total_overdue ?? 0, baseCurrency)}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">payment_status = overdue</p>
+            <p className="text-xs text-muted-foreground mt-1">Unpaid invoices past due date</p>
           </CardContent>
         </Card>
       </div>
@@ -339,7 +344,7 @@ export default function ApAging() {
           <CardTitle className="text-base">Outstanding invoices</CardTitle>
           {selectedBucket !== 'all' && (
             <p className="text-xs text-muted-foreground font-normal mt-1">
-              Filter: {buckets.find((b) => b.key === selectedBucket)?.label ?? selectedBucket} â€”{' '}
+              Filter: {buckets.find((b) => b.key === selectedBucket)?.label ?? selectedBucket} —{' '}
               <button
                 type="button"
                 className="text-[#0A4B8F] underline"
@@ -401,8 +406,8 @@ export default function ApAging() {
               ) : (
                 pageSlice.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="font-medium">{row.invoice_number ?? 'â€”'}</TableCell>
-                    <TableCell>{row.vendor_name ?? 'â€”'}</TableCell>
+                    <TableCell className="font-medium">{row.invoice_number ?? '—'}</TableCell>
+                    <TableCell>{row.vendor_name ?? '—'}</TableCell>
                     <TableCell>{formatCurrency(row.amount, baseCurrency)}</TableCell>
                     <TableCell>{displayDate(row.invoice_date ?? '', dateFormat)}</TableCell>
                     <TableCell>{displayDate(row.due_date ?? '', dateFormat)}</TableCell>
@@ -467,7 +472,7 @@ export default function ApAging() {
         <CardHeader>
           <CardTitle className="text-base">Outstanding by vendor</CardTitle>
           <p className="text-xs text-muted-foreground font-normal">
-            Top 10 vendors â€” stacked: current (green) vs overdue (red)
+            Top 10 vendors — stacked: current (green) vs overdue (red)
           </p>
         </CardHeader>
         <CardContent>
@@ -496,11 +501,10 @@ export default function ApAging() {
         {overdueCount > 0 && (
           <span className="text-red-600">
             {' '}
-            â€” {overdueCount} overdue ({formatCurrency(overdueAmt, baseCurrency)})
+            — {overdueCount} overdue ({formatCurrency(overdueAmt, baseCurrency)})
           </span>
         )}
       </div>
     </div>
   );
 }
-
