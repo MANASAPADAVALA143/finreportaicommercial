@@ -3,7 +3,6 @@ import { Eye, EyeOff } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
-import { loginRedirectFor } from '../config/productRole';
 
 export default function Login() {
   const nav = useNavigate();
@@ -20,9 +19,8 @@ export default function Login() {
     setError(null);
     setLoading(true);
     try {
-      const loggedIn = await login(email, password);
-      const dest =
-        (location.state as { from?: string } | null)?.from ?? loginRedirectFor(loggedIn.product_role);
+      await login(email, password);
+      const dest = (location.state as { from?: string } | null)?.from ?? '/dashboard';
       nav(dest, { replace: true });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);

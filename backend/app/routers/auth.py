@@ -108,6 +108,7 @@ def register(body: RegisterBody, request: Request, response: Response, db: Sessi
     )
     db.add(company)
     db.add(user)
+    db.flush()  # company + user must exist before audit_log FK insert (autoflush=False)
     _audit(db, user.id, "register", "auth", {"company": company.name}, request.client.host if request.client else None)
     db.commit()
     db.refresh(user)
