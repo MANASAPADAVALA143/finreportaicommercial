@@ -15,3 +15,22 @@ export function isBackendConfigured(): boolean {
   return backendOrigin() !== "";
 }
 
+/** Turn browser "Failed to fetch" into an actionable message for login/API calls. */
+export function formatApiNetworkError(err: unknown, apiUrl: string): Error {
+  const isNetworkFailure =
+    err instanceof TypeError ||
+    (err instanceof Error && /failed to fetch|networkerror|load failed/i.test(err.message));
+  if (!isNetworkFailure) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+  const isHttpsSite = typeof window !== "undefined" && window.location.protocol === "https:";
+  if (isHttpsSite && apiUrl.startsWith("http://")) {
+    return new Error(
+      `Cannot reach API: ${apiUrl} uses HTTP but this site uses HTTPS. Set VITE_API_URL to an https:// backend URL, then redeploy.`
+    );
+  }
+  return new Error(
+    `Cannot reach API at ${apiUrl}. Confirm the backend is running (open ${apiUrl}/health in a browser) and VITE_API_URL on Vercel matches your live API.`
+  );
+}
+

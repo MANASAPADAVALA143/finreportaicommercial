@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import { backendOrigin, isBackendConfigured } from '../utils/backendOrigin';
+import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
 import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
@@ -131,13 +131,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithRbac = useCallback(async (email: string, password: string) => {
     const apiUrl = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || base;
-    if (!apiUrl) throw new Error('VITE_API_URL missing');
-    const r = await fetch(`${apiUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email, password }),
-    });
+    if (!apiUrl) throw new Error('VITE_API_URL missing — set it in Vercel Environment Variables to your FastAPI URL, then redeploy.');
+    let r: Response;
+    try {
+      r = await fetch(`${apiUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      });
+    } catch (err) {
+      throw formatApiNetworkError(err, apiUrl);
+    }
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
     const loggedIn = {
@@ -159,7 +164,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loginWithRbac]);
 
   const register = useCallback(async (payload: { company_name: string; name: string; email: string; password: string }) => {
-    if (isSupabaseConfigured) {
+    if (!isBackendConfigured()) {
       const { data, error } = await supabase.auth.signUp({
         email: payload.email,
         password: payload.password,
@@ -178,13 +183,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!base) throw new Error('VITE_API_URL missing');
-    const r = await fetch(`${base}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-    });
+    const apiUrl = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || base;
+    if (!apiUrl) throw new Error('VITE_API_URL missing');
+    let r: Response;
+    try {
+      r = await fetch(`${apiUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      throw formatApiNetworkError(err, apiUrl);
+    }
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
     const loggedIn = {

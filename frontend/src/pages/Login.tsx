@@ -58,7 +58,7 @@ export default function Login() {
           </div>
         </label>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm text-white">{error}</p>}
 
         <button disabled={loading} className="w-full rounded bg-blue-600 py-2 text-white font-medium hover:bg-blue-500 disabled:opacity-50" type="submit">
           {loading ? 'Signing in...' : 'Sign In'}
