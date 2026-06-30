@@ -26,6 +26,7 @@ def init_db():
     import app.models.uae_accounting_full  # noqa: F401 - UAE Full Accounting Suite
     import app.models.fpa_master  # noqa: F401 - FP&A Master Upload (one file → all modules)
     import app.models.pipeline  # noqa: F401 - Connected bookkeeping pipeline (GL, accruals, recon)
+    # R2RHistoricalEntry is already in r2r_learning (imported above) — no extra import needed
     Base.metadata.create_all(bind=engine)
 
     # ── Safe column / table additions for SQLite (create_all skips existing tables)

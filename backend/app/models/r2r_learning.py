@@ -3,9 +3,57 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from app.core.database import Base
+
+
+class R2RHistoricalEntry(Base):
+    """Per-company historical JE baseline — synced from accounting on every Post."""
+    __tablename__ = "r2r_historical_data"
+
+    id           = Column(Integer, primary_key=True, autoincrement=True)
+    company_id   = Column(String(128), nullable=False, index=True)
+    country      = Column(String(10),  nullable=False, default="UAE")
+    je_id        = Column(String(128), nullable=True)
+    je_number    = Column(String(64),  nullable=True)
+    date         = Column(String(20),  nullable=True)
+    period       = Column(String(7),   nullable=True, index=True)
+    description  = Column(String(500), nullable=True)
+    account_code = Column(String(20),  nullable=True, index=True)
+    account_name = Column(String(200), nullable=True)
+    debit        = Column(Float, default=0.0)
+    credit       = Column(Float, default=0.0)
+    amount       = Column(Float, default=0.0)
+    source       = Column(String(50),  default="manual")
+    posted_by    = Column(String(100), nullable=True)
+    day_of_week  = Column(Integer, nullable=True)
+    hour_of_day  = Column(Integer, nullable=True)
+    synced_from  = Column(String(20),  default="accounting")
+    created_at   = Column(DateTime, default=datetime.utcnow)
+
+
+class R2RHistoricalEntry(Base):
+    __tablename__ = "r2r_historical_data"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(String(128), nullable=False, index=True)
+    country = Column(String(10), default="UAE")
+    je_id = Column(String(128), nullable=True)
+    je_number = Column(String(64), nullable=True)
+    date = Column(String(20), nullable=True)
+    period = Column(String(7), nullable=True)
+    description = Column(String(500), nullable=True)
+    account_code = Column(String(20), nullable=True)
+    account_name = Column(String(200), nullable=True)
+    debit = Column(Float, default=0.0)
+    credit = Column(Float, default=0.0)
+    amount = Column(Float, default=0.0)
+    source = Column(String(50), default="manual")
+    posted_by = Column(String(100), nullable=True)
+    day_of_week = Column(Integer, nullable=True)
+    hour_of_day = Column(Integer, nullable=True)
+    synced_from = Column(String(20), default="accounting")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class ClientProfile(Base):

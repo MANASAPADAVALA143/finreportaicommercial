@@ -199,3 +199,97 @@ async def analyse_pattern(request: Request, db: Session = Depends(get_db)) -> di
     except Exception as _e:
         print(f"[agent_run] r2r_pattern: {_e}")
     return result
+
+
+# ── R2R ↔ Accounting integration endpoints ────────────────────────────────────
+
+@router.get("/baseline-status/{company_id}")
+async def get_baseline_status(
+    company_id: str,
+    country: str = "UAE",
+    db: Session = Depends(get_db),
+):
+    """Return R2R historical baseline status for Historical Intelligence tab."""
+    from app.modules.r2r.historical import get_baseline_status as _get
+    return _get(company_id, country, db)
+
+
+@router.get("/load-from-accounting")
+async def load_from_accounting(
+    company_id: str = "demo",
+    country: str = "UAE",
+    period: str = None,
+    db: Session = Depends(get_db),
+):
+    """Load posted JEs from accounting DB — no file upload needed."""
+    from app.modules.r2r.historical import load_entries_for_analysis
+    rows = load_entries_for_analysis(company_id, country, period, db)
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "source": "accounting",
+        "company_id": company_id,
+        "country": country,
+    }
+
+
+@router.post("/sync-from-accounting")
+async def sync_from_accounting(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Manually bulk-sync all posted JEs from UAE accounting to R2R baseline."""
+    from app.modules.r2r.historical import add_to_company_baseline
+
+    body = await request.json()
+    company_id = body.get("company_id", "demo")
+    country    = body.get("country", "UAE")
+    period     = body.get("period")
+
+    try:
+        from app.models.uae_accounting_full import UAEJournalEntry, UAEJournalLine
+        q = db.query(UAEJournalEntry).filter_by(tenant_id=company_id, status="posted")
+        if period:
+            q = q.filter(UAEJournalEntry.period == period)
+        je_list = q.all()
+    except Exception as exc:
+        return {"synced": 0, "error": str(exc)}
+
+    je_rows = []
+    for je in je_list:
+        try:
+            lines = db.query(UAEJournalLine).filter_by(journal_id=je.id).all()
+            if lines:
+                for line in lines:
+                    je_rows.append({
+                        "je_id": f"{je.id}_{line.id}",
+                        "je_number": je.reference or je.id,
+                        "date": str(je.entry_date),
+                        "period": je.period or "",
+                        "description": je.description or "",
+                        "account_code": line.account_code or "",
+                        "account_name": line.account_name or "",
+                        "debit": float(line.debit or 0),
+                        "credit": float(line.credit or 0),
+                        "amount": float(line.debit or line.credit or 0),
+                        "source": je.source or "manual",
+                        "posted_by": je.posted_by or company_id,
+                    })
+            else:
+                je_rows.append({
+                    "je_id": je.id, "je_number": je.reference or je.id,
+                    "date": str(je.entry_date), "period": je.period or "",
+                    "description": je.description or "", "account_code": "",
+                    "amount": 0, "source": je.source or "manual",
+                })
+        except Exception:
+            pass
+
+    synced = add_to_company_baseline(company_id, je_rows, country, db)
+    return {
+        "synced": synced,
+        "total_je": len(je_list),
+        "total_lines": len(je_rows),
+        "company_id": company_id,
+        "country": country,
+    }

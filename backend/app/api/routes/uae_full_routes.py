@@ -202,7 +202,41 @@ def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
         post_journal_entry(je, db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"id": je.id, "status": je.status}
+
+    # Auto-sync to R2R historical baseline (non-critical — never blocks posting)
+    try:
+        from app.modules.r2r.historical import add_to_company_baseline
+        lines = db.query(UAEJournalLine).filter_by(journal_id=je_id).all()
+        je_rows = [
+            {
+                "je_id": f"{je.id}_{line.id}",
+                "je_number": je.reference or je.id,
+                "date": str(je.entry_date),
+                "period": je.period or "",
+                "description": je.description or "",
+                "account_code": line.account_code or "",
+                "account_name": line.account_name or "",
+                "debit": float(line.debit or 0),
+                "credit": float(line.credit or 0),
+                "amount": float(line.debit or line.credit or 0),
+                "source": je.source or "manual",
+                "posted_by": je.posted_by or tenant_id,
+            }
+            for line in lines
+        ] if lines else [{
+            "je_id": je.id, "je_number": je.reference or je.id,
+            "date": str(je.entry_date), "period": je.period or "",
+            "description": je.description or "",
+            "account_code": "", "account_name": "", "debit": 0, "credit": 0, "amount": 0,
+            "source": je.source or "manual", "posted_by": je.posted_by or tenant_id,
+        }]
+        add_to_company_baseline(
+            company_id=tenant_id, journal_entries=je_rows, country="UAE", db=db
+        )
+    except Exception:
+        pass  # R2R sync is non-critical
+
+    return {"id": je.id, "status": je.status, "r2r_synced": True}
 
 
 @router.post("/journals/{je_id}/reverse")
