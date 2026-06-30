@@ -235,6 +235,33 @@ export default function JournalEntries() {
   const [deleting, setDeleting] = useState<string>('');
   const [coaMap, setCoaMap] = useState<Record<string, string>>({});
   const [riskResults, setRiskResults] = useState<Record<string, { risk_score: number; risk_level: string; status: string }>>({});
+  const [r2rSyncCount, setR2rSyncCount] = useState<number>(0);
+
+  // Load R2R sync count after entries load
+  const refreshR2rCount = () => {
+    fetch('/api/r2r/baseline-status/demo?country=UAE')
+      .then(r => r.json())
+      .then(d => setR2rSyncCount(d.total_entries || 0))
+      .catch(() => {});
+  };
+
+  const handleSyncToR2R = async () => {
+    setSendingR2R(true);
+    try {
+      const res = await fetch('/api/r2r/sync-from-accounting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': 'demo' },
+        body: JSON.stringify({ company_id: 'demo', country: 'UAE', period }),
+      });
+      const d = await res.json();
+      setR2rMsg(`✅ Synced ${d.synced} entries to R2R baseline`);
+      refreshR2rCount();
+    } catch (e: any) {
+      setR2rMsg('⚠️ R2R sync failed');
+    } finally {
+      setSendingR2R(false);
+    }
+  };
 
   const load = () => {
     setLoading(true);
@@ -254,7 +281,7 @@ export default function JournalEntries() {
       .catch(() => { /* COA optional for display */ });
   }, []);
 
-  useEffect(() => { load(); }, [period]);
+  useEffect(() => { load(); refreshR2rCount(); }, [period]);
 
   const toggle = async (id: string) => {
     const next = new Set(expanded);
@@ -566,6 +593,22 @@ export default function JournalEntries() {
             <Search size={14} />
             {sendingR2R ? 'Sending…' : 'Run Anomaly Detection'}
           </button>
+          {/* R2R sync button */}
+          <button
+            onClick={handleSyncToR2R}
+            disabled={sendingR2R}
+            className="flex items-center gap-2 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+            title="Sync posted JEs to R2R historical baseline"
+          >
+            🔄 Sync to R2R
+          </button>
+          {/* R2R sync badge */}
+          {r2rSyncCount > 0 && (
+            <span className="flex items-center gap-1 text-xs text-teal-300 bg-teal-900/30 border border-teal-800 rounded-full px-2.5 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+              R2R: {r2rSyncCount} synced ✅
+            </span>
+          )}
           {/* CSV / Excel bulk import */}
           <label className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors ${importing ? 'bg-gray-600 opacity-50' : 'bg-emerald-700 hover:bg-emerald-600'}`}
             title="Upload or re-import: standard JE Excel (je_number + lines) OR accruals sheet (description, gl_code, amount_aed, period)">

@@ -1646,6 +1646,42 @@ export default function R2RPatternAnalysisPage() {
   // Baseline banner state — loaded when client changes
   const [baselineMeta, setBaselineMeta] = useState<Record<string, unknown> | null>(null);
 
+  // ── Load from UAE Accounting ────────────────────────────────────────────────
+  const [acctLoadMsg, setAcctLoadMsg] = useState<string | null>(null);
+  const [acctBaselineStatus, setAcctBaselineStatus] = useState<any>(null);
+
+  const loadFromAccounting = async (country = "UAE") => {
+    try {
+      setAcctLoadMsg("Loading from UAE Accounting…");
+      const base = API_BASE || "";
+      const company = selectedClientId || "demo";
+      const res = await fetch(`${base}/api/r2r/load-from-accounting?company_id=${company}&country=${country}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.rows && data.rows.length > 0) {
+        setRawRows(data.rows);
+        setUploadFileName(`UAE Accounting (${data.count} entries, auto-synced)`);
+        setAcctLoadMsg(`✅ Loaded ${data.count} entries from UAE Accounting`);
+      } else {
+        setAcctLoadMsg("⚠️ No posted JEs found. Post some Journal Entries in UAE Accounting first.");
+      }
+    } catch (e: any) {
+      setAcctLoadMsg(`⚠️ Load failed: ${e.message}`);
+    }
+  };
+
+  const loadBaselineStatus = async () => {
+    try {
+      const base = API_BASE || "";
+      const company = selectedClientId || "demo";
+      const res = await fetch(`${base}/api/r2r/baseline-status/${company}?country=UAE`);
+      if (res.ok) setAcctBaselineStatus(await res.json());
+    } catch { /* silent */ }
+  };
+
+  useEffect(() => { loadBaselineStatus(); }, [selectedClientId]);
+  // ────────────────────────────────────────────────────────────────────────────
+
   const [patternResult, setPatternResult] = useState<AnalyzeEntriesResult | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [sensitivity, setSensitivity] = useState<PatternSensitivity>(() => loadR2rSensitivity());
@@ -2358,13 +2394,31 @@ export default function R2RPatternAnalysisPage() {
               );
             })()}
           </div>
+          {/* ── Accounting sync status banner ── */}
+          {acctBaselineStatus && acctBaselineStatus.total_entries > 0 && (
+            <div style={{ marginBottom: 10, padding: "8px 14px", borderRadius: 8, background: "#0f2d5e22", border: "1px solid #1d4ed844", fontSize: 12 }}>
+              <span style={{ color: "#60a5fa", fontWeight: 700 }}>🏛️ UAE Accounting Baseline — {acctBaselineStatus.company_id}</span>
+              <span style={{ color: "#94a3b8", marginLeft: 12 }}>
+                {acctBaselineStatus.total_entries} entries · {acctBaselineStatus.accounts} accounts · {acctBaselineStatus.period_from || "–"} to {acctBaselineStatus.period_to || "–"} · Strength: <b style={{ color: acctBaselineStatus.baseline_strength === "strong" ? "#4ade80" : "#fbbf24" }}>{acctBaselineStatus.baseline_strength}</b>
+              </span>
+            </div>
+          )}
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {/* Load from UAE Accounting — no upload needed */}
+            <button
+              type="button"
+              onClick={() => loadFromAccounting("UAE")}
+              style={{ padding: "10px 18px", borderRadius: 8, background: "#0f2d5e", color: "#60a5fa", fontSize: 13, fontWeight: 700, border: "1px solid #1d4ed8", cursor: "pointer" }}
+            >
+              🏛️ Load from UAE Accounting
+            </button>
             <label style={{ cursor: "pointer", padding: "10px 18px", borderRadius: 8, background: C.blue, color: C.white, fontSize: 13, fontWeight: 600 }}>
               Choose file
               <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }}
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
             </label>
             {uploadFileName && <span style={{ fontSize: 12, color: C.textSub }}>{uploadFileName} · {rawRows.length} rows</span>}
+            {acctLoadMsg && <span style={{ fontSize: 12, color: acctLoadMsg.startsWith("✅") ? "#4ade80" : "#fbbf24" }}>{acctLoadMsg}</span>}
             {jeEntriesFromUpload.length > 0 && (
               <button
                 type="button"
