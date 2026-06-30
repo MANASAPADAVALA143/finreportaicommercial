@@ -176,25 +176,19 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(RequestLoggingMiddleware)
 
-# CORS — explicit list + regex for localhost ports and Excel / Microsoft 365 web clients
-_cors_origins = list(settings.BACKEND_CORS_ORIGINS)
-if settings.FRONTEND_URL:
-    _frontend = settings.FRONTEND_URL.strip().rstrip("/")
-    if _frontend and _frontend not in _cors_origins:
-        _cors_origins.append(_frontend)
-_cors_kwargs: dict = {
-    "allow_origins": _cors_origins,
-    "allow_credentials": True,
-    "allow_methods": ["*"],
-    "allow_headers": ["*"],
-}
-# Excel Online / Office add-ins use subdomains of officeapps.live.com, office.com, microsoft.com
-_cors_kwargs["allow_origin_regex"] = (
-    r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
-    r"|https://([\w\-]+\.)*(officeapps\.live\.com|office\.com|microsoft\.com)"
-    r"|https://[a-zA-Z0-9.\-]+\.vercel\.app"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://finreportai.com",
+        "https://www.finreportai.com",
+        "https://finreportaicommercial.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-app.add_middleware(CORSMiddleware, **_cors_kwargs)
 app.add_middleware(ProductRoleMiddleware)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 

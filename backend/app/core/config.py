@@ -22,18 +22,13 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # CORS — explicit origins; localhost any port also matched via allow_origin_regex in main.py
+    # CORS — browser origins allowed to call the API (see main.py CORSMiddleware)
     BACKEND_CORS_ORIGINS: list = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3004",
-        "http://localhost:3006",
-        "http://localhost:3007",
+        "https://finreportai.com",
+        "https://www.finreportai.com",
+        "https://finreportaicommercial.vercel.app",
         "http://localhost:5173",
-        "https://finreportai.railway.app",
-        "https://finreportaicommercial-production-8907.up.railway.app",
-        "https://finreportaicommercial.up.railway.app",
+        "http://localhost:3000",
     ]
     # Production Vercel URL — appended to CORS in main.py (e.g. https://finreportai.vercel.app)
     FRONTEND_URL: str = ""
