@@ -1,7 +1,7 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase, type Invoice } from '../../lib/ap-invoice/supabase';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { supabase, type Invoice } from '@/lib/ap-invoice/supabase';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -9,40 +9,46 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
-import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../components/ui/select';
-import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2 } from 'lucide-react';
-import { Checkbox } from '../../components/ui/checkbox';
+} from '@/components/ui/select';
+import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
-import { InvoiceDetailModal } from '../../components/ap-invoice/InvoiceDetailModal';
-import { detectAnomalies } from '../../utils/anomalyDetection';
-import { formatCurrency } from '../../utils/currency';
-import { displayDate } from '../../utils/dateUtils';
-import { useCompanySettings } from '../../hooks/useCompanySettings';
-import { useErpSettings, toTallySettings } from '../../hooks/useErpSettings';
-import { downloadTallyXML } from '../../utils/tallyExport';
-import { downloadQBIIF } from '../../utils/quickbooksExport';
-import { downloadXeroCSV } from '../../utils/xeroExport';
+import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
+import { detectAnomalies } from '@/utils/anomalyDetection';
+import { listInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { formatCurrency } from '@/utils/currency';
+import { displayDate } from '@/utils/dateUtils';
+import { useCompanySettings } from '@/hooks/useCompanySettings';
+import { useAuth } from '@/context/AuthContext';
+import { resolveApSupabaseCompanyId } from '@/lib/ap-invoice/workspaceCompanySync';
+import { getStoredWorkspaceId } from '@/services/workspaceService';
+import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
+import { downloadTallyXML } from '@/utils/tallyExport';
+import { downloadQBIIF } from '@/utils/quickbooksExport';
+import { downloadXeroCSV } from '@/utils/xeroExport';
 import * as XLSX from 'xlsx';
-import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
+import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
-import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '../../utils/extractionConfidence';
-import { runAutoMatch } from '../../lib/ap-invoice/threeWayMatchService';
+import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
+import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
+import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
+import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
 import {
   deriveInvoiceRiskDisplayScore,
   invoiceHasRiskSignal,
   invoiceRiskTierForFilter,
-} from '../../lib/ap-invoice/invoiceRiskDisplay';
+} from '@/lib/ap-invoice/invoiceRiskDisplay';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -51,17 +57,26 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '../../components/ui/alert-dialog';
-import { useToast } from '../../hooks/use-toast';
-import { getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
-import { uploadInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
+} from '@/components/ui/alert-dialog';
+import { useToast } from '@/hooks/use-toast';
+import { getMyCompany, clearCompanyCache } from '@/lib/ap-invoice/companyService';
+import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
 import {
   extractInvoiceFromImageFile,
   normalizeExtractedInvoice,
   type NormalizedExtractedInvoice,
-} from '../../lib/ap-invoice/cameraService';
+} from '@/lib/ap-invoice/cameraService';
+import { useMarket } from '@/contexts/MarketContext';
+import { PintAeValidateModal } from '@/components/gulftax/PintAeValidateModal';
+
+const DEBUG_INVOICE_NUMBERS = [
+  'INV-FK-TEST',
+  'INV-2026-DEBUG-400',
+  'INV-2026-DEBUG-401',
+  'INV-2026-DEBUG-402',
+];
 
 const statusColors: Record<string, string> = {
   Processing: 'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -86,15 +101,15 @@ function sourceIntakeBadge(source: Invoice['source']) {
     upload: 'bg-slate-100 text-slate-800 border-slate-200',
   };
   const labels: Record<string, string> = {
-    email: 'ðŸ“§ Email',
-    email_n8n: 'ðŸ“§ n8n email',
-    whatsapp: 'ðŸ’¬ WhatsApp',
-    camera: 'ðŸ“· Camera',
-    excel: 'ðŸ“Š Excel',
-    excel_vba: 'ðŸ“Š Excel VBA',
+    email: '📧 Email',
+    email_n8n: '📧 n8n email',
+    whatsapp: '💬 WhatsApp',
+    camera: '📷 Camera',
+    excel: '📊 Excel',
+    excel_vba: '📊 Excel VBA',
     vendor_portal: 'Portal',
     manual: 'Manual',
-    upload: 'ðŸ“¤ Upload',
+    upload: '📤 Upload',
   };
   return (
     <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${styles[s] ?? styles.upload}`}>
@@ -109,7 +124,7 @@ function invoicePaymentPill(inv: Invoice): { label: string; title?: string; vari
     const m = inv.payment_method?.trim();
     const utr = (inv.utr_number ?? inv.payment_reference)?.trim();
     return {
-      label: m ? `Paid â€” ${m}` : 'Paid',
+      label: m ? `Paid — ${m}` : 'Paid',
       title: utr ? `UTR / Ref: ${utr}` : undefined,
       variant: 'paid',
     };
@@ -128,9 +143,147 @@ function invoicePaymentPill(inv: Invoice): { label: string; title?: string; vari
   return { label: 'Pending', variant: 'pending' };
 }
 
+function invoiceGlCode(inv: Invoice): string {
+  return String(inv.gl_account_code ?? inv.gl_code ?? '').trim();
+}
+
+/** Dirham unicode (د.إ) and Latin-1 mojibake (Ø¯.Ø¥) → ISO code for display */
+function normalizeCurrencyCode(raw: string | null | undefined, market: string): string {
+  const c = String(raw ?? '').trim();
+  if (!c) return market === 'uae' ? 'AED' : 'INR';
+  if (/^AED$/i.test(c)) return 'AED';
+  if (c === 'د.إ' || c === 'Ø¯.Ø¥' || /[\u062F\u0625]/.test(c) || c.includes('Ø¯')) return 'AED';
+  return c.toUpperCase();
+}
+
+/** INV-2026-001 → PO-2026-001 when that PO exists in the workspace. */
+function inferPoNumberFromInvoiceNumber(invoiceNumber: string): string | null {
+  const m = /^INV-(\d{4})-(\d+)$/i.exec(String(invoiceNumber || '').trim());
+  if (!m) return null;
+  return `PO-${m[1]}-${m[2]}`;
+}
+
+const DESCRIPTION_IFRS_KEYWORDS: Array<[RegExp, string]> = [
+  [/construction|materials|civil|mep|electrical|installation/i, 'Industrial Supplies'],
+  [/transport|delivery|logistics/i, 'Travel & Entertainment'],
+  [/furniture|office|cleaning/i, 'Office Supplies'],
+  [/utilit|electric|water/i, 'Utilities'],
+  [/architect|design|consult|professional/i, 'Professional Services'],
+  [/internet|telecom|software|\bit\b/i, 'IT Infrastructure'],
+  [/marketing|advert/i, 'Marketing & Advertising'],
+  [/rent|lease/i, 'Rent & Lease'],
+];
+
+/** DB `risk_score` is numeric — map anomaly tier strings to 0–100 scores. */
+function normalizeRiskForDb(riskScore: unknown): { risk_score: number; risk_level: string } {
+  if (typeof riskScore === 'number' && Number.isFinite(riskScore)) {
+    const n = Math.round(riskScore);
+    const level = n >= 60 ? 'High' : n >= 30 ? 'Medium' : 'Low';
+    return { risk_score: n, risk_level: level };
+  }
+  const tier = String(riskScore ?? 'low').toLowerCase();
+  if (tier === 'high') return { risk_score: 75, risk_level: 'High' };
+  if (tier === 'medium') return { risk_score: 45, risk_level: 'Medium' };
+  return { risk_score: 15, risk_level: 'Low' };
+}
+
+async function classifyInvoiceFromGl(
+  inv: Invoice,
+  companyId: string | null
+): Promise<boolean> {
+  if (inv.ifrs_category?.trim()) return true;
+
+  const glCode = invoiceGlCode(inv);
+  let category: string | null = null;
+  let glRes = null;
+
+  if (glCode) {
+    let coaQuery = supabase
+      .from('chart_of_accounts')
+      .select('gl_code, account_name, ifrs_mapping')
+      .eq('gl_code', glCode)
+      .eq('is_active', true)
+      .limit(1);
+    if (companyId) coaQuery = coaQuery.eq('company_id', companyId);
+    const { data: coa } = await coaQuery.maybeSingle();
+    category = coa?.ifrs_mapping?.trim() || null;
+    if (!category) {
+      for (const [cat, { code }] of Object.entries(IFRS_STANDARD_GL)) {
+        if (code === glCode) {
+          category = cat;
+          break;
+        }
+      }
+    }
+    if (category) {
+      glRes = coa
+        ? {
+            gl_account: coa.gl_code,
+            gl_account_name: coa.account_name,
+            gl_source: 'company_coa' as const,
+            gl_confirmed: true,
+          }
+        : await resolveGLAccount(supabase, category, companyId, {
+            vendorName: inv.vendor_name,
+            description: inv.description ?? '',
+          });
+    }
+  }
+
+  if (!category) {
+    const text = `${inv.description ?? ''} ${inv.vendor_name ?? ''}`;
+    for (const [re, cat] of DESCRIPTION_IFRS_KEYWORDS) {
+      if (re.test(text)) {
+        category = cat;
+        glRes = await resolveGLAccount(supabase, cat, companyId, {
+          vendorName: inv.vendor_name,
+          description: inv.description ?? '',
+        });
+        break;
+      }
+    }
+  }
+
+  if (!category) {
+    const text = `${inv.description ?? ''} ${inv.vendor_name ?? ''}`.toLowerCase();
+    for (const cat of Object.keys(IFRS_STANDARD_GL)) {
+      if (text.includes(cat.toLowerCase())) {
+        category = cat;
+        glRes = await resolveGLAccount(supabase, cat, companyId, {
+          vendorName: inv.vendor_name,
+          description: inv.description ?? '',
+        });
+        break;
+      }
+    }
+  }
+
+  if (!category) return false;
+
+  const mergedGl = glRes ?? (await resolveGLAccount(supabase, category, companyId, {
+    vendorName: inv.vendor_name,
+    description: inv.description ?? '',
+  }));
+
+  const { error } = await supabase
+    .from('invoices')
+    .update({
+      ifrs_category: category,
+      ifrs_confidence: 85,
+      ...invoiceGlFieldsFromResult(mergedGl),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', inv.id);
+
+  return !error;
+}
+
 export function InvoiceList() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { accessToken } = useAuth();
+  const workspaceId = getStoredWorkspaceId();
+  const { market, isUAE } = useMarket();
   const { dateFormat } = useCompanySettings();
   const tallySettings = useErpSettings();
   const [showExport, setShowExport] = useState(false);
@@ -139,7 +292,8 @@ export function InvoiceList() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review'>('all');
+  const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review' | 'anomalies'>('all');
+  const [anomalyInvoiceIds, setAnomalyInvoiceIds] = useState<Set<string>>(new Set());
   const [confidenceSort, setConfidenceSort] = useState<'none' | 'high_first' | 'low_first'>('none');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -161,6 +315,9 @@ export function InvoiceList() {
   const [previewConfidence, setPreviewConfidence] = useState<number | undefined>();
   const [savingExtract, setSavingExtract] = useState(false);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [advanceFilter, setAdvanceFilter] = useState(false);
+  const [pintAeInvoice, setPintAeInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 20;
 
   const STEPPER_LABELS = [
@@ -193,7 +350,10 @@ export function InvoiceList() {
 
   useEffect(() => {
     fetchInvoices();
-    
+    void deleteDebugInvoicesOnce();
+    void listInvoiceAnomalies({ status: 'open' })
+      .then((rows) => setAnomalyInvoiceIds(new Set(rows.map((r) => r.invoice_id).filter(Boolean) as string[])))
+      .catch(() => setAnomalyInvoiceIds(new Set()));
     // Check for vendor filter in URL
     const urlParams = new URLSearchParams(window.location.search);
     const vendorFilter = urlParams.get('vendor');
@@ -212,12 +372,24 @@ export function InvoiceList() {
     ) {
       setViewMode('needs_review');
     }
+    if (urlParams.get('tab') === 'anomalies') {
+      setViewMode('anomalies');
+    }
+    if (urlParams.get('advance') === '1') {
+      setAdvanceFilter(true);
+    }
     const receivedAt = urlParams.get('receivedAt');
     if (receivedAt) {
       setSourceReceivedAtFilter(decodeURIComponent(receivedAt));
       setSourceFilter('email');
     }
-  }, []);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    const onSynced = () => { void fetchInvoices(); };
+    window.addEventListener('ap-company-synced', onSynced);
+    return () => window.removeEventListener('ap-company-synced', onSynced);
+  }, [accessToken, workspaceId]);
 
   useEffect(() => {
     filterInvoices();
@@ -228,6 +400,7 @@ export function InvoiceList() {
     startDate,
     endDate,
     viewMode,
+    anomalyInvoiceIds,
     ifrsFilter,
     matchStatusFilter,
     riskFilter,
@@ -235,6 +408,7 @@ export function InvoiceList() {
     sourceFilter,
     sourceReceivedAtFilter,
     invoiceKindFilter,
+    advanceFilter,
   ]);
 
   /** IFRS dropdown only lists categories present on loaded invoices; reset stale values (e.g. after data refresh). */
@@ -261,26 +435,151 @@ export function InvoiceList() {
     setEndDate('');
     setConfidenceSort('none');
     setInvoiceKindFilter('all');
-    navigate('/invoices', { replace: true });
+    navigate('/ap-invoices/list', { replace: true });
+  }
+
+  async function deleteDebugInvoicesOnce() {
+    try {
+      const { data, error } = await supabase
+        .from('invoices')
+        .delete()
+        .in('invoice_number', DEBUG_INVOICE_NUMBERS)
+        .select('invoice_number');
+      if (error) {
+        console.warn('[AP] Debug invoice cleanup skipped:', error.message);
+        return;
+      }
+      if (data && data.length > 0) {
+        setInvoices((prev) => prev.filter((i) => !DEBUG_INVOICE_NUMBERS.includes(i.invoice_number)));
+        toast({
+          title: 'Test invoices removed',
+          description: `Deleted ${data.length} debug invoice${data.length === 1 ? '' : 's'}.`,
+        });
+      }
+    } catch (e) {
+      console.warn('[AP] Debug invoice cleanup failed:', e);
+    }
+  }
+
+  async function handleBulkClassifyAndMatch() {
+    const targets = invoices.filter((inv) => inv.status === 'Processing');
+    if (targets.length === 0) {
+      toast({ title: 'Nothing to process', description: 'No invoices with status Processing.' });
+      return;
+    }
+
+    setBulkProcessing(true);
+    let classified = 0;
+    let matched = 0;
+    let approved = 0;
+    let failed = 0;
+
+    try {
+      let companyId: string | null = null;
+      try {
+        companyId = await resolveApSupabaseCompanyId(accessToken);
+      } catch {
+        companyId = (await getMyCompany())?.id ?? null;
+      }
+
+      for (const invRaw of targets) {
+        let inv = invRaw;
+        try {
+          const inferredPo = inferPoNumberFromInvoiceNumber(inv.invoice_number);
+          if (!inv.po_number?.trim() && inferredPo) {
+            await supabase
+              .from('invoices')
+              .update({ po_number: inferredPo, updated_at: new Date().toISOString() })
+              .eq('id', inv.id);
+            inv = { ...inv, po_number: inferredPo };
+          }
+
+          const didClassify = await classifyInvoiceFromGl(inv, companyId);
+          if (didClassify) classified += 1;
+
+          const matchResult = await runAutoMatch(inv.id, { respectUploadSetting: false });
+          if (
+            matchResult.invoice_match_status === 'matched' ||
+            matchResult.invoice_match_status === 'three_way_matched' ||
+            matchResult.invoice_match_status === 'partial'
+          ) {
+            matched += 1;
+          }
+          if (matchResult.auto_approved) approved += 1;
+        } catch (e) {
+          failed += 1;
+          console.warn('[AP] Bulk classify/match failed for', inv.invoice_number, e);
+        }
+      }
+
+      await fetchInvoices();
+      toast({
+        title: 'Bulk processing complete',
+        description: `${targets.length} invoice(s): ${classified} classified, ${matched} matched, ${approved} auto-approved${failed ? `, ${failed} failed` : ''}.`,
+      });
+    } catch (e) {
+      console.error('[AP] Bulk classify/match error:', e);
+      toast({
+        title: 'Bulk processing failed',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBulkProcessing(false);
+    }
   }
 
   async function fetchInvoices() {
+    let invoiceList: Invoice[] = [];
+    let companyId: string | null = null;
     try {
+      setLoading(true);
       clearCompanyCache();
-      const company = await getMyCompany();
+      try {
+        companyId = await resolveApSupabaseCompanyId(accessToken);
+      } catch {
+        const company = await getMyCompany();
+        companyId = company?.id ?? null;
+      }
       let q = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       const { data, error } = await q;
 
       if (error) throw error;
-      const invoiceList = data || [];
+      invoiceList = data || [];
+
+      // Workspace/company drift: show invoices even if company_id filter mismatches bulk import
+      if (invoiceList.length === 0 && companyId) {
+        const { data: allRows, error: allErr } = await supabase
+          .from('invoices')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!allErr && allRows && allRows.length > 0) {
+          console.warn('[AP] No invoices for active company — showing all invoices in database');
+          invoiceList = allRows;
+        }
+      }
+
       setInvoices(invoiceList);
       setSelectedInvoice((prev) => {
         if (!prev) return null;
         const next = invoiceList.find((i: Invoice) => i.id === prev.id);
         return next ?? prev;
       });
+    } catch (error) {
+      console.error('Error fetching invoices:', error);
+    } finally {
+      setLoading(false);
+    }
 
+    if (invoiceList.length === 0) return;
+
+    // Risk backfill + PO auto-match run in background so the list renders immediately
+    void enrichInvoicesInBackground(invoiceList, companyId);
+  }
+
+  async function enrichInvoicesInBackground(invoiceList: Invoice[], companyId: string | null) {
+    try {
       // Backfill risk_score for invoices that have null (existing invoices)
       // Stop after first 400 so missing/wrong schema doesn't cause hundreds of errors
       const needsRiskCheck = invoiceList.filter((inv: Invoice) => inv.risk_score == null);
@@ -310,9 +609,15 @@ export function InvoiceList() {
               },
               existing
             );
+            const riskDb = normalizeRiskForDb(result.risk_score);
             const { error } = await supabase
               .from('invoices')
-              .update({ risk_score: result.risk_score, risk_flags: Array.isArray(result.risk_flags) ? result.risk_flags : [], updated_at: new Date().toISOString() })
+              .update({
+                risk_score: riskDb.risk_score,
+                risk_level: riskDb.risk_level,
+                risk_flags: Array.isArray(result.risk_flags) ? result.risk_flags : [],
+                updated_at: new Date().toISOString(),
+              })
               .eq('id', inv.id);
             if (error) {
               if (error.code === 'PGRST301' || error.message?.includes('400') || (error as { status?: number }).status === 400) {
@@ -324,7 +629,16 @@ export function InvoiceList() {
               continue;
             }
             setInvoices((prev) =>
-              prev.map((i) => (i.id === inv.id ? { ...i, risk_score: result.risk_score, risk_flags: result.risk_flags } : i))
+              prev.map((i) =>
+                i.id === inv.id
+                  ? ({
+                      ...i,
+                      risk_score: riskDb.risk_score,
+                      risk_level: riskDb.risk_level,
+                      risk_flags: result.risk_flags,
+                    } as Invoice)
+                  : i
+              )
             );
           } catch (e) {
             console.warn('Failed to backfill risk for invoice', inv.invoice_number, e);
@@ -348,9 +662,16 @@ export function InvoiceList() {
           }
         }
         if (anyUpdated) {
-          const refreshCompany = await getMyCompany();
+          let refreshCompanyId = companyId;
+          if (!refreshCompanyId) {
+            try {
+              refreshCompanyId = await resolveApSupabaseCompanyId(accessToken);
+            } catch {
+              refreshCompanyId = (await getMyCompany())?.id ?? null;
+            }
+          }
           let rq = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-          if (refreshCompany?.id) rq = rq.eq('company_id', refreshCompany.id);
+          if (refreshCompanyId) rq = rq.eq('company_id', refreshCompanyId);
           const { data: refreshed } = await rq;
           if (refreshed) {
             setInvoices(refreshed);
@@ -363,9 +684,7 @@ export function InvoiceList() {
         }
       }
     } catch (error) {
-      console.error('Error fetching invoices:', error);
-    } finally {
-      setLoading(false);
+      console.warn('Invoice list background enrichment failed:', error);
     }
   }
 
@@ -385,6 +704,8 @@ export function InvoiceList() {
       filtered = filtered.filter((inv) => inv.duplicate_flag === true);
     } else if (viewMode === 'needs_review') {
       filtered = filtered.filter((inv) => invoiceNeedsExtractionReview(inv));
+    } else if (viewMode === 'anomalies') {
+      filtered = filtered.filter((inv) => anomalyInvoiceIds.has(inv.id) || invoiceHasRiskSignal(inv));
     }
 
     if (searchTerm) {
@@ -445,6 +766,10 @@ export function InvoiceList() {
       filtered = filtered.filter((inv) => inv.invoice_type !== 'sales');
     } else if (invoiceKindFilter === 'sales') {
       filtered = filtered.filter((inv) => inv.invoice_type === 'sales');
+    }
+
+    if (advanceFilter) {
+      filtered = filtered.filter((inv) => inv.is_advance_payment === true);
     }
 
     let out = filtered;
@@ -515,7 +840,7 @@ export function InvoiceList() {
   async function handleCameraFileConfirmed(file: File) {
     setCapturedFile(file);
     try {
-      const res = await extractInvoiceFromImageFile(file);
+      const res = await extractInvoiceFromImageFile(file, market);
       const n = normalizeExtractedInvoice(res.invoice);
       setPreviewNorm({
         ...n,
@@ -584,7 +909,7 @@ export function InvoiceList() {
   }
 
   async function exportExcel(invList: Invoice[]) {
-    // Sheet 1 â€” Invoices summary
+    // Sheet 1 — Invoices summary
     const headers = [
       'Invoice #', 'Vendor', 'Date', 'Due Date', 'Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
@@ -622,7 +947,7 @@ export function InvoiceList() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws1, 'Invoices');
 
-    // Sheet 2 â€” Line Items (fetch from DB for selected invoices)
+    // Sheet 2 — Line Items (fetch from DB for selected invoices)
     try {
       const invIds = invList.map((i) => i.id);
       const { data: lineItemRows } = await supabase
@@ -720,6 +1045,17 @@ export function InvoiceList() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            disabled={bulkProcessing || invoices.filter((i) => i.status === 'Processing').length === 0}
+            onClick={() => void handleBulkClassifyAndMatch()}
+            className="border-[#0A4B8F] text-[#0A4B8F] hover:bg-blue-50"
+          >
+            <Zap className="mr-2 h-4 w-4" />
+            {bulkProcessing
+              ? 'Processing…'
+              : `Run 3-Way Match & Classify (${invoices.filter((i) => i.status === 'Processing').length})`}
+          </Button>
           {selectedIds.length > 0 && (
             <Button
               variant="outline"
@@ -738,19 +1074,19 @@ export function InvoiceList() {
               className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
             >
               <FileSpreadsheet className="mr-2 h-4 w-4" />
-              Export â–¾
+              Export ▾
             </Button>
             {showExport && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} aria-hidden />
                 <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
                   {[
-                    { icon: 'ðŸ“Š', label: 'Tally XML', fn: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
-                    { icon: 'ðŸŸ¢', label: 'QuickBooks IIF', fn: () => downloadQBIIF(filteredInvoices) },
-                    { icon: 'âš«', label: 'Xero CSV', fn: () => downloadXeroCSV(filteredInvoices) },
-                    { icon: 'ðŸ“˜', label: 'Zoho Books CSV', fn: () => exportZohoCSV(filteredInvoices) },
-                    { icon: 'ðŸ”·', label: 'SAP CSV', fn: () => exportSAPCSV(filteredInvoices) },
-                    { icon: 'ðŸ“¥', label: 'Excel (Generic)', fn: () => void exportExcel(filteredInvoices) },
+                    { icon: '📊', label: 'Tally XML', fn: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
+                    { icon: '🟢', label: 'QuickBooks IIF', fn: () => downloadQBIIF(filteredInvoices) },
+                    { icon: '⚫', label: 'Xero CSV', fn: () => downloadXeroCSV(filteredInvoices) },
+                    { icon: '📘', label: 'Zoho Books CSV', fn: () => exportZohoCSV(filteredInvoices) },
+                    { icon: '🔷', label: 'SAP CSV', fn: () => exportSAPCSV(filteredInvoices) },
+                    { icon: '📥', label: 'Excel (Generic)', fn: () => void exportExcel(filteredInvoices) },
                   ].map((item) => (
                     <button
                       key={item.label}
@@ -824,7 +1160,7 @@ export function InvoiceList() {
                 className={viewMode === 'all' ? 'bg-[#0A4B8F]' : ''}
                 onClick={() => {
                   setViewMode('all');
-                  navigate('/invoices', { replace: true });
+                  navigate('/ap-invoices/list', { replace: true });
                 }}
               >
                 All
@@ -836,7 +1172,7 @@ export function InvoiceList() {
                 className={viewMode === 'approvals' ? 'bg-[#0A4B8F]' : ''}
                 onClick={() => {
                   setViewMode('approvals');
-                  navigate('/invoices', { replace: true });
+                  navigate('/ap-invoices/list', { replace: true });
                 }}
               >
                 Approval queue
@@ -848,7 +1184,7 @@ export function InvoiceList() {
                 className={viewMode === 'duplicates' ? 'bg-amber-700 hover:bg-amber-800' : ''}
                 onClick={() => {
                   setViewMode('duplicates');
-                  navigate('/invoices?filter=duplicates', { replace: true });
+                  navigate('/ap-invoices/list?filter=duplicates', { replace: true });
                 }}
               >
                 Duplicates
@@ -864,10 +1200,22 @@ export function InvoiceList() {
                 }
                 onClick={() => {
                   setViewMode('needs_review');
-                  navigate('/invoices?tab=needs-review', { replace: true });
+                  navigate('/ap-invoices/list?tab=needs-review', { replace: true });
                 }}
               >
                 Needs review
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === 'anomalies' ? 'default' : 'outline'}
+                className={viewMode === 'anomalies' ? 'bg-red-700 hover:bg-red-800 text-white' : ''}
+                onClick={() => {
+                  setViewMode('anomalies');
+                  navigate('/ap-invoices/list?tab=anomalies', { replace: true });
+                }}
+              >
+                Anomaly
               </Button>
               <span className="mx-1 hidden sm:inline text-gray-300">|</span>
               <Button
@@ -940,12 +1288,12 @@ export function InvoiceList() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Match Status</SelectItem>
-                  <SelectItem value="three_way_matched">âœ… 3-Way Matched</SelectItem>
-                  <SelectItem value="matched">âœ… PO Matched</SelectItem>
-                  <SelectItem value="partial">âš ï¸ Partial</SelectItem>
-                  <SelectItem value="mismatch">âŒ Mismatch</SelectItem>
-                  <SelectItem value="no_po">â€” No PO</SelectItem>
-                  <SelectItem value="match_issues">âš ï¸ Match exceptions</SelectItem>
+                  <SelectItem value="three_way_matched">✅ 3-Way Matched</SelectItem>
+                  <SelectItem value="matched">✅ PO Matched</SelectItem>
+                  <SelectItem value="partial">⚠️ Partial</SelectItem>
+                  <SelectItem value="mismatch">❌ Mismatch</SelectItem>
+                  <SelectItem value="no_po">— No PO</SelectItem>
+                  <SelectItem value="match_issues">⚠️ Match exceptions</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={riskFilter} onValueChange={setRiskFilter}>
@@ -965,7 +1313,7 @@ export function InvoiceList() {
                   setSourceFilter(v);
                   if (sourceReceivedAtFilter) {
                     setSourceReceivedAtFilter(null);
-                    navigate('/invoices', { replace: true });
+                    navigate('/ap-invoices/list', { replace: true });
                   }
                 }}
               >
@@ -995,7 +1343,7 @@ export function InvoiceList() {
                   onClick={() => {
                     setSourceReceivedAtFilter(null);
                     setSourceFilter('all');
-                    navigate('/invoices', { replace: true });
+                    navigate('/ap-invoices/list', { replace: true });
                   }}
                 >
                   Clear
@@ -1079,6 +1427,7 @@ export function InvoiceList() {
                   <TableHead>Vendor</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Status</TableHead>
+                  {isUAE && <TableHead>VAT Timing</TableHead>}
                   <TableHead>Payment</TableHead>
                   <TableHead>IFRS Category</TableHead>
                   <TableHead className="hidden lg:table-cell">
@@ -1094,9 +1443,9 @@ export function InvoiceList() {
                       Confidence
                       <span className="text-muted-foreground text-xs font-normal">
                         {confidenceSort === 'high_first'
-                          ? 'â†“'
+                          ? '↓'
                           : confidenceSort === 'low_first'
-                            ? 'â†‘'
+                            ? '↑'
                             : ''}
                       </span>
                     </button>
@@ -1147,10 +1496,15 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       <span className="font-bold">
-                        {formatCurrency(Number(invoice.total_amount), invoice.currency || 'INR')}
+                        {formatCurrency(
+                          Number(invoice.total_amount),
+                          normalizeCurrencyCode(invoice.currency, market)
+                        )}
                       </span>
                       <br />
-                      <span className="text-[11px] text-gray-500">{invoice.currency}</span>
+                      <span className="text-[11px] text-gray-500">
+                        {normalizeCurrencyCode(invoice.currency, market)}
+                      </span>
                     </TableCell>
                     <TableCell
                       className="cursor-pointer"
@@ -1173,11 +1527,27 @@ export function InvoiceList() {
                             variant="outline"
                             className="border-green-300 bg-green-50 text-green-800 text-[10px] px-1.5 py-0 font-medium"
                           >
-                            Tally âœ“
+                            Tally ✓
                           </Badge>
                         )}
                       </div>
                     </TableCell>
+                    {isUAE && (
+                      <TableCell
+                        className="cursor-pointer"
+                        onClick={() => setSelectedInvoice(invoice)}
+                      >
+                        {invoice.is_advance_payment ? (
+                          <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px]">
+                            ⚡ VAT Due on Receipt
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-gray-600 border-gray-200 text-[10px]">
+                            Standard
+                          </Badge>
+                        )}
+                      </TableCell>
+                    )}
                     <TableCell
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
@@ -1233,7 +1603,7 @@ export function InvoiceList() {
                       ) : (
                         <div>
                           <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
-                            âš  Not Classified
+                            ⚠ Not Classified
                           </span>
                           <br />
                           <span style={{ color: '#9ca3af', fontSize: '11px' }}>Fix required</span>
@@ -1251,25 +1621,29 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       {invoice.match_status === 'three_way_matched' && (
-                        <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>âœ… 3-Way Matched</span>
+                        <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>✅ 3-Way Matched</span>
                       )}
                       {invoice.match_status === 'matched' && (
-                        <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>âœ… PO Matched</span>
+                        <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>✅ PO Matched</span>
                       )}
                       {invoice.match_status === 'partial' && (
                         <div>
-                          <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>âš ï¸ Partial</span>
+                          <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>⚠️ Partial</span>
                           <br />
                           <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                            {formatCurrency(Number(invoice.match_difference ?? 0), invoice.currency || 'INR')} diff
+                            {formatCurrency(
+                              Number(invoice.match_difference ?? 0),
+                              normalizeCurrencyCode(invoice.currency, market)
+                            )}{' '}
+                            diff
                           </span>
                         </div>
                       )}
                       {invoice.match_status === 'mismatch' && (
-                        <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>âŒ Mismatch</span>
+                        <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>❌ Mismatch</span>
                       )}
                       {(!invoice.match_status || invoice.match_status === 'no_po') && (
-                        <span style={{ color: '#9ca3af', fontSize: '12px' }}>â€” No PO</span>
+                        <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>
                       )}
                     </TableCell>
                     <TableCell
@@ -1300,11 +1674,11 @@ export function InvoiceList() {
                               color: invoice.gl_source === 'company_coa' ? '#0e9f6e' : '#6b7280',
                             }}
                           >
-                            {invoice.gl_source === 'company_coa' ? 'ðŸ¢ Your COA' : 'ðŸ¤– IFRS Auto'}
+                            {invoice.gl_source === 'company_coa' ? '🏢 Your COA' : '🤖 IFRS Auto'}
                           </span>
                         </div>
                       ) : (
-                        <span style={{ color: '#9ca3af' }}>â€”</span>
+                        <span style={{ color: '#9ca3af' }}>—</span>
                       )}
                     </TableCell>
                     <TableCell
@@ -1312,7 +1686,7 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       {!invoiceHasRiskSignal(invoice) ? (
-                        <span className="text-sm text-gray-400">â€”</span>
+                        <span className="text-sm text-gray-400">—</span>
                       ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                         <span
@@ -1346,10 +1720,10 @@ export function InvoiceList() {
                           }}
                         >
                           {(invoice.risk_level ?? invoice.risk_score) === 'High' || invoice.risk_score === 'high'
-                            ? 'ðŸ”´'
+                            ? '🔴'
                             : (invoice.risk_level ?? invoice.risk_score) === 'Medium' || invoice.risk_score === 'medium'
-                            ? 'ðŸŸ¡'
-                            : 'ðŸŸ¢'}
+                            ? '🟡'
+                            : '🟢'}
                           {invoice.risk_level ??
                             (invoice.risk_score === 'high'
                               ? 'High'
@@ -1364,18 +1738,31 @@ export function InvoiceList() {
                         deriveInvoiceRiskDisplayScore(invoice) != null ? (
                           <span style={{ fontSize: '11px', color: '#9ca3af' }}>
                             {(invoice as { risk_flag_count?: number }).risk_flag_count
-                              ? `${(invoice as { risk_flag_count?: number }).risk_flag_count} flag${((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 1 ? 's' : ''} Â· `
+                              ? `${(invoice as { risk_flag_count?: number }).risk_flag_count} flag${((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 1 ? 's' : ''} · `
                               : ''}
                             Score:{' '}
                             {typeof invoice.risk_score === 'number' && invoice.risk_score > 0
                               ? invoice.risk_score
-                              : (deriveInvoiceRiskDisplayScore(invoice) ?? 'â€”')}
+                              : (deriveInvoiceRiskDisplayScore(invoice) ?? '—')}
                           </span>
                         ) : null}
                       </div>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
+                      {isUAE && invoice.status === 'Approved' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mr-1 text-[10px] h-7 px-2"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPintAeInvoice(invoice);
+                          }}
+                        >
+                          📋 Validate PINT AE
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1457,6 +1844,14 @@ export function InvoiceList() {
         />
       )}
 
+      <PintAeValidateModal
+        invoice={pintAeInvoice}
+        open={!!pintAeInvoice}
+        onOpenChange={(o) => {
+          if (!o) setPintAeInvoice(null);
+        }}
+      />
+
       <CameraCapture
         open={cameraOpen}
         onOpenChange={setCameraOpen}
@@ -1495,7 +1890,7 @@ export function InvoiceList() {
               disabled={deletingAll}
               onClick={() => void handleDeleteAllInvoices()}
             >
-              {deletingAll ? 'Deletingâ€¦' : 'Yes, delete all'}
+              {deletingAll ? 'Deleting…' : 'Yes, delete all'}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1503,4 +1898,3 @@ export function InvoiceList() {
     </div>
   );
 }
-

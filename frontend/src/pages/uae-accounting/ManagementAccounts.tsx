@@ -2,9 +2,10 @@
  * Management Accounts — AI-generated 5-section CFO narrative
  * P&L + Balance Sheet + AI narrative + export
  */
-import { useState } from 'react';
-import { TrendingUp, FileText, Zap, Download } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { TrendingUp, FileText, Zap, Download, CheckCircle2 } from 'lucide-react';
 import * as svc from '../../services/uaeFullAccounting.service';
+import { validateFS, type FSValidationResult } from '../../services/fsValidation.service';
 
 const THIS_PERIOD = new Date().toISOString().slice(0, 7);
 
@@ -29,6 +30,16 @@ export default function ManagementAccounts() {
   const [data, setData]       = useState<ManagementData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
+  const [fsValidation, setFsValidation] = useState<FSValidationResult | null>(null);
+
+  useEffect(() => {
+    if (!data) return;
+    const [y, m] = data.period.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const periodStart = `${y}-${String(m).padStart(2, '0')}-01`;
+    const periodEnd = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    void validateFS(periodStart, periodEnd).then(setFsValidation).catch(() => setFsValidation(null));
+  }, [data]);
 
   const handleGenerate = async () => {
     setLoading(true); setError(''); setData(null);
@@ -77,6 +88,12 @@ export default function ManagementAccounts() {
           )}
         </div>
       </div>
+
+      {fsValidation?.all_passed && (
+        <div className="mb-4 flex items-center gap-2 bg-green-900/40 border border-green-700 rounded-lg px-4 py-3 text-sm text-green-300">
+          <CheckCircle2 size={16} /> All Statements Validated ✓
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-900/40 border border-red-700 rounded-lg p-3 mb-4 text-sm text-red-300">{error}</div>

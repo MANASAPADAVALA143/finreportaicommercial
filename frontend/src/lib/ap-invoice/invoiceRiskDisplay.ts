@@ -1,4 +1,4 @@
-﻿import type { Invoice } from './supabase';
+import type { Invoice } from './supabase';
 
 function flagCount(inv: Invoice): number {
   const c = (inv as { risk_flag_count?: number }).risk_flag_count;
@@ -27,7 +27,7 @@ function normalizedRiskLevel(inv: Invoice): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
-/** Stable 0â€“100-style score for list/detail when numeric `risk_score` is missing or zero. */
+/** Stable 0–100-style score for list/detail when numeric `risk_score` is missing or zero. */
 export function deriveInvoiceRiskDisplayScore(inv: Invoice): number | null {
   if (typeof inv.risk_score === 'number' && inv.risk_score > 0) {
     return Math.round(inv.risk_score);
@@ -69,4 +69,3 @@ export function invoiceRiskTierForFilter(inv: Invoice): 'high' | 'medium' | 'low
   }
   return 'low';
 }
-

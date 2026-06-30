@@ -60,7 +60,7 @@ async def create_journal_entry(
         fraud_score=combined_fraud_score,
         anomaly_detected=is_anomaly or fraud_analysis["requires_review"],
         status="pending" if fraud_analysis["requires_review"] else "approved",
-        metadata={
+        entry_metadata={
             "fraud_analysis": fraud_analysis,
             "ml_anomaly_score": anomaly_score
         }

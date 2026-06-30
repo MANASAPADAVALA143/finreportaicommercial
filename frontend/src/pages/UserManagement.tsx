@@ -1,6 +1,7 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 import { useAuth } from '../context/AuthContext';
+import type { ProductRole } from '../config/productRole';
 
 type Role = 'cfo' | 'finance_manager' | 'accountant' | 'auditor' | 'super_admin';
 
@@ -9,6 +10,7 @@ interface UserRow {
   name: string;
   email: string;
   role: Role;
+  product_role: ProductRole;
   is_active: boolean;
   last_login: string | null;
 }
@@ -86,6 +88,15 @@ export default function UserManagement() {
     await loadUsers();
   };
 
+  const updateProductRole = async (u: UserRow, next: ProductRole) => {
+    await authFetch(`/api/users/${u.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_role: next }),
+    });
+    await loadUsers();
+  };
+
   const deactivate = async (u: UserRow) => {
     await authFetch(`/api/users/${u.id}`, { method: 'DELETE' });
     await loadUsers();
@@ -144,6 +155,7 @@ export default function UserManagement() {
                   <th className="text-left p-2">Name</th>
                   <th className="text-left p-2">Email</th>
                   <th className="text-left p-2">Role</th>
+                  <th className="text-left p-2">Product Access</th>
                   <th className="text-left p-2">Status</th>
                   <th className="text-left p-2">Last Login</th>
                   <th className="text-left p-2">Actions</th>
@@ -161,6 +173,17 @@ export default function UserManagement() {
                         <option value="finance_manager">Finance Manager</option>
                         <option value="accountant">Accountant</option>
                         <option value="auditor">Auditor</option>
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <select
+                        className="rounded bg-slate-950 border border-slate-700 px-2 py-1"
+                        value={u.product_role}
+                        onChange={(e) => void updateProductRole(u, e.target.value as ProductRole)}
+                      >
+                        <option value="full_access">Full Access</option>
+                        <option value="uae_client">UAE Client</option>
+                        <option value="india_client">India Client</option>
                       </select>
                     </td>
                     <td className="p-2">{u.is_active ? 'Active' : 'Inactive'}</td>

@@ -3,64 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Download, FileText, Activity, AlertTriangle, Sun, TrendingDown, AlertCircle, Info, ArrowRight, TrendingUp } from 'lucide-react';
 import KPICard from '../../components/fpa/kpi/KPICard';
 import KPISpeedometer from '../../components/fpa/kpi/KPISpeedometer';
-import MonthlyTrendChart from '../../components/fpa/kpi/MonthlyTrendChart';
-import KPIHeatmap from '../../components/fpa/kpi/KPIHeatmap';
 import AIInsights from '../../components/fpa/kpi/AIInsights';
 import KPIAlerts from '../../components/fpa/kpi/KPIAlerts';
-import {
-  kpiAlerts,
-  monthlyTrendData,
-  heatmapData
-} from '../../data/kpiMockData';
 import { loadFPAActual, loadFPABudget, checkDataAvailability, getMissingDataMessage, calculateRealKPIs } from '../../utils/fpaDataLoader';
+import { useCompany } from '../../context/CompanyContext';
+import PeriodSelector from '../../components/PeriodSelector';
+import { fetchGLSummary, glSummaryToKPIs, getCurrentPeriod } from '../../services/glSummary.service';
+import { getDSOMetrics } from '../../services/arService';
 
 // ── AI Morning Brief ──────────────────────────────────────────────────────────
-
-const MORNING_BRIEF_ITEMS = [
-  {
-    level: 'CRITICAL' as const,
-    icon: TrendingDown,
-    color: 'text-red-600',
-    bg: 'bg-red-50',
-    border: 'border-red-200',
-    badge: 'bg-red-100 text-red-700',
-    title: 'Software Revenue AED 250K below Oct budget',
-    body: 'Root cause: ADNOC Digital contract delayed to November. Probability of closing Nov: 80%.',
-    action: 'Update Nov forecast upward. Chase ADNOC Digital for signed PO.',
-    owner: 'Sarah Johnson (Sales) · Due 15 Nov',
-  },
-  {
-    level: 'WARNING' as const,
-    icon: AlertCircle,
-    color: 'text-amber-600',
-    bg: 'bg-amber-50',
-    border: 'border-amber-200',
-    badge: 'bg-amber-100 text-amber-700',
-    title: 'Cash drops below AED 4M projected in Week 4 Nov',
-    body: 'WPS salary run + Q4 VAT payment land same week. Current Week 4 Nov forecast: AED 3.8M.',
-    action: 'Chase Emirates NBD invoice AED 780K (62 days outstanding). Draw credit line if needed.',
-    owner: 'CFO · Due 10 Nov',
-  },
-  {
-    level: 'INFO' as const,
-    icon: Info,
-    color: 'text-blue-600',
-    bg: 'bg-blue-50',
-    border: 'border-blue-200',
-    badge: 'bg-blue-100 text-blue-700',
-    title: 'EBITDA margin recovered to 14.6% — best since June 2025',
-    body: 'Driven by Sales & Marketing underspend (AED 40K favorable) and Support & Maintenance revenue outperformance.',
-    action: 'No action required. Note in board pack as positive trend.',
-    owner: 'CFO · Board pack due 25 Nov',
-  },
-];
 
 function buildRealAlerts() {
   try {
     const actual  = JSON.parse(localStorage.getItem('fpa_actual')  || '{}');
     const budget  = JSON.parse(localStorage.getItem('fpa_budget')  || '{}');
     const cur = (localStorage.getItem('fpa_currency') || 'AED').toUpperCase();
-    const sym = cur === 'INR' ? '₹' : 'AED ';
     const fmt = (n: number) => cur === 'INR'
       ? `₹${(n/10000000).toFixed(1)} Cr`
       : `AED ${(n/1000000).toFixed(1)}M`;
@@ -148,10 +105,10 @@ function MorningBrief() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const realAlerts = buildRealAlerts();
-  const displayItems = realAlerts || MORNING_BRIEF_ITEMS;
+  const displayItems = realAlerts ?? [];
   const critCount = displayItems.filter(i => i.level === 'CRITICAL').length;
   const warnCount = displayItems.filter(i => i.level === 'WARNING').length;
-  const hasRealData = realAlerts !== null;
+  const currency = (localStorage.getItem('fpa_currency') || 'AED').toUpperCase();
 
   return (
     <div className="max-w-[1800px] mx-auto mb-6">
@@ -161,20 +118,22 @@ function MorningBrief() {
             <Sun className="w-8 h-8 text-yellow-400" />
             <div>
               <h2 className="text-xl font-bold">{greeting}. Here is your AI Morning Brief.</h2>
-              <p className="text-slate-400 text-sm mt-0.5">{today} · Al Futtaim Digital Services LLC · AED</p>
+              <p className="text-slate-400 text-sm mt-0.5">{today} · {currency}</p>
             </div>
           </div>
-          <div className="flex gap-3 text-sm">
-            <span className="bg-red-900/50 border border-red-700 text-red-300 px-3 py-1 rounded-full font-semibold">{critCount} Critical</span>
-            <span className="bg-amber-900/50 border border-amber-700 text-amber-300 px-3 py-1 rounded-full font-semibold">{warnCount} Warning</span>
-          </div>
+          {displayItems.length > 0 && (
+            <div className="flex gap-3 text-sm">
+              <span className="bg-red-900/50 border border-red-700 text-red-300 px-3 py-1 rounded-full font-semibold">{critCount} Critical</span>
+              <span className="bg-amber-900/50 border border-amber-700 text-amber-300 px-3 py-1 rounded-full font-semibold">{warnCount} Warning</span>
+            </div>
+          )}
         </div>
 
-        {!hasRealData && (
-          <div className="mb-3 px-3 py-2 bg-amber-900/30 border border-amber-700/40 rounded-lg text-xs text-amber-300">
-            ⚠️ Showing sample alerts — upload master data from FP&A Suite homepage to see real alerts
+        {displayItems.length === 0 ? (
+          <div className="text-center py-8 text-slate-400 text-sm">
+            No alerts — post journal entries to generate insights
           </div>
-        )}
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {displayItems.map((item, i) => {
             const Icon = item.icon;
@@ -195,39 +154,40 @@ function MorningBrief() {
             );
           })}
         </div>
+        )}
 
-        {/* UAE Compliance strip */}
-        <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-4 text-xs text-slate-400">
-          {(() => {
-            try {
-              const a = JSON.parse(localStorage.getItem('fpa_actual') || '{}');
-              const b = JSON.parse(localStorage.getItem('fpa_budget') || '{}');
-              const cur = localStorage.getItem('fpa_currency') || 'AED';
-              const rev = a.totalRevenue || 0; const exp = a.totalExpenses || 0;
-              const budRev = b.totalRevenue || rev;
-              const gm = rev > 0 ? ((rev - (exp * 0.35)) / rev * 100).toFixed(1) : '—';
-              const ebitdaPct = rev > 0 ? ((rev - exp) / rev * 100).toFixed(1) : '—';
-              const revVar = budRev > 0 ? ((rev - budRev) / budRev * 100).toFixed(1) : '—';
-              return [
-                { label: 'Revenue vs Budget', value: `${revVar}%`, ok: Number(revVar) >= 0 },
-                { label: 'Gross Margin', value: `${gm}% YTD`, ok: Number(gm) > 50 },
-                { label: 'EBITDA Margin', value: `${ebitdaPct}%`, ok: Number(ebitdaPct) > 10 },
-                { label: 'Currency', value: cur, ok: true },
-                { label: 'Data Status', value: rev > 0 ? '✅ Live data' : '⚠️ Sample data', ok: rev > 0 },
-              ];
-            } catch { return [
-              { label: 'VAT Filing', value: '31 Jan 2026', ok: true },
-              { label: 'Q4 VAT Payable', value: 'AED 385K est.', ok: true },
-              { label: 'Gross Margin', value: '73.9%', ok: false },
-            ]; }
-          })().map(b => (
-            <div key={b.label} className="flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${b.ok ? 'bg-green-400' : 'bg-amber-400'}`} />
-              <span className="font-medium text-slate-300">{b.label}:</span>
-              <span>{b.value}</span>
-            </div>
-          ))}
-        </div>
+        {/* Live metrics strip — only when real data exists */}
+        {displayItems.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap gap-4 text-xs text-slate-400">
+            {(() => {
+              try {
+                const a = JSON.parse(localStorage.getItem('fpa_actual') || '{}');
+                const b = JSON.parse(localStorage.getItem('fpa_budget') || '{}');
+                const cur = localStorage.getItem('fpa_currency') || 'AED';
+                const rev = a.totalRevenue || 0;
+                const exp = a.totalExpenses || 0;
+                const budRev = b.totalRevenue || rev;
+                const gm = rev > 0 ? ((rev - (a.costOfGoodsSold || exp * 0.35)) / rev * 100).toFixed(1) : '—';
+                const ebitdaPct = rev > 0 ? ((rev - exp) / rev * 100).toFixed(1) : '—';
+                const revVar = budRev > 0 ? ((rev - budRev) / budRev * 100).toFixed(1) : '—';
+                return [
+                  { label: 'Revenue vs Budget', value: `${revVar}%`, ok: Number(revVar) >= 0 },
+                  { label: 'Gross Margin', value: `${gm}% YTD`, ok: Number(gm) > 0 },
+                  { label: 'EBITDA Margin', value: `${ebitdaPct}%`, ok: Number(ebitdaPct) > 0 },
+                  { label: 'Currency', value: cur, ok: true },
+                ];
+              } catch {
+                return [];
+              }
+            })().map(b => (
+              <div key={b.label} className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${b.ok ? 'bg-green-400' : 'bg-amber-400'}`} />
+                <span className="font-medium text-slate-300">{b.label}:</span>
+                <span>{b.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -235,12 +195,37 @@ function MorningBrief() {
 
 const KPIDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { activeCompanyId } = useCompany();
+  const workspaceId = localStorage.getItem('gnanova_workspace_id');
   
-  // Check data availability
   const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);
   const [actualData, setActualData] = useState<any>(null);
   const [budgetData, setBudgetData] = useState<any>(null);
   const [realKPIs, setRealKPIs] = useState<any>(null);
+  const [glSource, setGlSource] = useState(false);
+  const [periodRange, setPeriodRange] = useState(getCurrentPeriod);
+  const [dsoKpi, setDsoKpi] = useState<{ value: number; benchmark: number; label: string } | null>(null);
+
+  const loadGlKpis = async (start: string, end: string) => {
+    if (!activeCompanyId) return;
+    try {
+      const [summary, dso] = await Promise.all([
+        fetchGLSummary(activeCompanyId, workspaceId, start, end),
+        getDSOMetrics(activeCompanyId, start, end).catch(() => null),
+      ]);
+      if (summary.has_data) {
+        setRealKPIs(glSummaryToKPIs(summary));
+        setGlSource(true);
+      }
+      if (dso) {
+        setDsoKpi({
+          value: dso.dso_current,
+          benchmark: dso.industry_benchmark,
+          label: dso.dso_vs_benchmark_label,
+        });
+      }
+    } catch { /* ignore */ }
+  };
 
   useEffect(() => {
     if (dataCheck.available) {
@@ -248,14 +233,14 @@ const KPIDashboard: React.FC = () => {
       const budget = loadFPABudget();
       setActualData(actual);
       setBudgetData(budget);
-      
-      // Calculate real KPIs from uploaded data
       if (actual && budget) {
-        const calculated = calculateRealKPIs(actual, budget);
-        setRealKPIs(calculated);
+        setRealKPIs(calculateRealKPIs(actual, budget));
+        setGlSource(false);
       }
+    } else {
+      void loadGlKpis(periodRange.start, periodRange.end);
     }
-  }, [dataCheck.available]);
+  }, [dataCheck.available, activeCompanyId, periodRange]);
   
   const [period, setPeriod] = useState('Oct 2025');
   const [view, setView] = useState('Monthly');
@@ -276,8 +261,17 @@ const KPIDashboard: React.FC = () => {
       {/* AI Morning Brief */}
       <MorningBrief />
 
+      {glSource && (
+        <div className="max-w-[1800px] mx-auto mb-4 px-2">
+          <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-800 flex items-center justify-between">
+            <span>Source: UAE GL — live journal entry actuals</span>
+            <PeriodSelector workspaceId={workspaceId} onPeriodChange={(s, e) => setPeriodRange({ start: s, end: e })} />
+          </div>
+        </div>
+      )}
+
       {/* Data Missing Warning Banner */}
-      {!dataCheck.available && (
+      {!dataCheck.available && !glSource && (
         <div className="bg-yellow-50 border-b-2 border-yellow-400 px-6 py-4 rounded-lg mb-6">
           <div className="max-w-[1800px] mx-auto flex items-center gap-3">
             <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0" />
@@ -389,8 +383,7 @@ const KPIDashboard: React.FC = () => {
 
             <div className="border-l border-gray-300 pl-6 ml-auto">
               <div className="flex items-center gap-4 text-sm text-gray-600">
-                <span><span className="font-semibold text-gray-900">Company:</span> Al Futtaim Digital Services LLC</span>
-                <span><span className="font-semibold text-gray-900">Currency:</span> AED</span>
+                <span><span className="font-semibold text-gray-900">Currency:</span> {(localStorage.getItem('fpa_currency') || 'AED').toUpperCase()}</span>
               </div>
             </div>
           </div>
@@ -406,7 +399,10 @@ const KPIDashboard: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {realKPIs && realKPIs.revenueKPIs ? (
             realKPIs.revenueKPIs.map((kpi: any, idx: number) => (
-              <KPICard key={kpi.id} kpi={kpi} delay={idx * 0.1} />
+              <div key={kpi.id}>
+                <KPICard kpi={kpi} delay={idx * 0.1} />
+                {kpi.source === 'UAE GL' && <p className="text-xs text-green-700 mt-1 text-center">Source: UAE GL</p>}
+              </div>
             ))
           ) : (
             <div className="col-span-4 text-center py-8 bg-white rounded-xl border border-gray-200">
@@ -461,15 +457,25 @@ const KPIDashboard: React.FC = () => {
           Working Capital Efficiency
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {dsoKpi && (
+            <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+              <p className="text-sm text-gray-500 mb-1">DSO (Days Sales Outstanding)</p>
+              <p className={`text-3xl font-bold ${dsoKpi.value > dsoKpi.benchmark ? 'text-red-600' : 'text-green-600'}`}>
+                {dsoKpi.value} days
+              </p>
+              <p className="text-xs text-gray-500 mt-2">UAE benchmark: {dsoKpi.benchmark} days · {dsoKpi.label}</p>
+              <p className="text-xs text-green-700 mt-1">Source: UAE AR live</p>
+            </div>
+          )}
           {realKPIs && realKPIs.efficiencyKPIs ? (
             realKPIs.efficiencyKPIs.map((kpi: any, idx: number) => (
               <KPICard key={kpi.id} kpi={kpi} delay={idx * 0.1} />
             ))
-          ) : (
+          ) : !dsoKpi ? (
             <div className="col-span-4 text-center py-8 bg-white rounded-xl border border-gray-200">
-              <p className="text-gray-500">Upload data to see efficiency KPIs</p>
+              <p className="text-gray-500">Upload data or select a company to see efficiency KPIs</p>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -479,50 +485,75 @@ const KPIDashboard: React.FC = () => {
           <div className="w-1 h-6 bg-indigo-600 rounded-full"></div>
           Margin Performance Gauges
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <KPISpeedometer
-            title="Gross Margin"
-            value={43.9}
-            target={51.4}
-            unit="%"
-          />
-          <KPISpeedometer
-            title="EBITDA Margin"
-            value={26.2}
-            target={25.7}
-            unit="%"
-          />
-          <KPISpeedometer
-            title="Net Profit Margin"
-            value={15.5}
-            target={23.1}
-            unit="%"
-          />
-        </div>
+        {realKPIs?.profitabilityKPIs ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <KPISpeedometer
+              title="Gross Margin"
+              value={realKPIs.profitabilityKPIs.find((k: { id: string }) => k.id === 'gross-margin')?.value ?? 0}
+              target={realKPIs.profitabilityKPIs.find((k: { id: string }) => k.id === 'gross-margin')?.target ?? 0}
+              unit="%"
+            />
+            <KPISpeedometer
+              title="EBITDA Margin"
+              value={
+                actualData?.totalRevenue > 0
+                  ? ((actualData.totalRevenue - (actualData.totalExpenses || 0)) / actualData.totalRevenue) * 100
+                  : 0
+              }
+              target={
+                budgetData?.totalRevenue > 0
+                  ? ((budgetData.totalRevenue - (budgetData.totalExpenses || 0)) / budgetData.totalRevenue) * 100
+                  : 0
+              }
+              unit="%"
+            />
+            <KPISpeedometer
+              title="Net Profit Margin"
+              value={realKPIs.profitabilityKPIs.find((k: { id: string }) => k.id === 'net-margin')?.value ?? 0}
+              target={realKPIs.profitabilityKPIs.find((k: { id: string }) => k.id === 'net-margin')?.target ?? 0}
+              unit="%"
+            />
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px', border: '1px dashed #CBD5E1', borderRadius: '8px' }}>
+            <p style={{ color: '#64748B' }}>Connect your accounting data to see live KPIs</p>
+          </div>
+        )}
       </div>
 
       {/* Trend Charts Section */}
-      <div className="max-w-[1800px] mx-auto mb-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
-          <div className="w-1 h-6 bg-cyan-600 rounded-full"></div>
-          12-Month Performance Trends
-        </h2>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <MonthlyTrendChart data={monthlyTrendData} type="revenue" />
-          <MonthlyTrendChart data={monthlyTrendData} type="margins" />
+      {realKPIs && (
+        <div className="max-w-[1800px] mx-auto mb-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+            <div className="w-1 h-6 bg-cyan-600 rounded-full"></div>
+            12-Month Performance Trends
+          </h2>
+          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+            <p className="text-gray-500">Upload monthly actuals to see performance trends</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Heatmap Section */}
-      <div className="max-w-[1800px] mx-auto mb-6">
-        <KPIHeatmap data={heatmapData} />
-      </div>
+      {realKPIs && (
+        <div className="max-w-[1800px] mx-auto mb-6">
+          <div className="text-center py-12 bg-white rounded-xl border border-dashed border-gray-300">
+            <p className="text-gray-500">Upload data across periods to see KPI heatmap</p>
+          </div>
+        </div>
+      )}
 
       {/* AI Insights & Alerts Section */}
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <AIInsights kpis={realKPIs?.allKPIs || []} />
-          <KPIAlerts alerts={kpiAlerts} />
+          {realKPIs ? (
+            <KPIAlerts alerts={[]} />
+          ) : (
+            <div className="bg-white rounded-xl border border-dashed border-gray-300 p-8 text-center">
+              <p className="text-gray-500">No alerts — connect accounting data to generate KPI alerts</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -533,9 +564,8 @@ const KPIDashboard: React.FC = () => {
             <div>
               <h3 className="text-lg font-bold mb-2">Dashboard Summary</h3>
               <p className="text-blue-100 text-sm">
-                Monitoring {realKPIs?.allKPIs?.length || 0} key performance indicators • 
-                {kpiAlerts.filter(a => a.severity === 'critical').length} critical alerts • 
-                {kpiAlerts.filter(a => a.severity === 'warning').length} warnings
+                Monitoring {realKPIs?.allKPIs?.length || 0} key performance indicators
+                {realKPIs ? '' : ' — upload actual and budget data to begin'}
               </p>
             </div>
             <div className="flex items-center gap-4">

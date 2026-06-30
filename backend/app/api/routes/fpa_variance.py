@@ -71,6 +71,7 @@ class AINarrativeResponse(BaseModel):
     executive_summary: str
     line_commentary: List[Dict[str, str]]  # [{ account, why, recommendation }]
     action_items: List[str]
+    fallback_used: bool = False
 
 
 class CommentaryRequest(BaseModel):
@@ -568,6 +569,293 @@ async def tb_line_commentary(body: TBLineCommentaryRequest):
     return TBLineCommentaryResponse(commentary=(text or "").strip())
 
 
+def _is_revenue_item(item: Dict[str, Any]) -> bool:
+    at = str(item.get("accountType") or item.get("account_type") or "").lower()
+    if at in ("income", "revenue"):
+        return True
+    if at in ("expense", "cost"):
+        return False
+    name = str(item.get("account", "")).lower()
+    if re.search(
+        r"commission|marketing|cost|expense|cogs|payroll|rent|admin|depreciation|interest|salary",
+        name,
+    ):
+        return False
+    return bool(re.search(r"revenue|income|turnover|receipts", name)) or (
+        bool(re.search(r"\bsales\b", name))
+        and not re.search(r"cogs|cost of sales|cost of goods|marketing|commission", name)
+    )
+
+
+def _is_expense_item(item: Dict[str, Any]) -> bool:
+    at = str(item.get("accountType") or item.get("account_type") or "").lower()
+    if at in ("expense", "cost"):
+        return True
+    if at in ("income", "revenue"):
+        return False
+    return not _is_revenue_item(item)
+
+
+def _variance_pct_decimal(item: Dict[str, Any]) -> float:
+    budget = float(item.get("budget", 0) or 0)
+    if not budget:
+        return 0.0
+    actual = float(item.get("actual", 0) or 0)
+    return (actual - budget) / abs(budget)
+
+
+def _get_variance_severity(item: Dict[str, Any]) -> str:
+    """Revenue over-budget = favorable; expense over-budget = adverse."""
+    vp = _variance_pct_decimal(item)
+    if _is_revenue_item(item):
+        if vp >= 0.05:
+            return "favorable"
+        if vp >= 0:
+            return "ok"
+        if vp < -0.05:
+            return "urgent"
+        return "monitor"
+    if vp <= -0.05:
+        return "favorable"
+    if vp <= 0:
+        return "ok"
+    if vp > 0.10:
+        return "urgent"
+    return "monitor"
+
+
+def _find_sales_marketing_row(line_items: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for item in line_items:
+        name = str(item.get("account", "")).lower()
+        if re.search(r"sales\s*[&/]?\s*marketing|sales\s+and\s+marketing|^marketing\b|s\s*&\s*m", name):
+            return item
+    return None
+
+
+def _sales_marketing_narrative(line_items: List[Dict[str, Any]], fc) -> str:
+    row = _find_sales_marketing_row(line_items)
+    if not row:
+        return ""
+    budget = float(row.get("budget", 0) or 0)
+    actual = float(row.get("actual", 0) or 0)
+    if not budget:
+        return ""
+    pct = (actual - budget) / abs(budget) * 100
+    direction = "under" if actual < budget else "over"
+    sentiment = "favorable" if actual <= budget else "adverse"
+    return (
+        f"Sales & Marketing came in {direction} budget at {fc(actual)} vs plan {fc(budget)} "
+        f"({pct:+.1f}% {sentiment})."
+    )
+
+
+def _format_line_for_prompt(item: Dict[str, Any], fc) -> str:
+    budget = float(item.get("budget", 0) or 0)
+    actual = float(item.get("actual", 0) or 0)
+    variance = float(item.get("variance", actual - budget) or 0)
+    variance_pct = float(item.get("variance_pct", 0) or 0)
+    if not variance_pct and budget:
+        variance_pct = variance / abs(budget) * 100
+    direction = "over" if actual > budget else "under"
+    is_revenue = _is_revenue_item(item)
+    if is_revenue:
+        sentiment = "FAVORABLE" if actual >= budget else "ADVERSE"
+    else:
+        sentiment = "FAVORABLE" if actual <= budget else "ADVERSE"
+    acct_type = "REVENUE" if is_revenue else "EXPENSE"
+    return (
+        f"- {item.get('account', '')} ({acct_type}): Budget {fc(budget)}, Actual {fc(actual)}, "
+        f"Variance {direction} by {abs(variance_pct):.1f}% — {sentiment}"
+    )
+
+
+def _generate_action_items(line_items: List[Dict[str, Any]], fc) -> List[str]:
+    """Deterministic action items with correct revenue vs expense severity."""
+    candidates: List[tuple[int, str]] = []
+    for row in line_items:
+        budget = float(row.get("budget", 0) or 0)
+        if not budget:
+            continue
+        severity = _get_variance_severity(row)
+        if severity == "ok":
+            continue
+        is_revenue = _is_revenue_item(row)
+        account = str(row.get("account", "Line item"))
+        variance_pct = _variance_pct_decimal(row) * 100
+        variance_amt = abs(float(row.get("actual", 0) or 0) - budget)
+        amt_label = fc(variance_amt)
+
+        if severity == "urgent":
+            if is_revenue:
+                text = (
+                    f"Revenue missed budget by {amt_label} ({variance_pct:+.1f}%) "
+                    f"— investigate pipeline gaps"
+                )
+            else:
+                text = (
+                    f"{account} exceeded budget by {amt_label} ({variance_pct:+.1f}%) "
+                    f"— review and contain"
+                )
+            candidates.append((1, f"🔴 URGENT: {text}"))
+        elif severity == "monitor":
+            if is_revenue:
+                text = (
+                    f"{account} below budget by {amt_label} ({variance_pct:+.1f}%) "
+                    f"— validate drivers, update forecast"
+                )
+            else:
+                text = (
+                    f"{account} over budget by {amt_label} ({variance_pct:+.1f}%) "
+                    f"— monitor closely"
+                )
+            candidates.append((2, f"🟡 MONITOR: {text}"))
+        elif severity == "favorable":
+            if is_revenue:
+                text = (
+                    f"{account} beat budget by {amt_label} (+{abs(variance_pct):.1f}%) "
+                    f"— roll into forecast"
+                )
+            else:
+                text = (
+                    f"{account} under budget by {amt_label} ({variance_pct:+.1f}%) "
+                    f"— sustain cost discipline"
+                )
+            candidates.append((3, f"🟢 FAVORABLE: {text}"))
+
+    candidates.sort(key=lambda x: x[0])
+    return [f"{i + 1}. {text}" for i, (_, text) in enumerate(candidates[:5])]
+
+
+def _strip_embedded_action_items(text: str) -> str:
+    """Remove action-item blocks accidentally included in executive summary."""
+    if not text:
+        return text
+    for marker in (
+        "---ACTION_ITEMS---",
+        "---LINE_COMMENTARY---",
+        "\nACTION ITEMS:",
+        "\n3) ACTION ITEMS",
+        "\n3. ACTION ITEMS",
+    ):
+        idx = text.find(marker)
+        if idx >= 0:
+            text = text[:idx]
+    lines = text.strip().split("\n")
+    while lines:
+        last = lines[-1].strip()
+        if re.match(r"^\d+[\.\)]\s*[🔴🟡🟢]", last) or re.match(r"^[🔴🟡🟢]\s*(URGENT|MONITOR|FAVORABLE|OPTIMISE)", last, re.I):
+            lines.pop()
+        else:
+            break
+    return "\n".join(lines).strip()
+
+
+def _line_variance_commentary(item: Dict[str, Any], fc) -> Dict[str, str]:
+    """Rule-based line commentary when Claude is unavailable."""
+    account = str(item.get("account", "Line item"))
+    var = float(item.get("variance", 0) or 0)
+    var_pct = float(item.get("variance_pct", 0) or 0)
+    is_revenue = _is_revenue_item(item)
+    favorable = (is_revenue and var > 0) or (not is_revenue and var < 0)
+    adverse = (is_revenue and var < 0) or (not is_revenue and var > 0)
+
+    if favorable:
+        why = f"Actual {fc(item.get('actual', 0))} beat budget {fc(item.get('budget', 0))} ({var_pct:+.1f}%)."
+        rec = "Validate drivers and roll the uplift into the next forecast cycle."
+    elif adverse:
+        why = f"Actual {fc(item.get('actual', 0))} missed budget {fc(item.get('budget', 0))} ({var_pct:+.1f}%)."
+        rec = "Investigate root cause with the department owner and set a recovery plan."
+    else:
+        why = f"Variance of {fc(var)} ({var_pct:+.1f}%) is within normal tolerance."
+        rec = "Continue monitoring; no immediate action required."
+
+    return {"account": account, "why": why, "recommendation": rec}
+
+
+def _build_template_narrative(
+    *,
+    fc,
+    narrative_mode: str,
+    total_budget: float,
+    total_actual: float,
+    total_variance: float,
+    total_variance_pct: float,
+    revenue_budget: float,
+    revenue_actual: float,
+    revenue_growth_pct: float,
+    cost_budget: float,
+    cost_actual: float,
+    cost_growth_pct: float,
+    net_profit_budget: float,
+    net_profit_actual: float,
+    net_profit_variance: float,
+    net_profit_growth_pct: float,
+    marketing_growth_pct: float,
+    budget_cogs_pct: float,
+    actual_cogs_pct: float,
+    cogs_growth_pct: float,
+    status_label: str,
+    material: List[Dict[str, Any]],
+    dept_summary: List[Dict[str, Any]],
+    line_items: List[Dict[str, Any]],
+) -> AINarrativeResponse:
+    """Deterministic CFO narrative when the LLM is unavailable."""
+    profit_word = "increased" if net_profit_variance >= 0 else "decreased"
+    rev_word = "above" if revenue_growth_pct >= 0 else "below"
+    cost_word = "above" if cost_growth_pct > 0 else "below"
+
+    if narrative_mode == "board":
+        executive_summary = (
+            f"• Net profit {profit_word} to {fc(net_profit_actual)} vs budget {fc(net_profit_budget)} "
+            f"({net_profit_growth_pct:+.1f}%).\n"
+            f"• Revenue {rev_word} plan at {fc(revenue_actual)} ({revenue_growth_pct:+.1f}% vs budget).\n"
+            f"• Overall: {status_label}. Monitor working capital as revenue scales."
+        )
+    elif narrative_mode == "investor":
+        executive_summary = (
+            f"Revenue reached {fc(revenue_actual)} against a {fc(revenue_budget)} plan ({revenue_growth_pct:+.1f}%). "
+            f"Net profit is {fc(net_profit_actual)} vs budget {fc(net_profit_budget)}. "
+            f"COGS moved from {budget_cogs_pct:.1f}% to {actual_cogs_pct:.1f}% of revenue. "
+            f"Key risk: cost growth at {cost_growth_pct:+.1f}% while revenue grows at {revenue_growth_pct:+.1f}%."
+        )
+    else:
+        executive_summary = (
+            f"Net profit {profit_word} to {fc(net_profit_actual)} from a budget of {fc(net_profit_budget)}, "
+            f"resulting in a {'favorable' if net_profit_variance >= 0 else 'adverse'} variance of "
+            f"{fc(net_profit_variance)} ({net_profit_growth_pct:+.1f}%). "
+            f"Revenue is {fc(revenue_actual)} vs budget {fc(revenue_budget)} ({revenue_growth_pct:+.1f}%); "
+            f"costs are {fc(cost_actual)} vs budget {fc(cost_budget)} ({cost_growth_pct:+.1f}%). "
+            f"COGS increased by {cogs_growth_pct:+.1f}% relative to {revenue_growth_pct:+.1f}% revenue growth. "
+        )
+        sm_line = _sales_marketing_narrative(line_items, fc)
+        if sm_line:
+            executive_summary += f" {sm_line}"
+        elif marketing_growth_pct:
+            executive_summary += f" Marketing spend variance was {marketing_growth_pct:+.1f}% vs budget."
+        executive_summary += (
+            f" Overall assessment: {status_label}. "
+            f"Working capital and liquidity should be monitored as the business scales."
+        )
+
+    line_commentary = [_line_variance_commentary(i, fc) for i in material[:10]]
+    action_items = _generate_action_items(line_items, fc)
+    if not action_items and revenue_growth_pct > cost_growth_pct:
+        action_items = [
+            "1. 🟢 FAVORABLE: Operating leverage is positive — consider reinvesting savings into growth."
+        ]
+    elif not action_items and cost_growth_pct > revenue_growth_pct:
+        action_items = [
+            "1. 🟡 MONITOR: Cost growth is outpacing revenue — review discretionary spend."
+        ]
+
+    return AINarrativeResponse(
+        executive_summary=executive_summary,
+        line_commentary=line_commentary,
+        action_items=action_items[:5],
+        fallback_used=True,
+    )
+
+
 @router.post("/ai-narrative", response_model=AINarrativeResponse)
 async def generate_ai_narrative(body: AINarrativeRequest):
     """Call Claude to produce executive summary, line commentary, and action items."""
@@ -593,22 +881,13 @@ async def generate_ai_narrative(body: AINarrativeRequest):
         return str(item.get("account", "")).lower()
 
     def _is_revenue(item: Dict[str, Any]) -> bool:
-        n = _name(item)
-        return bool(re.search(r"revenue|sales|income", n)) and not bool(
-            re.search(r"cogs|cost of sales|cost of goods", n)
-        )
+        return _is_revenue_item(item)
 
     def _is_expense(item: Dict[str, Any]) -> bool:
-        n = _name(item)
-        return bool(
-            re.search(
-                r"expense|cost|cogs|payroll|rent|marketing|admin|interest|depreciation|amort",
-                n,
-            )
-        )
+        return _is_expense_item(item)
 
     def _is_marketing(item: Dict[str, Any]) -> bool:
-        return bool(re.search(r"marketing|advertis", _name(item)))
+        return bool(re.search(r"marketing|advertis|sales\s*[&/]?\s*marketing", _name(item)))
 
     def _is_cogs(item: Dict[str, Any]) -> bool:
         return bool(re.search(r"cogs|cost of sales|cost of goods", _name(item)))
@@ -651,11 +930,7 @@ async def generate_ai_narrative(body: AINarrativeRequest):
     )
 
     material = [i for i in line_items if i.get("material") or abs(i.get("variance_pct", 0)) > 10]
-    material_text = "\n".join(
-        f"- {i.get('account', '')} ({i.get('department', '')}): Budget {fc(i.get('budget', 0))}, "
-        f"Actual {fc(i.get('actual', 0))}, Variance {fc(i.get('variance', 0))} ({i.get('variance_pct', 0):.1f}%)"
-        for i in material[:15]
-    )
+    material_text = "\n".join(_format_line_for_prompt(i, fc) for i in material[:15])
     dept_text = "\n".join(
         f"- {d.get('department', '')}: Budget {fc(d.get('budget', 0))}, Actual {fc(d.get('actual', 0))}, "
         f"Variance {d.get('variance_pct', 0):.1f}%"
@@ -670,27 +945,43 @@ async def generate_ai_narrative(body: AINarrativeRequest):
         else "NARRATIVE MODE: Investor Update. Emphasize growth story with TAM context, while explicitly covering key risks."
     )
 
+    sm_narrative_hint = _sales_marketing_narrative(line_items, fc) or (
+        f"Marketing spend variance was {marketing_growth_pct:+.1f}% vs budget."
+        if marketing_budget
+        else ""
+    )
+
     prompt = f"""You are a CFO advisor. Analyse these budget variances and provide:
 {mode_instructions}
 Currency for all amounts in your answer: {currency} ({currency_fmt} compact style as in DATA — do not mix lakh/crore wording with M/K).
+
+CRITICAL RULES:
+- Revenue ABOVE budget = FAVORABLE (🟢), never flag as urgent or overspend
+- Revenue BELOW budget = ADVERSE (🔴)
+- Expense ABOVE budget = ADVERSE (🔴 or 🟡 by magnitude)
+- Expense BELOW budget = FAVORABLE (🟢)
+- Use exact variance % from DATA — never say "+0.0%" if the real figure is non-zero
+- For Sales & Marketing / OpEx lines, use the computed variance from DATA, not category labels
 
 1) EXECUTIVE SUMMARY: One paragraph (3-5 sentences) for the board.
    Start with this exact logic (use these formatted figures):
    "Net profit increased to {fc(net_profit_actual)} from a budget of {fc(net_profit_budget)}, resulting in a favorable variance of {fc(net_profit_variance)} ({net_profit_growth_pct:.1f}%)."
    IMPORTANT: Net profit is NEVER "spent".
-   Add this line in summary: "The rapid revenue growth may increase working capital requirements, requiring close monitoring of cash flow and liquidity."
-   If marketing grew slower than revenue, use this tone exactly:
-   "Marketing costs increased by {marketing_growth_pct:.1f}% and should be evaluated to ensure continued ROI efficiency as the business scales."
-   Do NOT use aggressive wording like "requires immediate attention" for marketing in this case.
-   Include COGS insight when relevant, using this style with real percentages from DATA:
-   "A key highlight is that COGS increased by only {cogs_growth_pct:.1f}% relative to {revenue_growth_pct:.1f}% revenue growth, indicating strong operating leverage."
+   Include revenue performance: {fc(revenue_actual)} vs budget {fc(revenue_budget)} ({revenue_growth_pct:+.1f}%).
+   {f'Include this Sales & Marketing line if relevant: "{sm_narrative_hint}"' if sm_narrative_hint else ''}
+   Include COGS insight when relevant:
+   "COGS increased by {cogs_growth_pct:+.1f}% relative to {revenue_growth_pct:+.1f}% revenue growth."
+   Do NOT embed numbered action items in the executive summary.
 
 2) LINE BY LINE COMMENTARY: For each material variance listed below, give:
    - WHY: One sentence on likely cause.
    - RECOMMENDATION: One sentence on what the CFO should do.
 Format each as: "Account Name — WHY: ... RECOMMENDATION: ..."
 
-3) ACTION ITEMS: Exactly 3-5 numbered action items. Mix: URGENT (investigate overspend), MONITOR (watch trend), OPTIMISE (reallocate savings). Format: "1. 🔴 URGENT: ..." or "2. 🟡 MONITOR: ..." or "3. 🟢 OPTIMISE: ..."
+3) ACTION ITEMS: Exactly 3-5 numbered action items in ---ACTION_ITEMS--- section only (not in summary).
+   Mix: URGENT (adverse only), MONITOR (watch trend), FAVORABLE (beat plan).
+   Format: "1. 🔴 URGENT: ..." or "2. 🟡 MONITOR: ..." or "3. 🟢 FAVORABLE: ..."
+   Never mark revenue above budget as URGENT.
 
 DATA:
 Total Budget: {fc(total_budget)}
@@ -721,8 +1012,33 @@ Output in this exact structure (so we can parse):
 
     try:
         text = llm_service.invoke(prompt=prompt, max_tokens=2000, temperature=0.3)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Claude AI failed: {str(e)}")
+    except Exception:
+        return _build_template_narrative(
+            fc=fc,
+            narrative_mode=narrative_mode,
+            total_budget=total_budget,
+            total_actual=total_actual,
+            total_variance=total_variance,
+            total_variance_pct=total_variance_pct,
+            revenue_budget=revenue_budget,
+            revenue_actual=revenue_actual,
+            revenue_growth_pct=revenue_growth_pct,
+            cost_budget=cost_budget,
+            cost_actual=cost_actual,
+            cost_growth_pct=cost_growth_pct,
+            net_profit_budget=net_profit_budget,
+            net_profit_actual=net_profit_actual,
+            net_profit_variance=net_profit_variance,
+            net_profit_growth_pct=net_profit_growth_pct,
+            marketing_growth_pct=marketing_growth_pct,
+            budget_cogs_pct=budget_cogs_pct,
+            actual_cogs_pct=actual_cogs_pct,
+            cogs_growth_pct=cogs_growth_pct,
+            status_label=status_label,
+            material=material,
+            dept_summary=dept_summary,
+            line_items=line_items,
+        )
 
     executive_summary = ""
     line_commentary: List[Dict[str, str]] = []
@@ -764,10 +1080,13 @@ Output in this exact structure (so we can parse):
     if not executive_summary:
         executive_summary = text.strip()[:1500]
 
+    executive_summary = _strip_embedded_action_items(executive_summary)
+    action_items = _generate_action_items(line_items, fc) or action_items
+
     return AINarrativeResponse(
         executive_summary=executive_summary,
         line_commentary=line_commentary,
-        action_items=action_items,
+        action_items=action_items[:5],
     )
 
 

@@ -1,8 +1,8 @@
-﻿import { useEffect, useState, useCallback } from 'react';
-import { useMarket } from '../../contexts/MarketContext';
+import { useEffect, useState, useCallback } from 'react';
+import { useMarket } from '@/contexts/MarketContext';
 import { useNavigate } from 'react-router-dom';
-import { supabase, type Invoice } from '../../lib/ap-invoice/supabase';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { supabase, type Invoice } from '@/lib/ap-invoice/supabase';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -10,26 +10,31 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
-import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../../components/ui/dialog';
-import { Building2, Search, Eye, DollarSign, Pencil } from 'lucide-react';
+} from '@/components/ui/dialog';
+import { Building2, Search, Eye, Pencil, Plus } from 'lucide-react';
 import { format } from 'date-fns';
+import { formatCurrency } from '@/utils/currency';
 import {
   applyVendorGstinToInvoicesForName,
   listVendorsFromTable,
   upsertVendorGstin,
-} from '../../lib/ap-invoice/gstService';
-import { logAction, getInvoiceflowWorkEmail } from '../../lib/ap-invoice/auditService';
+} from '@/lib/ap-invoice/gstService';
+import { VendorDetailDialog } from '@/components/vendors/VendorDetailDialog';
+import type { Vendor } from '@/lib/ap-invoice/supabase';
+import { logAction, getInvoiceflowWorkEmail } from '@/lib/ap-invoice/auditService';
+
+import { getVendorById, ensureVendorRowByName } from '@/lib/ap-invoice/vendorMasterService';
 
 type VendorStats = {
   name: string;
@@ -40,11 +45,14 @@ type VendorStats = {
   status: 'active' | 'inactive';
   gstin: string | null;
   vendorRowId?: string;
+  risk_level?: string | null;
+  risk_score?: number | null;
+  bank_verification_status?: string | null;
 };
 
 export function Vendors() {
   const navigate = useNavigate();
-  const { config } = useMarket();
+  const { config, isUAE } = useMarket();
   const [vendorStats, setVendorStats] = useState<VendorStats[]>([]);
   const [filteredVendors, setFilteredVendors] = useState<VendorStats[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,13 +62,22 @@ export function Vendors() {
   const [editGstin, setEditGstin] = useState('');
   const [editingVendorRowId, setEditingVendorRowId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [detailVendor, setDetailVendor] = useState<Vendor | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [isAddingVendor, setIsAddingVendor] = useState(false);
 
-  const loadDbGstinMap = useCallback(async (): Promise<Map<string, { gstin: string | null; id?: string }>> => {
-    const map = new Map<string, { gstin: string | null; id?: string }>();
+  const loadDbGstinMap = useCallback(async (): Promise<Map<string, { gstin: string | null; id?: string; risk_level?: string | null; risk_score?: number | null; bank_verification_status?: string | null }>> => {
+    const map = new Map<string, { gstin: string | null; id?: string; risk_level?: string | null; risk_score?: number | null; bank_verification_status?: string | null }>();
     try {
       const rows = await listVendorsFromTable();
       for (const r of rows) {
-        map.set(r.name.trim().toLowerCase(), { gstin: r.gstin, id: r.id });
+        map.set(r.name.trim().toLowerCase(), {
+          gstin: r.gstin,
+          id: r.id,
+          risk_level: r.risk_level,
+          risk_score: r.risk_score,
+          bank_verification_status: r.bank_verification_status,
+        });
       }
     } catch {
       /* vendors table may not exist until migration */
@@ -88,11 +105,17 @@ export function Vendors() {
             status: 'active',
             gstin: fromDb?.gstin ?? null,
             vendorRowId: fromDb?.id,
+            risk_level: fromDb?.risk_level,
+            risk_score: fromDb?.risk_score,
+            bank_verification_status: fromDb?.bank_verification_status,
           });
         }
 
         const vendor = vendorMap.get(vendorName)!;
         if (fromDb?.gstin && !vendor.gstin) vendor.gstin = fromDb.gstin;
+        if (fromDb?.risk_level) vendor.risk_level = fromDb.risk_level;
+        if (fromDb?.risk_score != null) vendor.risk_score = fromDb.risk_score;
+        if (fromDb?.bank_verification_status) vendor.bank_verification_status = fromDb.bank_verification_status;
         vendor.totalInvoices += 1;
         vendor.totalSpend += Number(inv.total_amount);
 
@@ -129,6 +152,9 @@ export function Vendors() {
             status: 'inactive',
             gstin: r.gstin,
             vendorRowId: r.id,
+            risk_level: r.risk_level,
+            risk_score: r.risk_score,
+            bank_verification_status: r.bank_verification_status,
           });
         }
       } catch {
@@ -167,9 +193,18 @@ export function Vendors() {
   }, [vendorStats, searchTerm]);
 
   function openEdit(v: VendorStats) {
+    setIsAddingVendor(false);
     setEditName(v.name);
     setEditGstin(v.gstin ?? '');
     setEditingVendorRowId(v.vendorRowId ?? null);
+    setEditOpen(true);
+  }
+
+  function openAddVendor() {
+    setIsAddingVendor(true);
+    setEditName('');
+    setEditGstin('');
+    setEditingVendorRowId(null);
     setEditOpen(true);
   }
 
@@ -189,9 +224,22 @@ export function Vendors() {
       await fetchInvoices();
     } catch (e) {
       console.error(e);
-      alert(e instanceof Error ? e.message : 'Save failed â€” run GST-RECONCILIATION-MIGRATION.sql');
+      alert(e instanceof Error ? e.message : 'Save failed — run GST-RECONCILIATION-MIGRATION.sql');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function openVendorDetail(v: VendorStats) {
+    try {
+      const row = v.vendorRowId
+        ? (await getVendorById(v.vendorRowId)) ?? (await ensureVendorRowByName(v.name, v.gstin))
+        : await ensureVendorRowByName(v.name, v.gstin);
+      setDetailVendor(row);
+      setDetailOpen(true);
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'Could not open vendor — check vendors table in Supabase.');
     }
   }
 
@@ -215,7 +263,7 @@ export function Vendors() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Vendors</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Vendor master GSTIN syncs to invoices with the same name (empty GSTIN on invoice only)
+          Vendor master {config.taxIdLabel} syncs to invoices with the same name (empty {config.taxIdLabel} on invoice only)
         </p>
       </div>
 
@@ -240,12 +288,24 @@ export function Vendors() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
+          {vendorStats.length === 0 ? (
+            <div className="py-16 text-center">
+              <Building2 className="mx-auto h-12 w-12 text-gray-400" />
+              <p className="mt-4 text-gray-600">No vendors yet — add your first vendor</p>
+              <Button className="mt-6 bg-[#0A4B8F]" onClick={openAddVendor}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Vendor
+              </Button>
+            </div>
+          ) : (
+          <div className="overflow-x-auto w-full">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Vendor Name</TableHead>
                   <TableHead>{config.taxIdLabel}</TableHead>
+                  <TableHead>Risk</TableHead>
+                  <TableHead>Bank</TableHead>
                   <TableHead>Total Invoices</TableHead>
                   <TableHead>Total Spend</TableHead>
                   <TableHead>Average Invoice</TableHead>
@@ -257,8 +317,8 @@ export function Vendors() {
               <TableBody>
                 {filteredVendors.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-gray-500">
-                      No vendors found
+                    <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                      No vendors match your search
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -271,20 +331,22 @@ export function Vendors() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-xs max-w-[140px] truncate" title={vendor.gstin ?? ''}>
-                        {vendor.gstin || 'â€”'}
+                        {vendor.gstin || '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs capitalize">
+                          {vendor.risk_level ?? 'low'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs capitalize">
+                        {(vendor.bank_verification_status ?? 'verified').replace(/_/g, ' ')}
                       </TableCell>
                       <TableCell>{vendor.totalInvoices}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <DollarSign className="h-4 w-4 text-gray-400" />
-                          <span className="font-semibold">{vendor.totalSpend.toLocaleString()}</span>
-                        </div>
+                      <TableCell className="font-semibold">
+                        {formatCurrency(vendor.totalSpend, config.currency)}
                       </TableCell>
                       <TableCell>
-                        ${vendor.averageInvoice.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
+                        {formatCurrency(vendor.averageInvoice, config.currency)}
                       </TableCell>
                       <TableCell>
                         {vendor.lastInvoiceDate ? format(new Date(vendor.lastInvoiceDate), 'MMM dd, yyyy') : 'N/A'}
@@ -302,6 +364,10 @@ export function Vendors() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right space-x-1">
+                        <Button variant="ghost" size="sm" onClick={() => void openVendorDetail(vendor)}>
+                          <Building2 className="h-4 w-4 mr-1" />
+                          Detail
+                        </Button>
                         <Button variant="ghost" size="sm" onClick={() => openEdit(vendor)}>
                           <Pencil className="h-4 w-4 mr-1" />
                           {config.taxIdLabel}
@@ -317,18 +383,25 @@ export function Vendors() {
               </TableBody>
             </Table>
           </div>
+          )}
         </CardContent>
       </Card>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Vendor {config.taxIdLabel}</DialogTitle>
+            <DialogTitle>{isAddingVendor ? 'Add Vendor' : `Vendor ${config.taxIdLabel}`}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-2">
               <Label>Vendor name</Label>
-              <Input value={editName} readOnly className="bg-gray-50" />
+              <Input
+                value={editName}
+                readOnly={!isAddingVendor}
+                className={isAddingVendor ? '' : 'bg-gray-50'}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Vendor legal name"
+              />
             </div>
             <div className="space-y-2">
               <Label>{config.taxIdLabel}</Label>
@@ -336,7 +409,7 @@ export function Vendors() {
                 className="font-mono text-sm"
                 value={editGstin}
                 onChange={(e) => setEditGstin(e.target.value)}
-                placeholder="15-character GSTIN"
+                placeholder={isUAE ? '15-digit TRN (e.g. 100-1234567-8)' : '15-character GSTIN'}
               />
             </div>
           </div>
@@ -350,7 +423,13 @@ export function Vendors() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VendorDetailDialog
+        vendor={detailVendor}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        onSaved={() => void fetchInvoices()}
+      />
     </div>
   );
 }
-

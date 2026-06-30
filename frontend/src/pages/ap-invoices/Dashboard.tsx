@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, type Invoice, type AuditLog } from '../../lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
@@ -33,9 +33,12 @@ import { format } from 'date-fns';
 import { formatCurrency } from '../../utils/currency';
 import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { useCompany } from '../../context/CompanyContext';
+import APInsightsPanel from '@/components/ap-invoices/APInsightsPanel';
 import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard';
 import { ExtractionReviewCard } from '@/components/dashboard/ExtractionReviewCard';
 import { GstReconSummaryCard } from '@/components/dashboard/GstReconSummaryCard';
+import { AnomalyDashboardCard } from '@/components/dashboard/AnomalyDashboardCard';
 import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
 import { getMyCompany } from '../../lib/ap-invoice/companyService';
 import { getCashFlowForecast } from '../../lib/ap-invoice/paymentService';
@@ -62,6 +65,12 @@ function getAgentBadgeStyle(action: string): { bg: string; label: string } {
 export function Dashboard() {
   const navigate = useNavigate();
   const { baseCurrency, dateFormat } = useCompanySettings();
+  const { activeCompanyId } = useCompany();
+  const workspaceId =
+    localStorage.getItem('gnanova_workspace_id') ??
+    localStorage.getItem('active_workspace_id') ??
+    localStorage.getItem('tenantId') ??
+    '';
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -304,39 +313,41 @@ export function Dashboard() {
       <div className="flex h-[calc(100vh-12rem)] items-center justify-center">
         <div className="text-center">
           <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading dashboard...</p>
+          <p className="mt-4 text-slate-600">Loading dashboard...</p>
         </div>
       </div>
     );
   }
 
+  const statCard = 'bg-white border border-slate-200 shadow-sm';
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <p className="mt-1 text-sm text-slate-600">
           Invoice processing overview and statistics
         </p>
       </div>
 
       {/* Stats Cards */}
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">
+            <CardTitle className="text-sm font-medium text-slate-600">
               Total Invoices
             </CardTitle>
             <FileText className="h-5 w-5 text-blue-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-gray-900">{stats.total}</div>
-            <p className="text-xs text-gray-500 mt-1">All time processed</p>
+            <div className="text-3xl font-bold text-slate-900">{stats.total}</div>
+            <p className="text-xs text-slate-500 mt-1">All time processed</p>
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">
+            <CardTitle className="text-sm font-medium text-slate-600">
               Pending Approvals
             </CardTitle>
             <Clock className="h-5 w-5 text-yellow-600" />
@@ -349,9 +360,9 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">
+            <CardTitle className="text-sm font-medium text-slate-600">
               This Month's Total
             </CardTitle>
             <DollarSign className="h-5 w-5 text-green-600" />
@@ -372,9 +383,9 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">
+            <CardTitle className="text-sm font-medium text-slate-600">
               Total Tax This Month
             </CardTitle>
             <DollarSign className="h-5 w-5 text-purple-600" />
@@ -387,9 +398,9 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">
+            <CardTitle className="text-sm font-medium text-slate-600">
               Avg Processing Time
             </CardTitle>
             <CheckCircle className="h-5 w-5 text-blue-600" />
@@ -404,10 +415,11 @@ export function Dashboard() {
 
         <DuplicateAlertsCard invoices={invoices} />
         <ExtractionReviewCard invoices={invoices} />
+        <AnomalyDashboardCard />
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-gray-600">3-Way match â€” this month</CardTitle>
+            <CardTitle className="text-sm font-medium text-slate-600">3-Way match — this month</CardTitle>
             <TrendingUp className="h-5 w-5 text-emerald-600" />
           </CardHeader>
           <CardContent className="text-xs text-gray-600 space-y-1.5">
@@ -458,20 +470,20 @@ export function Dashboard() {
       </div>
 
       {/* SECTION 1: AI Live Activity Strip */}
-      <Card className="bg-white border shadow-sm">
+      <Card className="bg-white border border-slate-200 shadow-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base font-semibold text-gray-900">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-900">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
               <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
             </span>
-            Multi-Agent AI â€” Live Activity
+            Multi-Agent AI — Live Activity
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div className="space-y-3">
             {auditLogs.length === 0 ? (
-              <p className="text-sm text-gray-500 py-2">No recent activity</p>
+              <p className="text-sm text-slate-500 py-2">No recent activity</p>
             ) : (
               auditLogs.map((log) => {
                 const { bg, label } = getAgentBadgeStyle(log.action);
@@ -698,9 +710,9 @@ export function Dashboard() {
 
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
-        <Card>
+        <Card className={statCard}>
           <CardHeader>
-            <CardTitle>Monthly Invoice Amounts</CardTitle>
+            <CardTitle className="text-slate-900">Monthly Invoice Amounts</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -715,9 +727,9 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={statCard}>
           <CardHeader>
-            <CardTitle>Invoice Status Distribution</CardTitle>
+            <CardTitle className="text-slate-900">Invoice Status Distribution</CardTitle>
           </CardHeader>
           <CardContent className="flex justify-center">
             <ResponsiveContainer width="100%" height={300}>
@@ -1241,6 +1253,8 @@ export function Dashboard() {
           }}
         />
       )}
+
+      <APInsightsPanel workspaceId={workspaceId} companyId={activeCompanyId} />
     </div>
   );
 }

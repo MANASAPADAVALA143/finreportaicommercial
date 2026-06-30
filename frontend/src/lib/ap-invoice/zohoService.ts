@@ -1,18 +1,18 @@
-﻿/**
- * Zoho Books integration â€” push approved invoices as Bills.
+/**
+ * Zoho Books integration — push approved invoices as Bills.
  *
- * Setup (Settings â†’ Zoho Books):
- *   1. Create a Zoho API client at https://api-console.zoho.com â†’ Self Client â†’ Server-based
+ * Setup (Settings → Zoho Books):
+ *   1. Create a Zoho API client at https://api-console.zoho.com → Self Client → Server-based
  *   2. Scopes: ZohoBooks.bills.CREATE, ZohoBooks.bills.READ, ZohoBooks.contacts.READ
- *   3. Generate code â†’ exchange for refresh_token (one-time, paste into Settings)
+ *   3. Generate code → exchange for refresh_token (one-time, paste into Settings)
  *   4. Save client_id, client_secret, refresh_token, organization_id in Settings
  *
- * Token refresh is automatic â€” stored in Supabase app_settings so it survives browser sessions.
+ * Token refresh is automatic — stored in Supabase app_settings so it survives browser sessions.
  */
 
-import { supabase } from './supabase';
-import { logAction } from './auditService';
-import type { Invoice } from './supabase';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import { logAction } from '@/lib/ap-invoice/auditService';
+import type { Invoice } from '@/lib/ap-invoice/supabase';
 
 export interface ZohoSettings {
   client_id: string;
@@ -86,7 +86,7 @@ function buildBillPayload(invoice: Invoice) {
     currency_code: invoice.currency || 'INR',
     line_items: [
       {
-        description: `Invoice ${invoice.invoice_number} â€” ${invoice.vendor_name}`,
+        description: `Invoice ${invoice.invoice_number} — ${invoice.vendor_name}`,
         rate: Number(invoice.total_amount) - Number(invoice.tax_amount ?? 0),
         quantity: 1,
         tax_percentage: invoice.tax_rate ?? 0,
@@ -183,11 +183,10 @@ export async function testZohoConnection(settings: ZohoSettings): Promise<{ ok: 
     const json = await res.json() as { code?: number; organizations?: unknown[] };
     if (json.code === 0) {
       const count = (json.organizations ?? []).length;
-      return { ok: true, message: `Connected to Zoho Books â€” ${count} organization(s) found.` };
+      return { ok: true, message: `Connected to Zoho Books — ${count} organization(s) found.` };
     }
     return { ok: false, message: `Zoho responded with code ${json.code}` };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   }
 }
-

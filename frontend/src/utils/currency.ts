@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Parse amount from n8n/string - handles "46,846.00", "â‚¹46,846", "$1,234.56"
  */
 export function parseAmount(val: unknown): number {
@@ -12,7 +12,7 @@ export const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: '$',
   EUR: 'â‚¬',
   GBP: 'Â£',
-  AED: 'Ø¯.Ø¥',
+  AED: 'AED ',
   SGD: 'S$',
   JPY: 'Â¥',
   AUD: 'A$',

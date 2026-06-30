@@ -3,14 +3,30 @@ import asyncio
 import glob
 import json
 import os
-from datetime import datetime
-from typing import Optional
+import shutil
+import tempfile
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.services import llm_service
+from app.services.ifrs15_service import (
+    calculate_percentage_complete,
+    calculate_recognition,
+    create_contract,
+    get_contract,
+    list_contracts,
+    portfolio_summary as ifrs15_portfolio_summary,
+    post_recognition_je,
+    update_contract,
+    _contract_dict,
+)
 
 router = APIRouter(prefix="/api/rev-rec", tags=["Rev Rec Reconciliation"])
 
@@ -891,3 +907,210 @@ async def download_rev_rec_file(file_id: str):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=filename,
     )
+
+
+# ── IFRS 15 contract register (Phase 3) ──────────────────────────────────────
+
+def _ws(request: Request, query_ws: str | None = None) -> str:
+    return query_ws or request.headers.get("x-workspace-id") or request.headers.get("x-tenant-id") or "demo"
+
+
+def _company_id(request: Request, query_cid: str | None = None) -> str | None:
+    return query_cid or request.headers.get("x-company-id")
+
+
+class PerformanceObligationIn(BaseModel):
+    description: str = ""
+    standalone_selling_price_aed: float = 0
+    allocated_transaction_price_aed: float = 0
+    satisfaction_method: str = "over_time"
+    percentage_complete: float = 0
+    revenue_recognised_aed: float = 0
+    revenue_remaining_aed: float = 0
+    start_date: str = ""
+    end_date: str = ""
+
+
+class ContractSaveRequest(BaseModel):
+    workspace_id: str = ""
+    company_id: str | None = None
+    contract_number: str = ""
+    customer_name: str
+    contract_date: str = ""
+    contract_value_aed: float = 0
+    performance_obligations: list[PerformanceObligationIn] = Field(default_factory=list)
+    contract_liability_aed: float = 0
+    contract_asset_aed: float = 0
+    status: str = "active"
+
+
+class ContractPatchRequest(BaseModel):
+    performance_obligations: list[dict[str, Any]] | None = None
+    customer_name: str | None = None
+    status: str | None = None
+
+
+class CalculateRecognitionRequest(BaseModel):
+    contract_id: str
+    obligation_index: int = 0
+    method: str = "time_elapsed"
+    method_data: dict[str, Any] = Field(default_factory=dict)
+    workspace_id: str = ""
+    company_id: str | None = None
+
+
+class PostRecognitionJeRequest(BaseModel):
+    contract_id: str
+    obligation_index: int = 0
+    period_date: str
+    amount_aed: float
+    billed_amount_aed: float = 0
+    workspace_id: str = ""
+    company_id: str | None = None
+
+
+@router.post("/contracts")
+def save_contract(body: ContractSaveRequest, request: Request, db: Session = Depends(get_db)):
+    data = body.model_dump()
+    data["workspace_id"] = _ws(request, body.workspace_id or None)
+    data["company_id"] = body.company_id or _company_id(request)
+    data["performance_obligations"] = [o.model_dump() if hasattr(o, "model_dump") else o for o in body.performance_obligations]
+    c = create_contract(db, data)
+    return {"status": "success", "contract": _contract_dict(c)}
+
+
+@router.get("/contracts")
+def get_contracts(
+    request: Request,
+    workspace_id: str | None = Query(None),
+    company_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    return {"contracts": list_contracts(db, ws, cid)}
+
+
+@router.patch("/contracts/{contract_id}")
+def patch_contract(
+    contract_id: str,
+    body: ContractPatchRequest,
+    request: Request,
+    workspace_id: str | None = Query(None),
+    company_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    c = get_contract(db, contract_id, ws, cid)
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    updated = update_contract(db, c, updates)
+    return {"status": "success", "contract": _contract_dict(updated)}
+
+
+@router.get("/portfolio-summary")
+def get_ifrs15_portfolio_summary(
+    request: Request,
+    workspace_id: str | None = Query(None),
+    company_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    return ifrs15_portfolio_summary(db, _ws(request, workspace_id), company_id or _company_id(request))
+
+
+@router.post("/calculate-recognition")
+def calc_recognition(body: CalculateRecognitionRequest, request: Request, db: Session = Depends(get_db)):
+    try:
+        return calculate_recognition(
+            db, body.contract_id, body.obligation_index, body.method, body.method_data,
+            _ws(request, body.workspace_id or None), body.company_id or _company_id(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/post-recognition-je")
+def post_rev_recognition_je(body: PostRecognitionJeRequest, request: Request, db: Session = Depends(get_db)):
+    try:
+        return post_recognition_je(
+            db,
+            contract_id=body.contract_id,
+            obligation_index=body.obligation_index,
+            period_date=date.fromisoformat(body.period_date[:10]),
+            amount_aed=body.amount_aed,
+            workspace_id=_ws(request, body.workspace_id or None),
+            company_id=body.company_id or _company_id(request),
+            billed_amount=body.billed_amount_aed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/extract-contract")
+async def extract_contract(
+    request: Request,
+    file: UploadFile = File(...),
+    workspace_id: str | None = Query(None),
+    company_id: str | None = Query(None),
+):
+    api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    ext = Path((file.filename or "upload").replace("\\", "_")).suffix.lower()
+    if ext not in {".pdf", ".docx", ".txt"}:
+        raise HTTPException(status_code=400, detail="Supported: PDF, DOCX, TXT")
+
+    upload_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            upload_path = Path(tmp.name)
+            shutil.copyfileobj(file.file, tmp)
+
+        if ext == ".txt":
+            contract_text = upload_path.read_text(encoding="utf-8", errors="ignore")
+        elif ext == ".pdf":
+            from PyPDF2 import PdfReader
+            contract_text = "\n".join(
+                (p.extract_text() or "") for p in PdfReader(str(upload_path)).pages
+            )
+        else:
+            from docx import Document
+            contract_text = "\n".join(p.text for p in Document(str(upload_path)).paragraphs)
+
+        prompt = f"""Extract IFRS 15 revenue contract fields from this document. Return JSON only:
+{{
+  "customer_name": "",
+  "contract_value_aed": 0,
+  "contract_date": "YYYY-MM-DD",
+  "performance_obligations": [{{"description": "", "standalone_selling_price_aed": 0, "satisfaction_method": "over_time|point_in_time", "start_date": "", "end_date": ""}}],
+  "payment_terms": "",
+  "contract_duration_months": 0
+}}
+
+CONTRACT:
+{contract_text[:12000] if isinstance(contract_text, str) else str(contract_text)[:12000]}"""
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(model="claude-sonnet-4-20250514", max_tokens=2000, temperature=0,
+            messages=[{"role": "user", "content": prompt}])
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+        extracted = json.loads(raw)
+        return {
+            "status": "success",
+            "extracted_data": extracted,
+            "workspace_id": _ws(request, workspace_id),
+            "company_id": company_id or _company_id(request),
+        }
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid JSON from AI: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)[:200]) from exc
+    finally:
+        if upload_path and upload_path.exists():
+            upload_path.unlink(missing_ok=True)

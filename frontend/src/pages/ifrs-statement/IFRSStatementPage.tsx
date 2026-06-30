@@ -7,10 +7,13 @@ import StatementViewer from "../../components/ifrs/StatementViewer";
 import DisclosureNotesPage from "../../components/ifrs/DisclosureNotesPage";
 import { GeneratedStatementPayload, ifrsService, IFRSMapping, HarnessSummary } from "../../services/ifrs.service";
 import { formatApiError } from "../../utils/apiError";
+import { validateFS, exportFSExcel, type FSValidationResult } from "../../services/fsValidation.service";
+import { useSyncIfrsTenant } from "../../hooks/useSyncIfrsTenant";
 
 const steps = ["Upload", "Map GL", "Review", "Generate", "Disclosures"] as const;
 
 export default function IFRSStatementPage() {
+  const tenantId = useSyncIfrsTenant();
   const [step, setStep] = useState<(typeof steps)[number]>("Upload");
   const [tbId, setTbId] = useState<number | null>(null);
   const [status, setStatus] = useState<string>("uploaded");
@@ -34,6 +37,8 @@ export default function IFRSStatementPage() {
     pages: number;
     watermark: string;
   } | null>(null);
+  const [fsValidation, setFsValidation] = useState<FSValidationResult | null>(null);
+  const [exporting, setExporting] = useState(false);
   /** Require an explicit harness payload with ready_to_generate true (null harness = not loaded / not ready). */
   const harnessAllowsGenerate = harness?.ready_to_generate === true;
   const canGenerateStatements =
@@ -89,13 +94,69 @@ export default function IFRSStatementPage() {
     void refreshStatements();
   }, [step, tbId]);
 
+  useEffect(() => {
+    if (!Object.keys(statements).length) return;
+    const now = new Date();
+    const periodStart = `${now.getFullYear()}-01-01`;
+    const periodEnd = now.toISOString().slice(0, 10);
+    void validateFS(periodStart, periodEnd)
+      .then(setFsValidation)
+      .catch(() => setFsValidation(null));
+  }, [statements]);
+
+  const handleExportExcel = async () => {
+    const now = new Date();
+    const periodStart = `${now.getFullYear()}-01-01`;
+    const periodEnd = now.toISOString().slice(0, 10);
+    setExporting(true);
+    try {
+      const blob = await exportFSExcel(periodStart, periodEnd);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `financial_statements_${periodEnd.slice(0, 7)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Excel exported");
+    } catch (e: unknown) {
+      toast.error(formatApiError(e) || "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6 relative">
+      {fsValidation && step === "Generate" && (
+        <div className="fixed top-4 right-4 z-40 flex flex-col gap-2 max-w-xs">
+          {fsValidation.checks.map((c) => (
+            <div
+              key={c.check}
+              className={`rounded-lg border px-4 py-3 text-xs shadow-lg ${
+                c.passed
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                  : "bg-red-50 border-red-200 text-red-900"
+              }`}
+            >
+              <p className="font-semibold">{c.passed ? "✓" : "⚠"} {c.message}</p>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => void handleExportExcel()}
+            disabled={exporting}
+            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {exporting ? "Exporting…" : "Export to Excel"}
+          </button>
+        </div>
+      )}
       <div className="mx-auto max-w-7xl">
         <div className="mb-5 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">IFRS Statement — Week 3</h1>
             <p className="text-sm text-slate-600">Statements + disclosure notes + compliance checks</p>
+            <p className="text-xs text-slate-500">Tenant: <span className="font-mono">{tenantId}</span></p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Link
@@ -128,11 +189,27 @@ export default function IFRSStatementPage() {
 
         {step === "Upload" && (
           <div className="space-y-4">
+            <div className="rounded-xl border border-blue-100 bg-blue-50/80 p-4">
+              <p className="text-sm text-slate-700">
+                <strong>First time?</strong> Optionally{" "}
+                <Link
+                  to="/ifrs-statement/onboarding"
+                  className="font-semibold text-blue-700 hover:text-blue-900 underline"
+                >
+                  set up a company mapping template
+                </Link>{" "}
+                so GL codes auto-map from your saved Chart of Accounts. You can still upload a trial balance
+                without onboarding — company name is captured on upload below.
+              </p>
+            </div>
             <div className="rounded-xl border bg-white p-4">
               <p className="text-sm font-semibold text-slate-800">How do you want to provide the trial balance?</p>
               <div className="mt-3 flex flex-wrap gap-3">
                 <span className="rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-900 ring-1 ring-blue-200">
                   Upload file (below)
+                </span>
+                <span className="rounded-lg bg-violet-50 px-3 py-2 text-sm font-medium text-violet-900 ring-1 ring-violet-200">
+                  Use sample data (server upload)
                 </span>
                 <Link
                   to="/erp/tally"

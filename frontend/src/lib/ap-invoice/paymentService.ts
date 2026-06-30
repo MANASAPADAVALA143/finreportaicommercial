@@ -1,7 +1,7 @@
-﻿import { supabase } from './supabase';
+import { supabase } from './supabase';
 import type { Invoice, PaymentBatch } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
-import { requireCompanyId } from './companyService';
+import { getMyCompany, requireCompanyId } from './companyService';
 
 /**
  * Normalize legacy / mixed-case payment_status for queue, calendar, and cash-flow logic.
@@ -14,7 +14,31 @@ export function normalizedOpenPaymentStatus(inv: Invoice): 'unpaid' | 'overdue' 
   if (['paid', 'complete', 'completed'].includes(raw)) return 'paid';
   if (raw === 'scheduled') return 'scheduled';
   if (raw === 'overdue') return 'overdue';
+  if (raw === 'frozen') return 'unpaid';
   return 'unpaid';
+}
+
+/** Open AP balance — includes pending, overdue, processing, scheduled, frozen, null. */
+export function isInvoiceOpenForPayment(inv: {
+  status?: string | null;
+  payment_status?: string | null;
+}): boolean {
+  if (inv.status === 'Paid' || inv.status === 'Rejected') return false;
+  const ps = String(inv.payment_status ?? '').trim().toLowerCase();
+  if (ps === 'paid' || ps === 'cancelled') return false;
+  // pending, overdue, processing, unpaid, scheduled, frozen, null → open
+  return true;
+}
+
+/** Past due on calendar date — due_date < today, still open for payment. */
+export function isInvoiceOverdueByDate(
+  inv: { status?: string | null; payment_status?: string | null; due_date?: string | null },
+  today?: string,
+): boolean {
+  if (!isInvoiceOpenForPayment(inv)) return false;
+  const t = today ?? new Date().toISOString().split('T')[0];
+  const due = inv.due_date?.slice(0, 10);
+  return !!due && due < t;
 }
 
 export function effectivePaymentDate(inv: Invoice): string | null {
@@ -164,17 +188,60 @@ export async function fetchInvoicesByIds(ids: string[]): Promise<Invoice[]> {
   return (data || []) as Invoice[];
 }
 
-/** Mark overdue invoices (call on page load) */
-export async function markOverdueInvoices(): Promise<number> {
-  const { data, error } = await supabase.rpc('mark_overdue_invoices');
-  if (error) {
-    console.warn('mark_overdue_invoices:', error.message);
-    return 0;
-  }
-  return typeof data === 'number' ? data : Number(data) || 0;
+const CLOSED_PAYMENT_STATUSES = new Set(['paid', 'cancelled', 'frozen']);
+
+function shouldMarkOverdue(
+  inv: Pick<Invoice, 'status' | 'payment_status' | 'due_date'>,
+  today: string,
+): boolean {
+  if (!isInvoiceOverdueByDate(inv, today)) return false;
+  const ps = String(inv.payment_status ?? 'unpaid').trim().toLowerCase();
+  return !CLOSED_PAYMENT_STATUSES.has(ps);
 }
 
-/** Cash flow for next ~30 days â€” grouped by week (unpaid vs scheduled by effective pay date) */
+/** Mark overdue invoices (call on aging / calendar page load). */
+export async function markOverdueInvoices(): Promise<number> {
+  const today = new Date().toISOString().split('T')[0];
+  const company_id = (await getMyCompany())?.id;
+
+  const { data, error } = await supabase.rpc('mark_overdue_invoices');
+  if (!error && data != null) {
+    const rpcCount = typeof data === 'number' ? data : Number(data) || 0;
+    if (rpcCount > 0) return rpcCount;
+  } else if (error) {
+    console.warn('mark_overdue_invoices RPC:', error.message);
+  }
+
+  let selectQ = supabase
+    .from('invoices')
+    .select('id, status, payment_status, due_date')
+    .neq('status', 'Paid')
+    .lt('due_date', today);
+  if (company_id) selectQ = selectQ.eq('company_id', company_id);
+
+  const { data: candidates, error: selErr } = await selectQ;
+  if (selErr) {
+    console.warn('markOverdueInvoices select:', selErr.message);
+    return 0;
+  }
+
+  const ids = (candidates ?? [])
+    .filter((row) => shouldMarkOverdue(row as Invoice, today))
+    .map((row) => row.id);
+  if (!ids.length) return 0;
+
+  let updateQ = supabase.from('invoices').update({ payment_status: 'overdue' }).in('id', ids);
+  if (company_id) updateQ = updateQ.eq('company_id', company_id);
+
+  const { data: updated, error: updErr } = await updateQ.select('id');
+  if (updErr) {
+    console.warn('markOverdueInvoices update:', updErr.message);
+    return 0;
+  }
+  return updated?.length ?? 0;
+}
+
+/** Cash flow for next ~30 days — grouped by week (unpaid vs scheduled by effective pay date) */
 export async function getCashFlowForecast() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -215,4 +282,3 @@ export async function getCashFlowForecast() {
     return { label: week.label, unpaid, scheduled };
   });
 }
-

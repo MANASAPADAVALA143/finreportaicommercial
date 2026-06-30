@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -29,6 +29,63 @@ from app.services.month_end_close_pdf import build_close_pdf_bytes
 
 # Example auth protection added below; replicate for other endpoints in this router as needed.
 router = APIRouter(prefix="/api/close", tags=["month-end-close"])
+
+_RESERVED_PATHS = frozenset({"status", "history", "start", "start-json", "report", "workspace"})
+
+DEFAULT_TRACKER_TASKS: list[dict[str, str]] = [
+    {"task": "Post all sub-ledger journals", "category": "Journals"},
+    {"task": "Complete bank reconciliation", "category": "Reconciliation"},
+    {"task": "Clear suspense accounts", "category": "Reconciliation"},
+    {"task": "Post accruals and prepayments", "category": "Journals"},
+    {"task": "Post depreciation", "category": "Journals"},
+    {"task": "Intercompany reconciliation", "category": "Reconciliation"},
+    {"task": "Review trial balance", "category": "Review"},
+    {"task": "Variance analysis vs budget", "category": "Review"},
+    {"task": "Management accounts preparation", "category": "Reporting"},
+    {"task": "CFO sign-off", "category": "Sign-off"},
+]
+
+
+def _default_tracker_items() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": f"task_{i}",
+            "task": t["task"],
+            "category": t["category"],
+            "owner": "",
+            "dueDate": "",
+            "status": "Not Started",
+            "completed": False,
+            "completed_by": None,
+        }
+        for i, t in enumerate(DEFAULT_TRACKER_TASKS)
+    ]
+
+
+def _get_or_create_tracker_run(db: Session, workspace_id: str, period: str) -> CloseRun:
+    run = (
+        db.query(CloseRun)
+        .filter(CloseRun.entity_id == workspace_id, CloseRun.period == period, CloseRun.status == "tracker")
+        .order_by(CloseRun.created_at.desc())
+        .first()
+    )
+    if run:
+        return run
+    run = CloseRun(
+        run_id=str(uuid.uuid4()),
+        entity_id=workspace_id,
+        period=period,
+        currency="AED",
+        status="tracker",
+        checks_json={"tracker_items": _default_tracker_items(), "progress_pct": 0},
+        snapshot_json={},
+        audit_trail=[],
+    )
+    _append_audit(run, "tracker_created", {"workspace_id": workspace_id, "period": period})
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
 
 
 def _append_audit(run: CloseRun, action: str, detail: dict | None = None) -> None:
@@ -244,6 +301,82 @@ def list_history(entity_id: Optional[str] = None, db: Session = Depends(get_db))
             }
         )
     return {"runs": out}
+
+
+class TrackerItemPatch(BaseModel):
+    completed: bool | None = None
+    completed_by: str | None = None
+    status: str | None = None
+    owner: str | None = None
+    dueDate: str | None = None
+
+
+@router.get("/{workspace_id}")
+def get_close_tracker(
+    workspace_id: str,
+    period: str = Query(..., description="Close period YYYY-MM"),
+    db: Session = Depends(get_db),
+):
+    if workspace_id in _RESERVED_PATHS:
+        raise HTTPException(status_code=404, detail="Not found")
+    run = _get_or_create_tracker_run(db, workspace_id, period)
+    items = list((run.checks_json or {}).get("tracker_items") or _default_tracker_items())
+    complete = sum(1 for it in items if it.get("status") == "Complete" or it.get("completed"))
+    progress = round(complete / len(items) * 100) if items else 0
+    return {
+        "workspace_id": workspace_id,
+        "period": period,
+        "run_id": run.run_id,
+        "items": items,
+        "progress_pct": progress,
+        "currency": "AED",
+    }
+
+
+@router.patch("/{workspace_id}/items/{item_id}")
+def patch_close_tracker_item(
+    workspace_id: str,
+    item_id: str,
+    body: TrackerItemPatch,
+    period: str = Query(..., description="Close period YYYY-MM"),
+    db: Session = Depends(get_db),
+):
+    if workspace_id in _RESERVED_PATHS:
+        raise HTTPException(status_code=404, detail="Not found")
+    run = _get_or_create_tracker_run(db, workspace_id, period)
+    cj = dict(run.checks_json or {})
+    items = list(cj.get("tracker_items") or _default_tracker_items())
+    idx = next((i for i, it in enumerate(items) if it.get("id") == item_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="item_id not found")
+
+    item = dict(items[idx])
+    if body.status is not None:
+        item["status"] = body.status
+        item["completed"] = body.status == "Complete"
+    if body.completed is not None:
+        item["completed"] = body.completed
+        if body.completed:
+            item["status"] = "Complete"
+        elif item.get("status") == "Complete":
+            item["status"] = "In Progress"
+    if body.completed_by is not None:
+        item["completed_by"] = body.completed_by
+    if body.owner is not None:
+        item["owner"] = body.owner
+    if body.dueDate is not None:
+        item["dueDate"] = body.dueDate
+
+    items[idx] = item
+    complete = sum(1 for it in items if it.get("status") == "Complete" or it.get("completed"))
+    cj["tracker_items"] = items
+    cj["progress_pct"] = round(complete / len(items) * 100) if items else 0
+    run.checks_json = cj
+    flag_modified(run, "checks_json")
+    _append_audit(run, "tracker_item_updated", {"item_id": item_id, "status": item.get("status")})
+    db.add(run)
+    db.commit()
+    return {"workspace_id": workspace_id, "period": period, "item": item, "progress_pct": cj["progress_pct"]}
 
 
 @router.get("/report/{run_id}/pdf")

@@ -1,6 +1,6 @@
-﻿/**
+/**
  * /anomaly-intelligence
- * Live anomaly dashboard â€” SPC control charts, Benford analysis,
+ * Live anomaly dashboard — SPC control charts, Benford analysis,
  * price drift alerts, ghost vendor risk, all powered by training data.
  */
 
@@ -9,49 +9,35 @@ import {
   LineChart, Line, BarChart, Bar, CartesianGrid, XAxis, YAxis,
   Tooltip, ReferenceLine, ResponsiveContainer, Cell,
 } from 'recharts';
-import { getMyCompany } from '../../lib/ap-invoice/companyService';
-import { supabase } from '../../lib/ap-invoice/supabase';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   AlertTriangle, Brain, CheckCircle2, Loader2, RefreshCw,
   TrendingUp, TrendingDown, Minus, ShieldAlert, Activity,
 } from 'lucide-react';
+import { useMarket } from '@/contexts/MarketContext';
+import { formatCurrency } from '@/utils/currency';
+import {
+  VendorAnomalyDetailPanel,
+  type AnomalyWithInvoice,
+  type VendorProfileRow,
+  type VendorInvoiceRow,
+} from '@/components/anomaly/VendorAnomalyDetailPanel';
 
-// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-interface VendorProfile {
-  id: string;
-  vendor_name: string;
-  mean_amount: number;
-  std_deviation: number;
-  min_amount: number;
-  max_amount: number;
-  median_amount: number;
-  avg_invoices_per_month: number;
-  historical_rejection_rate: number;
-  is_recurring: boolean;
-  is_splitting_vendor: boolean;
-  price_trend: 'stable' | 'increasing' | 'decreasing';
-  price_trend_pct: number;
-  training_invoice_count: number;
+type VendorProfile = VendorProfileRow;
+
+interface LiveInvoice extends VendorInvoiceRow {}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function makeFmt(currency: string) {
+  return (n: number) => formatCurrency(n, currency);
 }
-
-interface LiveInvoice {
-  id: string;
-  vendor_name: string;
-  total_amount: number;
-  invoice_date: string;
-  status: string;
-}
-
-// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-const fmt = (n: number) =>
-  n >= 100000 ? `â‚¹${(n / 100000).toFixed(1)}L`
-  : n >= 1000 ? `â‚¹${(n / 1000).toFixed(0)}K`
-  : `â‚¹${Math.round(n).toLocaleString('en-IN')}`;
 
 const AXIS = { fontSize: 10, fill: '#94a3b8' };
 const GRID = { strokeDasharray: '3 3', stroke: 'rgba(0,0,0,0.07)' };
@@ -108,15 +94,28 @@ function benfordScore(data: ReturnType<typeof buildBenfordData>) {
   return Math.max(0, Math.round(100 - totalDev * 2));
 }
 
-// â”€â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function AnomalyIntelligence() {
+  const { config: marketConfig } = useMarket();
+  const displayCurrency = marketConfig.currency;
+  const fmt = makeFmt(displayCurrency);
+
   const [companyId, setCompanyId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<VendorProfile[]>([]);
   const [invoices, setInvoices] = useState<LiveInvoice[]>([]);
+  const [anomalies, setAnomalies] = useState<AnomalyWithInvoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedVendor, setSelectedVendor] = useState<VendorProfile | null>(null);
+  const [detailVendor, setDetailVendor] = useState<VendorProfile | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [tab, setTab] = useState<'spc' | 'benford' | 'drift' | 'ghost'>('spc');
+
+  function openVendorDetail(p: VendorProfile) {
+    setDetailVendor(p);
+    setSelectedVendor(p);
+    setDetailOpen(true);
+  }
 
   useEffect(() => {
     void (async () => {
@@ -129,19 +128,33 @@ export function AnomalyIntelligence() {
 
   async function load(cid: string) {
     setLoading(true);
-    const [vpRes, invRes] = await Promise.all([
+    const [vpRes, invRes, anRes] = await Promise.all([
       supabase.from('vendor_profiles').select('*').eq('company_id', cid).order('mean_amount', { ascending: false }),
-      supabase.from('invoices').select('id,vendor_name,total_amount,invoice_date,status').eq('company_id', cid).order('invoice_date', { ascending: false }).limit(500),
+      supabase
+        .from('invoices')
+        .select('id,vendor_name,invoice_number,total_amount,invoice_date,status')
+        .eq('company_id', cid)
+        .order('invoice_date', { ascending: false })
+        .limit(500),
+      supabase
+        .from('invoice_anomalies')
+        .select('*, invoices(id, invoice_number, vendor_name, total_amount, invoice_date)')
+        .eq('company_id', cid)
+        .order('created_at', { ascending: false }),
     ]);
+    if (vpRes.error) console.warn('[anomaly-intelligence] vendor_profiles:', vpRes.error.message);
+    if (invRes.error) console.warn('[anomaly-intelligence] invoices:', invRes.error.message);
+    if (anRes.error) console.warn('[anomaly-intelligence] invoice_anomalies:', anRes.error.message);
     const vp = (vpRes.data ?? []) as VendorProfile[];
     const inv = (invRes.data ?? []) as LiveInvoice[];
     setProfiles(vp);
     setInvoices(inv);
-    if (vp.length > 0) setSelectedVendor(vp[0]);
+    setAnomalies((anRes.data ?? []) as AnomalyWithInvoice[]);
+    if (vp.length > 0 && !selectedVendor) setSelectedVendor(vp[0]);
     setLoading(false);
   }
 
-  // â”€â”€ Derived analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Derived analytics ───────────────────────────────────────────────────────
 
   const anomalyVendors = profiles.filter((p) => {
     const vendorInvs = invoices.filter((i) => i.vendor_name.toLowerCase() === p.vendor_name.toLowerCase());
@@ -174,9 +187,9 @@ export function AnomalyIntelligence() {
       <div className="text-center py-20">
         <Brain className="h-14 w-14 mx-auto text-gray-200 mb-3" />
         <p className="text-lg font-semibold text-gray-500">No training data yet</p>
-        <p className="text-sm text-gray-400 mt-1">Go to ðŸ§  Training Data and upload historical invoices first</p>
+        <p className="text-sm text-gray-400 mt-1">Go to 🧠 Training Data and upload historical invoices first</p>
         <Button variant="outline" className="mt-4" onClick={() => window.location.href = '/training'}>
-          Go to Training Data â†’
+          Go to Training Data →
         </Button>
       </div>
     );
@@ -193,7 +206,7 @@ export function AnomalyIntelligence() {
             Anomaly Intelligence
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Real-time pattern detection Â· trained on your ERP history Â· {profiles.length} vendor profiles
+            Real-time pattern detection · trained on your ERP history · {profiles.length} vendor profiles
           </p>
         </div>
         {companyId && (
@@ -203,10 +216,10 @@ export function AnomalyIntelligence() {
         )}
       </div>
 
-      {/* â”€â”€ Alert Summary â”€â”€ */}
+      {/* ── Alert Summary ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Amount Anomalies', value: anomalyVendors.length, icon: AlertTriangle, color: 'red', desc: 'vendors with >3Ïƒ invoices' },
+          { label: 'Amount Anomalies', value: anomalyVendors.length, icon: AlertTriangle, color: 'red', desc: 'vendors with >3σ invoices' },
           { label: 'Price Drift', value: driftVendors.length, icon: TrendingUp, color: 'orange', desc: 'vendors drifting >5%' },
           { label: 'Splitting Risk', value: splittingVendors.length, icon: ShieldAlert, color: 'yellow', desc: 'invoice splitting detected' },
           { label: 'Ghost Vendors', value: ghostVendors.length, icon: AlertTriangle, color: 'purple', desc: 'single-invoice vendors' },
@@ -226,7 +239,7 @@ export function AnomalyIntelligence() {
         ))}
       </div>
 
-      {/* â”€â”€ Vendor Selector â”€â”€ */}
+      {/* ── Vendor Selector ── */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold text-gray-600">Select Vendor to Analyse</CardTitle>
@@ -250,10 +263,10 @@ export function AnomalyIntelligence() {
                       : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
                   }`}
                 >
-                  {p.vendor_name.length > 22 ? p.vendor_name.slice(0, 22) + 'â€¦' : p.vendor_name}
-                  {isAnomaly && ' âš ï¸'}
-                  {isDrift && !isAnomaly && ' ðŸ“ˆ'}
-                  {isSplit && !isAnomaly && ' âœ‚ï¸'}
+                  {p.vendor_name.length > 22 ? p.vendor_name.slice(0, 22) + '…' : p.vendor_name}
+                  {isAnomaly && ' ⚠️'}
+                  {isDrift && !isAnomaly && ' 📈'}
+                  {isSplit && !isAnomaly && ' ✂️'}
                 </button>
               );
             })}
@@ -261,15 +274,15 @@ export function AnomalyIntelligence() {
         </CardContent>
       </Card>
 
-      {/* â”€â”€ Analysis Tabs â”€â”€ */}
+      {/* ── Analysis Tabs ── */}
       {selectedVendor && (
         <>
           <div className="flex gap-1 border-b">
             {[
-              { id: 'spc', label: 'ðŸ“Š SPC Control Chart' },
-              { id: 'benford', label: 'ðŸ”¢ Benford Analysis' },
-              { id: 'drift', label: 'ðŸ“ˆ Price Drift' },
-              { id: 'ghost', label: 'ðŸ‘» Ghost Vendors' },
+              { id: 'spc', label: '📊 SPC Control Chart' },
+              { id: 'benford', label: '🔢 Benford Analysis' },
+              { id: 'drift', label: '📈 Price Drift' },
+              { id: 'ghost', label: '👻 Ghost Vendors' },
             ].map((t) => (
               <button
                 key={t.id}
@@ -289,10 +302,10 @@ export function AnomalyIntelligence() {
           {tab === 'spc' && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">{selectedVendor.vendor_name} â€” SPC Control Chart</CardTitle>
+                <CardTitle className="text-base">{selectedVendor.vendor_name} — SPC Control Chart</CardTitle>
                 <CardDescription>
-                  Mean: {fmt(selectedVendor.mean_amount)} Â· UCL: {fmt(selectedVendor.mean_amount + 3 * selectedVendor.std_deviation)} Â· LCL: {fmt(Math.max(0, selectedVendor.mean_amount - 3 * selectedVendor.std_deviation))}
-                  Â· Trained on {selectedVendor.training_invoice_count} invoices
+                  Mean: {fmt(selectedVendor.mean_amount)} · UCL: {fmt(selectedVendor.mean_amount + 3 * selectedVendor.std_deviation)} · LCL: {fmt(Math.max(0, selectedVendor.mean_amount - 3 * selectedVendor.std_deviation))}
+                  · Trained on {selectedVendor.training_invoice_count} invoices
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -328,8 +341,8 @@ export function AnomalyIntelligence() {
                 <div className="flex gap-4 mt-3 text-xs text-gray-500 flex-wrap">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-indigo-500 inline-block" />Normal invoice</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500 inline-block" />Outside control limits (anomaly)</span>
-                  <span className="flex items-center gap-1"><span className="w-6 border-t-2 border-dashed border-red-500 inline-block" />UCL/LCL (Â±3Ïƒ)</span>
-                  <span className="flex items-center gap-1"><span className="w-6 border-t-2 border-dashed border-amber-400 inline-block" />Warning (Â±2Ïƒ)</span>
+                  <span className="flex items-center gap-1"><span className="w-6 border-t-2 border-dashed border-red-500 inline-block" />UCL/LCL (±3σ)</span>
+                  <span className="flex items-center gap-1"><span className="w-6 border-t-2 border-dashed border-amber-400 inline-block" />Warning (±2σ)</span>
                 </div>
               </CardContent>
             </Card>
@@ -341,8 +354,8 @@ export function AnomalyIntelligence() {
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
                   <div>
-                    <CardTitle className="text-base">Benford's Law Analysis â€” {selectedVendor.vendor_name}</CardTitle>
-                    <CardDescription>Leading digit distribution Â· deviation from expected = potential manipulation</CardDescription>
+                    <CardTitle className="text-base">Benford's Law Analysis — {selectedVendor.vendor_name}</CardTitle>
+                    <CardDescription>Leading digit distribution · deviation from expected = potential manipulation</CardDescription>
                   </div>
                   <div className={`text-center px-3 py-1.5 rounded-lg ${bScore >= 70 ? 'bg-green-50 border border-green-200' : bScore >= 50 ? 'bg-yellow-50 border border-yellow-200' : 'bg-red-50 border border-red-200'}`}>
                     <p className={`text-2xl font-bold ${bScore >= 70 ? 'text-green-700' : bScore >= 50 ? 'text-yellow-700' : 'text-red-700'}`}>{bScore}</p>
@@ -373,7 +386,7 @@ export function AnomalyIntelligence() {
                 </div>
                 {bScore < 60 && (
                   <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
-                    âš ï¸ <strong>Low conformity score ({bScore}/100)</strong> â€” {selectedVendor.vendor_name}'s invoice amounts deviate significantly from Benford's Law. This may indicate invoice manipulation or splitting patterns.
+                    ⚠️ <strong>Low conformity score ({bScore}/100)</strong> — {selectedVendor.vendor_name}'s invoice amounts deviate significantly from Benford's Law. This may indicate invoice manipulation or splitting patterns.
                   </div>
                 )}
               </CardContent>
@@ -400,10 +413,10 @@ export function AnomalyIntelligence() {
                         <div>
                           <p className="font-semibold text-gray-900 text-sm">{p.vendor_name}</p>
                           <p className="text-xs text-gray-500 mt-0.5">
-                            Avg: {fmt(p.mean_amount)} Â· Range: {fmt(p.min_amount)} â€“ {fmt(p.max_amount)} Â· {p.training_invoice_count} invoices
+                            Avg: {fmt(p.mean_amount)} · Range: {fmt(p.min_amount)} – {fmt(p.max_amount)} · {p.training_invoice_count} invoices
                           </p>
                           <p className="text-xs text-orange-700 mt-1 font-medium">
-                            ðŸ“ˆ Upward price drift: +{p.price_trend_pct.toFixed(1)}% â€” contract review recommended
+                            📈 Upward price drift: +{p.price_trend_pct.toFixed(1)}% — contract review recommended
                           </p>
                         </div>
                         <div className="text-right shrink-0 ml-4">
@@ -430,7 +443,7 @@ export function AnomalyIntelligence() {
                   <ShieldAlert className="h-4 w-4 text-purple-500" />
                   Ghost Vendor Risk Analysis
                 </CardTitle>
-                <CardDescription>Single-invoice vendors with no recurring history â€” potential fraud risk</CardDescription>
+                <CardDescription>Single-invoice vendors with no recurring history — potential fraud risk</CardDescription>
               </CardHeader>
               <CardContent>
                 {ghostVendors.length === 0 ? (
@@ -457,7 +470,7 @@ export function AnomalyIntelligence() {
                             <td className="px-3 py-2.5 text-right font-semibold">{fmt(p.mean_amount)}</td>
                             <td className="px-3 py-2.5 text-center text-gray-500">{p.training_invoice_count}</td>
                             <td className="px-3 py-2.5 text-center">
-                              <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">{(p as unknown as Record<string, unknown>).typical_gl_code as string || 'â€”'}</span>
+                              <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">{(p as unknown as Record<string, unknown>).typical_gl_code as string || '—'}</span>
                             </td>
                             <td className="px-3 py-2.5 text-center">
                               <Badge className={p.mean_amount > 100000 ? 'bg-red-100 text-red-700 border-red-200' : 'bg-yellow-100 text-yellow-700 border-yellow-200'}>
@@ -471,7 +484,7 @@ export function AnomalyIntelligence() {
                   </div>
                 )}
                 <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-700">
-                  <strong>Ghost vendor indicators:</strong> Only one invoice ever Â· Not in approved vendor list Â· High amount Â· Round-number amounts Â· No PO reference.
+                  <strong>Ghost vendor indicators:</strong> Only one invoice ever · Not in approved vendor list · High amount · Round-number amounts · No PO reference.
                   Cross-check these vendors against your approved vendor master.
                 </div>
               </CardContent>
@@ -480,7 +493,7 @@ export function AnomalyIntelligence() {
         </>
       )}
 
-      {/* â”€â”€ All Vendor Alerts â”€â”€ */}
+      {/* ── All Vendor Alerts ── */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">All Vendor Alerts</CardTitle>
@@ -502,18 +515,25 @@ export function AnomalyIntelligence() {
                 {profiles.map((p) => {
                   const isAnomaly = anomalyVendors.includes(p);
                   const flags = [
-                    isAnomaly && 'âš ï¸ Amount anomaly',
-                    p.is_splitting_vendor && 'âœ‚ï¸ Splitting',
-                    p.price_trend === 'increasing' && 'ðŸ“ˆ Price drift',
-                    p.historical_rejection_rate > 0.1 && 'ðŸš« High rejection',
-                    p.training_invoice_count === 1 && 'ðŸ‘» Ghost vendor',
+                    isAnomaly && '⚠️ Amount anomaly',
+                    p.is_splitting_vendor && '✂️ Splitting',
+                    p.price_trend === 'increasing' && '📈 Price drift',
+                    p.historical_rejection_rate > 0.1 && '🚫 High rejection',
+                    p.training_invoice_count === 1 && '👻 Ghost vendor',
                   ].filter(Boolean) as string[];
+
+                  const statusBadge =
+                    flags.length === 0
+                      ? { label: 'Clean', className: 'bg-green-100 text-green-700 border-green-200' }
+                      : flags.length === 1
+                      ? { label: 'Watch', className: 'bg-yellow-100 text-yellow-700 border-yellow-200' }
+                      : { label: 'Flag', className: '' };
 
                   return (
                     <tr
                       key={p.id}
                       className="border-b hover:bg-indigo-50/30 cursor-pointer"
-                      onClick={() => { setSelectedVendor(p); setTab('spc'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                      onClick={() => openVendorDetail(p)}
                     >
                       <td className="px-4 py-2.5 font-medium text-gray-900 max-w-[200px] truncate">{p.vendor_name}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums">{fmt(p.mean_amount)}</td>
@@ -527,18 +547,35 @@ export function AnomalyIntelligence() {
                       <td className="px-4 py-2.5 text-center">
                         <div className="flex gap-1 justify-center flex-wrap">
                           {flags.length === 0
-                            ? <span className="text-gray-300">â€”</span>
+                            ? <span className="text-gray-300">—</span>
                             : flags.map((f, i) => (
                               <span key={i} className="text-[10px] bg-red-50 text-red-700 border border-red-100 px-1.5 py-0.5 rounded-full whitespace-nowrap">{f}</span>
                             ))}
                         </div>
                       </td>
                       <td className="px-4 py-2.5 text-center">
-                        {flags.length === 0
-                          ? <Badge className="bg-green-100 text-green-700 border-green-200 text-[10px]">Clean</Badge>
-                          : flags.length === 1
-                          ? <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200 text-[10px]">Watch</Badge>
-                          : <Badge variant="destructive" className="text-[10px]">Flag</Badge>}
+                        {flags.length === 0 ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openVendorDetail(p); }}
+                          >
+                            <Badge className={`${statusBadge.className} text-[10px] hover:opacity-80`}>Clean</Badge>
+                          </button>
+                        ) : flags.length === 1 ? (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openVendorDetail(p); }}
+                          >
+                            <Badge className={`${statusBadge.className} text-[10px] hover:opacity-80 cursor-pointer`}>Watch</Badge>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openVendorDetail(p); }}
+                          >
+                            <Badge variant="destructive" className="text-[10px] hover:opacity-80 cursor-pointer">Flag</Badge>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -548,7 +585,17 @@ export function AnomalyIntelligence() {
           </div>
         </CardContent>
       </Card>
+
+      <VendorAnomalyDetailPanel
+        profile={detailVendor}
+        invoices={invoices}
+        anomalies={anomalies}
+        companyId={companyId}
+        currency={displayCurrency}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        onAnomalyResolved={() => companyId && void load(companyId)}
+      />
     </div>
   );
 }
-

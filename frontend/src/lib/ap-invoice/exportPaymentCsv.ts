@@ -1,4 +1,4 @@
-﻿import type { Invoice } from './supabase';
+import type { Invoice } from './supabase';
 
 export function exportPaymentBatchCsv(invoices: Invoice[], batchDate: string) {
   const headers = [
@@ -37,4 +37,3 @@ export function exportPaymentBatchCsv(invoices: Invoice[], batchDate: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
-

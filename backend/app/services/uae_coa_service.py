@@ -1,4 +1,4 @@
-﻿"""UAE Chart of Accounts — seed + GL balance helpers."""
+"""UAE Chart of Accounts — seed + GL balance helpers."""
 from __future__ import annotations
 from sqlalchemy.orm import Session
 from app.models.uae_accounting_full import UAEAccount, UAEJournalLine
@@ -10,6 +10,7 @@ UAE_COA = [
     {"code":"1002","name":"Cash at Bank - ENBD","type":"Asset","sub":"Current Asset","vat":False},
     {"code":"1003","name":"Cash at Bank - FAB","type":"Asset","sub":"Current Asset","vat":False},
     {"code":"1004","name":"Cash at Bank - ADCB","type":"Asset","sub":"Current Asset","vat":False},
+    {"code":"1014","name":"Bank Emirates NBD USD","type":"Asset","sub":"Current Asset","vat":False,"currency":"USD"},
     {"code":"1100","name":"Trade Receivables","type":"Asset","sub":"Current Asset","vat":True,"vr":5},
     {"code":"1101","name":"Allowance for Doubtful Debts","type":"Asset","sub":"Current Asset","vat":False},
     {"code":"1110","name":"VAT Recoverable (Input Tax)","type":"Asset","sub":"Current Asset","vat":False},
@@ -69,28 +70,34 @@ UAE_COA = [
     {"code":"7160","name":"Bank Charges","type":"Expense","sub":"Finance","vat":False},
     {"code":"7170","name":"Interest Expense (IFRS 16)","type":"Expense","sub":"Finance","vat":False},
     {"code":"7200","name":"Corporate Tax Expense","type":"Expense","sub":"Tax","vat":False},
+    {"code":"7202","name":"Foreign Exchange Loss/Gain","type":"Expense","sub":"Finance","vat":False},
     {"code":"7210","name":"Fines & Penalties","type":"Expense","sub":"Other","vat":False},
 ]
 
 
-def seed_uae_chart_of_accounts(tenant_id: str, db: Session) -> int:
+def seed_uae_chart_of_accounts(
+    tenant_id: str,
+    db: Session,
+    *,
+    company_id: str | None = None,
+) -> int:
     """Seed UAE-standard 62-account CoA. Safe to call multiple times (idempotent)."""
-    existing = {
-        a.code
-        for a in db.query(UAEAccount.code)
-        .filter(UAEAccount.tenant_id == tenant_id)
-        .all()
-    }
+    q = db.query(UAEAccount.code).filter(UAEAccount.tenant_id == tenant_id)
+    if company_id:
+        q = q.filter(UAEAccount.company_id == company_id)
+    existing = {a.code for a in q.all()}
     added = 0
     for row in UAE_COA:
         if row["code"] in existing:
             continue
         acct = UAEAccount(
             tenant_id=tenant_id,
+            company_id=company_id,
             code=row["code"],
             name=row["name"],
             account_type=row["type"],
             sub_type=row["sub"],
+            currency=row.get("currency", "AED"),
             is_vat_applicable=row.get("vat", False),
             vat_rate=row.get("vr", 0),
         )

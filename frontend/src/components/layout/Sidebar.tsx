@@ -46,6 +46,7 @@ import {
 
 import { useAuth } from '../../context/AuthContext';
 import { currentSections, currentBranding, type NavItem } from '../../config/productConfig';
+import { canAccessPath } from '../../config/productRole';
 
 // ── Icon map ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +91,11 @@ const linkActive = 'bg-blue-600 text-white border-blue-500 shadow-sm';
 
 function SidebarLink({ item }: { item: NavItem }) {
   const { pathname } = useLocation();
-  const { hasPermission } = useAuth();
+  const { hasPermission, productRole, user } = useAuth();
+
+  if (!canAccessPath(productRole, item.path, user?.role)) {
+    return null;
+  }
 
   // Permission gate
   if (item.permission && !hasPermission(item.permission) && !hasPermission('*')) {

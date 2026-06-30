@@ -1,4 +1,4 @@
-﻿import type { SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { getMyCompany, requireCompanyId } from './companyService';
 import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
@@ -154,7 +154,7 @@ export const STANDARD_TEMPLATES: Record<AccountingStandard, StandardConfig> = {
   CUSTOM: {
     label: 'Custom only',
     shortLabel: 'Custom',
-    description: 'Use only your own GL codes â€” no standard fallback',
+    description: 'Use only your own GL codes — no standard fallback',
     whoUsesIt: 'Societies, restaurants, schools, NGOs',
     categories: [],
   },
@@ -582,4 +582,3 @@ export async function logGlSuggestionAction(
     final_name: payload.finalName,
   });
 }
-

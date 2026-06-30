@@ -21,7 +21,8 @@ import BudgetTable from '../../components/fpa/BudgetTable';
 import { budgetVersions, departmentBudgets, budgetSummary } from '../../data/budgetMockData';
 import { BudgetLineItem, BudgetStatus, BudgetApproach, MonthlyBudget } from '../../types/budget';
 import { callAI } from '../../services/aiProvider';
-import { loadFPABudget, loadFPAPriorYear, checkDataAvailability, getMissingDataMessage, convertBudgetToLineItems } from '../../utils/fpaDataLoader';
+import { loadFPABudget, loadFPAPriorYear, loadFPAActual, checkDataAvailability, getMissingDataMessage, convertBudgetToLineItems, syncFpaMasterFromApi } from '../../utils/fpaDataLoader';
+import { forwardFillMonthlyBudget, inferBudgetDepartment, isYoYComparable } from '../../utils/budgetUtils';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
 
@@ -90,18 +91,29 @@ const BudgetManagement: React.FC = () => {
   const [priorYearData, setPriorYearData] = useState<any>(null);
 
   useEffect(() => {
-    // Read from fpa_budget (master upload) or fpa_actual as fallback
-    const budget = loadFPABudget() || loadFPAActual();
-    const prior  = loadFPAPriorYear();
-    if (!budget) return;
-    setBudgetDataFromStorage(budget);
-    setPriorYearData(prior);
-    // convertBudgetToLineItems now has a fast path for lineItems arrays
-    const converted = convertBudgetToLineItems(budget) as BudgetLineItem[];
-    if (converted.length > 0) {
-      setBudgetData(converted);
-    }
-  }, []);
+    let cancelled = false;
+
+    const loadBudget = () => {
+      const budget = loadFPABudget() || loadFPAActual();
+      const prior  = loadFPAPriorYear();
+      if (!budget) return;
+      setBudgetDataFromStorage(budget);
+      setPriorYearData(prior);
+      const converted = convertBudgetToLineItems(budget) as BudgetLineItem[];
+      if (converted.length > 0) {
+        setBudgetData(converted);
+      }
+    };
+
+    (async () => {
+      await syncFpaMasterFromApi(tenantId);
+      if (!cancelled) loadBudget();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId]);
   
   const [budgetData, setBudgetData] = useState<BudgetLineItem[]>([]);
   const [currentStatus, setCurrentStatus] = useState<BudgetStatus>('Approved');
@@ -111,7 +123,7 @@ const BudgetManagement: React.FC = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [aiSuggesting, setAiSuggesting] = useState(false);
   const [cfoSyncing, setCfoSyncing] = useState(false);
-  const displayCurrency = (localStorage.getItem('fpa_currency') || 'USD').toUpperCase();
+  const displayCurrency = (localStorage.getItem('fpa_currency') || 'AED').toUpperCase();
 
   const syncBudgetToCommandCenter = useCallback(async () => {
     const line_items = buildBudgetCfoLineItems(budgetData);
@@ -148,21 +160,13 @@ const BudgetManagement: React.FC = () => {
     if (!budgetData || budgetData.length === 0) return null;
     const isRevenueRow = (item: BudgetLineItem) => {
       if (item.isHeader) return false;
-      const accType = String((item as any).accountType || '').toLowerCase();
-      if (accType === 'income' || accType === 'revenue') return true;
-      if (accType === 'expense' || accType === 'cost') return false;
-      const name = String(item.category || (item as any).lineItem || '').toLowerCase();
-      return (/^(total\s+)?(revenue|income|sales|license|service|subscri|maintenance|support.*rev)/i.test(name)
-        && !/cost|expense|salary|commission/i.test(name));
+      const name = String(item.lineItem || item.category || '');
+      return item.accountType === 'income' || /revenue|income|subscri|implement|professional service/i.test(name.toLowerCase());
     };
     const isExpenseRow = (item: BudgetLineItem) => {
       if (item.isHeader) return false;
-      const accType = String((item as any).accountType || '').toLowerCase();
-      if (accType === 'expense' || accType === 'cost') return true;
-      if (accType === 'income' || accType === 'revenue') return false;
-      const name = String(item.category || (item as any).lineItem || '').toLowerCase();
-      // Broad match: cost/expense items, cloud, infra, staff, etc.
-      return /expense|cost|cogs|payroll|marketing|admin|depreciation|operating|salary|salaries|cloud|infra|staff|overhead|interest|support.staff|implementation.staff/i.test(name);
+      const name = String(item.lineItem || item.category || '');
+      return item.accountType === 'expense' || /cost|expense|salary|marketing|cloud|admin|overhead|payroll/i.test(name.toLowerCase());
     };
     const sumMonthly = (item: BudgetLineItem) =>
       Object.values(item.monthly || {}).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -188,12 +192,12 @@ const BudgetManagement: React.FC = () => {
       sumByKeywords(budgetData, /(depreciation|amorti[sz]ation)/i);
     const resolvedNetProfit = resolvedRevenue - totalExpenses;
     const resolvedEbitda = resolvedNetProfit + Math.max(addBackTax + addBackInterest + addBackDA, addBackFromRows);
-    const priorRevenue = Number(priorYearData?.totalRevenue || 0) || budgetSummary.priorYearRevenue;
+    const priorRevenue = priorYearData?.totalRevenue != null ? Number(priorYearData.totalRevenue) : 0;
     const priorExpenses =
-      Number(priorYearData?.costOfGoodsSold || 0) +
-      Number(priorYearData?.totalOperatingExpenses || 0) ||
-      budgetSummary.priorYearExpenses;
-    const priorNetProfit = priorRevenue - priorExpenses;
+      priorYearData != null
+        ? Number(priorYearData.costOfGoodsSold || 0) + Number(priorYearData.totalOperatingExpenses || 0)
+        : 0;
+    const priorNetProfit = priorRevenue && priorExpenses ? priorRevenue - priorExpenses : 0;
     const priorEbitda =
       priorNetProfit +
       Number(priorYearData?.corporationTax || 0) +
@@ -215,7 +219,20 @@ const BudgetManagement: React.FC = () => {
     };
   }, [budgetData, budgetDataFromStorage, priorYearData]);
 
-  const displaySummary = computedSummary || budgetSummary;
+  const displaySummary = computedSummary || {
+    ...budgetSummary,
+    priorYearRevenue: 0,
+    priorYearExpenses: 0,
+    priorYearNetProfit: 0,
+    priorYearEbitda: 0,
+  };
+
+  const filteredBudgetData = React.useMemo(() => {
+    if (selectedDepartment === 'All Departments') return budgetData;
+    return budgetData.filter(
+      (row) => row.isHeader || String(row.department || '').toLowerCase() === selectedDepartment.toLowerCase(),
+    );
+  }, [budgetData, selectedDepartment]);
 
   const getStatusColor = (status: BudgetStatus) => {
     const colors = {
@@ -356,6 +373,8 @@ const BudgetManagement: React.FC = () => {
             const perMonth = annualBudget / 12;
             (Object.keys(monthly) as (keyof MonthlyBudget)[]).forEach(k => { monthly[k] = perMonth; });
           }
+          const filledMonthly = forwardFillMonthlyBudget(monthly);
+          Object.assign(monthly, filledMonthly);
           if (annualBudget === 0) {
             annualBudget = Object.values(monthly).reduce((s, v) => s + v, 0);
           }
@@ -369,13 +388,14 @@ const BudgetManagement: React.FC = () => {
           lineItems.push({
             id: `upload-${lineItems.length}-${category.slice(0,20).replace(/\s/g,'-')}`,
             category,
+            lineItem: category,
             isHeader: /^(revenue|cost of revenue|operating exp|gross profit|ebitda|total)/i.test(category) && annualBudget === 0,
             isEditable: true,
             monthly,
             priorYearActual: priorActual,
             indent: 0,
-            ...(deptCol  ? { department: String((row as any)[deptCol]  ?? '') } : {}),
-            ...(ownerCol ? { owner:      String((row as any)[ownerCol] ?? '') } : {}),
+            department: inferBudgetDepartment(category, category, deptCol ? String((row as any)[deptCol] ?? '') : undefined),
+            ...(ownerCol ? { owner: String((row as any)[ownerCol] ?? '') } : {}),
           } as BudgetLineItem);
         }
 
@@ -390,13 +410,13 @@ const BudgetManagement: React.FC = () => {
           priorYearRevenue: totalPriorRevenue,
           rowCount: lineItems.length,
           lineItems: lineItems.map(r => ({
-            account: r.category,
+            account: (r as BudgetLineItem).lineItem || r.category,
             category: r.category,
             budget: Object.values(r.monthly).reduce((s, v) => s + v, 0),
-            monthly: r.monthly,            // ← full monthly breakdown
+            monthly: r.monthly,
             monthlyBudgets: Object.values(r.monthly),
-            accountType: isRevenue(r.category) ? 'income' : isExpense(r.category) ? 'expense' : 'other',
-            department: (r as any).department || 'All Depts',
+            accountType: isRevenue((r as BudgetLineItem).lineItem || r.category) ? 'income' : isExpense((r as BudgetLineItem).lineItem || r.category) ? 'expense' : 'other',
+            department: (r as BudgetLineItem).department || inferBudgetDepartment((r as BudgetLineItem).lineItem || r.category),
             owner: (r as any).owner || 'CFO',
             priorYearActual: r.priorYearActual || 0,
           })),
@@ -727,26 +747,58 @@ Format as a structured commentary using ${displayCurrency} currency.
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           {[
-            { label: 'Total Revenue', value: displaySummary.totalRevenue, prior: displaySummary.priorYearRevenue, color: 'blue' },
-            { label: 'Total Expenses', value: displaySummary.totalExpenses, prior: displaySummary.priorYearExpenses, color: 'red' },
-            { label: 'Net Profit', value: displaySummary.netProfit, prior: displaySummary.priorYearNetProfit, color: 'green' },
-            { label: 'EBITDA', value: displaySummary.ebitda, prior: displaySummary.priorYearEbitda, color: 'purple' }
+            {
+              label: 'Total Revenue',
+              value: displaySummary.totalRevenue,
+              prior: displaySummary.priorYearRevenue,
+              card: 'bg-blue-950 border-blue-700',
+              icon: 'text-blue-400',
+              lowerIsBetter: false,
+            },
+            {
+              label: 'Total Expenses',
+              value: displaySummary.totalExpenses,
+              prior: displaySummary.priorYearExpenses,
+              card: 'bg-amber-950 border-amber-700',
+              icon: 'text-amber-400',
+              lowerIsBetter: true,
+            },
+            {
+              label: 'Net Profit',
+              value: displaySummary.netProfit,
+              prior: displaySummary.priorYearNetProfit,
+              card: displaySummary.netProfit >= 0 ? 'bg-green-950 border-green-700' : 'bg-red-950 border-red-700',
+              icon: displaySummary.netProfit >= 0 ? 'text-green-400' : 'text-red-400',
+              lowerIsBetter: false,
+            },
+            {
+              label: 'EBITDA',
+              value: displaySummary.ebitda,
+              prior: displaySummary.priorYearEbitda,
+              card: 'bg-purple-950 border-purple-700',
+              icon: 'text-purple-400',
+              lowerIsBetter: false,
+            },
           ].map((item, idx) => {
-            const change = ((item.value - item.prior) / item.prior) * 100;
+            const yoyValid = isYoYComparable(item.value, item.prior);
+            const change = yoyValid ? ((item.value - item.prior) / item.prior) * 100 : 0;
+            const changeGood = item.lowerIsBetter ? change <= 0 : change >= 0;
             return (
-              <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div key={idx} className={`rounded-xl border p-6 ${item.card}`}>
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-sm font-medium text-gray-600">{item.label}</span>
-                  <TrendingUp className={`text-${item.color}-500`} size={20} />
+                  <span className="text-sm font-medium text-slate-300">{item.label}</span>
+                  <TrendingUp className={item.icon} size={20} />
                 </div>
-                <div className="text-2xl font-bold text-gray-900 mb-2">
-                  {formatCurrency(item.value)}
+                <div className="text-2xl font-bold text-white mb-2">{formatCurrency(item.value)}</div>
+                <div className="text-sm text-slate-400">
+                  {yoyValid ? `vs FY2024: ${formatCurrency(item.prior)}` : '— Upload FY2024 to compare'}
                 </div>
-                <div className="text-sm text-gray-500">
-                  vs FY2024: {formatCurrency(item.prior)}
-                </div>
-                <div className={`text-sm font-semibold mt-2 ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% YoY
+                <div className={`text-sm font-semibold mt-2 ${yoyValid ? (changeGood ? 'text-emerald-400' : 'text-red-400') : 'text-slate-500'}`}>
+                  {yoyValid ? (
+                    <>{change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}% YoY</>
+                  ) : (
+                    'No prior-year data'
+                  )}
                 </div>
               </div>
             );
@@ -796,20 +848,20 @@ Format as a structured commentary using ${displayCurrency} currency.
 
       {/* Main Budget Table */}
       <div className="max-w-[1800px] mx-auto">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-700 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-900">Monthly Budget Breakdown</h2>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
+            <h2 className="text-xl font-bold text-white">Monthly Budget Breakdown</h2>
+            <div className="flex items-center gap-2 text-sm text-slate-400">
               <span className="flex items-center gap-1">
                 <Edit2 size={14} />
                 Click any cell to edit
               </span>
             </div>
           </div>
-          <p className="text-xs text-gray-500 mb-3">
-            * Monthly figures are annual budget / 12 (equal spread). Click any cell to adjust individual months.
+          <p className="text-xs text-slate-500 mb-3">
+            * Jan–Mar from uploaded data. Apr–Dec forward-filled from last known month budget. Click any cell to adjust.
           </p>
-          <BudgetTable data={budgetData} onDataChange={setBudgetData} currency={displayCurrency} />
+          <BudgetTable data={filteredBudgetData} onDataChange={setBudgetData} currency={displayCurrency} />
         </div>
       </div>
 

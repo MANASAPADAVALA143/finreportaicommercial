@@ -1,32 +1,12 @@
 /**
- * apSupabase.ts
- * ─────────────────────────────────────────────
- * Supabase client pointing at the AP InvoiceFlow project.
- * FinReportAI's embedded AP Invoice pages use this to query
- * the same data as the standalone InvoiceFlow app — no
- * duplication of backend logic, just a second Supabase client.
- *
- * Credentials: InvoiceFlow project (xuaaqonmaarldzklocax)
- * Set VITE_AP_SUPABASE_URL + VITE_AP_SUPABASE_ANON_KEY in .env
+ * AP Supabase — same FinReportAI project (ftlycgfgbboxapxhlpad).
+ * Re-exports the shared AP client; no separate InvoiceFlow project.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from './ap-invoice/supabase';
+import { invoiceFlowAgentUrl } from './ap-invoice/apiBase';
 
-const url  = (import.meta.env.VITE_AP_SUPABASE_URL  as string | undefined) ?? '';
-const key  = (import.meta.env.VITE_AP_SUPABASE_ANON_KEY as string | undefined) ?? '';
-
-if (!url || !key) {
-  console.warn(
-    '[AP InvoiceFlow] Missing VITE_AP_SUPABASE_URL / VITE_AP_SUPABASE_ANON_KEY — AP Invoice pages will not load data.'
-  );
-}
-
-export const apSupabase = createClient(
-  url  || 'https://placeholder.supabase.co',
-  key  || 'placeholder-anon-key'
-);
-
-// ── Shared types (mirrors InvoiceFlow's lib/supabase.ts) ─────────────────────
+export const apSupabase = supabase;
 
 export type APInvoice = {
   id: string;
@@ -93,7 +73,6 @@ export type PurchaseOrder = {
   company_id?: string | null;
   created_at: string;
   updated_at: string;
-  // joined from goods_receipts
   grn_number?: string | null;
   match_status?: string | null;
 };
@@ -134,8 +113,5 @@ export type APInvoiceLineItem = {
   created_at: string;
 };
 
-/** InvoiceFlow FastAPI agent base URL (AI extraction) */
-export const apAgentUrl = (path: string) => {
-  const base = (import.meta.env.VITE_AP_AGENT_URL as string | undefined) ?? 'https://apinvoice-production.up.railway.app';
-  return `${base.replace(/\/$/, '')}${path}`;
-};
+/** FinReportAI FastAPI — OCR / agent endpoints */
+export const apAgentUrl = invoiceFlowAgentUrl;

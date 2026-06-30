@@ -3,27 +3,72 @@
  * Wraps all /api/uae/full/* endpoints.
  */
 
-const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
-const BASE = `${API_BASE}/api/uae/full`;
+function resolveBase(): string {
+  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
+  if (explicit) return `${explicit}/api/uae/full`;
+  // Dev: Vite proxies /api → localhost:8000 (same-origin, avoids connection-reset/CORS issues)
+  return '/api/uae/full';
+}
+
+const BASE = resolveBase();
+
+function companyParams(extra: Record<string, string> = {}): Record<string, string> {
+  const cid = localStorage.getItem('active_company_id');
+  return cid ? { ...extra, company_id: cid } : extra;
+}
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId') ?? 'demo';
-  return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, ...extra };
+  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+  return {
+    'Content-Type': 'application/json',
+    'X-Workspace-ID': wsId,
+    'X-Tenant-ID': wsId,
+    ...extra,
+  };
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
   let url = `${BASE}${path}`;
-  if (params) { const q = new URLSearchParams(params).toString(); if (q) url += '?' + q; }
-  const res = await fetch(url, { headers: hdrs() });
+  const merged = companyParams(params ?? {});
+  const q = new URLSearchParams(merged).toString();
+  if (q) url += '?' + q;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: hdrs() });
+  } catch {
+    throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST', headers: hdrs(),
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+async function post<T>(path: string, body?: unknown, params?: Record<string, string>): Promise<T> {
+  let url = `${BASE}${path}`;
+  const q = new URLSearchParams(companyParams(params ?? {})).toString();
+  if (q) url += (path.includes('?') ? '&' : '?') + q;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST', headers: hdrs(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function del<T>(path: string): Promise<T> {
+  let url = `${BASE}${path}`;
+  const q = new URLSearchParams(companyParams()).toString();
+  if (q) url += (path.includes('?') ? '&' : '?') + q;
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'DELETE', headers: hdrs() });
+  } catch {
+    throw new Error('Cannot reach API — ensure backend is running on port 8000');
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -53,7 +98,7 @@ export interface JournalEntry {
 }
 
 export interface JournalLine {
-  id: string; account_code: string; description: string;
+  id: string; account_code: string; account_name?: string; description: string;
   debit: number; credit: number;
 }
 
@@ -97,11 +142,48 @@ export interface PeriodClose {
   checklist: Record<string, boolean>; closed_at?: string;
 }
 
+export interface FxRevalueResult {
+  message: string;
+  period: string;
+  posted: boolean;
+  accounts_processed: number;
+  total_adjustment_aed: number;
+  journal_entry_id?: string | null;
+  journal_entry_number?: string | null;
+  details: Array<{
+    account_code: string;
+    account_name: string;
+    currency: string;
+    foreign_balance: number;
+    original_rate: number;
+    current_rate: number;
+    original_aed: number;
+    revalued_aed: number;
+    adjustment_aed: number;
+  }>;
+}
+
 export interface DashboardKPIs {
   period: string; coa_count: number; je_count: number;
   asset_count: number; invoice_count: number; accrual_count: number;
   ar_outstanding: number; revenue: number; expenses: number;
   net_profit: number; total_assets: number;
+}
+
+export interface SetupContext {
+  company: {
+    id: string; company_name: string; base_currency: string;
+    reporting_standard: string; financial_year_start: number;
+    opening_balance_date?: string | null;
+  } | null;
+  periods: {
+    id: string; period_name: string; period_number: number;
+    start_date: string; end_date: string; status: string;
+  }[];
+  coa_count: number;
+  has_opening_balance: boolean;
+  setup_complete: boolean;
+  default_period: string;
 }
 
 // ── Chart of Accounts ─────────────────────────────────────────────────────
@@ -122,10 +204,45 @@ export const listJournals = (params?: { period?: string; source?: string; status
 export const createJE = (body: {
   entry_date: string; description: string; reference?: string;
   source?: string; auto_post?: boolean;
-  lines: { account_code: string; description?: string; debit: number; credit: number }[];
+  lines: { account_code: string; account_name?: string; description?: string; debit: number; credit: number }[];
 }) => post<{ id: string; status: string }>('/journals', body);
+
+export interface JournalImportResult {
+  imported: number;
+  skipped: number;
+  errors: string[];
+  total_parsed: number;
+  message: string;
+  workspace_id?: string;
+  company_id?: string | null;
+}
+
+export async function importJournalsCSV(file: File): Promise<JournalImportResult> {
+  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+  const cid = localStorage.getItem('active_company_id');
+  const form = new FormData();
+  form.append('file', file);
+  let url = `${BASE}/journals/import`;
+  if (cid) url += `?company_id=${encodeURIComponent(cid)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId },
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Import failed (${res.status})`);
+  }
+  return res.json();
+}
 export const postJE = (jeId: string) =>
-  post<{ id: string; status: string }>(`/journals/${jeId}/post`);
+  post<{ id: string; status: string; requires_approval?: boolean; warnings?: string[] }>(
+    `/journals/${jeId}/post`
+  );
+export const approveJE = (jeId: string) =>
+  post<{ id: string; status: string }>(`/journals/${jeId}/approve`);
+export const deleteJE = (jeId: string) =>
+  del<{ id: string; deleted: boolean }>(`/journals/${jeId}`);
 export const reverseJE = (jeId: string, reversalDate: string) =>
   post<{ id: string; status: string }>(`/journals/${jeId}/reverse?reversal_date=${reversalDate}`);
 export const getJE = (jeId: string) => get<JournalEntry>(`/journals/${jeId}`);
@@ -225,6 +342,24 @@ export const lockPeriod = (runId: string) =>
     `/period-close/${runId}/lock`
   );
 
+export async function runFxRevaluation(body: {
+  workspace_id: string;
+  company_id?: string;
+  period: string;
+  revaluation_date: string;
+  exchange_rates: Record<string, number | { current_rate: number; original_rate?: number }>;
+}): Promise<FxRevalueResult> {
+  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
+  const url = explicit ? `${explicit}/api/uae/fx/revalue` : '/api/uae/fx/revalue';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: hdrs(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ── Management Accounts ───────────────────────────────────────────────────
 
 export const generateManagementAccounts = (period: string) =>
@@ -240,3 +375,5 @@ export const generateManagementAccounts = (period: string) =>
 
 export const getDashboard = (period: string) =>
   get<DashboardKPIs>('/dashboard', { period });
+
+export const getSetupContext = () => get<SetupContext>('/setup-context');

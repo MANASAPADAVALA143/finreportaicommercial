@@ -46,7 +46,7 @@ import type { CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { callAI } from '../../services/aiProvider';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
-import { loadFPAActual, loadFPABudget, convertToVarianceData } from '../../utils/fpaDataLoader';
+import { loadFPAActual, loadFPABudget, convertToVarianceData, syncFpaMasterFromApi, FPA_MASTER_UPDATED_EVENT } from '../../utils/fpaDataLoader';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -109,6 +109,72 @@ export type VarianceLineItem = {
   ytdBudget?: number;
   priorYear?: number;
 };
+
+function stripEmbeddedActionItems(summary: string): string {
+  if (!summary) return summary;
+  let text = summary;
+  for (const marker of ['---ACTION_ITEMS---', '---LINE_COMMENTARY---', '\nACTION ITEMS:', '\n3) ACTION ITEMS', '\n3. ACTION ITEMS']) {
+    const idx = text.indexOf(marker);
+    if (idx >= 0) text = text.slice(0, idx);
+  }
+  const lines = text.trim().split('\n');
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1].trim();
+    if (/^\d+[\.)]\s*[🔴🟡🟢]/.test(last) || /^[🔴🟡🟢]\s*(URGENT|MONITOR|FAVORABLE|OPTIMISE)/i.test(last)) {
+      lines.pop();
+    } else {
+      break;
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+function buildClientActionItems(
+  analysis: NonNullable<ReturnType<typeof computeVarianceAnalysis>>,
+  currency: CurrencyType,
+  currencyFormat: CurrencyFormatLocale,
+): string[] {
+  type Sev = 'urgent' | 'monitor' | 'favorable' | 'ok';
+  const getSeverity = (row: VarianceLineItem & { variance?: number; variance_pct?: number }): Sev => {
+    const vp = row.budget ? (row.actual - row.budget) / Math.abs(row.budget) : 0;
+    const isRevenue = row.accountType === 'income';
+    if (isRevenue) {
+      if (vp >= 0.05) return 'favorable';
+      if (vp >= 0) return 'ok';
+      if (vp < -0.05) return 'urgent';
+      return 'monitor';
+    }
+    if (vp <= -0.05) return 'favorable';
+    if (vp <= 0) return 'ok';
+    if (vp > 0.1) return 'urgent';
+    return 'monitor';
+  };
+
+  const items = analysis.line_items
+    .map((row) => {
+      const severity = getSeverity(row);
+      if (severity === 'ok') return null;
+      const pct = row.budget ? (((row.actual - row.budget) / Math.abs(row.budget)) * 100).toFixed(1) : '0.0';
+      const amt = formatCurrency(Math.abs((row.variance ?? row.actual - row.budget)), currency, currencyFormat);
+      const isRevenue = row.accountType === 'income';
+      if (severity === 'urgent') {
+        return isRevenue
+          ? `🔴 URGENT: Revenue missed budget by ${amt} (${pct}%) — investigate pipeline gaps`
+          : `🔴 URGENT: ${row.account} exceeded budget by ${amt} (${pct}%) — review and contain`;
+      }
+      if (severity === 'monitor') {
+        return isRevenue
+          ? `🟡 MONITOR: ${row.account} below budget by ${amt} (${pct}%) — validate drivers, update forecast`
+          : `🟡 MONITOR: ${row.account} over budget by ${amt} (${pct}%) — monitor closely`;
+      }
+      return isRevenue
+        ? `🟢 FAVORABLE: ${row.account} beat budget by ${amt} (+${Math.abs(Number(pct))}%) — roll into forecast`
+        : `🟢 FAVORABLE: ${row.account} under budget by ${amt} (${pct}%) — sustain cost discipline`;
+    })
+    .filter(Boolean) as string[];
+
+  return items.slice(0, 5).map((text, i) => `${i + 1}. ${text}`);
+}
 
 function inferAccountType(account: string, accountType?: string): 'income' | 'expense' | 'other' {
   const explicit = String(accountType || '').toLowerCase();
@@ -227,7 +293,9 @@ export function VarianceAnalysisPage() {
     executive_summary: string;
     line_commentary: Array<{ account: string; why: string; recommendation: string }>;
     action_items: string[];
+    fallback_used?: boolean;
   } | null>(null);
+  const [narrativeFallback, setNarrativeFallback] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStep, setAiStep] = useState('');
   const lastVarianceSyncKey = useRef<string | null>(null);
@@ -241,9 +309,9 @@ export function VarianceAnalysisPage() {
   const [aiMode, setAiMode] = useState<'cfo' | 'board' | 'investor'>('cfo');
   const [showAiModeMenu, setShowAiModeMenu] = useState(false);
   const [currency, setCurrency] = useState<CurrencyType>(() => {
-    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
+    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'AED').toUpperCase();
     if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(stored)) return stored as CurrencyType;
-    return 'USD';
+    return 'AED';
   });
   const [currencyFormat, setCurrencyFormat] = useState<CurrencyFormatLocale>(() => {
     const stored = String(localStorage.getItem(LS_CURRENCY_FORMAT_KEY) || 'GLOBAL').toUpperCase();
@@ -259,57 +327,82 @@ export function VarianceAnalysisPage() {
   }, [currencyFormat]);
 
   useEffect(() => {
-    if (rawItems.length > 0) return;
-    const actualData = loadFPAActual();
-    const budgetData = loadFPABudget();
-    if (!actualData) return;
+    let cancelled = false;
 
-    // ── Fast path: use lineItems array from master/budget upload ─────────────
-    const srcItems = actualData.lineItems || budgetData?.lineItems || [];
-    if (srcItems.length > 0) {
-      const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-      const rows: VarianceLineItem[] = srcItems.map((item: any, idx: number) => {
-        const actArr: number[] = item.monthlyActuals || (item.monthly ? MONTHS.map((k: string) => Number(item.monthly[k]) || 0) : []);
-        const budArr: number[] = item.monthlyBudgets || (item.monthly ? MONTHS.map((k: string) => Number((budgetData?.lineItems?.[idx] as any)?.monthly?.[k] || item.monthly[k]) || 0) : []);
-        // YTD = sum only months where actuals exist
-        const ytdM = actArr.reduce((last, v, i) => (v > 0 ? i + 1 : last), 0) || MONTHS.length;
-        const actual  = actArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.actual || 0);
-        const budget  = budArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.budget || 0);
-        const accType = String(item.accountType || item.account_type || '').toLowerCase();
-        const name    = String(item.account || item.account_name || item.category || '');
-        return {
-          account:     name,
-          department:  String(item.department || 'All Depts'),
-          budget, actual,
-          accountType: (accType === 'income' || accType === 'revenue' ? 'income' : accType === 'expense' || accType === 'cost' ? 'expense' : 'other') as any,
-        };
-      }).filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
+    const hydrateFromStorage = (): boolean => {
+      const actualData = loadFPAActual();
+      const budgetData = loadFPABudget();
+      if (!actualData) return false;
 
-      if (rows.length) {
-        setRawItems(rows);
-        const cur = localStorage.getItem('fpa_currency') || 'AED';
-        setLoadBanner(`✅ ${rows.length} lines loaded from master upload (${cur})`);
-        window.setTimeout(() => setLoadBanner(null), 6000);
-        return;
+      const srcItems = actualData.lineItems || budgetData?.lineItems || [];
+      if (srcItems.length > 0) {
+        const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        const rows: VarianceLineItem[] = srcItems.map((item: any, idx: number) => {
+          const actArr: number[] = item.monthlyActuals || (item.monthly ? MONTHS.map((k: string) => Number(item.monthly[k]) || 0) : []);
+          const budArr: number[] = item.monthlyBudgets || (item.monthly ? MONTHS.map((k: string) => Number((budgetData?.lineItems?.[idx] as any)?.monthly?.[k] || item.monthly[k]) || 0) : []);
+          const ytdM = actArr.reduce((last, v, i) => (v > 0 ? i + 1 : last), 0) || MONTHS.length;
+          const actual  = actArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.actual || 0);
+          const budget  = budArr.slice(0, ytdM).reduce((s, v) => s + v, 0) || Number(item.budget || 0);
+          const accType = String(item.accountType || item.account_type || '').toLowerCase();
+          const name    = String(item.account || item.account_name || item.category || '');
+          return {
+            account:     name,
+            department:  String(item.department || 'All Depts'),
+            budget, actual,
+            accountType: (accType === 'income' || accType === 'revenue' ? 'income' : accType === 'expense' || accType === 'cost' ? 'expense' : 'other') as any,
+          };
+        }).filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
+
+        if (rows.length) {
+          setRawItems(rows);
+          const cur = localStorage.getItem('fpa_currency') || 'AED';
+          setLoadBanner(`✅ ${rows.length} lines loaded from master upload (${cur})`);
+          window.setTimeout(() => setLoadBanner(null), 6000);
+          return true;
+        }
       }
-    }
 
-    // ── Fallback: convert from generic actual/budget totals ───────────────────
-    const rows = convertToVarianceData(actualData, budgetData || actualData)
-      .filter((r: any) => !r.isHeader)
-      .map((r: any) => ({
-        account: String(r.category ?? ''),
-        department: 'All Depts',
-        budget: Number(r.budget) || 0,
-        actual: Number(r.actual) || 0,
-      }))
-      .filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
+      const rows = convertToVarianceData(actualData, budgetData || actualData)
+        .filter((r: any) => !r.isHeader)
+        .map((r: any) => ({
+          account: String(r.category ?? ''),
+          department: 'All Depts',
+          budget: Number(r.budget) || 0,
+          actual: Number(r.actual) || 0,
+        }))
+        .filter((r: VarianceLineItem) => r.account && (r.budget !== 0 || r.actual !== 0));
 
-    if (!rows.length) return;
-    setRawItems(rows);
-    setLoadBanner(`Data loaded: ${rows.length} variance lines`);
-    window.setTimeout(() => setLoadBanner(null), 5000);
-  }, [rawItems.length]);
+      if (!rows.length) return false;
+      setRawItems(rows);
+      setLoadBanner(`Data loaded: ${rows.length} variance lines`);
+      window.setTimeout(() => setLoadBanner(null), 5000);
+      return true;
+    };
+
+    const loadFromMaster = async () => {
+      const sync = await syncFpaMasterFromApi(tenantId);
+      if (cancelled) return;
+      const loaded = hydrateFromStorage();
+      if (!loaded && sync.rowCount > 0 && sync.usableRowCount === 0) {
+        setLoadBanner(
+          '⚠️ Master file has no budget/actual values. Add Account + Budget + Actual columns, then re-upload.'
+        );
+        window.setTimeout(() => setLoadBanner(null), 8000);
+      }
+    };
+
+    void loadFromMaster();
+
+    const onMasterUpdated = () => {
+      void loadFromMaster();
+    };
+    window.addEventListener(FPA_MASTER_UPDATED_EVENT, onMasterUpdated);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener(FPA_MASTER_UPDATED_EVENT, onMasterUpdated);
+    };
+  }, [tenantId]);
 
   const analysis = useMemo(() => (rawItems.length ? computeVarianceAnalysis(rawItems) : null), [rawItems]);
 
@@ -493,10 +586,12 @@ export function VarianceAnalysisPage() {
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
+        setNarrativeFallback(Boolean(data.fallback_used));
         setAiNarrative({
           executive_summary: data.executive_summary || '',
           line_commentary: data.line_commentary || [],
           action_items: data.action_items || [],
+          fallback_used: Boolean(data.fallback_used),
         });
       } else {
         const material = analysis.line_items.filter((i) => (i.material ?? Math.abs(i.variance_pct ?? 0) > 10));
@@ -539,7 +634,23 @@ Write concise CFO commentary and 3 numeric action items.`;
         });
       }
     } catch (e: any) {
-      alert('AI narrative failed: ' + (e.message || e));
+      console.warn('AI narrative unavailable, using on-page summary', e);
+      const material = analysis.line_items.filter((i) => i.material ?? Math.abs(i.variance_pct ?? 0) > 10);
+      setAiNarrative({
+        executive_summary:
+          `Net profit is ${formatCurrency(analysis.total_actual, currency, currencyFormat)} vs budget ` +
+          `${formatCurrency(analysis.total_budget, currency, currencyFormat)} ` +
+          `(${analysis.total_variance_pct.toFixed(1)}% total variance). ` +
+          `Revenue ${analysis.revenue_variance_pct >= 0 ? 'beat' : 'missed'} plan by ${Math.abs(analysis.revenue_variance_pct).toFixed(1)}%; ` +
+          `costs ${analysis.cost_variance_pct > 0 ? 'ran above' : 'came in below'} budget by ${Math.abs(analysis.cost_variance_pct).toFixed(1)}%.`,
+        line_commentary: material.slice(0, 8).map((i) => ({
+          account: i.account,
+          why: `Variance of ${formatCurrency(i.variance ?? 0, currency, currencyFormat)} (${(i.variance_pct ?? 0).toFixed(1)}%).`,
+          recommendation: 'Review with the department owner and update the forecast if the trend persists.',
+        })),
+        action_items: buildClientActionItems(analysis, currency, currencyFormat),
+      });
+      setNarrativeFallback(true);
     } finally {
       setAiLoading(false);
       setAiStep('');
@@ -1318,14 +1429,19 @@ Write concise CFO commentary and 3 numeric action items.`;
                 )}
                 {aiNarrative && !aiLoading && (
                   <>
+                    {narrativeFallback && (
+                      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                        Rule-based narrative shown — Claude AI is unavailable (check Anthropic API credits). Variance data and charts are unaffected.
+                      </div>
+                    )}
                     <div className="rounded-xl border-l-4 p-6" style={{ background: colors.card, borderColor: colors.actualBar }}>
                       <div className="flex items-start justify-between gap-4">
                         <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: colors.text }}>
-                          {aiNarrative.executive_summary}
+                          {stripEmbeddedActionItems(aiNarrative.executive_summary)}
                         </p>
                         <div className="flex gap-2 shrink-0">
                           <button
-                            onClick={() => navigator.clipboard.writeText(aiNarrative.executive_summary)}
+                            onClick={() => navigator.clipboard.writeText(stripEmbeddedActionItems(aiNarrative.executive_summary))}
                             className="p-2 rounded border"
                             style={{ borderColor: colors.border, color: colors.text }}
                             title="Copy"
@@ -1356,7 +1472,11 @@ Write concise CFO commentary and 3 numeric action items.`;
                           ))}
                         </ol>
                         <button
-                          onClick={() => window.open(`mailto:?subject=Variance%20Analysis%20Action%20Items&body=${encodeURIComponent(aiNarrative.executive_summary + '\n\n' + aiNarrative.action_items.join('\n'))}`)}
+                          onClick={() => {
+                            const summary = stripEmbeddedActionItems(aiNarrative.executive_summary);
+                            const body = summary + (aiNarrative.action_items.length ? '\n\nKey actions:\n' + aiNarrative.action_items.join('\n') : '');
+                            window.open(`mailto:?subject=Variance%20Analysis%20Summary&body=${encodeURIComponent(body)}`);
+                          }}
                           className="mt-4 px-4 py-2 rounded-lg border flex items-center gap-2"
                           style={{ borderColor: colors.border, color: colors.text }}
                         >

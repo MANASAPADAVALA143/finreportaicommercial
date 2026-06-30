@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "FinReport AI"
     VERSION: str = "1.0.0"
     DEBUG: bool = True
+    ENVIRONMENT: str = "production"  # production | demo
+    DEMO_TENANT_ID: str = "00000000-0000-4000-8000-000000000001"
     
     # Database — sqlite default so `uvicorn` starts without Postgres; override in .env for production
     DATABASE_URL: str = "sqlite:///./finreportai.db"
@@ -20,19 +22,16 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # CORS — explicit origins; localhost any port also matched via allow_origin_regex in main.py
+    # CORS — browser origins allowed to call the API (see main.py CORSMiddleware)
     BACKEND_CORS_ORIGINS: list = [
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:3004",
-        "http://localhost:3006",
-        "http://localhost:3007",
+        "https://finreportai.com",
+        "https://www.finreportai.com",
+        "https://finreportaicommercial.vercel.app",
         "http://localhost:5173",
-        "https://finreportai.railway.app",
-        "https://finreportaicommercial-production-8907.up.railway.app",
-        "https://finreportaicommercial.up.railway.app",
+        "http://localhost:3000",
     ]
+    # Production Vercel URL — appended to CORS in main.py (e.g. https://finreportai.vercel.app)
+    FRONTEND_URL: str = ""
 
     # Expose FastAPI routes as MCP tools at /mcp (requires `fastapi-mcp` package)
     ENABLE_FASTAPI_MCP: bool = True

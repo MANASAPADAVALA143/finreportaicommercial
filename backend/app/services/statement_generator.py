@@ -62,7 +62,8 @@ STATEMENT_STRUCTURE: dict[str, dict[str, Any]] = {
             ("Deferred tax liabilities", 42),
             ("Employee benefit obligations", 43),
             ("Provisions", 44),
-            ("TOTAL NON-CURRENT LIABILITIES", 45, True),
+            ("Other non-current liabilities", 45),
+            ("TOTAL NON-CURRENT LIABILITIES", 46, True),
         ],
         "Current Liabilities": [
             ("Trade and other payables", 50),

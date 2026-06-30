@@ -1,4 +1,4 @@
-﻿import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ export function ExtractionReviewCard({ invoices }: Props) {
 
   return (
     <Card
-      className={`shadow-sm border-l-4 ${isClear ? 'border-l-green-500 bg-green-50/30' : 'border-l-amber-500 bg-white'}`}
+      className={`shadow-sm border border-slate-200 border-l-4 ${isClear ? 'border-l-green-500 bg-green-50' : 'border-l-amber-500 bg-white'}`}
     >
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">

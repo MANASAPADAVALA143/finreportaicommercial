@@ -61,7 +61,7 @@ from app.services.disclosure_generator import (
     generate_n8_related_parties,
     generate_n9_contingencies,
 )
-from app.services.gl_mapping_ai import apply_ai_mappings_to_db, infer_account_type
+from app.services.gl_mapping_ai import infer_account_type
 from app.services.board_pack_data import build_board_pack_data
 from app.services.board_pack_generator import BoardPackGenerator, count_pdf_pages
 from app.services.board_pack_seed import (
@@ -295,7 +295,15 @@ def run_ai_mapping_job(
         tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
         if not tb:
             return
-        apply_ai_mappings_to_db(db, tenant_id, tb, lines)
+        from app.services.gl_mapping_ai import (
+            apply_ai_mappings_only_missing,
+            apply_template_mappings_first,
+            clear_unlocked_gl_mappings,
+        )
+
+        clear_unlocked_gl_mappings(db, trial_balance_id)
+        apply_template_mappings_first(db, tenant_id, tb, lines)
+        apply_ai_mappings_only_missing(db, tenant_id, tb, lines)
         _prune_duplicate_gl_mappings(db, trial_balance_id, tenant_id)
         tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
         if tb:
@@ -852,6 +860,93 @@ def create_mapping_template(
     db.commit()
     db.refresh(tmpl)
     return {"id": tmpl.id, "entries_saved": len(entries)}
+
+
+class CoaTemplateEntryBody(BaseModel):
+    gl_code: str
+    gl_description: str
+    ifrs_statement: str
+    ifrs_section: str
+    ifrs_line_item: str
+    ifrs_sub_section: Optional[str] = None
+
+
+class TemplateFromCoaBody(BaseModel):
+    template_name: str
+    industry: Optional[str] = None
+    is_default: bool = True
+    company_name: Optional[str] = None
+    currency: Optional[str] = None
+    entries: list[CoaTemplateEntryBody] = Field(..., min_length=1)
+
+
+@router.post("/mapping-templates/from-coa")
+def create_mapping_template_from_coa(
+    body: TemplateFromCoaBody,
+    tenant_id: str = Depends(tenant_id_header),
+    db: Session = Depends(get_db),
+):
+    """
+    Save a company CoA mapping template before any trial balance exists (onboarding).
+    """
+    if body.is_default:
+        db.query(MappingTemplate).filter(
+            MappingTemplate.tenant_id == tenant_id,
+            MappingTemplate.is_default.is_(True),
+        ).update({"is_default": False}, synchronize_session=False)
+
+    entries: list[dict[str, Any]] = [
+        {
+            "gl_code": e.gl_code.strip(),
+            "gl_description": e.gl_description.strip(),
+            "ifrs_statement": e.ifrs_statement.strip(),
+            "ifrs_line_item": e.ifrs_line_item.strip(),
+            "ifrs_section": e.ifrs_section.strip(),
+            "ifrs_sub_section": e.ifrs_sub_section,
+            "ai_confidence_score": 0.98,
+            "company_name": body.company_name,
+            "currency": body.currency,
+        }
+        for e in body.entries
+        if e.gl_code.strip() and e.ifrs_line_item.strip()
+    ]
+    if not entries:
+        raise HTTPException(status_code=400, detail="No valid template entries provided")
+
+    tmpl = MappingTemplate(
+        tenant_id=tenant_id,
+        template_name=body.template_name.strip(),
+        industry=body.industry,
+        is_default=body.is_default,
+        entries=entries,
+    )
+    db.add(tmpl)
+    db.commit()
+    db.refresh(tmpl)
+    logger.info(
+        "Saved CoA mapping template id=%s tenant=%s entries=%d default=%s",
+        tmpl.id,
+        tenant_id,
+        len(entries),
+        body.is_default,
+    )
+    return {
+        "id": tmpl.id,
+        "template_name": tmpl.template_name,
+        "entries_saved": len(entries),
+        "is_default": tmpl.is_default,
+        "tenant_id": tenant_id,
+    }
+
+
+@router.get("/mapping-templates/industry")
+def list_industry_templates(
+    db: Session = Depends(get_db),
+):
+    """System-level industry templates (tenant-agnostic defaults)."""
+    from app.services.seed_industry_templates import list_system_industry_templates
+
+    return {"templates": list_system_industry_templates(db)}
 
 
 def _line_item_to_dict(li: StatementLineItem) -> dict[str, Any]:

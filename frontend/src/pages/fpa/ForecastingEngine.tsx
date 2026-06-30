@@ -25,7 +25,7 @@ import {
   apSchedule,
   scenarioMultipliers
 } from '../../data/forecastMockData';
-import { loadFPAActual, loadFPABudget, loadFPAForecast, checkDataAvailability, generateForecastFromReal } from '../../utils/fpaDataLoader';
+import { loadFPAActual, loadFPABudget, loadFPAForecast, checkDataAvailability, generateForecastFromReal, hasFpaLineData, syncFpaMasterFromApi } from '../../utils/fpaDataLoader';
 import {
   ComposedChart,
   Bar,
@@ -57,24 +57,37 @@ const ForecastingEngine: React.FC = () => {
   const [realForecastData, setRealForecastData] = useState<any>(null);
 
   useEffect(() => {
-    // Read from master upload (fpa_actual/fpa_budget) or fallback
-    const actual  = loadFPAActual();
-    const budget  = loadFPABudget() || actual; // use actual as budget if no separate budget
-    const monthly = loadFPAForecast();
-    setActualData(actual);
-    setBudgetData(budget);
-    setForecastMonthlyData(monthly);
+    let cancelled = false;
 
-    if (actual || budget) {
-      const generated = generateForecastFromReal(actual || budget, budget || actual, monthly);
-      if (generated.revenue?.length > 0 || generated.expenses?.length > 0) {
-        setRealForecastData(generated);
+    const loadForecastData = () => {
+      const actual  = loadFPAActual();
+      const budget  = loadFPABudget() || actual;
+      const monthly = loadFPAForecast();
+      setActualData(actual);
+      setBudgetData(budget);
+      setForecastMonthlyData(monthly);
+
+      if (actual || budget) {
+        const generated = generateForecastFromReal(actual || budget, budget || actual, monthly);
+        if (generated.revenue?.length > 0 || generated.expenses?.length > 0) {
+          setRealForecastData(generated);
+        }
       }
-    }
 
-    // Ensure currency is set
-    if (!localStorage.getItem('fpa_currency')) localStorage.setItem('fpa_currency', 'AED');
-  }, []);
+      if (!localStorage.getItem('fpa_currency')) localStorage.setItem('fpa_currency', 'AED');
+    };
+
+    (async () => {
+      if (!hasFpaLineData()) {
+        await syncFpaMasterFromApi(tenantId);
+      }
+      if (!cancelled) loadForecastData();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId]);
   
   const [activeTab, setActiveTab] = useState<'revenue' | 'expense' | 'cashflow'>('revenue');
   const [scenario, setScenario] = useState<Scenario>('base');

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Sparkles, AlertTriangle } from 'lucide-react';
-
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { cfoGet, cfoPost, fmtMoney } from '../../services/cfoDesk.service';
 
 const C = {
   bg: '#060A12', surface: '#0B1120', panel: '#0F1829', border: '#1A2640',
@@ -15,13 +14,12 @@ const CAT_COLORS: Record<string, string> = {
   'pending_approval': '#F59E0B',
 };
 
-type Payment = { description: string; entity: string; flag: string; category: string; amount_eur: number; due: string; status: string; notes: string };
-type Week = { week: number; label: string; dates: string; total_eur: number; risk: string | null; projected_cash: number; cash_threshold?: number; cash_risk_note?: string; payments: Payment[] };
+type Payment = { description: string; entity: string; flag: string; category: string; amount_eur: number; amount_aed?: number; due: string; status: string; notes: string };
+type Week = { week: number; label: string; dates: string; total_eur: number; total_aed?: number; risk: string | null; projected_cash: number; cash_threshold?: number; cash_risk_note?: string; payments: Payment[] };
 
-function fmt(n: number) {
-  const abs = Math.abs(n);
-  const s = abs >= 1000000 ? `€${(abs / 1000000).toFixed(2)}M` : `€${(abs / 1000).toFixed(0)}K`;
-  return n < 0 ? `+${s}` : s;
+function fmt(n: number, currency = 'AED') {
+  const v = n;
+  return fmtMoney(v, currency);
 }
 
 function StatusIcon({ s }: { s: string }) {
@@ -39,15 +37,17 @@ export default function PaymentCalendar() {
   const [totalCommitted, setTotalCommitted] = useState(0);
   const [highestWeek, setHighestWeek] = useState(0);
 
+  const [currency, setCurrency] = useState('AED');
+
   useEffect(() => { void load(); }, []);
 
   async function load() {
     try {
-      const r = await fetch(`${API}/api/payment-calendar/weeks`);
-      const d = await r.json() as { weeks: Week[] };
+      const d = await cfoGet<{ weeks: Week[]; currency?: string }>('/api/payment-calendar/weeks');
+      setCurrency(d.currency || 'AED');
       setWeeks(d.weeks);
-      const total = d.weeks.reduce((a, w) => a + w.total_eur, 0);
-      const max = Math.max(...d.weeks.map(w => w.total_eur));
+      const total = d.weeks.reduce((a, w) => a + (w.total_aed ?? w.total_eur), 0);
+      const max = Math.max(...d.weeks.map(w => w.total_aed ?? w.total_eur));
       setTotalCommitted(total);
       setHighestWeek(max);
     } catch { /* ignore */ }
@@ -56,8 +56,7 @@ export default function PaymentCalendar() {
   async function loadInsight() {
     setInsightLoading(true);
     try {
-      const r = await fetch(`${API}/api/payment-calendar/ai-insight`, { method: 'POST' });
-      const d = await r.json() as { insight: string };
+      const d = await cfoPost<{ insight: string }>('/api/payment-calendar/ai-insight');
       setInsight(d.insight);
     } catch { setInsight('Failed to load insight.'); }
     setInsightLoading(false);
@@ -77,8 +76,8 @@ export default function PaymentCalendar() {
       {/* Summary bar */}
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 24, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: '14px 20px' }}>
         {[
-          { label: 'Total Committed', val: fmt(totalCommitted), col: C.textPrimary },
-          { label: 'Highest Week', val: fmt(highestWeek), col: C.amber },
+          { label: 'Total Committed', val: fmt(totalCommitted, currency), col: C.textPrimary },
+          { label: 'Highest Week', val: fmt(highestWeek, currency), col: C.amber },
           { label: 'Cash Risk Weeks', val: riskWeeks || 'None', col: riskWeeks ? C.red : C.teal },
         ].map(({ label, val, col }) => (
           <div key={label}>
@@ -113,8 +112,8 @@ export default function PaymentCalendar() {
                   {w.risk === 'watch' && <span style={{ marginLeft: 10, fontSize: 10, fontWeight: 700, color: C.amber, background: 'rgba(245,158,11,.12)', padding: '2px 8px', borderRadius: 3 }}>⚠️ WATCH</span>}
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: w.risk === 'critical' ? C.red : C.textPrimary }}>{fmt(w.total_eur)}</div>
-                  <div style={{ fontSize: 10, color: C.textDim }}>Cash: {fmt(w.projected_cash)}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: w.risk === 'critical' ? C.red : C.textPrimary }}>{fmt(w.total_aed ?? w.total_eur, currency)}</div>
+                  <div style={{ fontSize: 10, color: C.textDim }}>Cash: {fmt(w.projected_cash, currency)}</div>
                 </div>
               </div>
 
@@ -135,8 +134,8 @@ export default function PaymentCalendar() {
                         {p.category}
                       </span>
                     </div>
-                    <div style={{ color: p.amount_eur < 0 ? C.teal : p.status === 'at_risk' ? C.red : C.textPrimary, fontWeight: 600 }}>
-                      {fmt(p.amount_eur)}
+                    <div style={{ color: (p.amount_aed ?? p.amount_eur) < 0 ? C.teal : p.status === 'at_risk' ? C.red : C.textPrimary, fontWeight: 600 }}>
+                      {fmt(p.amount_aed ?? p.amount_eur, currency)}
                     </div>
                     <div style={{ color: C.textDim }}>{p.due}</div>
                     <div><StatusIcon s={p.status} /></div>

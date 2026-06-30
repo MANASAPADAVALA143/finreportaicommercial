@@ -1,9 +1,10 @@
-﻿import { supabase } from './supabase';
-import type { ApprovalRule, Invoice, InvoiceApprovalRow } from './supabase';
-import { notifyApprovalEvent } from './approvalNotifications';
-import { logAction } from './auditService';
-import { requireCompanyId } from './companyService';
-import { notifyApproverViaWhatsApp } from './whatsappService';
+import { supabase } from '@/lib/ap-invoice/supabase';
+import type { ApprovalRule, Invoice, InvoiceApprovalRow } from '@/lib/ap-invoice/supabase';
+import { notifyApprovalEvent } from '@/lib/ap-invoice/approvalNotifications';
+import { logAction } from '@/lib/ap-invoice/auditService';
+import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
+import { requireCompanyId } from '@/lib/ap-invoice/companyService';
+import { notifyApproverViaWhatsApp } from '@/lib/ap-invoice/whatsappService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 export type ApprovalRowStatus = 'pending' | 'approved' | 'rejected';
@@ -122,7 +123,7 @@ export async function submitInvoiceForApproval(
     total_steps: chain.length,
   });
 
-  // WhatsApp one-tap â€” use approver's phone from the rule (index matches approver_emails)
+  // WhatsApp one-tap — use approver's phone from the rule (index matches approver_emails)
   const approverPhone = rule.approver_phones?.[0] ?? null;
   void notifyApproverViaWhatsApp(
     approvalRowId,
@@ -213,6 +214,7 @@ export async function processApprovalAction(
     logAction('approval.rejected', 'invoice', invoice.id, actorEmail.trim(), {
       comment: comment?.trim() ?? null,
     });
+    recalcVendorRiskAsync(invoice.vendor_name);
 
     if (invoice.approval_submitted_by) {
       void notifyApprovalEvent({
@@ -271,6 +273,7 @@ export async function processApprovalAction(
       step: ar.step_index,
       advanced_to: nextIndex,
     });
+    recalcVendorRiskAsync(invoice.vendor_name);
 
     void notifyApprovalEvent({
       type: 'approver_assigned',
@@ -308,6 +311,7 @@ export async function processApprovalAction(
   });
 
   logAction('approval.approved', 'invoice', invoice.id, actorEmail.trim(), { step: ar.step_index });
+  recalcVendorRiskAsync(invoice.vendor_name);
 
   if (invoice.approval_submitted_by) {
     void notifyApprovalEvent({
@@ -317,6 +321,15 @@ export async function processApprovalAction(
       submitter_email: invoice.approval_submitted_by,
       outcome: 'approved',
     });
+  }
+
+  // Push to GulfTax transaction store (non-blocking)
+  try {
+    const cid = invoice.company_id || (await requireCompanyId());
+    const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
+    void syncApprovedInvoiceToGulfTax(invoice.id, cid);
+  } catch {
+    /* sync is best-effort; GL post may also trigger backend sync */
   }
 
   return { ok: true };
@@ -397,4 +410,3 @@ export async function deleteApprovalRule(id: string) {
   const { error } = await supabase.from('approval_rules').delete().eq('id', id);
   if (error) throw error;
 }
-

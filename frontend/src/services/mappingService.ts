@@ -430,6 +430,14 @@ export function validateMapping(ifrsLine: string): boolean {
 
 // ==================== INDUSTRY TEMPLATES ====================
 
+/** Canonical four industry templates ported to /ifrs-statement (see backend/app/data/industry_templates.json). */
+export const CANONICAL_INDUSTRY_TEMPLATE_IDS = [
+  "manufacturing",
+  "retail",
+  "services",
+  "technology",
+] as const;
+
 export const INDUSTRY_TEMPLATES = [
   {
     id: "manufacturing",
@@ -512,3 +520,7 @@ export const INDUSTRY_TEMPLATES = [
     }
   }
 ];
+
+export const CANONICAL_INDUSTRY_TEMPLATES = INDUSTRY_TEMPLATES.filter((t) =>
+  (CANONICAL_INDUSTRY_TEMPLATE_IDS as readonly string[]).includes(t.id)
+);

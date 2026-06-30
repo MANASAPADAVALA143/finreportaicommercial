@@ -823,16 +823,14 @@ export const CFODashboard = () => {
               </div>
               <div>
                 <h2 className="text-lg font-bold text-gray-900">AP Overview</h2>
-                <p className="text-xs text-gray-500">Live data from InvoiceFlow · refreshed on load</p>
+                <p className="text-xs text-gray-500">Live AP data from FinReportAI · refreshed on load</p>
               </div>
             </div>
             <a
-              href="https://apinvoice-production.up.railway.app"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/ap-invoices"
               className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition"
             >
-              Open InvoiceFlow <ExternalLink className="w-3.5 h-3.5" />
+              Open AP Invoices
             </a>
           </div>
 

@@ -1,1 +1,1 @@
-"""GulfTax AI — UAE VAT classifier embedded in FinReportAI."""
+"""GulfTax AI — UAE VAT / CT / E-Invoicing embedded in FinReportAI."""

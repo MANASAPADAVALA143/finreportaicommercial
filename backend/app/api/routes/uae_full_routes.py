@@ -16,13 +16,17 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Optional, Dict, List
+from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.uae_accounting_full import (
     UAEAccount, UAEJournalEntry, UAEJournalLine,
     UAECustomer, UAESalesInvoice, UAESalesInvoiceLine,
@@ -32,18 +36,328 @@ from app.models.uae_accounting_full import (
 from app.services.uae_coa_service import seed_uae_chart_of_accounts, get_account_balances
 from app.services.uae_journal_service import (
     create_journal_entry, post_journal_entry, reverse_journal_entry, get_trial_balance,
+    import_journals_from_csv,
+    coa_name_map, enrich_journal_lines, missing_journal_account_codes,
+    _normalize_account_code,
 )
+from app.exceptions.period_control import PeriodControlError
+from app.services.audit_log_service import log_audit
+from app.services.uae_controls_service import get_controls, validate_journal_entry
+from app.services.notification_service import get_workspace_role_email, scan_notifications, send_notification
 from app.services.uae_fixed_assets_service import run_monthly_depreciation, get_depreciation_schedule
-from app.services.uae_accruals_service import suggest_accruals, post_accrual
+from app.services.uae_accruals_service import suggest_accruals, post_accrual, persist_accrual_suggestions
 from app.services.uae_bank_recon_service import (
     import_bank_statement, run_reconciliation, get_reconciliation_summary,
 )
 
 router = APIRouter(prefix="/api/uae/full", tags=["UAE Full Accounting"])
 
+# ===========================================================================
+# UAE FX revaluation (functional currency: AED)
+# ===========================================================================
+
+fx_router = APIRouter(prefix="/api/uae/fx", tags=["UAE FX Revaluation"])
+
+
+class FXRevalueRequest(BaseModel):
+    workspace_id: str
+    company_id: Optional[str] = None
+    period: str
+    revaluation_date: str
+    exchange_rates: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _fx_rate_pair(rate_input: Any) -> tuple[float, float]:
+    """
+    Accept either:
+      - { current_rate, original_rate } — AED book balance revaluation (AED per 1 FCY)
+      - number — legacy: FCY units stored on GL (original defaults to 1.0)
+    """
+    if isinstance(rate_input, (int, float)):
+        current = float(rate_input)
+        if current <= 0:
+            raise ValueError("Exchange rate must be > 0")
+        return 1.0, current
+    if isinstance(rate_input, dict):
+        current = float(rate_input.get("current_rate", 0))
+        original = float(rate_input.get("original_rate", 1.0))
+        if current <= 0 or original <= 0:
+            raise ValueError("current_rate and original_rate must be > 0")
+        return original, current
+    raise ValueError("Invalid exchange rate payload")
+
+
+def _ensure_fx_gl_account(
+    tenant_id: str,
+    company_id: str | None,
+    db: Session,
+) -> UAEAccount:
+    fx = (
+        db.query(UAEAccount)
+        .filter(
+            UAEAccount.tenant_id == tenant_id,
+            UAEAccount.code == "7202",
+            or_(UAEAccount.company_id == company_id, UAEAccount.company_id.is_(None)),
+        )
+        .order_by(UAEAccount.company_id.desc())
+        .first()
+    )
+    if fx:
+        return fx
+    fx = UAEAccount(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        company_id=company_id,
+        code="7202",
+        name="Foreign Exchange Loss/Gain",
+        account_type="Expense",
+        sub_type="Finance",
+        currency="AED",
+        is_active=True,
+    )
+    db.add(fx)
+    db.flush()
+    return fx
+
+
+@fx_router.post("/revalue")
+def run_fx_revaluation(
+    body: FXRevalueRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Automated month-end FX revaluation.
+    Revalues non-AED account balances and posts JE with source=FX_REVALUATION.
+    """
+    tenant_id = (body.workspace_id or "").strip() or _tenant(request.headers)
+    company_id = body.company_id
+    try:
+        reval_date = date.fromisoformat(body.revaluation_date[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="revaluation_date must be YYYY-MM-DD") from exc
+
+    account_q = db.query(UAEAccount).filter(
+        UAEAccount.tenant_id == tenant_id,
+        UAEAccount.is_active == True,
+        UAEAccount.currency.isnot(None),
+        UAEAccount.currency != "AED",
+    )
+    account_q = _apply_company(account_q, UAEAccount, company_id)
+    fx_accounts = account_q.order_by(UAEAccount.code).all()
+    if not fx_accounts:
+        return {
+            "message": "No foreign currency GL accounts found",
+            "period": body.period,
+            "posted": False,
+            "accounts_processed": 0,
+            "total_adjustment_aed": 0.0,
+            "journal_entry_id": None,
+            "journal_entry_number": None,
+            "details": [],
+        }
+
+    line_q = (
+        db.query(UAEJournalLine, UAEJournalEntry)
+        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+        .filter(
+            UAEJournalEntry.tenant_id == tenant_id,
+            UAEJournalEntry.status == "posted",
+            UAEJournalEntry.entry_date <= reval_date,
+        )
+    )
+    line_q = _apply_company(line_q, UAEJournalEntry, company_id)
+    rows = line_q.all()
+
+    by_code: dict[str, Decimal] = {}
+    for line, _je in rows:
+        code = _normalize_account_code(line.account_code)
+        if not code:
+            continue
+        signed = Decimal(str(line.debit or 0)) - Decimal(str(line.credit or 0))
+        by_code[code] = by_code.get(code, Decimal("0")) + signed
+
+    missing_currencies: set[str] = set()
+    details: list[dict[str, Any]] = []
+    je_lines: list[dict[str, Any]] = []
+
+    _ensure_fx_gl_account(tenant_id, company_id, db)
+
+    for acct in fx_accounts:
+        code = _normalize_account_code(acct.code)
+        ccy = (acct.currency or "").upper()
+        book_aed = float(by_code.get(code, Decimal("0")))
+        if abs(book_aed) < 0.000001:
+            continue
+        raw_rate = body.exchange_rates.get(ccy)
+        if raw_rate is None:
+            missing_currencies.add(ccy)
+            continue
+        try:
+            original_rate, current_rate = _fx_rate_pair(raw_rate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid exchange rate for {ccy}: {exc}") from exc
+
+        # GL balances are in AED; derive FC units at original rate then revalue at current rate.
+        foreign_units = book_aed / original_rate
+        original_aed = book_aed
+        revalued_aed = foreign_units * current_rate
+        delta = round(revalued_aed - original_aed, 2)
+        if abs(delta) < 0.01:
+            continue
+
+        desc = f"FX Revaluation {body.period} - {ccy} at {current_rate:g}"
+        amount = abs(delta)
+
+        if delta > 0:
+            # Account increases in AED => FX gain
+            je_lines.append({
+                "account_code": code,
+                "account_name": acct.name,
+                "description": desc,
+                "debit": amount,
+                "credit": 0.0,
+                "currency": "AED",
+            })
+            je_lines.append({
+                "account_code": "7202",
+                "account_name": "Foreign Exchange Loss/Gain",
+                "description": desc,
+                "debit": 0.0,
+                "credit": amount,
+                "currency": "AED",
+            })
+        else:
+            # Account decreases in AED => FX loss
+            je_lines.append({
+                "account_code": "7202",
+                "account_name": "Foreign Exchange Loss/Gain",
+                "description": desc,
+                "debit": amount,
+                "credit": 0.0,
+                "currency": "AED",
+            })
+            je_lines.append({
+                "account_code": code,
+                "account_name": acct.name,
+                "description": desc,
+                "debit": 0.0,
+                "credit": amount,
+                "currency": "AED",
+            })
+
+        details.append({
+            "account_code": code,
+            "account_name": acct.name,
+            "currency": ccy,
+            "book_balance_aed": round(book_aed, 2),
+            "foreign_balance": round(book_aed, 2),
+            "original_rate": original_rate,
+            "current_rate": current_rate,
+            "original_aed": round(original_aed, 2),
+            "revalued_aed": round(revalued_aed, 2),
+            "adjustment_aed": delta,
+        })
+
+    if missing_currencies:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Missing exchange rates for one or more currencies",
+                "missing_currencies": sorted(missing_currencies),
+                "hint": "Provide exchange_rates like {\"USD\": {\"current_rate\": 3.67, \"original_rate\": 3.65}}",
+            },
+        )
+
+    if not je_lines:
+        return {
+            "message": "No FX revaluation adjustment required",
+            "period": body.period,
+            "posted": False,
+            "accounts_processed": 0,
+            "total_adjustment_aed": 0.0,
+            "journal_entry_id": None,
+            "journal_entry_number": None,
+            "details": details,
+        }
+
+    try:
+        je = create_journal_entry(
+            tenant_id=tenant_id,
+            company_id=company_id,
+            entry_date=reval_date,
+            description=f"FX Revaluation {body.period}",
+            reference=f"FX-{body.period}",
+            source="FX_REVALUATION",
+            lines=je_lines,
+            db=db,
+            auto_post=True,
+        )
+    except PeriodControlError as exc:
+        raise HTTPException(status_code=400, detail=exc.payload) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    run = (
+        db.query(UAEPeriodClose)
+        .filter(UAEPeriodClose.tenant_id == tenant_id, UAEPeriodClose.period == body.period)
+        .first()
+    )
+    if run and run.status != "closed":
+        run.multi_currency_revaluation = True
+        checklist = _run_checklist(run)
+        run.status = "ready_to_close" if all(checklist.values()) else "open"
+        db.add(run)
+
+    log_audit(
+        db,
+        workspace_id=tenant_id,
+        company_id=company_id,
+        action="fx_revaluation_posted",
+        entity_type="journal_entry",
+        entity_id=je.id,
+        user_email=request.headers.get("x-user-email"),
+        details={
+            "period": body.period,
+            "revaluation_date": body.revaluation_date,
+            "accounts_processed": len(details),
+            "source": "FX_REVALUATION",
+        },
+    )
+    db.commit()
+
+    return {
+        "message": "FX revaluation posted",
+        "period": body.period,
+        "posted": True,
+        "accounts_processed": len(details),
+        "total_adjustment_aed": round(sum(abs(d["adjustment_aed"]) for d in details), 2),
+        "journal_entry_id": je.id,
+        "journal_entry_number": je.entry_number,
+        "details": details,
+    }
+
 
 def _tenant(request_headers) -> str:
-    return request_headers.get("x-tenant-id", "demo")
+    return (
+        request_headers.get("x-workspace-id")
+        or request_headers.get("x-tenant-id")
+        or "demo"
+    )
+
+
+def _tenant_dep(
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+) -> str:
+    return (x_workspace_id or x_tenant_id or "demo").strip()
+
+
+def _apply_company(q, model, company_id: Optional[str]):
+    """Filter by company_id when provided (multi-company support)."""
+    if company_id and hasattr(model, "company_id"):
+        return q.filter(model.company_id == company_id)
+    return q
 
 
 # ===========================================================================
@@ -51,21 +365,91 @@ def _tenant(request_headers) -> str:
 # ===========================================================================
 
 @router.post("/coa/seed")
-def seed_chart_of_accounts(request: Request, db: Session = Depends(get_db)):
+def seed_chart_of_accounts(
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
-    count = seed_uae_chart_of_accounts(tenant_id, db)
+    count = seed_uae_chart_of_accounts(tenant_id, db, company_id=company_id)
     return {"seeded": count, "message": f"Seeded {count} accounts"}
 
 
-@router.get("/coa")
-def list_chart_of_accounts(request: Request, db: Session = Depends(get_db)):
+@router.get("/setup-context")
+def uae_setup_context(
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Company profile, accounting periods, and setup flags for /uae-full UI."""
     tenant_id = _tenant(request.headers)
-    accounts = (
-        db.query(UAEAccount)
-        .filter_by(tenant_id=tenant_id, is_active=True)
-        .order_by(UAEAccount.code)
-        .all()
-    )
+    cid = company_id
+    profile = None
+    if cid:
+        profile = db.query(UaeCompanyProfile).filter_by(id=cid, workspace_id=tenant_id).first()
+    else:
+        profile = (
+            db.query(UaeCompanyProfile)
+            .filter_by(workspace_id=tenant_id, status="active")
+            .order_by(UaeCompanyProfile.updated_at.desc())
+            .first()
+        )
+        cid = profile.id if profile else None
+
+    periods_q = db.query(AccountingPeriod).filter_by(workspace_id=tenant_id)
+    if cid:
+        periods_q = periods_q.filter_by(company_id=cid)
+    periods = periods_q.order_by(AccountingPeriod.period_number).all()
+
+    coa_count = 0
+    opening_je = False
+    if cid:
+        coa_count = db.query(UAEAccount).filter_by(
+            tenant_id=tenant_id, company_id=cid, is_active=True,
+        ).count()
+        opening_je = db.query(UAEJournalEntry).filter_by(
+            tenant_id=tenant_id, company_id=cid, source="opening_balance", status="posted",
+        ).first() is not None
+
+    open_period = next((p for p in periods if p.status == "open"), periods[0] if periods else None)
+
+    return {
+        "company": {
+            "id": profile.id,
+            "company_name": profile.company_name,
+            "base_currency": profile.base_currency,
+            "reporting_standard": profile.reporting_standard,
+            "financial_year_start": profile.financial_year_start,
+            "opening_balance_date": profile.opening_balance_date.isoformat() if profile and profile.opening_balance_date else None,
+        } if profile else None,
+        "periods": [
+            {
+                "id": p.id,
+                "period_name": p.period_name,
+                "period_number": p.period_number,
+                "start_date": p.start_date.isoformat(),
+                "end_date": p.end_date.isoformat(),
+                "status": p.status,
+            }
+            for p in periods
+        ],
+        "coa_count": coa_count,
+        "has_opening_balance": opening_je,
+        "setup_complete": bool(profile and coa_count > 0),
+        "default_period": open_period.start_date.strftime("%Y-%m") if open_period else date.today().strftime("%Y-%m"),
+    }
+
+
+@router.get("/coa")
+def list_chart_of_accounts(
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    tenant_id = _tenant(request.headers)
+    q = db.query(UAEAccount).filter_by(tenant_id=tenant_id, is_active=True)
+    q = _apply_company(q, UAEAccount, company_id)
+    accounts = q.order_by(UAEAccount.code).all()
     return {
         "accounts": [
             {
@@ -130,6 +514,7 @@ def account_balances(period: str, request: Request, db: Session = Depends(get_db
 
 class JELineIn(BaseModel):
     account_code: str
+    account_name: Optional[str] = ""
     description:  Optional[str] = ""
     debit:        float = 0.0
     credit:       float = 0.0
@@ -142,6 +527,25 @@ class JECreate(BaseModel):
     source:      str = "manual"
     lines:       list[JELineIn]
     auto_post:   bool = False
+    company_id:  Optional[str] = None
+
+
+def _account_name_map(tenant_id: str, db: Session, company_id: Optional[str] = None) -> dict[str, str]:
+    return coa_name_map(tenant_id, db, company_id)
+
+
+def _serialize_je_lines(je: UAEJournalEntry, names: dict[str, str]) -> list[dict]:
+    return [
+        {
+            "id": l.id,
+            "account_code": l.account_code,
+            "account_name": (l.account_name or names.get(_normalize_account_code(l.account_code), "") or ""),
+            "description": l.description,
+            "debit": float(l.debit or 0),
+            "credit": float(l.credit or 0),
+        }
+        for l in je.lines
+    ]
 
 
 @router.get("/journals")
@@ -150,14 +554,17 @@ def list_journals(
     period: Optional[str] = None,
     source: Optional[str] = None,
     status: Optional[str] = None,
+    company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     tenant_id = _tenant(request.headers)
     q = db.query(UAEJournalEntry).filter_by(tenant_id=tenant_id)
+    q = _apply_company(q, UAEJournalEntry, company_id)
     if period: q = q.filter(UAEJournalEntry.period == period)
     if source: q = q.filter(UAEJournalEntry.source == source)
     if status: q = q.filter(UAEJournalEntry.status == status)
     entries = q.order_by(UAEJournalEntry.entry_date.desc()).limit(200).all()
+    names = _account_name_map(tenant_id, db)
     return {
         "entries": [
             {
@@ -169,6 +576,7 @@ def list_journals(
                 "source":      e.source,
                 "status":      e.status,
                 "total_debit": sum(l.debit for l in e.lines),
+                "lines":       _serialize_je_lines(e, names),
             }
             for e in entries
         ],
@@ -179,17 +587,133 @@ def list_journals(
 @router.post("/journals")
 def create_je(body: JECreate, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request.headers)
-    lines = [{"account_code": l.account_code, "description": l.description,
-              "debit": l.debit, "credit": l.credit} for l in body.lines]
+    entry_date = date.fromisoformat(body.entry_date)
+    coa_names = coa_name_map(tenant_id, db, body.company_id)
+    raw_lines = [
+        {
+            "account_code": l.account_code,
+            "account_name": l.account_name or "",
+            "description": l.description,
+            "debit": l.debit,
+            "credit": l.credit,
+        }
+        for l in body.lines
+    ]
+    lines = enrich_journal_lines(raw_lines, coa_names)
+    missing = missing_journal_account_codes(lines, coa_names)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Account(s) not found in Chart of Accounts: {', '.join(missing)}",
+        )
+    check = validate_journal_entry(
+        entry_date=entry_date, lines=lines, source=body.source,
+        workspace_id=tenant_id, db=db,
+    )
+    if not check["ok"]:
+        raise HTTPException(status_code=400, detail="; ".join(check["errors"]))
+    initial_status = "pending_approval" if check["requires_approval"] else "draft"
+    auto_post = body.auto_post and initial_status != "pending_approval"
+    user_email = request.headers.get("x-user-email")
     try:
         je = create_journal_entry(
-            tenant_id=tenant_id, entry_date=date.fromisoformat(body.entry_date),
+            tenant_id=tenant_id, entry_date=entry_date,
             description=body.description, lines=lines, reference=body.reference,
-            source=body.source, db=db, auto_post=body.auto_post,
+            source=body.source, company_id=body.company_id,
+            db=db, auto_post=auto_post,
+            initial_status=initial_status,
         )
+    except PeriodControlError as exc:
+        raise HTTPException(status_code=400, detail=exc.payload) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"id": je.id, "status": je.status}
+
+    total_dr = sum(l.debit for l in body.lines)
+    if initial_status == "pending_approval":
+        scan_notifications(db, tenant_id)
+        controls = get_controls(db, tenant_id)
+        threshold = float(controls.je_approval_threshold_aed or 0) if controls else 0
+        cfo_email = get_workspace_role_email(db, tenant_id, ["CFO", "Approver", "cfo"])
+        if cfo_email:
+            send_notification(
+                cfo_email,
+                f"JE approval needed: AED {total_dr:,.2f}",
+                (
+                    f"Journal entry AED {total_dr:,.2f} posted by {user_email or 'user'} "
+                    f"requires your approval.\n"
+                    f"Description: {body.description}\n"
+                    f"Approve at: /uae-full/journals"
+                ),
+            )
+        log_audit(
+            db, workspace_id=tenant_id,
+            company_id=body.company_id,
+            action="je_pending_approval", entity_type="journal_entry", entity_id=je.id,
+            user_email=user_email,
+            details={"total": total_dr, "threshold": threshold},
+        )
+        db.commit()
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "pending_approval",
+                "message": f"JE above AED {threshold:,.0f} — sent to CFO for approval",
+                "je_id": je.id,
+                "warnings": check.get("warnings", []),
+            },
+        )
+
+    if je.status == "posted":
+        log_audit(
+            db, workspace_id=tenant_id,
+            company_id=je.company_id,
+            action="je_posted", entity_type="journal_entry", entity_id=je.id,
+            user_email=user_email,
+            details={"entry_number": je.entry_number, "source": body.source},
+        )
+        db.commit()
+
+    return {
+        "id": je.id,
+        "status": je.status,
+        "warnings": check.get("warnings", []),
+        "requires_approval": check["requires_approval"],
+    }
+
+
+@router.post("/journals/import")
+async def import_journals(
+    request: Request,
+    file: UploadFile = File(...),
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Import journal entries from CSV. Accepts paired or multiline column formats."""
+    tenant_id = _tenant(request.headers)
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only .csv files are supported")
+
+    raw = await file.read()
+    csv_text = raw.decode("utf-8", errors="replace")
+    if not csv_text.strip():
+        raise HTTPException(status_code=400, detail="CSV file is empty")
+
+    result = import_journals_from_csv(
+        tenant_id,
+        csv_text,
+        db,
+        company_id=company_id,
+        auto_post=True,
+    )
+    return {
+        "imported": result["imported"],
+        "skipped": result["skipped"],
+        "errors": result["errors"],
+        "total_parsed": result["total_parsed"],
+        "workspace_id": tenant_id,
+        "company_id": company_id,
+        "message": f"Imported {result['imported']} journal entries",
+    }
 
 
 @router.post("/journals/{je_id}/post")
@@ -198,12 +722,39 @@ def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
+    if je.status == "pending_approval":
+        raise HTTPException(status_code=400, detail="Use /api/uae/controls/journals/{id}/approve to post this entry")
+    lines = [
+        {"account_code": l.account_code, "debit": float(l.debit or 0), "credit": float(l.credit or 0)}
+        for l in je.lines
+    ]
+    check = validate_journal_entry(
+        entry_date=je.entry_date, lines=lines, source=je.source or "manual",
+        workspace_id=tenant_id, db=db,
+    )
+    if not check["ok"]:
+        raise HTTPException(status_code=400, detail="; ".join(check["errors"]))
+    if check["requires_approval"]:
+        je.status = "pending_approval"
+        db.add(je)
+        db.commit()
+        scan_notifications(db, tenant_id, je.company_id)
+        return {"id": je.id, "status": je.status, "requires_approval": True, "warnings": check.get("warnings", [])}
     try:
         post_journal_entry(je, db)
+    except PeriodControlError as exc:
+        raise HTTPException(status_code=400, detail=exc.payload) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    log_audit(
+        db, workspace_id=tenant_id, company_id=je.company_id,
+        action="je_posted", entity_type="journal_entry", entity_id=je.id,
+        user_email=request.headers.get("x-user-email"),
+        details={"entry_number": je.entry_number},
+    )
 
     # Auto-sync to R2R historical baseline (non-critical — never blocks posting)
+    r2r_synced = False
     try:
         from app.modules.r2r.historical import add_to_company_baseline
         lines = db.query(UAEJournalLine).filter_by(journal_id=je_id).all()
@@ -233,10 +784,42 @@ def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
         add_to_company_baseline(
             company_id=tenant_id, journal_entries=je_rows, country="UAE", db=db
         )
+        r2r_synced = True
     except Exception:
         pass  # R2R sync is non-critical
 
-    return {"id": je.id, "status": je.status, "r2r_synced": True}
+    db.commit()
+    return {"id": je.id, "status": je.status, "r2r_synced": r2r_synced}
+
+
+@router.post("/journals/{je_id}/approve")
+def approve_je(je_id: str, request: Request, db: Session = Depends(get_db)):
+    """Approve a high-value JE in pending_approval and post it."""
+    tenant_id = _tenant(request.headers)
+    je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
+    if not je:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if je.status != "pending_approval":
+        raise HTTPException(status_code=400, detail="Journal is not pending approval")
+    approver = request.headers.get("x-user-email") or "approver"
+    try:
+        post_journal_entry(je, db)
+    except PeriodControlError as exc:
+        raise HTTPException(status_code=400, detail=exc.payload) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    je.approved_by = approver
+    je.approved_at = datetime.utcnow()
+    db.add(je)
+    log_audit(
+        db, workspace_id=tenant_id, company_id=je.company_id,
+        action="je_approved", entity_type="journal_entry", entity_id=je.id,
+        user_email=approver,
+        details={"entry_number": je.entry_number},
+    )
+    db.commit()
+    scan_notifications(db, tenant_id, je.company_id)
+    return {"id": je.id, "status": je.status}
 
 
 @router.post("/journals/{je_id}/reverse")
@@ -252,26 +835,57 @@ def reverse_je(je_id: str, reversal_date: str, request: Request, db: Session = D
     return {"id": new_je.id, "status": new_je.status}
 
 
+DELETABLE_JE_STATUSES = frozenset({"draft", "pending_approval", "rejected"})
+
+
+@router.delete("/journals/{je_id}")
+def delete_je(je_id: str, request: Request, db: Session = Depends(get_db)):
+    """Delete an unposted journal entry (draft / pending approval / rejected)."""
+    tenant_id = _tenant(request.headers)
+    je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
+    if not je:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if je.status not in DELETABLE_JE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete a {je.status} journal entry — use Reverse for posted entries",
+        )
+    ref = je.reference or je.entry_number or je_id
+    db.delete(je)
+    log_audit(
+        db, workspace_id=tenant_id, company_id=je.company_id,
+        action="je_deleted", entity_type="journal_entry", entity_id=je_id,
+        user_email=request.headers.get("x-user-email"),
+        details={"reference": ref, "description": je.description},
+    )
+    db.commit()
+    return {"id": je_id, "deleted": True}
+
+
 @router.get("/journals/{je_id}")
 def get_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request.headers)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
+    names = _account_name_map(tenant_id, db)
     return {
         "id": je.id, "entry_date": str(je.entry_date), "period": je.period,
         "description": je.description, "reference": je.reference,
         "source": je.source, "status": je.status,
-        "lines": [{"id": l.id, "account_code": l.account_code,
-                   "description": l.description, "debit": l.debit, "credit": l.credit}
-                  for l in je.lines],
+        "lines": _serialize_je_lines(je, names),
     }
 
 
 @router.get("/trial-balance")
-def full_trial_balance(period: str, request: Request, db: Session = Depends(get_db)):
+def full_trial_balance(
+    period: str,
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
-    return get_trial_balance(tenant_id, period, db)
+    return get_trial_balance(tenant_id, period, db, company_id=company_id)
 
 
 # ===========================================================================
@@ -338,10 +952,12 @@ def list_invoices(
     request: Request,
     status: Optional[str] = None,
     customer_id: Optional[str] = None,
+    company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     tenant_id = _tenant(request.headers)
     q = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id)
+    q = _apply_company(q, UAESalesInvoice, company_id)
     if status:      q = q.filter(UAESalesInvoice.status == status)
     if customer_id: q = q.filter(UAESalesInvoice.customer_id == customer_id)
     invoices = q.order_by(UAESalesInvoice.invoice_date.desc()).limit(200).all()
@@ -459,9 +1075,15 @@ class BankAccountCreate(BaseModel):
 
 
 @router.get("/bank-accounts")
-def list_bank_accounts(request: Request, db: Session = Depends(get_db)):
+def list_bank_accounts(
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
-    accounts = db.query(UAEBankAccount).filter_by(tenant_id=tenant_id, is_active=True).all()
+    q = db.query(UAEBankAccount).filter_by(tenant_id=tenant_id, is_active=True)
+    q = _apply_company(q, UAEBankAccount, company_id)
+    accounts = q.all()
     return {
         "accounts": [
             {"id": a.id, "bank_name": a.bank_name, "account_number": a.account_number,
@@ -570,9 +1192,16 @@ class AssetCreate(BaseModel):
 
 
 @router.get("/fixed-assets")
-def list_assets(request: Request, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_assets(
+    request: Request,
+    status: Optional[str] = None,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
     q = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id)
+    if company_id and hasattr(UAEFixedAsset, "company_id"):
+        q = q.filter(or_(UAEFixedAsset.company_id == company_id, UAEFixedAsset.company_id.is_(None)))
     if status:
         q = q.filter_by(status=status)
     assets = q.order_by(UAEFixedAsset.asset_code).all()
@@ -593,11 +1222,16 @@ def list_assets(request: Request, status: Optional[str] = None, db: Session = De
 
 
 @router.post("/fixed-assets")
-def create_asset(body: AssetCreate, request: Request, db: Session = Depends(get_db)):
+def create_asset(
+    body: AssetCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    company_id: Optional[str] = None,
+):
     tenant_id = _tenant(request.headers)
     asset_count = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id).count()
     asset = UAEFixedAsset(
-        id=str(uuid.uuid4()), tenant_id=tenant_id,
+        id=str(uuid.uuid4()), tenant_id=tenant_id, company_id=company_id,
         name=body.asset_name,
         asset_code=body.asset_code or f"FA-{asset_count + 1:04d}",
         category=body.asset_category,
@@ -626,7 +1260,7 @@ def depreciation_schedule(asset_id: str, request: Request, db: Session = Depends
     asset = db.query(UAEFixedAsset).filter_by(id=asset_id, tenant_id=tenant_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    return {"asset_id": asset_id, "asset_name": asset.asset_name,
+    return {"asset_id": asset_id, "asset_name": asset.name,
             "schedule": get_depreciation_schedule(asset)}
 
 
@@ -686,7 +1320,8 @@ def create_accrual(body: AccrualCreate, request: Request, db: Session = Depends(
 def suggest(period: str, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request.headers)
     suggestions = suggest_accruals(tenant_id, period, db)
-    return {"period": period, "suggestions": suggestions, "count": len(suggestions)}
+    saved = persist_accrual_suggestions(tenant_id, period, suggestions, db)
+    return {"period": period, "suggestions": suggestions, "count": len(suggestions), "saved": saved}
 
 
 @router.post("/accruals/{accrual_id}/post")
@@ -706,6 +1341,8 @@ CLOSE_FIELDS = [
     "tb_reconciled", "bank_recon_done", "accruals_posted",
     "fixed_assets_depreciated", "vat_reconciled", "ar_reviewed",
     "ap_reviewed", "ifrs_statements_generated", "management_accounts_done",
+    "multi_currency_revaluation",
+    "intercompany_balances_reconciled", "ifrs_adjustments_posted", "audit_trail_exported",
 ]
 
 
@@ -720,6 +1357,10 @@ def _run_checklist(run: UAEPeriodClose) -> dict[str, bool]:
         "prepayments_amortised":      bool(run.tb_reconciled),
         "payroll_posted":             bool(run.ifrs_statements_generated),
         "management_accounts_reviewed": bool(run.management_accounts_done),
+        "multi_currency_revaluation": bool(run.multi_currency_revaluation),
+        "intercompany_balances_reconciled": bool(run.intercompany_balances_reconciled),
+        "ifrs_adjustments_posted": bool(run.ifrs_adjustments_posted),
+        "audit_trail_exported": bool(run.audit_trail_exported),
     }
 
 
@@ -768,6 +1409,10 @@ _ITEM_TO_FIELD = {
     "prepayments_amortised":        "tb_reconciled",
     "payroll_posted":               "ifrs_statements_generated",
     "management_accounts_reviewed": "management_accounts_done",
+    "multi_currency_revaluation":   "multi_currency_revaluation",
+    "intercompany_balances_reconciled": "intercompany_balances_reconciled",
+    "ifrs_adjustments_posted": "ifrs_adjustments_posted",
+    "audit_trail_exported": "audit_trail_exported",
 }
 
 
@@ -809,9 +1454,14 @@ def lock_period(run_id: str, request: Request, db: Session = Depends(get_db)):
 # ===========================================================================
 
 @router.post("/management-accounts")
-def generate_management_accounts(period: str, request: Request, db: Session = Depends(get_db)):
+def generate_management_accounts(
+    period: str,
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
-    tb        = get_trial_balance(tenant_id, period, db)
+    tb        = get_trial_balance(tenant_id, period, db, company_id=company_id)
     totals    = tb.get("totals", {})
     revenue   = abs(totals.get("revenue",   0))
     expenses  = abs(totals.get("expense",   0))
@@ -868,23 +1518,131 @@ def _generate_ai_narrative(period, revenue, expenses, net_profit, gross_margin):
 
 
 # ===========================================================================
+# AP — VENDORS & PURCHASE INVOICES
+# ===========================================================================
+
+@router.get("/vendors")
+def list_vendors(request: Request, db: Session = Depends(get_db)):
+    tenant_id = _tenant(request.headers)
+    from app.models.uae_ap import UAEVendor
+    vendors = db.query(UAEVendor).filter_by(tenant_id=tenant_id, is_active=True).order_by(UAEVendor.name).all()
+    return {
+        "vendors": [
+            {"id": v.id, "name": v.name, "trn": v.trn, "email": v.email, "emirate": v.emirate}
+            for v in vendors
+        ],
+        "count": len(vendors),
+    }
+
+
+@router.get("/purchase-invoices")
+def list_purchase_invoices(request: Request, db: Session = Depends(get_db)):
+    tenant_id = _tenant(request.headers)
+    from app.models.uae_ap import UAEPurchaseInvoice
+    invoices = (
+        db.query(UAEPurchaseInvoice)
+        .filter_by(tenant_id=tenant_id)
+        .order_by(UAEPurchaseInvoice.invoice_date.desc())
+        .limit(200)
+        .all()
+    )
+    return {
+        "invoices": [
+            {
+                "id": i.id,
+                "invoice_number": i.invoice_number,
+                "vendor_id": i.vendor_id,
+                "invoice_date": i.invoice_date.isoformat() if i.invoice_date else None,
+                "total_amount": float(i.total_amount or 0),
+                "outstanding": float(i.outstanding or 0),
+                "status": i.status,
+                "workspace_id": i.workspace_id,
+            }
+            for i in invoices
+        ],
+        "count": len(invoices),
+    }
+
+
+class PurchaseInvoiceCreate(BaseModel):
+    invoice_number: str
+    vendor_id: str
+    invoice_date: str
+    due_date: str
+    subtotal: float
+    vat_amount: float
+    total_amount: float
+    description: str = "AP Invoice"
+    vat_treatment: str = "standard_rated"
+    source: str = "manual"
+
+
+@router.post("/purchase-invoices")
+def create_purchase_invoice(body: PurchaseInvoiceCreate, request: Request, db: Session = Depends(get_db)):
+    tenant_id = _tenant(request.headers)
+    from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine
+    pi = UAEPurchaseInvoice(
+        id=str(uuid.uuid4()),
+        tenant_id=tenant_id,
+        workspace_id=tenant_id,
+        invoice_number=body.invoice_number,
+        vendor_id=body.vendor_id,
+        invoice_date=date.fromisoformat(body.invoice_date),
+        due_date=date.fromisoformat(body.due_date),
+        subtotal=body.subtotal,
+        vat_amount=body.vat_amount,
+        total_amount=body.total_amount,
+        outstanding=body.total_amount,
+        status="approved",
+        vat_treatment=body.vat_treatment,
+        source=body.source,
+    )
+    db.add(pi)
+    db.add(UAEPurchaseInvoiceLine(
+        id=str(uuid.uuid4()),
+        invoice_id=pi.id,
+        description=body.description,
+        quantity=1,
+        unit_price=body.subtotal,
+        line_total=body.subtotal,
+        vat_rate=5,
+        vat_amount=body.vat_amount,
+    ))
+    db.commit()
+    db.refresh(pi)
+    return {"id": pi.id, "invoice_number": pi.invoice_number, "workspace_id": pi.workspace_id}
+
+
+# ===========================================================================
 # DASHBOARD KPIs
 # ===========================================================================
 
 @router.get("/dashboard")
-def dashboard_kpis(period: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id     = _tenant(request.headers)
-    coa_count     = db.query(UAEAccount).filter_by(tenant_id=tenant_id, is_active=True).count()
-    je_count      = db.query(UAEJournalEntry).filter_by(tenant_id=tenant_id, period=period, status="posted").count()
-    asset_count   = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id, status="active").count()
-    inv_count     = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id, period=period).count()
+def dashboard_kpis(
+    period: str,
+    request: Request,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    tenant_id = _tenant(request.headers)
+    coa_q = db.query(UAEAccount).filter_by(tenant_id=tenant_id, is_active=True)
+    coa_q = _apply_company(coa_q, UAEAccount, company_id)
+    coa_count = coa_q.count()
+    je_q = db.query(UAEJournalEntry).filter_by(tenant_id=tenant_id, period=period, status="posted")
+    je_q = _apply_company(je_q, UAEJournalEntry, company_id)
+    je_count = je_q.count()
+    asset_q = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id, status="active")
+    asset_q = _apply_company(asset_q, UAEFixedAsset, company_id)
+    asset_count = asset_q.count()
+    inv_q = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id, period=period)
+    inv_q = _apply_company(inv_q, UAESalesInvoice, company_id)
+    inv_count = inv_q.count()
     accrual_count = db.query(UAEAccrual).filter_by(tenant_id=tenant_id, period=period).count()
-    ar_invoices   = (
-        db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id)
-        .filter(UAESalesInvoice.outstanding > 0).all()
-    )
+    ar_q = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id).filter(UAESalesInvoice.outstanding > 0)
+    ar_q = _apply_company(ar_q, UAESalesInvoice, company_id)
+    ar_invoices = ar_q.all()
     ar_total = sum(float(i.outstanding or 0) for i in ar_invoices)
-    tb     = get_trial_balance(tenant_id, period, db)
+    tb = get_trial_balance(tenant_id, period, db, company_id=company_id)
     totals = tb.get("totals", {})
     return {
         "period":        period,

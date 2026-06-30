@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Invoice image / file storage service (Supabase Storage).
  * Bucket: invoice-files (public)
  *
@@ -7,7 +7,7 @@
  *  - getInvoiceFileUrl: get signed URL for private bucket (if needed)
  *  - deleteInvoiceFile: remove from storage when invoice is deleted
  */
-import { supabase } from './supabase';
+import { supabase } from '@/lib/ap-invoice/supabase';
 
 const BUCKET = 'invoice-files';
 
@@ -44,7 +44,7 @@ export function getPublicUrl(pathOrUrl: string): string {
 
 /**
  * Delete an invoice file from storage. Pass the path (not full URL).
- * Fire-and-forget â€” failures are logged but not thrown.
+ * Fire-and-forget — failures are logged but not thrown.
  */
 export async function deleteInvoiceFile(path: string): Promise<void> {
   if (!path || path.startsWith('http')) return;
@@ -55,7 +55,7 @@ export async function deleteInvoiceFile(path: string): Promise<void> {
 /**
  * Extract the storage path from a public URL.
  * e.g. https://xxx.supabase.co/storage/v1/object/public/invoice-files/uploads/abc.pdf
- *      â†’ uploads/abc.pdf
+ *      → uploads/abc.pdf
  */
 export function extractStoragePath(url: string): string | null {
   try {
@@ -67,4 +67,3 @@ export function extractStoragePath(url: string): string | null {
     return null;
   }
 }
-

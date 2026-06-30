@@ -1,4 +1,5 @@
-﻿import { invoiceFlowAgentUrl } from './apiBase';
+import { invoiceFlowAgentUrl } from '@/lib/ap-invoice/apiBase';
+import type { Market } from './marketConfig';
 
 export type NormalizedExtractedInvoice = {
   invoice_number: string;
@@ -11,6 +12,11 @@ export type NormalizedExtractedInvoice = {
   currency: string;
   gstin: string;
   tax_amount: number | null;
+  /** UAE VAT (optional — filled from extraction or 5% reverse calc) */
+  vat_amount: number | null;
+  vat_rate: number | null;
+  vat_treatment: string | null;
+  net_amount: number | null;
   /** DB + UI: purchase = AP, sales = AR */
   invoice_kind: 'purchase' | 'sales';
 };
@@ -39,7 +45,10 @@ function pickNumber(obj: Record<string, unknown>, keys: string[]): number {
 }
 
 /** Maps FastAPI / agent JSON into row-shaped fields for preview + Supabase insert. */
-export function normalizeExtractedInvoice(raw: Record<string, unknown>): NormalizedExtractedInvoice {
+export function normalizeExtractedInvoice(
+  raw: Record<string, unknown>,
+  market: Market = 'india',
+): NormalizedExtractedInvoice {
   const inv = (raw.invoice as Record<string, unknown> | undefined) ?? raw;
   const today = new Date().toISOString().slice(0, 10);
   const invNo = pickString(inv, ['invoice_number', 'invoice_no', 'document_number', 'bill_number']) || `CAM-${Date.now()}`;
@@ -52,11 +61,25 @@ export function normalizeExtractedInvoice(raw: Record<string, unknown>): Normali
   }
   const vendor = pickString(inv, ['vendor_name', 'supplier_name', 'seller_name', 'vendor']);
   const customer = pickString(inv, ['customer_name', 'buyer_name', 'customer', 'ship_to_name']);
-  const custGst = pickString(inv, ['customer_gstin', 'buyer_gstin', 'customer_gst']);
-  const sellerGst = pickString(inv, ['vendor_gstin', 'supplier_gstin', 'gstin', 'seller_gstin']);
+  const custGst = pickString(inv, ['customer_gstin', 'buyer_gstin', 'customer_gst', 'customer_trn']);
+  const sellerGst = pickString(inv, ['vendor_gstin', 'supplier_gstin', 'gstin', 'seller_gstin', 'vendor_trn', 'trn']);
   const total = pickNumber(inv, ['total_amount', 'total', 'grand_total', 'amount']);
-  const cur = (pickString(inv, ['currency']) || 'INR').toUpperCase().slice(0, 3);
-  const tax = pickNumber(inv, ['tax_amount', 'total_tax', 'gst_amount']);
+  const defaultCur = market === 'uae' ? 'AED' : 'INR';
+  const cur = (pickString(inv, ['currency']) || defaultCur).toUpperCase().slice(0, 3);
+  const tax = pickNumber(inv, ['tax_amount', 'total_tax', 'gst_amount', 'vat_amount']);
+  let vatAmount = pickNumber(inv, ['vat_amount', 'vat']);
+  if (!vatAmount && tax > 0) vatAmount = tax;
+  let vatRate = pickNumber(inv, ['vat_rate', 'tax_rate']);
+  if (!vatRate && market === 'uae') vatRate = 5;
+  let vatTreatment = pickString(inv, ['vat_treatment', 'tax_treatment']) || (market === 'uae' ? 'standard' : '');
+  if (!vatTreatment && market === 'uae') vatTreatment = 'standard';
+  let netAmount = pickNumber(inv, ['net_amount', 'subtotal_amount', 'subtotal', 'taxable_amount']);
+  if (!netAmount && total > 0 && vatAmount > 0) netAmount = Math.round((total - vatAmount) * 100) / 100;
+  if (!vatAmount && total > 0 && market === 'uae') {
+    // Total inclusive of 5% UAE VAT → VAT = total / 21
+    vatAmount = Math.round((total / 21) * 100) / 100;
+    netAmount = Math.round((total - vatAmount) * 100) / 100;
+  }
   const rawKind = pickString(inv, ['invoice_kind', 'invoice_type', 'kind']).toLowerCase();
   let invoice_kind: 'purchase' | 'sales' = 'purchase';
   if (rawKind === 'sales' || rawKind === 'ar' || rawKind === 'receivable') invoice_kind = 'sales';
@@ -70,9 +93,13 @@ export function normalizeExtractedInvoice(raw: Record<string, unknown>): Normali
     customer_name: customer,
     customer_gstin: custGst,
     total_amount: total || 0,
-    currency: cur || 'INR',
+    currency: cur || defaultCur,
     gstin: sellerGst,
-    tax_amount: tax || null,
+    tax_amount: vatAmount || tax || null,
+    vat_amount: vatAmount || null,
+    vat_rate: vatRate || null,
+    vat_treatment: vatTreatment || null,
+    net_amount: netAmount || null,
     invoice_kind,
   };
 }
@@ -107,13 +134,13 @@ function describeFailedResponse(status: number, text: string, parsed: Record<str
   const snippet = trimmed.slice(0, 280);
   const base = snippet ? `HTTP ${status}: ${snippet}` : `HTTP ${status}`;
   if (status === 450) {
-    return `${base} (Some networks/parental filters use status 450 â€” try another connection or disable filtering.)`;
+    return `${base} (Some networks/parental filters use status 450 — try another connection or disable filtering.)`;
   }
   if (status === 405) {
     return (
       `${base} ` +
       `HTTP 405 here often means the POST hit the web app (e.g. Vercel SPA) instead of FastAPI. ` +
-      `On Vercel: set INVOICEFLOW_AGENT_URL to your agent base URL, leave VITE_API_URL empty so scan uses the built-in proxy, and redeploy â€” ` +
+      `On Vercel: set INVOICEFLOW_AGENT_URL to your agent base URL, leave VITE_API_URL empty so scan uses the built-in proxy, and redeploy — ` +
       `or set VITE_API_URL to your FastAPI URL only (not your Vercel site URL).`
     );
   }
@@ -130,14 +157,14 @@ function loadImageElement(src: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Phone cameras often output HEIC (unsupported by many APIs). Large photos can hit limits â€” shrink to JPEG.
+ * Phone cameras often output HEIC (unsupported by many APIs). Large photos can hit limits — shrink to JPEG.
  */
 async function prepareImageForExtract(file: File): Promise<File> {
   const nameLower = file.name.toLowerCase();
   const typeLower = (file.type || '').toLowerCase();
   if (typeLower.includes('heic') || typeLower.includes('heif') || nameLower.endsWith('.heic') || nameLower.endsWith('.heif')) {
     throw new Error(
-      'This photo is HEIC/HEIF. Please use Upload file and choose a JPEG/PNG, or change the phone camera to â€œMost Compatibleâ€ (JPEG).'
+      'This photo is HEIC/HEIF. Please use Upload file and choose a JPEG/PNG, or change the phone camera to “Most Compatible” (JPEG).'
     );
   }
   if (!typeLower.startsWith('image/')) return file;
@@ -172,15 +199,24 @@ async function prepareImageForExtract(file: File): Promise<File> {
   }
 }
 
+/** Build multipart body for FastAPI extract-image (includes market for India vs UAE prompts). */
+export function buildExtractImageFormData(file: File, market: Market = 'india'): FormData {
+  const fd = new FormData();
+  fd.append('file', file, file.name || 'capture.jpg');
+  fd.append('market', market);
+  return fd;
+}
+
 /**
  * POST multipart to FastAPI `POST /api/agent/extract-image` (same-origin proxy in dev).
  * Expects JSON: `{ invoice: { ... }, confidence?: number }`.
  */
-export async function extractInvoiceFromImageFile(file: File): Promise<ExtractImageResponse> {
+export async function extractInvoiceFromImageFile(
+  file: File,
+  market: Market = 'india',
+): Promise<ExtractImageResponse> {
   const uploadFile = await prepareImageForExtract(file);
-
-  const fd = new FormData();
-  fd.append('file', uploadFile, uploadFile.name || 'capture.jpg');
+  const fd = buildExtractImageFormData(uploadFile, market);
   const url = invoiceFlowAgentUrl('/api/agent/extract-image');
   const res = await fetch(url, { method: 'POST', body: fd });
   const text = await res.text();
@@ -205,4 +241,3 @@ export async function extractInvoiceFromImageFile(file: File): Promise<ExtractIm
   const confidence = typeof o.confidence === 'number' ? o.confidence : undefined;
   return { invoice, confidence };
 }
-

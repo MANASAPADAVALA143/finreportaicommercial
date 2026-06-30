@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useClient } from '../context/ClientContext';
-import { saveClientData, getClientData } from '../services/clientManager';
+import { useAuth } from '../context/AuthContext';
+import { backendOrigin } from '../utils/backendOrigin';
 
 interface CloseTask {
   id: string;
@@ -11,44 +12,81 @@ interface CloseTask {
   dueDate: string;
   status: 'Not Started' | 'In Progress' | 'Complete' | 'Overdue';
   category: string;
+  completed?: boolean;
+  completed_by?: string | null;
 }
 
-const DEFAULT_TASKS: Omit<CloseTask, 'id'>[] = [
-  { task: 'Post all sub-ledger journals', owner: '', dueDate: '', status: 'Not Started', category: 'Journals' },
-  { task: 'Complete bank reconciliation', owner: '', dueDate: '', status: 'Not Started', category: 'Reconciliation' },
-  { task: 'Clear suspense accounts', owner: '', dueDate: '', status: 'Not Started', category: 'Reconciliation' },
-  { task: 'Post accruals and prepayments', owner: '', dueDate: '', status: 'Not Started', category: 'Journals' },
-  { task: 'Post depreciation', owner: '', dueDate: '', status: 'Not Started', category: 'Journals' },
-  { task: 'Intercompany reconciliation', owner: '', dueDate: '', status: 'Not Started', category: 'Reconciliation' },
-  { task: 'Review trial balance', owner: '', dueDate: '', status: 'Not Started', category: 'Review' },
-  { task: 'Variance analysis vs budget', owner: '', dueDate: '', status: 'Not Started', category: 'Review' },
-  { task: 'Management accounts preparation', owner: '', dueDate: '', status: 'Not Started', category: 'Reporting' },
-  { task: 'CFO sign-off', owner: '', dueDate: '', status: 'Not Started', category: 'Sign-off' },
-];
+function getWorkspaceId(): string {
+  return (
+    localStorage.getItem('active_workspace_id') ||
+    localStorage.getItem('gnanova_workspace_id') ||
+    localStorage.getItem('tenantId') ||
+    'default'
+  );
+}
 
 export function CloseTrackerPage() {
   const navigate = useNavigate();
   const { activeClient } = useClient();
+  const { user, authFetch } = useAuth();
   const [tasks, setTasks] = useState<CloseTask[]>([]);
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
-  const companyId = activeClient?.companyId || 'default';
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const workspaceId = getWorkspaceId();
+
+  const loadTasks = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const base = backendOrigin();
+      const res = await authFetch(`${base}/api/close/${workspaceId}?period=${encodeURIComponent(period)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setTasks(data.items || []);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load close tracker');
+      setTasks([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [authFetch, workspaceId, period]);
 
   useEffect(() => {
-    const saved = getClientData<CloseTask[]>(companyId, `close_${period}`);
-    if (saved && saved.length > 0) {
-      setTasks(saved);
-    } else {
-      setTasks(DEFAULT_TASKS.map((t, i) => ({ ...t, id: `task_${i}` })));
-    }
-  }, [companyId, period]);
+    void loadTasks();
+  }, [loadTasks]);
 
-  const save = (updated: CloseTask[]) => {
-    setTasks(updated);
-    saveClientData(companyId, `close_${period}`, updated);
+  const patchItem = async (id: string, patch: Partial<CloseTask> & { completed?: boolean; completed_by?: string }) => {
+    const prev = tasks;
+    setTasks(tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    try {
+      const base = backendOrigin();
+      const res = await authFetch(
+        `${base}/api/close/${workspaceId}/items/${id}?period=${encodeURIComponent(period)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      if (data.item) {
+        setTasks((current) => current.map((t) => (t.id === id ? { ...t, ...data.item } : t)));
+      }
+    } catch (e: unknown) {
+      setTasks(prev);
+      setError(e instanceof Error ? e.message : 'Failed to save');
+    }
   };
 
   const updateTask = (id: string, field: keyof CloseTask, value: string) => {
-    save(tasks.map((t) => (t.id === id ? { ...t, [field]: value } : t)));
+    const patch: Record<string, string | boolean> = { [field]: value };
+    if (field === 'status') {
+      patch.completed = value === 'Complete';
+      patch.completed_by = value === 'Complete' ? (user?.email || '') : '';
+    }
+    void patchItem(id, patch as Partial<CloseTask> & { completed?: boolean; completed_by?: string });
   };
 
   const today = new Date().toISOString().slice(0, 10);
@@ -114,6 +152,12 @@ export function CloseTrackerPage() {
         </div>
       </div>
 
+      {error && (
+        <div style={{ marginBottom: 12, padding: 10, borderRadius: 6, background: '#FCEBEB', color: '#A32D2D', fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
       <div
         style={{
           padding: 16,
@@ -126,7 +170,7 @@ export function CloseTrackerPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontSize: 14, fontWeight: 500 }}>Close Progress — {pct}%</span>
           <span style={{ fontSize: 13, color: overdue > 0 ? '#A32D2D' : '#3B6D11' }}>
-            {overdue > 0 ? `${overdue} overdue` : 'On track ✓'}
+            {loading ? 'Loading…' : overdue > 0 ? `${overdue} overdue` : 'On track ✓'}
           </span>
         </div>
         <div
@@ -163,6 +207,9 @@ export function CloseTrackerPage() {
       </div>
 
       <div style={{ overflowX: 'auto', background: 'white', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#64748B', fontSize: 13 }}>Loading checklist…</div>
+        ) : (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--color-background-secondary, #F1F5F9)' }}>
@@ -255,6 +302,7 @@ export function CloseTrackerPage() {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </div>
   );

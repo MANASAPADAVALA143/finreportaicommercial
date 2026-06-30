@@ -1,5 +1,5 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Zap,
@@ -9,10 +9,42 @@ import {
   FileSpreadsheet,
   ShieldCheck,
   Globe,
-  IndianRupee
+  IndianRupee,
+  ShoppingCart,
+  Shield,
+  Receipt,
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
+import { useAuth } from '../../context/AuthContext';
+import { isUaeFinanceSuiteOnly } from '../../config/productRole';
+
+const UAE_FINANCE_SUITE_MODULES = [
+  {
+    icon: <ShoppingCart className="w-14 h-14 text-teal-400" />,
+    title: 'AP InvoiceFlow',
+    description: 'Upload invoices, approvals, VAT recon, Zoho/QBO integrations',
+    link: '/ap-invoices',
+    bgColor: 'bg-teal-500/10',
+    badge: 'AP',
+  },
+  {
+    icon: <Shield className="w-14 h-14 text-amber-400" />,
+    title: 'UAE Tax (GulfTax)',
+    description: 'VAT classifier, VAT return, corporate tax, FTA reports, reconciliation',
+    link: '/gulftax',
+    bgColor: 'bg-amber-500/10',
+    badge: 'GulfTax',
+  },
+  {
+    icon: <Receipt className="w-14 h-14 text-blue-400" />,
+    title: 'E-Invoicing',
+    description: 'PINT AE validation, XML generation, ASP submissions',
+    link: '/gulftax/e-invoicing',
+    bgColor: 'bg-blue-500/10',
+    badge: 'Peppol',
+  },
+] as const;
 
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
   { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
@@ -23,7 +55,14 @@ const AGENT_DEFS: { id: AgentId; name: string; route: string; description: strin
 ];
 
 export const Dashboard: React.FC = () => {
+  const nav = useNavigate();
+  const { productRole } = useAuth();
+  const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const { actions, activeAgents, markActive } = useAgentActivity();
+
+  useEffect(() => {
+    if (uaeOnly) nav('/gulftax', { replace: true });
+  }, [uaeOnly, nav]);
 
   const modules = [
     {
@@ -144,6 +183,8 @@ export const Dashboard: React.FC = () => {
     },
   ];
 
+  if (uaeOnly) return null;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
       {/* Top Navigation Bar */}
@@ -155,6 +196,36 @@ export const Dashboard: React.FC = () => {
           Open a section below and upload data there to use it. Each section uses only its own uploads.
         </p>
       </nav>
+
+      {/* UAE Finance Suite — primary entry for UAE clients */}
+      <div className="border-b border-teal-800/40 bg-teal-950/30">
+        <div className="container mx-auto px-6 py-8">
+          <div className="text-center mb-6">
+            <h2 className="text-2xl font-bold text-white">🇦🇪 UAE Finance Suite</h2>
+            <p className="text-sm text-teal-200/80 mt-1">
+              AP invoices, GulfTax VAT/CT, and Peppol e-invoicing for UAE entities
+            </p>
+          </div>
+          <div className="grid md:grid-cols-3 gap-4 max-w-5xl mx-auto">
+            {UAE_FINANCE_SUITE_MODULES.map((mod) => (
+              <Link
+                key={mod.link}
+                to={mod.link}
+                className="bg-slate-800/50 rounded-xl p-5 border border-teal-700/40 hover:border-teal-500/60 hover:bg-slate-800/70 transition-all group"
+              >
+                <span className="inline-block px-2 py-0.5 mb-3 text-[10px] font-bold rounded-full bg-teal-700/50 text-teal-200">
+                  {mod.badge}
+                </span>
+                <div className={`${mod.bgColor} w-14 h-14 rounded-lg flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
+                  {mod.icon}
+                </div>
+                <h3 className="text-lg font-semibold text-white mb-1">{mod.title}</h3>
+                <p className="text-sm text-slate-400 leading-snug">{mod.description}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* Agent Network Header */}
       <div className="border-b border-slate-700 bg-slate-800/30">

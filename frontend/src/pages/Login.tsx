@@ -1,11 +1,12 @@
-﻿import { FormEvent, useState } from 'react';
+import { FormEvent, useState } from 'react';
 import { Eye, EyeOff } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
   const nav = useNavigate();
+  const location = useLocation();
   const { login } = useAuth();
   const [email, setEmail] = useState('admin@gnanova.com');
   const [password, setPassword] = useState('Admin@123');
@@ -19,9 +20,16 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      nav('/dashboard', { replace: true });
+      const dest = (location.state as { from?: string } | null)?.from ?? '/dashboard';
+      nav(dest, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const raw = err instanceof Error ? err.message : String(err);
+      try {
+        const parsed = JSON.parse(raw) as { detail?: string };
+        setError(parsed.detail ?? raw);
+      } catch {
+        setError(raw);
+      }
     } finally {
       setLoading(false);
     }
@@ -50,14 +58,14 @@ export default function Login() {
           </div>
         </label>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm text-white">{error}</p>}
 
         <button disabled={loading} className="w-full rounded bg-blue-600 py-2 text-white font-medium hover:bg-blue-500 disabled:opacity-50" type="submit">
           {loading ? 'Signing in...' : 'Sign In'}
         </button>
 
         <div className="flex justify-between text-sm">
-          <a className="text-slate-400 hover:text-slate-200" href="#">Forgot password?</a>
+          <Link className="text-slate-400 hover:text-slate-200" to="/forgot-password">Forgot password?</Link>
           <button className="text-blue-400 hover:text-blue-300" type="button" onClick={() => nav('/register')}>
             Create account
           </button>

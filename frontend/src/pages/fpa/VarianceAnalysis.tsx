@@ -1,5 +1,5 @@
 // FP&A Variance Analysis - Main Page
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Download, ChevronDown, Upload, X, FileText, RefreshCw, AlertTriangle, CheckCircle2, ArrowRight, TrendingDown, TrendingUp, Info } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -19,6 +19,9 @@ import {
 import type { PeriodType, CompareType, DepartmentType, CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
+import { useCompany } from '../../context/CompanyContext';
+import PeriodSelector from '../../components/PeriodSelector';
+import { fetchGLSummary, glSummaryToVarianceRows, getCurrentPeriod } from '../../services/glSummary.service';
 import { exportVarianceExcelWithAI } from '../../utils/fpa/excelExport';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
@@ -52,75 +55,9 @@ const scoreMateriality = (variance: number, variancePct: number, totalBudget: nu
   return pctFactor * 0.5 + absFactor * 0.5;
 };
 
-// ── Al Futtaim Digital Services sample data ───────────────────────────────────
-
-const AF_RAW: Array<{ cat: string; actual: number; budget: number; ytdA: number; ytdB: number; prior: number; type: 'income' | 'expense' | 'header' | 'subtotal'; section: string }> = [
-  { cat: 'Software Licenses',      actual:1850000,budget:2100000,ytdA:16200000,ytdB:17500000,prior:14800000, type:'income',   section:'REVENUE' },
-  { cat: 'Implementation Services',actual: 920000,budget: 900000,ytdA: 7800000,ytdB: 7200000,prior: 6500000, type:'income',   section:'REVENUE' },
-  { cat: 'Support & Maintenance',  actual: 580000,budget: 560000,ytdA: 4900000,ytdB: 4700000,prior: 4200000, type:'income',   section:'REVENUE' },
-  { cat: 'TOTAL REVENUE',          actual:3350000,budget:3560000,ytdA:28900000,ytdB:29400000,prior:25500000, type:'subtotal', section:'REVENUE' },
-  { cat: 'Cloud Infrastructure',   actual: 420000,budget: 380000,ytdA: 3600000,ytdB: 3200000,prior: 3100000, type:'expense',  section:'COST OF REVENUE' },
-  { cat: 'Implementation Staff',   actual: 310000,budget: 290000,ytdA: 2600000,ytdB: 2400000,prior: 2200000, type:'expense',  section:'COST OF REVENUE' },
-  { cat: 'Support Staff',          actual: 145000,budget: 140000,ytdA: 1200000,ytdB: 1150000,prior: 1050000, type:'expense',  section:'COST OF REVENUE' },
-  { cat: 'GROSS PROFIT',           actual:2475000,budget:2750000,ytdA:21500000,ytdB:22650000,prior:19150000, type:'subtotal', section:'GROSS PROFIT' },
-  { cat: 'Salaries & Benefits',    actual:1420000,budget:1350000,ytdA:12100000,ytdB:11800000,prior:10200000, type:'expense',  section:'OPERATING EXPENSES' },
-  { cat: 'Sales & Marketing',      actual: 380000,budget: 420000,ytdA: 3200000,ytdB: 3400000,prior: 2800000, type:'expense',  section:'OPERATING EXPENSES' },
-  { cat: 'Admin & Overheads',      actual: 185000,budget: 180000,ytdA: 1580000,ytdB: 1480000,prior: 1350000, type:'expense',  section:'OPERATING EXPENSES' },
-  { cat: 'EBITDA',                 actual: 490000,budget: 800000,ytdA: 4620000,ytdB: 5970000,prior: 4800000, type:'subtotal', section:'EBITDA' },
-];
-
-function buildAlFuttaimRows(): any[] {
-  return AF_RAW.map((r, i) => {
-    const variance = r.actual - r.budget;
-    const variancePct = r.budget !== 0 ? (variance / r.budget) * 100 : 0;
-    const ytdVariance = r.ytdA - r.ytdB;
-    const ytdVariancePct = r.ytdB !== 0 ? (ytdVariance / r.ytdB) * 100 : 0;
-    const favorable = r.type === 'income' || r.type === 'subtotal' ? variance > 0 : variance < 0;
-    const absVarPct = Math.abs(variancePct);
-    return {
-      id: `af-${i}`,
-      category: r.cat,
-      isHeader: false,
-      actual: r.actual,
-      budget: r.budget,
-      variance,
-      variancePct,
-      favorable,
-      ytdActual: r.ytdA,
-      ytdBudget: r.ytdB,
-      ytdVariance,
-      ytdVariancePct,
-      priorYear: r.prior,
-      priorYearVariancePct: r.prior !== 0 ? ((r.actual - r.prior) / r.prior) * 100 : 0,
-      hasChildren: false,
-      isExpanded: false,
-      threshold: absVarPct > 10 ? 'critical' : absVarPct > 5 ? 'warning' : 'ok',
-      level: 0,
-      department: 'All Depts',
-      owner: r.type === 'expense' && /salari/i.test(r.cat) ? 'Fatima Al Zaabi' : r.type === 'income' ? 'Sarah Johnson' : 'CFO',
-      trend: buildFallbackTrend(variancePct),
-      decomposition: { volume: variance * 0.6, price: variance * 0.3, mix: variance * 0.1, note: 'Proxy decomposition' },
-      accountType: r.type === 'subtotal' ? 'income' : r.type,
-      materialityScore: scoreMateriality(variance, variancePct, 3560000),
-      materialityBand: absVarPct > 10 ? 'critical' : absVarPct >= 5 ? 'monitor' : 'low',
-    };
-  });
-}
-
 // ── WHY Panel: decision-useful commentary for large variances ─────────────────
 
-const WHY_MAP: Record<string, { why: string; action: string; owner: string; priority: 'critical' | 'warning' | 'info' }> = {
-  'Software Licenses':      { why: 'ADNOC Digital contract (AED 250K) delayed to November. Emirates NBD renewal pending.', action: 'Update November forecast upward. Chase ADNOC Digital for signed PO.', owner: 'Sarah Johnson (Sales)', priority: 'critical' },
-  'Cloud Infrastructure':   { why: 'AWS and Azure usage surged 10.5% above budget due to UAT environment for DEWA project.', action: 'CTO to review cloud spend. Shut down idle dev environments by 15 Nov.', owner: 'Raj Kumar (Technology)', priority: 'warning' },
-  'Salaries & Benefits':    { why: 'Q4 headcount additions (3 engineers) onboarded ahead of revenue targets.', action: 'Freeze further hiring until Software Licenses revenue recovers in Nov.', owner: 'Fatima Al Zaabi (HR)', priority: 'warning' },
-  'Sales & Marketing':      { why: 'GITEX spend AED 40K below plan — team deferred campaign to Q1 2026.', action: 'No action required. Favorable variance — reallocate to digital campaigns.', owner: 'Sarah Johnson (Sales)', priority: 'info' },
-  'EBITDA':                 { why: 'Revenue miss on Software Licenses (AED -250K) combined with salary over-run (AED +70K) compressed EBITDA by AED 310K vs budget.', action: 'Prioritise ADNOC contract close. If not closed by 15 Nov, trigger cost reduction plan.', owner: 'CFO', priority: 'critical' },
-  'GROSS PROFIT':           { why: 'Cloud and staff costs scaling faster than revenue growth rate.', action: 'Review pricing on DEWA implementation — recover infrastructure costs in client billing.', owner: 'Ahmed Al Rashidi (Delivery)', priority: 'warning' },
-};
-
-function getWhyForRow(category: string, variancePct: number): typeof WHY_MAP[string] | null {
-  const key = Object.keys(WHY_MAP).find(k => category.toLowerCase().includes(k.toLowerCase()));
-  if (key) return WHY_MAP[key];
+function getWhyForRow(category: string, variancePct: number): { why: string; action: string; owner: string; priority: 'critical' | 'warning' | 'info' } | null {
   if (Math.abs(variancePct) > 10) {
     const isOver = variancePct > 0;
     return {
@@ -189,27 +126,6 @@ function WhyPanel({ data, currency, currencyFormat }: { data: any[]; currency: s
           );
         })}
       </div>
-
-      {/* Decision Panel */}
-      <div className="mt-5 bg-gray-50 border border-gray-200 rounded-lg p-4">
-        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">📋 Based on this analysis — Recommended Actions</p>
-        <div className="space-y-2">
-          {[
-            { n: 1, action: 'Chase ADNOC Digital for signed PO by 15 Nov', owner: 'Sarah Johnson', deadline: '15 Nov 2025', badge: 'REVENUE RISK', color: 'text-red-600' },
-            { n: 2, action: 'CTO review of cloud spend — shut down idle environments', owner: 'Raj Kumar', deadline: '10 Nov 2025', badge: 'COST CONTROL', color: 'text-amber-600' },
-            { n: 3, action: 'If ADNOC not closed by 15 Nov, trigger hiring freeze', owner: 'CFO', deadline: '15 Nov 2025', badge: 'CONTINGENCY', color: 'text-blue-600' },
-          ].map(a => (
-            <div key={a.n} className="flex items-start gap-3 text-sm">
-              <span className="w-5 h-5 rounded-full bg-white border border-gray-300 flex items-center justify-center text-[11px] font-bold text-gray-600 shrink-0 mt-0.5">{a.n}</span>
-              <div className="flex-1">
-                <span className={`text-[10px] font-bold ${a.color} mr-2`}>[{a.badge}]</span>
-                <span className="text-gray-800">{a.action}</span>
-                <span className="text-gray-400 text-xs ml-2">— {a.owner} · {a.deadline}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -217,10 +133,14 @@ function WhyPanel({ data, currency, currencyFormat }: { data: any[]; currency: s
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
   const { activeClient } = useClient();
+  const { activeCompanyId } = useCompany();
   const tenantId = activeClient?.companyId || 'default';
+  const workspaceId = localStorage.getItem('gnanova_workspace_id');
 
-  // No auto-load from localStorage — only data from this page's "Upload Data" is shown (clean for video)
   const [uploadedDataOnly, setUploadedDataOnly] = useState<any[]>([]);
+  const [usingGlData, setUsingGlData] = useState(false);
+  const [glMeta, setGlMeta] = useState<{ je_count: number; start: string; end: string } | null>(null);
+  const [periodRange, setPeriodRange] = useState(getCurrentPeriod);
 
   // Period Selection State
   const [periodType, setPeriodType] = useState<PeriodType>('monthly');
@@ -231,9 +151,9 @@ export const VarianceAnalysis = () => {
   const [department, setDepartment] = useState<DepartmentType>('all');
   const [ownerFilter, setOwnerFilter] = useState('all');
   const [currency, setCurrency] = useState<CurrencyType>(() => {
-    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'USD').toUpperCase();
+    const stored = (localStorage.getItem(LS_FPA_CURRENCY_KEY) || localStorage.getItem(LS_APP_CURRENCY_FALLBACK_KEY) || 'AED').toUpperCase();
     if (['INR', 'USD', 'EUR', 'GBP', 'AED'].includes(stored)) return stored as CurrencyType;
-    return 'USD';
+    return 'AED';
   });
   const [currencyFormat, setCurrencyFormat] = useState<CurrencyFormatLocale>(() => {
     const stored = String(localStorage.getItem(LS_CURRENCY_FORMAT_KEY) || 'GLOBAL').toUpperCase();
@@ -255,6 +175,26 @@ export const VarianceAnalysis = () => {
   useEffect(() => {
     localStorage.setItem(LS_CURRENCY_FORMAT_KEY, currencyFormat);
   }, [currencyFormat]);
+
+  const loadGlSummary = useCallback(async (start: string, end: string) => {
+    const cid = activeCompanyId;
+    if (!cid) return;
+    try {
+      const summary = await fetchGLSummary(cid, workspaceId, start, end);
+      if (summary.has_data) {
+        setUploadedDataOnly(glSummaryToVarianceRows(summary));
+        setGlMeta({ je_count: summary.je_count, start, end });
+        setUsingGlData(true);
+        setCurrency('AED');
+      }
+    } catch {
+      /* keep upload flow */
+    }
+  }, [activeCompanyId, workspaceId]);
+
+  useEffect(() => {
+    void loadGlSummary(periodRange.start, periodRange.end);
+  }, [loadGlSummary, periodRange]);
 
   // Only data uploaded on this page — no localStorage, no demo data (clean for video)
   const currentVarianceData = useMemo(() => {
@@ -493,6 +433,8 @@ export const VarianceAnalysis = () => {
       });
 
       setUploadedDataOnly(mappedData);
+      setUsingGlData(false);
+      setGlMeta(null);
 
       // Save to localStorage so Forecasting Engine + KPI Dashboard can use as actuals
       const incomeRows  = mappedData.filter((r: any) => r.accountType === 'income');
@@ -874,29 +816,6 @@ export const VarianceAnalysis = () => {
 
             {/* Action Buttons */}
             <div className="flex items-center gap-3">
-              {/* Load Sample Data */}
-              <button
-                onClick={() => {
-                  const rows = buildAlFuttaimRows();
-                  setUploadedDataOnly(rows);
-                  setCurrency('AED');
-                  localStorage.setItem('fpa_currency', 'AED');
-                  // Save to localStorage so Forecasting Engine uses Al Futtaim actuals
-                  const inc = rows.filter((r: any) => r.accountType === 'income');
-                  const exp = rows.filter((r: any) => r.accountType === 'expense');
-                  const rev = inc.reduce((s: number, r: any) => s + r.actual, 0);
-                  const exps = exp.reduce((s: number, r: any) => s + r.actual, 0);
-                  const payload = { totalRevenue: rev, totalExpenses: exps, netProfit: rev - exps, ebitda: (rev-exps)*1.15, rowCount: rows.length, lineItems: rows.map((r: any) => ({ account: r.category, actual: r.actual, budget: r.budget, accountType: r.accountType })), uploadedAt: new Date().toISOString() };
-                  localStorage.setItem('fpa_actual', JSON.stringify(payload));
-                  localStorage.setItem('fpa_actual_tb', JSON.stringify(payload));
-                  alert('✅ Loaded: Al Futtaim Digital Services LLC — Oct 2025 data (AED)\n\nActuals saved → Forecasting Engine will use AED 3.35M revenue as base.');
-                }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition flex items-center gap-2 font-medium text-sm"
-                title="Load Al Futtaim Digital Services sample data"
-              >
-                🇦🇪 Load Sample Data
-              </button>
-
               {/* Upload Button */}
               <button
                 onClick={() => setShowUploadModal(true)}
@@ -904,6 +823,9 @@ export const VarianceAnalysis = () => {
               >
                 <Upload className="w-4 h-4" />
                 Upload Data
+                {usingGlData && (
+                  <span className="text-[10px] bg-green-500/30 px-1.5 py-0.5 rounded">Using GL data</span>
+                )}
               </button>
 
 
@@ -1084,17 +1006,30 @@ export const VarianceAnalysis = () => {
         </div>
       </div>
 
+      {usingGlData && glMeta && (
+        <div className="max-w-[1600px] mx-auto px-6 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-900">
+            <span>
+              Loaded from UAE GL — {glMeta.je_count} journal entries ({glMeta.start} to {glMeta.end})
+            </span>
+            <PeriodSelector
+              workspaceId={workspaceId}
+              onPeriodChange={(start, end) => setPeriodRange({ start, end })}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="max-w-[1600px] mx-auto px-6 py-8">
         {currentVarianceData.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-            <p className="text-gray-600 text-lg mb-2">No variance data yet</p>
-            <p className="text-gray-500 text-sm mb-6">Use the Upload Data button above to add your variance file and see the analysis.</p>
+          <div style={{ textAlign: 'center', padding: '60px' }}>
+            <p className="text-gray-600 text-lg mb-6">Upload your trial balance to see variance analysis</p>
             <button
               onClick={() => setShowUploadModal(true)}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition"
             >
-              Upload Data
+              Upload trial balance
             </button>
           </div>
         ) : (

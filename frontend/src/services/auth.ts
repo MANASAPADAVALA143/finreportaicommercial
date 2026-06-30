@@ -59,36 +59,38 @@ export const useAuthStore = create<AuthState>((set) => ({
       }
     }
     
-    // PRODUCTION MODE - Use Supabase
+    // FastAPI RBAC login
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const apiUrl = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
+      if (!apiUrl) throw new Error('VITE_API_URL missing');
+
+      const response = await fetch(`${apiUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
       });
-
-      if (error) throw error;
-
-      if (data.session) {
-        localStorage.setItem('access_token', data.session.access_token);
-        localStorage.setItem('refresh_token', data.session.refresh_token);
-        
-        // Get user profile from Supabase
-        const { data: profileData } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
-
-        const user: User = {
-          id: data.user.id,
-          email: data.user.email!,
-          full_name: profileData?.full_name,
-          company: profileData?.company,
-          role: profileData?.role || 'user',
-        };
-
-        set({ user, isAuthenticated: true, isLoading: false });
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(err || 'Login failed');
       }
+
+      const data = await response.json();
+      const user: User = {
+        id: data.user?.id ?? '',
+        email: data.user?.email ?? email,
+        full_name: data.user?.name ?? data.user?.full_name,
+        company: data.company_name ?? data.user?.company_name,
+        role: data.user?.role ?? 'user',
+      };
+
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(user));
+      if (data.refresh_token) {
+        sessionStorage.setItem('finreport_refresh_token', data.refresh_token);
+      }
+
+      set({ user, isAuthenticated: true, isLoading: false });
     } catch (error: any) {
       set({ 
         error: error.message || 'Login failed',

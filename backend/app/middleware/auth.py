@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.users import User, UserRole
 from app.services.auth_service import decode_token
+from app.services.supabase_auth_service import ensure_rbac_user, verify_supabase_token
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -18,24 +19,35 @@ def _bearer_token(authorization: str | None) -> str:
     return authorization.replace("Bearer ", "", 1).strip()
 
 
+def _user_from_rbac_token(db: Session, token: str) -> User | None:
+    try:
+        payload = decode_token(token)
+    except ValueError:
+        return None
+    if payload.get("type") != "access":
+        return None
+    user_id = str(payload.get("sub", ""))
+    user = db.get(User, user_id)
+    if not user or not user.is_active:
+        return None
+    return user
+
+
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None),
 ) -> User:
     token = _bearer_token(authorization)
+
+    user = _user_from_rbac_token(db, token)
+    if user:
+        return user
+
     try:
-        payload = decode_token(token)
+        sb_user = verify_supabase_token(token)
+        return ensure_rbac_user(db, sb_user)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=401, detail="Invalid access token")
-
-    user_id = str(payload.get("sub", ""))
-    user = db.get(User, user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-    return user
 
 
 def require_role(*roles: UserRole | str) -> Callable:

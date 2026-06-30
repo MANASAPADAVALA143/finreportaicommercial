@@ -60,3 +60,48 @@ def seed_if_empty(db: Session) -> int:
     db.add_all(rows)
     db.commit()
     return len(rows)
+
+
+def upsert_missing_master_lines(db: Session) -> int:
+    """Add master lines introduced after initial seed (safe for existing DBs)."""
+    added = 0
+    missing = [
+        {
+            "name": "Other non-current liabilities",
+            "statement": "financial_position",
+            "section": "Non-current Liabilities",
+        },
+    ]
+    for spec in missing:
+        exists = (
+            db.query(IFRSLineItemMaster)
+            .filter(
+                IFRSLineItemMaster.name == spec["name"],
+                IFRSLineItemMaster.statement == spec["statement"],
+            )
+            .first()
+        )
+        if exists:
+            continue
+        max_order = (
+            db.query(IFRSLineItemMaster.display_order)
+            .filter(IFRSLineItemMaster.statement == spec["statement"])
+            .order_by(IFRSLineItemMaster.display_order.desc())
+            .limit(1)
+            .scalar()
+        ) or 0
+        db.add(
+            IFRSLineItemMaster(
+                name=spec["name"],
+                statement=spec["statement"],
+                section=spec["section"],
+                sub_section=None,
+                standard="IAS 1",
+                is_calculated=False,
+                display_order=int(max_order) + 1,
+            )
+        )
+        added += 1
+    if added:
+        db.commit()
+    return added

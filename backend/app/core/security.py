@@ -1,23 +1,20 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from app.core.config import settings
+from app.services.auth_service import hash_password, verify_password
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash."""
-    return pwd_context.verify(plain_password, hashed_password)
-
-
 def get_password_hash(password: str) -> str:
-    """Generate password hash."""
-    return pwd_context.hash(password)
+    """Generate password hash (delegates to auth_service — single bcrypt call)."""
+    return hash_password(password)
+
+
+__all__ = ["get_password_hash", "hash_password", "verify_password", "oauth2_scheme", "create_access_token", "create_refresh_token", "get_current_user"]
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

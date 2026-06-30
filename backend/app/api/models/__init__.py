@@ -34,7 +34,7 @@ class JournalEntry(Base):
     status = Column(String, default="pending")
     fraud_score = Column(Float)
     anomaly_detected = Column(Boolean, default=False)
-    metadata = Column(JSON)
+    entry_metadata = Column("metadata", JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     user = relationship("User", back_populates="journal_entries")

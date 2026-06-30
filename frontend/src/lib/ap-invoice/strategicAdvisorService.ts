@@ -1,4 +1,4 @@
-﻿import { supabase, type Invoice, type PurchaseOrder } from './supabase';
+import { supabase, type Invoice, type PurchaseOrder } from './supabase';
 import { getMyCompany } from './companyService';
 import { effectivePaymentDate, normalizedOpenPaymentStatus } from './paymentService';
 import { anonymiseVendor, redactDemoVendorNames } from './vendorDisplay';
@@ -71,7 +71,7 @@ export interface CFOKPIs {
   invoiceExceptions: Array<{ type: string; count: number }>;
   newSuppliers: Array<{ name: string; checks: string[]; amount: number }>;
   concentrationTop5: Array<{ name: string; value: number }>;
-  /** Legacy / action queue â€” calendar week */
+  /** Legacy / action queue — calendar week */
   dueThisWeekAmount: number;
   dueThisWeekCount: number;
   dueNextVendor?: string;
@@ -79,7 +79,7 @@ export interface CFOKPIs {
   bankReconMatchPct: number | null;
 }
 
-/** @deprecated Use CFOKPIs â€” kept for typing external imports */
+/** @deprecated Use CFOKPIs — kept for typing external imports */
 export type CFOKPIData = CFOKPIs;
 
 const CACHE_MS = 120_000;
@@ -147,7 +147,7 @@ function monthLabel(ym: string): string {
 }
 
 export function formatInr(n: number): string {
-  return `â‚¹${Math.round(n).toLocaleString('en-IN')}`;
+  return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }
 
 async function loadInvoices(companyId: string | undefined, limit = 800): Promise<Invoice[]> {
@@ -269,7 +269,7 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
       insights.push({
         priority: 'critical',
         category: 'fraud',
-        title: `Possible invoice splitting â€” ${vendor}`,
+        title: `Possible invoice splitting — ${vendor}`,
         detail: `${invs.length} invoices in 30 days, each under ${formatInr(SPLIT_EACH_MAX)}, total ${formatInr(total)}.`,
         action: 'Request consolidated billing or PO coverage before further payment.',
         amount: total,
@@ -299,7 +299,7 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
     insights.push({
       priority: 'critical',
       category: 'cash_flow',
-      title: `${overdueOpen.length} approved invoices past due â€” ${formatInr(overdueTotal)}`,
+      title: `${overdueOpen.length} approved invoices past due — ${formatInr(overdueTotal)}`,
       detail: `Oldest: ${oldest.vendor_name} (${oldest.invoice_number}), ~${oldestDays} days late.`,
       action: 'Prioritise settlement starting with oldest balances.',
       amount: overdueTotal,
@@ -325,7 +325,7 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
       priority: 'high',
       category: 'cash_flow',
       title: `${formatInr(dueTotal)} due within 7 days`,
-      detail: `${dueSoon.length} open invoices (${names}${dueSoon.length > 4 ? 'â€¦' : ''}).`,
+      detail: `${dueSoon.length} open invoices (${names}${dueSoon.length > 4 ? '…' : ''}).`,
       action: 'Confirm liquidity and payment rails for the week ahead.',
       amount: dueTotal,
       vendor: topDueSoonVendor?.vendor_name?.trim() || 'Multiple vendors',
@@ -351,7 +351,7 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
     insights.push({
       priority: 'high',
       category: 'risk',
-      title: `New supplier â€” first bill: ${v}`,
+      title: `New supplier — first bill: ${v}`,
       detail: `Invoice ${inv.invoice_number} for ${formatInr(Number(inv.total_amount))}.`,
       action: 'Verify bank details, tax registration, and contract before release.',
       amount: Number(inv.total_amount),
@@ -389,7 +389,7 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
         priority: 'strategic',
         category: 'spend',
         title: `${cat} is ~${pct}% of recent AP`,
-        detail: `${formatInr(amt)} in the last 90 days â€” concentration in one lane.`,
+        detail: `${formatInr(amt)} in the last 90 days — concentration in one lane.`,
         action: 'Compare to budget and negotiate volume terms if intentional.',
         amount: amt,
       });
@@ -676,7 +676,7 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
   }
 
   const discountData = vendorSpend.slice(0, 8).map((v) => ({
-    vendor: v.vendor.length > 18 ? `${v.vendor.slice(0, 16)}â€¦` : v.vendor,
+    vendor: v.vendor.length > 18 ? `${v.vendor.slice(0, 16)}…` : v.vendor,
     potential: v.amount * 0.02,
     captured: v.amount * 0.005,
   }));
@@ -968,8 +968,8 @@ export function buildActionRows(insights: StrategicInsight[], kpis: CFOKPIs | nu
       id: `ins-${n}`,
       dueLabel: ins.priority === 'critical' ? 'Today' : ins.priority === 'high' ? 'This week' : 'This month',
       action: redactDemoVendorNames(ins.title),
-      vendor: ins.vendor ? anonymiseVendor(ins.vendor) : 'â€”',
-      amountLabel: ins.amount != null ? formatInr(ins.amount) : 'â€”',
+      vendor: ins.vendor ? anonymiseVendor(ins.vendor) : '—',
+      amountLabel: ins.amount != null ? formatInr(ins.amount) : '—',
       priority: ins.priority === 'critical' ? 'High' : ins.priority === 'high' ? 'Medium' : 'Low',
     });
   }
@@ -989,4 +989,3 @@ export function buildActionRows(insights: StrategicInsight[], kpis: CFOKPIs | nu
   }
   return rows.slice(0, 12);
 }
-

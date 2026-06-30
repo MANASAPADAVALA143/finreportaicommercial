@@ -53,7 +53,7 @@ export default function Register() {
           <input className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
         </label>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm text-white">{error}</p>}
 
         <button disabled={loading} className="w-full rounded bg-blue-600 py-2 text-white font-medium hover:bg-blue-500 disabled:opacity-50" type="submit">
           {loading ? 'Creating...' : 'Create Account'}

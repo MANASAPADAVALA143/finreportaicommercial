@@ -1,4 +1,4 @@
-﻿import { supabase } from './supabase';
+import { supabase } from './supabase';
 
 export type SubscriptionTier = 'starter' | 'growth' | 'enterprise';
 
@@ -85,9 +85,44 @@ export async function getMyCompany(): Promise<Company | null> {
 
     const meta = user.user_metadata as Record<string, unknown> | undefined;
     const activeId = typeof meta?.active_company_id === 'string' ? meta.active_company_id : null;
-    const picked = activeId ? companies.find((c) => c.id === activeId) : null;
-    _companyCache = picked ?? companies[0] ?? null;
-    if (_companyCache) return _companyCache;
+    if (activeId) {
+      const picked = companies.find((c) => c.id === activeId);
+      if (picked) {
+        _companyCache = picked;
+        return picked;
+      }
+    }
+
+    // Multiple workspaces — pick the one with the most invoices (avoids empty list / wrong tenant)
+    if (companies.length > 1) {
+      let best: Company | null = null;
+      let bestCount = -1;
+      for (const c of companies) {
+        const { count, error: countErr } = await supabase
+          .from('invoices')
+          .select('*', { count: 'exact', head: true })
+          .eq('company_id', c.id);
+        if (countErr) continue;
+        const n = count ?? 0;
+        if (n > bestCount) {
+          bestCount = n;
+          best = c;
+        }
+      }
+      if (best && bestCount > 0) {
+        _companyCache = best;
+        if (best.id !== activeId) {
+          await supabase.auth
+            .updateUser({ data: { active_company_id: best.id } })
+            .then(() => null, () => null);
+        }
+        return best;
+      }
+    }
+
+    const picked = companies[0] ?? null;
+    _companyCache = picked;
+    if (picked) return picked;
 
     // 2. Fallback: check company_settings for this user's email
     const { data: cs } = await supabase
@@ -149,7 +184,9 @@ export async function getMyCompany(): Promise<Company | null> {
   return _companyCache;
 }
 
-export async function listMyCompanies(): Promise<Company[]> {
+export type CompanyWithStats = Company & { invoice_count?: number };
+
+export async function listMyCompanies(): Promise<CompanyWithStats[]> {
   const { data: userData } = await supabase.auth.getUser();
   const user = userData?.user;
   if (!user?.id) {
@@ -165,13 +202,22 @@ export async function listMyCompanies(): Promise<Company[]> {
     console.warn('listMyCompanies:', error.message);
     return [];
   }
-  const out: Company[] = [];
+  const out: CompanyWithStats[] = [];
   for (const r of rows ?? []) {
     const c = (r as { companies: Company | Company[] | null }).companies;
     const row = Array.isArray(c) ? c[0] : c;
-    if (row?.id) out.push(row as Company);
+    if (row?.id) out.push(row as CompanyWithStats);
   }
-  return out;
+  await Promise.all(
+    out.map(async (co) => {
+      const { count } = await supabase
+        .from('invoices')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', co.id);
+      co.invoice_count = count ?? 0;
+    }),
+  );
+  return out.sort((a, b) => (b.invoice_count ?? 0) - (a.invoice_count ?? 0));
 }
 
 const PAYMENT_LOG_ROLES = ['finance_manager', 'admin', 'owner', 'super_admin'] as const;
@@ -310,7 +356,7 @@ export async function isSuperAdmin(): Promise<boolean> {
 /** Use on every insert into tenant-scoped tables. */
 export async function requireCompanyId(): Promise<string> {
   const c = await getMyCompany();
-  if (!c?.id) throw new Error('No company context â€” run MULTI-TENANT-MIGRATION.sql and ensure companies row exists.');
+  if (!c?.id) throw new Error('No company context — run MULTI-TENANT-MIGRATION.sql and ensure companies row exists.');
   return c.id;
 }
 
@@ -410,4 +456,3 @@ export async function fetchAllCompaniesAdmin(): Promise<Company[]> {
 }
 
 export { parseApprovalFlow };
-

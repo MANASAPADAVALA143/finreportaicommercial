@@ -16,6 +16,15 @@ from app.services.auth_service import hash_password
 
 router = APIRouter(prefix="/api/users", tags=["rbac-users"])
 
+VALID_PRODUCT_ROLES = (
+    "uae_client",
+    "uae_full",
+    "india_client",
+    "india_full",
+    "fpa_client",
+    "full_access",
+)
+
 
 class CreateUserBody(BaseModel):
     name: str
@@ -27,6 +36,7 @@ class CreateUserBody(BaseModel):
 class UpdateUserBody(BaseModel):
     name: str | None = None
     role: UserRole | None = None
+    product_role: str | None = None
     is_active: bool | None = None
 
 
@@ -37,6 +47,7 @@ def _to_dict(u: User) -> dict:
         "name": u.name,
         "email": u.email,
         "role": role,
+        "product_role": getattr(u, "product_role", None) or "full_access",
         "is_active": bool(u.is_active),
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login": u.last_login.isoformat() if u.last_login else None,
@@ -108,6 +119,10 @@ def update_user(
         row.name = body.name.strip()
     if body.role is not None:
         row.role = body.role
+    if body.product_role is not None:
+        if body.product_role not in VALID_PRODUCT_ROLES:
+            raise HTTPException(status_code=400, detail="Invalid product_role")
+        row.product_role = body.product_role
     if body.is_active is not None:
         row.is_active = body.is_active
     db.add(row)

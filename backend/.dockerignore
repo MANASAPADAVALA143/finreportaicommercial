@@ -1,0 +1,17 @@
+.venv
+.venv-*
+__pycache__
+*.pyc
+*.pyo
+*.db
+.env
+.env.*
+!.env.example
+uploads
+board_packs
+finreportai.db
+gulftax.db
+.git
+.pytest_cache
+.mypy_cache
+*.md

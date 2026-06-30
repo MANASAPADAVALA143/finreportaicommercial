@@ -54,7 +54,7 @@ export default function BankReconciliation() {
     const fd = new FormData();
     fd.append('file', file);
     const base = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
-    const tenantId = localStorage.getItem('tenantId') ?? 'demo';
+    const tenantId = localStorage.getItem('tenantId');
     const params = new URLSearchParams({
       bank_name: bankName, statement_date: stmtDate,
       opening_balance: opening || '0', closing_balance: closing || '0',

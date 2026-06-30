@@ -1,6 +1,9 @@
-﻿import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import { backendOrigin } from '../utils/backendOrigin';
+import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
+import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import type { Session } from '@supabase/supabase-js';
 
 type Role = 'super_admin' | 'cfo' | 'finance_manager' | 'accountant' | 'auditor';
 
@@ -9,6 +12,7 @@ interface AuthUser {
   name: string;
   email: string;
   role: Role;
+  product_role: ProductRole;
   company_id: string;
   company_name?: string | null;
   permissions: string[];
@@ -19,7 +23,10 @@ interface AuthContextValue {
   user: AuthUser | null;
   isAuthenticated: boolean;
   accessToken: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  bootstrapping: boolean;
+  productRole: ProductRole;
+  loginRedirect: string;
+  login: (email: string, password: string) => Promise<AuthUser>;
   register: (payload: { company_name: string; name: string; email: string; password: string }) => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (module: string) => boolean;
@@ -48,10 +55,28 @@ function parseJwt(token: string): { exp?: number } {
   }
 }
 
+function userFromSupabaseSession(session: Session): AuthUser {
+  const meta = session.user.user_metadata ?? {};
+  const appMeta = session.user.app_metadata ?? {};
+  const internalRole = (meta.role || appMeta.role || 'accountant') as Role;
+  return {
+    id: session.user.id,
+    name: String(meta.full_name || meta.name || session.user.email?.split('@')[0] || 'User'),
+    email: session.user.email ?? '',
+    role: internalRole,
+    product_role: normalizeProductRole(meta.product_role || appMeta.product_role),
+    company_id: String(meta.company_id || ''),
+    company_name: meta.company ?? null,
+    permissions: internalRole === 'super_admin' ? ['*'] : [],
+    is_active: true,
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const base = backendOrigin();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const refreshTimer = useRef<number | null>(null);
 
   const clearTimer = () => {
@@ -61,7 +86,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const applySession = useCallback((session: Session | null) => {
+    if (!session?.access_token) {
+      setUser(null);
+      setAccessToken(null);
+      return;
+    }
+    setAccessToken(session.access_token);
+    setUser(userFromSupabaseSession(session));
+  }, []);
+
   const scheduleRefresh = useCallback((token: string) => {
+    if (!base) return;
     clearTimer();
     const exp = parseJwt(token).exp;
     if (!exp || !base) return;
@@ -79,6 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!r.ok) throw new Error('refresh failed');
         const j = await r.json();
         if (j.access_token) {
+          localStorage.setItem('token', j.access_token);
           setAccessToken(j.access_token);
           if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
           scheduleRefresh(j.access_token);
@@ -92,41 +129,90 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, wait);
   }, [base]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    if (!base) throw new Error('VITE_API_URL missing');
-    const r = await fetch(`${base}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email, password }),
-    });
+  const loginWithRbac = useCallback(async (email: string, password: string) => {
+    const apiUrl = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || base;
+    if (!apiUrl) throw new Error('VITE_API_URL missing — set it in Vercel Environment Variables to your FastAPI URL, then redeploy.');
+    let r: Response;
+    try {
+      r = await fetch(`${apiUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      });
+    } catch (err) {
+      throw formatApiNetworkError(err, apiUrl);
+    }
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
-    setUser(j.user);
+    const loggedIn = {
+      ...j.user,
+      company_name: j.company_name ?? j.user?.company_name ?? null,
+      product_role: normalizeProductRole(j.user?.product_role),
+    } as AuthUser;
+    localStorage.setItem('token', j.access_token);
+    localStorage.setItem('user', JSON.stringify(loggedIn));
+    setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
     scheduleRefresh(j.access_token);
+    return loggedIn;
   }, [base, scheduleRefresh]);
 
+  const login = useCallback(async (email: string, password: string) => {
+    return loginWithRbac(email, password);
+  }, [loginWithRbac]);
+
   const register = useCallback(async (payload: { company_name: string; name: string; email: string; password: string }) => {
-    if (!base) throw new Error('VITE_API_URL missing');
-    const r = await fetch(`${base}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-    });
+    if (!isBackendConfigured()) {
+      const { data, error } = await supabase.auth.signUp({
+        email: payload.email,
+        password: payload.password,
+        options: {
+          data: {
+            full_name: payload.name,
+            company: payload.company_name,
+            role: 'accountant',
+            product_role: 'full_access',
+          },
+        },
+      });
+      if (error) throw new Error(error.message);
+      if (!data.session) throw new Error('Check your email to confirm registration');
+      applySession(data.session);
+      return;
+    }
+
+    const apiUrl = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || base;
+    if (!apiUrl) throw new Error('VITE_API_URL missing');
+    let r: Response;
+    try {
+      r = await fetch(`${apiUrl}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      throw formatApiNetworkError(err, apiUrl);
+    }
     if (!r.ok) throw new Error(await r.text());
     const j = await r.json();
-    setUser(j.user);
+    const loggedIn = {
+      ...j.user,
+      product_role: normalizeProductRole(j.user?.product_role),
+    } as AuthUser;
+    localStorage.setItem('token', j.access_token);
+    localStorage.setItem('user', JSON.stringify(loggedIn));
+    setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
     scheduleRefresh(j.access_token);
-  }, [base, scheduleRefresh]);
+  }, [base, applySession, scheduleRefresh]);
 
   const logout = useCallback(async () => {
     clearTimer();
-    if (base) {
+    if (isBackendConfigured() && base) {
       const rt = sessionStorage.getItem(REFRESH_KEY);
       await fetch(`${base}/api/auth/logout`, {
         method: 'POST',
@@ -134,8 +220,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         credentials: 'include',
         body: JSON.stringify({ refresh_token: rt || undefined }),
       });
+    } else if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
     }
     sessionStorage.removeItem(REFRESH_KEY);
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     setAccessToken(null);
     setUser(null);
   }, [base]);
@@ -147,12 +237,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const authFetch = useCallback(async (input: RequestInfo | URL, init?: RequestInit) => {
+    let token = accessToken ?? localStorage.getItem('token');
+    if (!token && isSupabaseConfigured && !isBackendConfigured()) {
+      const { data } = await supabase.auth.getSession();
+      token = data.session?.access_token ?? token;
+      if (data.session?.access_token && data.session.access_token !== accessToken) {
+        setAccessToken(data.session.access_token);
+      }
+    }
+
     const target =
       typeof input === 'string' && input.startsWith('/') && base ? `${base}${input}` : input;
     const headers = new Headers(init?.headers || {});
-    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
+    if (token) headers.set('Authorization', `Bearer ${token}`);
     const response = await fetch(target, { ...init, headers, credentials: 'include' });
-    if (response.status === 401) {
+
+    if (response.status === 401 && isBackendConfigured()) {
       try {
         if (!base) throw new Error('missing base');
         const rt = sessionStorage.getItem(REFRESH_KEY);
@@ -164,16 +264,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
         if (!rr.ok) throw new Error('refresh failed');
         const j = await rr.json();
-        const token = j.access_token as string | undefined;
-        if (!token) throw new Error('missing access token');
-        setAccessToken(token);
+        const newToken = j.access_token as string | undefined;
+        if (!newToken) throw new Error('missing access token');
+        localStorage.setItem('token', newToken);
+        setAccessToken(newToken);
         if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
-        scheduleRefresh(token);
+        scheduleRefresh(newToken);
         const retryHeaders = new Headers(init?.headers || {});
-        retryHeaders.set('Authorization', `Bearer ${token}`);
+        retryHeaders.set('Authorization', `Bearer ${newToken}`);
         return fetch(target, { ...init, headers: retryHeaders, credentials: 'include' });
       } catch {
         sessionStorage.removeItem(REFRESH_KEY);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
         setUser(null);
         setAccessToken(null);
         window.location.href = '/login';
@@ -184,16 +287,117 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => () => clearTimer(), []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const finish = () => {
+      if (!cancelled) setBootstrapping(false);
+    };
+
+    const restoreFromBackend = async () => {
+      const storedToken = localStorage.getItem('token');
+      const storedUser = localStorage.getItem('user');
+      if (storedToken && storedUser) {
+        try {
+          const parsed = JSON.parse(storedUser) as AuthUser;
+          if (!cancelled) {
+            setAccessToken(storedToken);
+            setUser({ ...parsed, product_role: normalizeProductRole(parsed.product_role) });
+            scheduleRefresh(storedToken);
+          }
+          finish();
+          return;
+        } catch {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+        }
+      }
+
+      const rt = sessionStorage.getItem(REFRESH_KEY);
+      if (!rt || !base) {
+        finish();
+        return;
+      }
+      try {
+        const r = await fetch(`${base}/api/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ refresh_token: rt }),
+        });
+        if (!r.ok) throw new Error('refresh failed');
+        const j = await r.json();
+        const token = j.access_token as string | undefined;
+        if (!token) throw new Error('missing access token');
+        const me = await fetch(`${base}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
+        });
+        if (!me.ok) throw new Error('me failed');
+        const meJson = (await me.json()) as AuthUser;
+        const restoredUser = {
+          ...meJson,
+          product_role: normalizeProductRole(meJson.product_role),
+        };
+        if (!cancelled) {
+          localStorage.setItem('token', token);
+          localStorage.setItem('user', JSON.stringify(restoredUser));
+          setAccessToken(token);
+          setUser(restoredUser);
+          scheduleRefresh(token);
+        }
+      } catch {
+        sessionStorage.removeItem(REFRESH_KEY);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      } finally {
+        finish();
+      }
+    };
+
+    if (isBackendConfigured()) {
+      void restoreFromBackend();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (isSupabaseConfigured) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (!cancelled) applySession(session);
+        finish();
+      });
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (!cancelled) applySession(session);
+      });
+      return () => {
+        cancelled = true;
+        subscription.unsubscribe();
+      };
+    }
+
+    void restoreFromBackend();
+    return () => {
+      cancelled = true;
+    };
+  }, [base, applySession, scheduleRefresh]);
+
+  const productRole = normalizeProductRole(user?.product_role);
+  const loginRedirect = loginRedirectFor(productRole);
+
   const value = useMemo<AuthContextValue>(() => ({
     user,
     isAuthenticated: !!user && !!accessToken,
     accessToken,
+    bootstrapping,
+    productRole,
+    loginRedirect,
     login,
     register,
     logout,
     hasPermission,
     authFetch,
-  }), [user, accessToken, login, register, logout, hasPermission, authFetch]);
+  }), [user, accessToken, bootstrapping, productRole, loginRedirect, login, register, logout, hasPermission, authFetch]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

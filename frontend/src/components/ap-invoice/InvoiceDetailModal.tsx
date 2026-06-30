@@ -1,7 +1,7 @@
-﻿import { useEffect, useState, useMemo, useRef } from 'react';
-import { useMarket } from '../../contexts/MarketContext';
-import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
-import { classifyVATWithGulfTax } from '../../lib/ap-invoice/gulfTaxService';
+import { useEffect, useState, useMemo, useRef } from 'react';
+import { useMarket } from '@/contexts/MarketContext';
+import { validateTaxId, VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
+import { classifyVATWithGulfTax } from '@/lib/ap-invoice/gulfTaxService';
 import {
   supabase,
   type Invoice,
@@ -11,33 +11,40 @@ import {
   type GLAccount,
   type PurchaseOrder,
   type Gstr2bEntry,
-} from '../../lib/ap-invoice/supabase';
-import { getAuditLog, logAction, getInvoiceflowWorkEmail } from '../../lib/ap-invoice/auditService';
+} from '@/lib/ap-invoice/supabase';
+import { getAuditLog, logAction, getInvoiceflowWorkEmail } from '@/lib/ap-invoice/auditService';
+import {
+  getAnomaliesForInvoice,
+  resolveAnomaly,
+  escalateAnomalyToCFO,
+} from '@/lib/ap-invoice/anomalyService';
+import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
+import type { InvoiceAnomaly } from '@/lib/ap-invoice/supabase';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import {
   getEffectiveExtractionScore,
   getExtractionScoreSource,
   getParsedFieldConfidences,
-} from '../../utils/extractionConfidence';
-import { deriveInvoiceRiskDisplayScore } from '../../lib/ap-invoice/invoiceRiskDisplay';
+} from '@/utils/extractionConfidence';
+import { deriveInvoiceRiskDisplayScore } from '@/lib/ap-invoice/invoiceRiskDisplay';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from '../ui/dialog';
-import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
-import { Input } from '../ui/input';
-import { Label } from '../ui/label';
-import { Textarea } from '../ui/textarea';
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../ui/select';
+} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -45,12 +52,12 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../ui/table';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
-import { Separator } from '../ui/separator';
-import { ScrollArea } from '../ui/scroll-area';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
+} from '@/components/ui/table';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ApprovalChainPanel } from '@/components/approvals/ApprovalChainPanel';
 
 const UUID_RE =
@@ -58,13 +65,14 @@ const UUID_RE =
 
 function formatApprovedByLabel(inv: Invoice): string {
   if (inv.auto_matched && !inv.approved_by) return 'System (auto-match)';
-  if (!inv.approved_by) return 'â€”';
+  if (!inv.approved_by) return '—';
   if (UUID_RE.test(inv.approved_by)) return 'Signed-in user';
   return inv.approved_by;
 }
 import { DuplicateWarningBanner } from '@/components/invoices/DuplicateWarningBanner';
-import { checkDuplicateBeforePayment, type DuplicateAlert } from '../../lib/ap-invoice/duplicateAlertService';
-import { pushInvoiceToZoho, loadZohoSettings, type ZohoSettings } from '../../lib/ap-invoice/zohoService';
+import { checkDuplicateBeforePayment, type DuplicateAlert } from '@/lib/ap-invoice/duplicateAlertService';
+import { pushInvoiceToZoho, loadZohoSettings, type ZohoSettings } from '@/lib/ap-invoice/zohoService';
+import { pushInvoiceToQB, loadQBSettings, type QBSettings } from '@/lib/ap-invoice/quickbooksService';
 import {
   CheckCircle,
   XCircle,
@@ -83,28 +91,28 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
-import { useToast } from '../../hooks/use-toast';
-import { getApprovalLevelName, isPendingApproval } from '../../utils/approvalWorkflow';
-import { formatCurrency } from '../../utils/currency';
-import { getTaxLabel } from '../../utils/taxConfig';
-import { displayDate } from '../../utils/dateUtils';
-import { useCompanySettings } from '../../hooks/useCompanySettings';
-import { getMyCompany } from '../../lib/ap-invoice/companyService';
-import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
+import { useToast } from '@/hooks/use-toast';
+import { getApprovalLevelName, isPendingApproval } from '@/utils/approvalWorkflow';
+import { formatCurrency } from '@/utils/currency';
+import { getTaxLabel } from '@/utils/taxConfig';
+import { displayDate } from '@/utils/dateUtils';
+import { useCompanySettings } from '@/hooks/useCompanySettings';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
   getAccountingStandard,
   logGlSuggestionAction,
-} from '../../lib/ap-invoice/accountingStandardService';
-import { getMatchStatusColor } from '../../utils/threeWayMatch';
-import { runAutoMatch } from '../../lib/ap-invoice/threeWayMatchService';
-import { pushToTallyPrime } from '../../utils/tallyExport';
-import { useErpSettings, toTallySettings } from '../../hooks/useErpSettings';
+} from '@/lib/ap-invoice/accountingStandardService';
+import { getMatchStatusColor } from '@/utils/threeWayMatch';
+import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
+import { pushToTallyPrime } from '@/utils/tallyExport';
+import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
 import {
   applyVendorGstinToInvoicesForName,
   fetchGstr2bByMatchedInvoice,
   fetchGstr2bBySupplierAndInvoice,
   updateInvoiceGstFields,
-} from '../../lib/ap-invoice/gstService';
+} from '@/lib/ap-invoice/gstService';
 
 /** Same key as GST Recon page (localStorage). */
 const COMPANY_GSTIN_KEY = 'invoiceflow_company_gstin';
@@ -127,18 +135,18 @@ const statusColors = {
 };
 
 const LANGUAGE_LABELS: Record<string, string> = {
-  en: 'ðŸ‡¬ðŸ‡§ English',
-  hi: 'ðŸ‡®ðŸ‡³ Hindi',
-  ar: 'ðŸ‡¦ðŸ‡ª Arabic',
-  de: 'ðŸ‡©ðŸ‡ª German',
-  fr: 'ðŸ‡«ðŸ‡· French',
-  ja: 'ðŸ‡¯ðŸ‡µ Japanese',
-  zh: 'ðŸ‡¨ðŸ‡³ Chinese',
-  es: 'ðŸ‡ªðŸ‡¸ Spanish',
-  pt: 'ðŸ‡§ðŸ‡· Portuguese',
-  ko: 'ðŸ‡°ðŸ‡· Korean',
-  it: 'ðŸ‡®ðŸ‡¹ Italian',
-  nl: 'ðŸ‡³ðŸ‡± Dutch',
+  en: '🇬🇧 English',
+  hi: '🇮🇳 Hindi',
+  ar: '🇦🇪 Arabic',
+  de: '🇩🇪 German',
+  fr: '🇫🇷 French',
+  ja: '🇯🇵 Japanese',
+  zh: '🇨🇳 Chinese',
+  es: '🇪🇸 Spanish',
+  pt: '🇧🇷 Portuguese',
+  ko: '🇰🇷 Korean',
+  it: '🇮🇹 Italian',
+  nl: '🇳🇱 Dutch',
 };
 
 const IFRS_OVERRIDE_OPTIONS = [
@@ -203,6 +211,8 @@ export function InvoiceDetailModal({
   const [duplicateAlertOpen, setDuplicateAlertOpen] = useState(false);
   const [zohoPushing, setZohoPushing] = useState(false);
   const [zohoSettings, setZohoSettings] = useState<ZohoSettings | null>(null);
+  const [qbPushing, setQbPushing] = useState(false);
+  const [qbSettings, setQbSettings] = useState<QBSettings | null>(null);
   const [paymentMetaFromLog, setPaymentMetaFromLog] = useState<{ paid_by: string | null } | null>(null);
   const [markPaidForm, setMarkPaidForm] = useState({
     payment_method: 'NEFT',
@@ -213,6 +223,8 @@ export function InvoiceDetailModal({
   });
   const [paymentProofFile, setPaymentProofFile] = useState<File | null>(null);
   const [paymentProofUploading, setPaymentProofUploading] = useState(false);
+  const [persistedAnomalies, setPersistedAnomalies] = useState<InvoiceAnomaly[]>([]);
+  const [anomalyActionLoading, setAnomalyActionLoading] = useState(false);
   const autoPoMatchAttemptedKeyRef = useRef<string | null>(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -256,10 +268,10 @@ export function InvoiceDetailModal({
   }, [invoice, parsedRiskFlags.length]);
 
   const SEVERITY = {
-    critical: { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b', icon: 'ðŸš¨', label: 'Critical' },
-    high: { bg: '#fff7ed', border: '#fed7aa', text: '#9a3412', icon: 'ðŸ”´', label: 'High' },
-    medium: { bg: '#fefce8', border: '#fde68a', text: '#92400e', icon: 'ðŸŸ¡', label: 'Medium' },
-    low: { bg: '#f0fdf4', border: '#bbf7d0', text: '#166534', icon: 'ðŸŸ¢', label: 'Low' },
+    critical: { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b', icon: '🚨', label: 'Critical' },
+    high: { bg: '#fff7ed', border: '#fed7aa', text: '#9a3412', icon: '🔴', label: 'High' },
+    medium: { bg: '#fefce8', border: '#fde68a', text: '#92400e', icon: '🟡', label: 'Medium' },
+    low: { bg: '#f0fdf4', border: '#bbf7d0', text: '#166534', icon: '🟢', label: 'Low' },
   };
 
   async function fetchComplianceActivity() {
@@ -279,9 +291,11 @@ export function InvoiceDetailModal({
       fetchLineItems();
       fetchAuditLogs();
       void fetchComplianceActivity();
+      void getAnomaliesForInvoice(invoice.id).then(setPersistedAnomalies).catch(() => setPersistedAnomalies([]));
       fetchGLAccounts();
       fetchPurchaseOrders();
       loadZohoSettings().then((s) => setZohoSettings(s as ZohoSettings)).catch(() => null);
+      loadQBSettings().then((s) => setQbSettings(s as QBSettings)).catch(() => null);
       setEditedInvoice(invoice);
       setSelectedPoNumber(invoice.po_number?.trim() ?? '');
       // Auto-suggest GL account based on IFRS category
@@ -672,7 +686,7 @@ export function InvoiceDetailModal({
       }
 
       await fetchGLAccounts();
-      toast({ title: 'Added to chart', description: `${code} â€” ${name}` });
+      toast({ title: 'Added to chart', description: `${code} — ${name}` });
       onUpdate();
     } catch (e) {
       console.error(e);
@@ -763,6 +777,16 @@ export function InvoiceDetailModal({
         new_value: 'Approved',
         user_name: approverName,
       });
+
+      try {
+        const cid = invoice.company_id || (await getMyCompany())?.id;
+        if (cid) {
+          const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
+          void syncApprovedInvoiceToGulfTax(invoice.id, cid);
+        }
+      } catch {
+        /* GulfTax sync is best-effort */
+      }
 
       toast({
         title: 'Success',
@@ -891,7 +915,7 @@ export function InvoiceDetailModal({
         user_name: approverName || 'Finance',
         notes: `Query sent to vendor: ${queryMessage}`,
       });
-      toast({ title: 'Query sent', description: `Vendor notified: "${queryMessage.slice(0, 60)}â€¦"` });
+      toast({ title: 'Query sent', description: `Vendor notified: "${queryMessage.slice(0, 60)}…"` });
       setShowQueryDialog(false);
       setQueryMessage('');
       onUpdate();
@@ -900,6 +924,48 @@ export function InvoiceDetailModal({
       toast({ title: 'Error', description: 'Failed to query invoice', variant: 'destructive' });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleAnomalyAction(
+    anomalyId: string,
+    status: 'investigating' | 'false_positive',
+  ) {
+    setAnomalyActionLoading(true);
+    try {
+      const actor = workEmail || 'AP User';
+      await resolveAnomaly(anomalyId, status, actor);
+      const updated = await getAnomaliesForInvoice(invoice.id);
+      setPersistedAnomalies(updated);
+      toast({
+        title: status === 'false_positive' ? 'Marked false positive' : 'Under investigation',
+      });
+      onUpdate();
+    } catch (e) {
+      toast({ title: 'Action failed', variant: 'destructive' });
+    } finally {
+      setAnomalyActionLoading(false);
+    }
+  }
+
+  async function handleAnomalyEscalate(anomaly: InvoiceAnomaly) {
+    setAnomalyActionLoading(true);
+    try {
+      const co = await getMyCompany();
+      if (!co?.id) throw new Error('No company');
+      await escalateAnomalyToCFO({
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        vendorName: invoice.vendor_name,
+        flagReason: anomaly.flag_reason ?? anomaly.flag_code ?? 'Anomaly flagged',
+        actor: workEmail || 'AP User',
+        companyId: co.id,
+      });
+      toast({ title: 'Escalated to CFO', description: 'Added to Action Queue for CFO review.' });
+    } catch {
+      toast({ title: 'Escalation failed', variant: 'destructive' });
+    } finally {
+      setAnomalyActionLoading(false);
     }
   }
 
@@ -981,6 +1047,7 @@ export function InvoiceDetailModal({
         payment_method: markPaidForm.payment_method,
         amount: invoice.total_amount,
       });
+      recalcVendorRiskAsync(invoice.vendor_name);
 
       await supabase.from('audit_logs').insert({
         invoice_id: invoice.id,
@@ -1012,7 +1079,7 @@ export function InvoiceDetailModal({
         parts.push(e.message);
       }
       const detail =
-        parts.join(' â€” ') ||
+        parts.join(' — ') ||
         'Could not save payment. Apply pending Supabase migrations: payment columns on invoices, payment_log table + RLS (see supabase/migrations).';
       toast({
         title: 'Error',
@@ -1063,6 +1130,18 @@ export function InvoiceDetailModal({
         new_value: newStatus,
         user_name: 'System User',
       });
+
+      if (newStatus === 'Approved') {
+        try {
+          const cid = invoice.company_id || (await getMyCompany())?.id;
+          if (cid) {
+            const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
+            void syncApprovedInvoiceToGulfTax(invoice.id, cid);
+          }
+        } catch {
+          /* GulfTax sync is best-effort */
+        }
+      }
 
       toast({
         title: 'Success',
@@ -1147,7 +1226,7 @@ export function InvoiceDetailModal({
                     style={{ background: '#eff6ff', color: '#1a56db' }}
                   >
                     {LANGUAGE_LABELS[invoice.invoice_language] || invoice.invoice_language}
-                    {' Â· '}Extracted & translated by AI
+                    {' · '}Extracted & translated by AI
                   </span>
                 )}
                 <span className="text-sm text-gray-500">
@@ -1319,7 +1398,7 @@ export function InvoiceDetailModal({
                     </div>
                     {effScore < 90 && (
                       <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                        Review extracted values â€” confidence is below 90%. Check vendor name, amount, and
+                        Review extracted values — confidence is below 90%. Check vendor name, amount, and
                         invoice date carefully before approving.
                       </div>
                     )}
@@ -1461,7 +1540,7 @@ export function InvoiceDetailModal({
                     <p className="text-sm">
                       {invoice.due_date && !Number.isNaN(new Date(invoice.due_date).getTime())
                         ? format(new Date(invoice.due_date), 'MMMM dd, yyyy')
-                        : 'â€”'}
+                        : '—'}
                     </p>
                   </div>
                 </div>
@@ -1658,21 +1737,21 @@ export function InvoiceDetailModal({
                         <Label>GL Account</Label>
                         <p className="font-mono text-sm font-medium text-gray-800">
                           {invoice.gl_account_code ?? invoice.gl_code}
-                          {invoice.gl_account_name ?? invoice.gl_name ? ` â€” ${invoice.gl_account_name ?? invoice.gl_name}` : ''}
+                          {invoice.gl_account_name ?? invoice.gl_name ? ` — ${invoice.gl_account_name ?? invoice.gl_name}` : ''}
                         </p>
                         {invoice.gl_source && (
                           <span
                             className="text-xs font-semibold"
                             style={{ color: invoice.gl_source === 'company_coa' ? '#0e9f6e' : '#6b7280' }}
                           >
-                            {invoice.gl_source === 'company_coa' ? 'ðŸ¢ From your COA' : 'ðŸ¤– IFRS Auto'}
+                            {invoice.gl_source === 'company_coa' ? '🏢 From your COA' : '🤖 IFRS Auto'}
                           </span>
                         )}
                       </div>
                     )}
 
                     <div className="space-y-2">
-                      <Label>Confidence (0â€“100)</Label>
+                      <Label>Confidence (0–100)</Label>
                       <div className="flex items-center gap-2">
                         <div className="h-2 flex-1 rounded-full bg-gray-200">
                           <div
@@ -1689,7 +1768,7 @@ export function InvoiceDetailModal({
                     <div className="space-y-2">
                       <Label>Explanation</Label>
                       <p className="text-sm text-gray-600">
-                        {invoice.ifrs_explanation?.trim() || 'â€”'}
+                        {invoice.ifrs_explanation?.trim() || '—'}
                       </p>
                     </div>
 
@@ -1810,7 +1889,7 @@ export function InvoiceDetailModal({
                         onClick={() => setShowHoldDialog(true)}
                         disabled={loading}
                       >
-                        â¸ Hold
+                        ⏸ Hold
                       </Button>
                       <Button
                         variant="outline"
@@ -1818,7 +1897,7 @@ export function InvoiceDetailModal({
                         onClick={() => setShowQueryDialog(true)}
                         disabled={loading}
                       >
-                        â“ Query Vendor
+                        ❓ Query Vendor
                       </Button>
                     </div>
 
@@ -1827,7 +1906,7 @@ export function InvoiceDetailModal({
                       <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 space-y-3">
                         <p className="text-sm font-medium text-orange-800">Reason for placing on hold</p>
                         <Textarea
-                          placeholder="e.g. Waiting for corrected PO from procurement teamâ€¦"
+                          placeholder="e.g. Waiting for corrected PO from procurement team…"
                           value={holdReason}
                           onChange={(e) => setHoldReason(e.target.value)}
                           rows={2}
@@ -1846,7 +1925,7 @@ export function InvoiceDetailModal({
                       <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-3">
                         <p className="text-sm font-medium text-purple-800">Message to send to vendor</p>
                         <Textarea
-                          placeholder="e.g. Invoice amount does not match PO-2025-0341. Please send revised invoiceâ€¦"
+                          placeholder="e.g. Invoice amount does not match PO-2025-0341. Please send revised invoice…"
                           value={queryMessage}
                           onChange={(e) => setQueryMessage(e.target.value)}
                           rows={2}
@@ -1965,7 +2044,7 @@ export function InvoiceDetailModal({
                         <span className="text-gray-600">Bank recon</span>
                         {invoice.bank_reconciled ? (
                           <Badge className="bg-emerald-100 text-emerald-900 text-xs max-w-[60%] truncate" title={invoice.bank_ref ?? ''}>
-                            Reconciled{invoice.bank_ref ? ` Â· ${invoice.bank_ref}` : ''}
+                            Reconciled{invoice.bank_ref ? ` · ${invoice.bank_ref}` : ''}
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-amber-800 border-amber-200 text-xs">
@@ -2040,7 +2119,7 @@ export function InvoiceDetailModal({
                       }
                     }}
                   >
-                    {invoice.tally_synced ? 'âœ… Synced to TallyPrime' : 'ðŸ“Š Push to TallyPrime'}
+                    {invoice.tally_synced ? '✅ Synced to TallyPrime' : '📊 Push to TallyPrime'}
                   </Button>
                 </CardContent>
               </Card>
@@ -2072,7 +2151,39 @@ export function InvoiceDetailModal({
                       }
                     }}
                   >
-                    {zohoPushing ? 'â³ Pushingâ€¦' : 'ðŸ“— Push to Zoho Books'}
+                    {zohoPushing ? '⏳ Pushing…' : '📗 Push to Zoho Books'}
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Push to QuickBooks Online (for approved invoices when QB is configured) */}
+            {invoice.status === 'Approved' && qbSettings?.client_id && (
+              <Card>
+                <CardContent className="pt-6">
+                  <Button
+                    variant="outline"
+                    disabled={qbPushing}
+                    className="border-[#2CA01C] text-[#2CA01C] hover:bg-green-50"
+                    onClick={async () => {
+                      if (!qbSettings) return;
+                      setQbPushing(true);
+                      try {
+                        const result = await pushInvoiceToQB(invoice, qbSettings);
+                        if (result.success) {
+                          toast({ title: 'QuickBooks Online', description: result.message });
+                          onUpdate();
+                        } else {
+                          toast({ title: 'QuickBooks error', description: result.message, variant: 'destructive' });
+                        }
+                      } catch (e) {
+                        toast({ title: 'Error', description: String(e), variant: 'destructive' });
+                      } finally {
+                        setQbPushing(false);
+                      }
+                    }}
+                  >
+                    {qbPushing ? '⏳ Pushing…' : '🟢 Push to QuickBooks'}
                   </Button>
                 </CardContent>
               </Card>
@@ -2281,7 +2392,68 @@ export function InvoiceDetailModal({
                         color: '#166534',
                       }}
                     >
-                      âœ… No risk flags detected for this invoice
+                      ✅ No risk flags detected for this invoice
+                    </div>
+                  )}
+
+                  {/* Persisted anomalies from invoice_anomalies table */}
+                  {persistedAnomalies.length > 0 && (
+                    <div style={{ marginTop: '16px' }}>
+                      <p style={{ fontSize: '12px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
+                        Detected anomalies ({persistedAnomalies.length})
+                      </p>
+                      {persistedAnomalies.map((a) => {
+                        const sev = a.severity ?? 'medium';
+                        const cfg = SEVERITY[sev as keyof typeof SEVERITY] || SEVERITY.medium;
+                        return (
+                          <div
+                            key={a.id}
+                            style={{
+                              background: cfg.bg,
+                              border: `1px solid ${cfg.border}`,
+                              borderRadius: '8px',
+                              padding: '10px 12px',
+                              marginBottom: '8px',
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 700, color: cfg.text }}>
+                                {a.flag_code?.replace(/_/g, ' ')}
+                              </span>
+                              <span style={{ fontSize: '10px', color: cfg.text }}>{a.status}</span>
+                            </div>
+                            <p style={{ fontSize: '12px', color: cfg.text, margin: '4px 0 0' }}>{a.flag_reason}</p>
+                            {a.status === 'open' || a.status === 'investigating' ? (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={anomalyActionLoading}
+                                  onClick={() => void handleAnomalyAction(a.id, 'investigating')}
+                                >
+                                  Investigate
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={anomalyActionLoading}
+                                  onClick={() => void handleAnomalyAction(a.id, 'false_positive')}
+                                >
+                                  Mark False Positive
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  disabled={anomalyActionLoading}
+                                  onClick={() => void handleAnomalyEscalate(a)}
+                                >
+                                  Escalate to CFO
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2346,19 +2518,19 @@ export function InvoiceDetailModal({
               <CardContent className="space-y-4 pt-4">
                 <ul className="space-y-2 text-sm">
                   <li className="flex gap-2">
-                    <span className="w-5 shrink-0">{invoice.po_id || invoice.po_number ? 'âœ“' : 'âœ—'}</span>
+                    <span className="w-5 shrink-0">{invoice.po_id || invoice.po_number ? '✓' : '✗'}</span>
                     <span>
                       {invoice.po_id || invoice.po_number ? 'PO matched' : 'No PO found'}{' '}
                       {invoice.po_number && (
                         <span className="text-gray-700">
-                          {invoice.po_number} Â· {formatCurrency(invoice.po_amount ?? 0, invoice.currency || 'USD')}
+                          {invoice.po_number} · {formatCurrency(invoice.po_amount ?? 0, invoice.currency || 'USD')}
                         </span>
                       )}
                     </span>
                   </li>
                   <li className="flex gap-2">
                     <span className="w-5 shrink-0">
-                      {invoice.match_status === 'three_way_matched' || (invoice.grn_amount ?? 0) > 0 ? 'âœ“' : 'â€”'}
+                      {invoice.match_status === 'three_way_matched' || (invoice.grn_amount ?? 0) > 0 ? '✓' : '—'}
                     </span>
                     <span>
                       {invoice.match_status === 'three_way_matched' || (invoice.grn_amount ?? 0) > 0
@@ -2367,14 +2539,14 @@ export function InvoiceDetailModal({
                       {(invoice.grn_amount ?? 0) > 0 && (
                         <span className="text-gray-700">
                           {' '}
-                          Â· {formatCurrency(invoice.grn_amount ?? 0, invoice.currency || 'USD')}
+                          · {formatCurrency(invoice.grn_amount ?? 0, invoice.currency || 'USD')}
                         </span>
                       )}
                     </span>
                   </li>
                   <li className="flex gap-2">
                     <span className="w-5 shrink-0">
-                      {invoice.match_status === 'mismatch' ? 'âœ—' : invoice.po_amount != null ? 'âœ“' : 'â€”'}
+                      {invoice.match_status === 'mismatch' ? '✗' : invoice.po_amount != null ? '✓' : '—'}
                     </span>
                     <span>
                       {invoice.match_status === 'mismatch' ? 'Amount variance' : 'Amount vs PO'}{' '}
@@ -2387,8 +2559,8 @@ export function InvoiceDetailModal({
                     </span>
                   </li>
                   <li className="flex gap-2">
-                    <span className="w-5 shrink-0">â€¢</span>
-                    <span className="text-gray-700">Vendor: {invoice.vendor_name || 'â€”'}</span>
+                    <span className="w-5 shrink-0">•</span>
+                    <span className="text-gray-700">Vendor: {invoice.vendor_name || '—'}</span>
                   </li>
                 </ul>
 
@@ -2417,9 +2589,9 @@ export function InvoiceDetailModal({
 
                 {invoice.approval_status === 'approved' && invoice.auto_matched && (
                   <p className="text-sm font-semibold text-green-800">
-                    AUTO-APPROVED Â· system match
+                    AUTO-APPROVED · system match
                     {invoice.match_attempted_at &&
-                      ` Â· ${format(new Date(invoice.match_attempted_at), 'dd MMM yyyy HH:mm')}`}
+                      ` · ${format(new Date(invoice.match_attempted_at), 'dd MMM yyyy HH:mm')}`}
                   </p>
                 )}
 
@@ -2452,8 +2624,8 @@ export function InvoiceDetailModal({
                     <p className="text-xs font-semibold text-gray-600">Manual receipt confirmation (optional)</p>
                     {invoice.grn_confirmed ? (
                       <p className="text-xs text-green-800">
-                        Confirmed by {invoice.grn_confirmed_by ?? 'â€”'} on{' '}
-                        {invoice.grn_confirmed_at ? format(new Date(invoice.grn_confirmed_at), 'PPp') : 'â€”'}
+                        Confirmed by {invoice.grn_confirmed_by ?? '—'} on{' '}
+                        {invoice.grn_confirmed_at ? format(new Date(invoice.grn_confirmed_at), 'PPp') : '—'}
                       </p>
                     ) : (
                       <>
@@ -2493,7 +2665,7 @@ export function InvoiceDetailModal({
 
                 {invoice.match_status === 'partial' && (
                   <div className="rounded-md border border-amber-100 bg-amber-50/40 p-3 text-sm text-amber-950 space-y-2">
-                    <p>PO linked â€” waiting for a confirmed goods receipt or further review.</p>
+                    <p>PO linked — waiting for a confirmed goods receipt or further review.</p>
                     {invoice.po_id && (
                       <Button type="button" size="sm" variant="secondary" asChild>
                         <Link to={`/goods-receipts?poId=${invoice.po_id}`}>Create GRN</Link>
@@ -2522,7 +2694,7 @@ export function InvoiceDetailModal({
                               const list = forVendor.length > 0 ? forVendor : purchaseOrders;
                               return list.map((po) => (
                                 <SelectItem key={po.id} value={po.po_number}>
-                                  {po.po_number} â€” {formatCurrency(Number(po.po_amount), invoice.currency || 'USD')}
+                                  {po.po_number} — {formatCurrency(Number(po.po_amount), invoice.currency || 'USD')}
                                 </SelectItem>
                               ));
                             })()
@@ -2534,7 +2706,7 @@ export function InvoiceDetailModal({
                         disabled={matchLoading || !selectedPoNumber}
                         onClick={handleLinkPoAndRunMatch}
                       >
-                        {matchLoading ? 'Runningâ€¦' : 'Link PO & Run Match'}
+                        {matchLoading ? 'Running…' : 'Link PO & Run Match'}
                       </Button>
                     </div>
                   </div>
@@ -2556,11 +2728,11 @@ export function InvoiceDetailModal({
                     <p className="mt-2 text-amber-900">
                       Suggested:{' '}
                       <span className="font-mono font-semibold">{invoice.gl_account_code ?? invoice.gl_code}</span>
-                      {' â€” '}
+                      {' — '}
                       <span className="font-medium">{invoice.gl_account_name ?? invoice.gl_name}</span>
                       {invoice.gl_suggestion_source === 'standard_fallback'
                         ? ' (aligned with your accounting standard)'
-                        : ' (AI suggestion â€” please verify)'}
+                        : ' (AI suggestion — please verify)'}
                       {invoice.gl_standard_ref ? (
                         <span className="block mt-1 text-xs">Standard reference: {invoice.gl_standard_ref}</span>
                       ) : null}
@@ -2581,7 +2753,7 @@ export function InvoiceDetailModal({
                 {(invoice.gl_auto_suggested && (invoice.gl_account_code || invoice.gl_code)) ? (
                   <div className="rounded-lg border-2 border-blue-200 bg-blue-50 p-4">
                     <p className="text-xs font-medium text-blue-800 mb-2">
-                      {invoice.gl_source === 'company_coa' ? 'ðŸ¢ From your COA' : 'ðŸ¤– Auto-suggested from IFRS category'}
+                      {invoice.gl_source === 'company_coa' ? '🏢 From your COA' : '🤖 Auto-suggested from IFRS category'}
                     </p>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-600">GL Code:</span>
@@ -2589,7 +2761,7 @@ export function InvoiceDetailModal({
                     </div>
                     <div className="flex justify-between text-sm mt-1">
                       <span className="text-gray-600">GL Name:</span>
-                      <span className="font-medium text-blue-900">{invoice.gl_account_name ?? invoice.gl_name ?? 'â€”'}</span>
+                      <span className="font-medium text-blue-900">{invoice.gl_account_name ?? invoice.gl_name ?? '—'}</span>
                     </div>
                   </div>
                 ) : (invoice.gl_code || invoice.gl_account_code) ? (
@@ -2601,14 +2773,14 @@ export function InvoiceDetailModal({
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-600">GL Name:</span>
-                        <span className="font-medium">{invoice.gl_account_name ?? invoice.gl_name ?? 'â€”'}</span>
+                        <span className="font-medium">{invoice.gl_account_name ?? invoice.gl_name ?? '—'}</span>
                       </div>
                       {invoice.gl_source && (
                         <p
                           className="text-xs font-semibold mt-1"
                           style={{ color: invoice.gl_source === 'company_coa' ? '#0e9f6e' : '#6b7280' }}
                         >
-                          {invoice.gl_source === 'company_coa' ? 'ðŸ¢ From your COA' : 'ðŸ¤– IFRS Auto'}
+                          {invoice.gl_source === 'company_coa' ? '🏢 From your COA' : '🤖 IFRS Auto'}
                         </p>
                       )}
                     </div>
@@ -2666,7 +2838,7 @@ export function InvoiceDetailModal({
                     <SelectContent>
                       {glAccounts.map((account) => (
                         <SelectItem key={account.id} value={account.gl_code}>
-                          {account.gl_code} â€” {account.gl_name}
+                          {account.gl_code} — {account.gl_name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -2705,13 +2877,13 @@ export function InvoiceDetailModal({
                               {log.field_changed}
                               {log.old_value && log.new_value && (
                                 <span>
-                                  : {log.old_value} â†’ {log.new_value}
+                                  : {log.old_value} → {log.new_value}
                                 </span>
                               )}
                             </p>
                           )}
                           <p className="mt-1 text-xs text-gray-500">
-                            {log.user_name} â€¢{' '}
+                            {log.user_name} •{' '}
                             {format(new Date(log.created_at), 'MMM dd, yyyy HH:mm')}
                           </p>
                         </div>
@@ -2771,13 +2943,13 @@ export function InvoiceDetailModal({
                       </div>
                       <p className="text-xs text-gray-500">
                         Recon period (from invoice date):{' '}
-                        <span className="font-mono">{invoicePeriodFromDate(invoice.invoice_date) || 'â€”'}</span>
+                        <span className="font-mono">{invoicePeriodFromDate(invoice.invoice_date) || '—'}</span>
                       </p>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {isUAE ? (
                         <div className="space-y-4">
-                          <p className="text-xs text-gray-600">UAE VAT fields â€” TRN validation per Federal Decree No. 8 of 2017.</p>
+                          <p className="text-xs text-gray-600">UAE VAT fields — TRN validation per Federal Decree No. 8 of 2017.</p>
                           <div className="grid gap-4 md:grid-cols-2">
                             <div className="space-y-2 md:col-span-2">
                               <Label>Vendor TRN (on invoice)</Label>
@@ -2789,7 +2961,7 @@ export function InvoiceDetailModal({
                               />
                               {((editedInvoice as Record<string, unknown>).vendor_trn as string) && (
                                 <p className={`text-xs font-medium ${validateTaxId((editedInvoice as Record<string, unknown>).vendor_trn as string, 'uae') ? 'text-green-700' : 'text-red-600'}`}>
-                                  {validateTaxId((editedInvoice as Record<string, unknown>).vendor_trn as string, 'uae') ? 'âœ“ Valid TRN' : 'âœ— Must be 15 digits starting with 1'}
+                                  {validateTaxId((editedInvoice as Record<string, unknown>).vendor_trn as string, 'uae') ? '✓ Valid TRN' : '✗ Must be 15 digits starting with 1'}
                                 </p>
                               )}
                             </div>
@@ -2834,7 +3006,7 @@ export function InvoiceDetailModal({
                                 toast({ title: `GulfTax: ${result.treatment} (${result.applicable_rate}%)`, description: result.reason });
                               }}
                             >
-                              ðŸ” Validate in GulfTax AI
+                              🔍 Validate in GulfTax AI
                             </Button>
                           </div>
                         </div>
@@ -2945,7 +3117,7 @@ export function InvoiceDetailModal({
                     </CardHeader>
                     <CardContent>
                       {activityLoading ? (
-                        <p className="text-sm text-gray-500">Loadingâ€¦</p>
+                        <p className="text-sm text-gray-500">Loading…</p>
                       ) : activityEntries.length === 0 ? (
                         <p className="text-center text-sm text-gray-500 py-6">No activity recorded yet</p>
                       ) : (
@@ -3013,7 +3185,7 @@ export function InvoiceDetailModal({
     <Dialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>âš ï¸ Possible Duplicate Invoice</DialogTitle>
+          <DialogTitle>⚠️ Possible Duplicate Invoice</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 text-sm">
           {duplicateAlert?.flagged && (
@@ -3027,7 +3199,7 @@ export function InvoiceDetailModal({
               <div className="space-y-1.5">
                 {duplicateAlert!.potentialMatches.map((m) => (
                   <div key={m.id} className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
-                    <span className="font-semibold">{m.invoice_number}</span> â€” {m.vendor_name} â€” {m.currency} {Number(m.total_amount).toLocaleString()} â€” {m.invoice_date} â€” <span className="italic">{m.status}</span>
+                    <span className="font-semibold">{m.invoice_number}</span> — {m.vendor_name} — {m.currency} {Number(m.total_amount).toLocaleString()} — {m.invoice_date} — <span className="italic">{m.status}</span>
                   </div>
                 ))}
               </div>
@@ -3054,9 +3226,9 @@ export function InvoiceDetailModal({
         </DialogHeader>
         <p className="text-sm text-muted-foreground border-b pb-3">
           <span className="font-mono font-medium">{invoice.invoice_number}</span>
-          {' Â· '}
+          {' · '}
           {invoice.vendor_name}
-          {' Â· '}
+          {' · '}
           {formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')}
         </p>
         <div className="space-y-3 py-3">
@@ -3119,7 +3291,7 @@ export function InvoiceDetailModal({
           </div>
           <div className="space-y-2">
             <Label>
-              Payment Proof <span className="text-muted-foreground font-normal">(screenshot / receipt â€” optional)</span>
+              Payment Proof <span className="text-muted-foreground font-normal">(screenshot / receipt — optional)</span>
             </Label>
             <input
               type="file"
@@ -3130,7 +3302,7 @@ export function InvoiceDetailModal({
             {paymentProofFile && (
               <p className="text-xs text-gray-500">Selected: {paymentProofFile.name}</p>
             )}
-            {paymentProofUploading && <p className="text-xs text-blue-600">Uploading proofâ€¦</p>}
+            {paymentProofUploading && <p className="text-xs text-blue-600">Uploading proof…</p>}
           </div>
           {invoice.payment_proof_url && (
             <div className="text-sm">
@@ -3149,7 +3321,7 @@ export function InvoiceDetailModal({
             onClick={() => void confirmMarkPaid()}
             disabled={markPaidSaving}
           >
-            {markPaidSaving ? 'Savingâ€¦' : 'Confirm payment'}
+            {markPaidSaving ? 'Saving…' : 'Confirm payment'}
           </Button>
         </div>
       </DialogContent>
@@ -3157,4 +3329,3 @@ export function InvoiceDetailModal({
     </>
   );
 }
-

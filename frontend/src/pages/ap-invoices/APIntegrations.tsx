@@ -1,149 +1,212 @@
 ﻿/**
- * APIntegrations.tsx â€” Zoho Books + QuickBooks integration hub
- * Connect, sync, and manage external accounting integrations
+ * APIntegrations.tsx — Zoho Books + QuickBooks integration hub
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link2, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Zap, Settings, ArrowRight, Database } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  disconnectIntegration,
+  getIntegrationStatuses,
+  getQuickBooksOAuthUrl,
+  getZohoOAuthUrl,
+  triggerIntegrationSync,
+  type IntegrationId,
+  type IntegrationStatus,
+} from '../../lib/ap-invoice/apIntegrationsService';
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 
-type Integration = {
-  id: string;
+const CORE_INTEGRATIONS: Array<{
+  id: IntegrationId;
   name: string;
   logo: string;
   description: string;
-  connected: boolean;
-  lastSync?: string;
-  syncCount?: number;
-  status?: 'active' | 'paused' | 'error';
   color: string;
   features: string[];
   connectUrl: string;
-};
-
-const INTEGRATIONS: Integration[] = [
+  settingsPath: string;
+}> = [
   {
     id: 'zoho',
     name: 'Zoho Books',
-    logo: 'ðŸŸ ',
+    logo: '🟠',
     description: 'Sync AP invoices, vendor payments, and purchase orders with Zoho Books.',
-    connected: false,
     color: 'from-orange-900/40 to-orange-800/20 border-orange-700/50',
-    features: ['Vendor sync', 'Invoice push', 'Payment reconciliation', 'GSTIN validation', 'Real-time webhooks'],
-    connectUrl: '/uae-accounting/connect/zoho',
+    features: ['Vendor sync', 'Invoice push', 'Payment reconciliation', 'TRN validation', 'OAuth'],
+    connectUrl: '/ap-invoices/integrations',
+    settingsPath: '/ap-invoices/settings',
   },
   {
     id: 'quickbooks',
     name: 'QuickBooks Online',
-    logo: 'ðŸŸ¢',
+    logo: '🟢',
     description: 'Two-way sync with QuickBooks: push approved invoices, pull vendor bills.',
-    connected: false,
     color: 'from-green-900/40 to-green-800/20 border-green-700/50',
-    features: ['Vendor bills import', 'AP aging sync', 'GL code mapping', 'Multi-currency', 'Auto-reconciliation'],
-    connectUrl: '/uae-accounting/connect/qbo',
-  },
-  {
-    id: 'xero',
-    name: 'Xero',
-    logo: 'ðŸ”µ',
-    description: 'Import bills from Xero and push approved payments back automatically.',
-    connected: false,
-    color: 'from-blue-900/40 to-blue-800/20 border-blue-700/50',
-    features: ['Bill import', 'Contact sync', 'Bank feed', 'Multi-currency', 'IFRS tagging'],
-    connectUrl: '#',
-  },
-  {
-    id: 'tally',
-    name: 'Tally Prime',
-    logo: 'ðŸŸ£',
-    description: 'Export approved invoices to Tally in standard XML/JSON voucher format.',
-    connected: false,
-    color: 'from-purple-900/40 to-purple-800/20 border-purple-700/50',
-    features: ['Voucher export', 'Ledger mapping', 'GST integration', 'TDS handling', 'Batch export'],
-    connectUrl: '#',
+    features: ['Vendor bills import', 'AP aging sync', 'GL code mapping', 'Multi-currency', 'OAuth'],
+    connectUrl: '/ap-invoices/integrations',
+    settingsPath: '/ap-invoices/settings',
   },
 ];
 
 type SyncLog = { time: string; action: string; count: number; status: 'success' | 'error' };
 
+function formatSyncTime(iso: string | null): string {
+  if (!iso) return 'Never';
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
 export default function APIntegrations() {
-  const [connections, setConnections] = useState<Record<string, boolean>>({});
-  const [syncStatus, setSyncStatus]   = useState<Record<string, SyncStatus>>({});
-  const [syncLogs, setSyncLogs]       = useState<SyncLog[]>([]);
-  const [selected, setSelected]       = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [statuses, setStatuses] = useState<IntegrationStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState<Record<string, SyncStatus>>({});
+  const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState<IntegrationId | null>(null);
 
-  const isConnected = (id: string) => connections[id] ?? INTEGRATIONS.find(i => i.id === id)?.connected ?? false;
-
-  const handleConnect = (intg: Integration) => {
-    if (intg.connectUrl !== '#') {
-      window.location.href = intg.connectUrl;
-      return;
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const s = await getIntegrationStatuses();
+      setStatuses(s);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
     }
-    // Simulate connect for other integrations
-    setConnections(p => ({ ...p, [intg.id]: true }));
-    setSyncLogs(p => [{
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    if (connected) {
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: `${connected} connected via OAuth`,
+        count: 0,
+        status: 'success',
+      }, ...p]);
+      void refresh();
+      setSearchParams({}, { replace: true });
+    } else if (error) {
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: `OAuth failed: ${error}`,
+        count: 0,
+        status: 'error',
+      }, ...p]);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, refresh, setSearchParams]);
+
+  const statusFor = (id: IntegrationId) => statuses.find((s) => s.id === id);
+
+  const handleConnect = async (id: IntegrationId) => {
+    setConnecting(id);
+    try {
+      const url = id === 'zoho' ? await getZohoOAuthUrl() : await getQuickBooksOAuthUrl();
+      window.location.href = url;
+    } catch (e) {
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: e instanceof Error ? e.message : 'OAuth failed — add client credentials in Settings first',
+        count: 0,
+        status: 'error',
+      }, ...p]);
+      setConnecting(null);
+    }
+  };
+
+  const handleDisconnect = async (id: IntegrationId) => {
+    const st = statusFor(id);
+    if (!window.confirm('Disconnect this integration?')) return;
+    await disconnectIntegration(id, st?.connectionId ?? null);
+    await refresh();
+    setSyncLogs((p) => [{
       time: new Date().toLocaleTimeString(),
-      action: `Connected to ${intg.name}`,
+      action: `Disconnected ${id}`,
       count: 0,
       status: 'success',
     }, ...p]);
   };
 
-  const handleDisconnect = (id: string) => {
-    if (!window.confirm('Disconnect this integration?')) return;
-    setConnections(p => ({ ...p, [id]: false }));
+  const handleSync = async (id: IntegrationId) => {
+    const st = statusFor(id);
+    if (!st?.connected) return;
+    setSyncStatus((p) => ({ ...p, [id]: 'syncing' }));
+    try {
+      const result = await triggerIntegrationSync(id, st.connectionId);
+      setSyncStatus((p) => ({ ...p, [id]: result.ok ? 'success' : 'error' }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: result.message,
+        count: result.count ?? 0,
+        status: result.ok ? 'success' : 'error',
+      }, ...p.slice(0, 19)]);
+      await refresh();
+    } catch (e) {
+      setSyncStatus((p) => ({ ...p, [id]: 'error' }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: e instanceof Error ? e.message : 'Sync failed',
+        count: 0,
+        status: 'error',
+      }, ...p]);
+    }
+    setTimeout(() => setSyncStatus((p) => ({ ...p, [id]: 'idle' })), 3000);
   };
 
-  const handleSync = async (intg: Integration) => {
-    setSyncStatus(p => ({ ...p, [intg.id]: 'syncing' }));
-    await new Promise(r => setTimeout(r, 2000));
-    const ok = Math.random() > 0.2;
-    setSyncStatus(p => ({ ...p, [intg.id]: ok ? 'success' : 'error' }));
-    setSyncLogs(p => [{
-      time: new Date().toLocaleTimeString(),
-      action: `${intg.name} sync â€” ${ok ? 'invoices pulled' : 'failed'}`,
-      count: ok ? Math.floor(Math.random() * 20 + 5) : 0,
-      status: ok ? 'success' : 'error',
-    }, ...p.slice(0, 19)]);
-    setTimeout(() => setSyncStatus(p => ({ ...p, [intg.id]: 'idle' })), 3000);
-  };
+  const connectedCount = statuses.filter((s) => s.connected).length;
+  const lastSync = statuses
+    .map((s) => s.lastSyncAt)
+    .filter(Boolean)
+    .sort()
+    .reverse()[0];
 
   return (
     <div className="p-6 space-y-6 min-h-screen bg-gray-950">
-      {/* Header */}
       <div>
         <h1 className="text-xl font-bold text-white flex items-center gap-2">
           <Link2 className="w-5 h-5 text-blue-400" /> Integrations
         </h1>
-        <p className="text-slate-400 text-sm mt-0.5">Connect AP InvoiceFlow with your accounting software</p>
+        <p className="text-slate-400 text-sm mt-0.5">Connect AP InvoiceFlow with Zoho Books or QuickBooks Online</p>
       </div>
 
-      {/* Status bar */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
           <p className="text-xs text-slate-400">Connected</p>
-          <p className="text-xl font-bold text-green-400 mt-1">{Object.values(connections).filter(Boolean).length}</p>
+          <p className="text-xl font-bold text-green-400 mt-1">{loading ? '…' : connectedCount}</p>
         </div>
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
           <p className="text-xs text-slate-400">Available</p>
-          <p className="text-xl font-bold text-white mt-1">{INTEGRATIONS.length}</p>
+          <p className="text-xl font-bold text-white mt-1">{CORE_INTEGRATIONS.length}</p>
         </div>
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
           <p className="text-xs text-slate-400">Last Sync</p>
-          <p className="text-sm font-bold text-slate-300 mt-1">{syncLogs[0]?.time ?? 'Never'}</p>
+          <p className="text-sm font-bold text-slate-300 mt-1">{formatSyncTime(lastSync ?? null)}</p>
         </div>
       </div>
 
-      {/* Integration cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {INTEGRATIONS.map(intg => {
-          const connected = isConnected(intg.id);
+        {CORE_INTEGRATIONS.map((intg) => {
+          const st = statusFor(intg.id);
+          const connected = st?.connected ?? false;
           const sStatus = syncStatus[intg.id] ?? 'idle';
           const isSelected = selected === intg.id;
 
           return (
-            <div key={intg.id}
-              className={`bg-gradient-to-br border rounded-xl overflow-hidden transition-all ${intg.color} ${isSelected ? 'ring-2 ring-blue-500' : ''}`}>
+            <div
+              key={intg.id}
+              className={`bg-gradient-to-br border rounded-xl overflow-hidden transition-all ${intg.color} ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
+            >
               <div className="p-5">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
@@ -161,74 +224,88 @@ export default function APIntegrations() {
                           </span>
                         )}
                       </div>
+                      {st?.lastSyncAt && (
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          Last sync: {formatSyncTime(st.lastSyncAt)}
+                          {st.lastSyncStatus !== 'never' && ` (${st.lastSyncStatus})`}
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <button onClick={() => setSelected(isSelected ? null : intg.id)}
-                    className="p-1.5 rounded-lg bg-black/20 hover:bg-black/40 text-slate-400 hover:text-white">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(isSelected ? null : intg.id)}
+                    className="p-1.5 rounded-lg bg-black/20 hover:bg-black/40 text-slate-400 hover:text-white"
+                  >
                     <Settings className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
                 <p className="text-xs text-slate-300 mb-4">{intg.description}</p>
+                {st?.message && !connected && (
+                  <p className="text-[11px] text-amber-300 mb-3">{st.message}</p>
+                )}
 
-                {/* Features */}
                 <div className="flex flex-wrap gap-1.5 mb-4">
-                  {intg.features.map(f => (
+                  {intg.features.map((f) => (
                     <span key={f} className="px-2 py-0.5 rounded-full bg-black/30 text-slate-300 text-[10px]">{f}</span>
                   ))}
                 </div>
 
-                {/* Actions */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {connected ? (
                     <>
                       <button
-                        onClick={() => handleSync(intg)}
+                        type="button"
+                        onClick={() => void handleSync(intg.id)}
                         disabled={sStatus === 'syncing'}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium">
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium"
+                      >
                         <RefreshCw className={`w-3.5 h-3.5 ${sStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                        {sStatus === 'syncing' ? 'Syncingâ€¦' : sStatus === 'success' ? 'âœ“ Synced' : sStatus === 'error' ? 'âœ— Failed' : 'Sync Now'}
+                        {sStatus === 'syncing' ? 'Syncing…' : sStatus === 'success' ? 'Synced' : sStatus === 'error' ? 'Failed' : 'Sync Now'}
                       </button>
                       <button
-                        onClick={() => handleDisconnect(intg.id)}
-                        className="px-3 py-1.5 rounded-lg bg-black/30 hover:bg-red-900/50 text-slate-300 hover:text-red-300 text-xs">
+                        type="button"
+                        onClick={() => void handleDisconnect(intg.id)}
+                        className="px-3 py-1.5 rounded-lg bg-black/30 hover:bg-red-900/50 text-slate-300 hover:text-red-300 text-xs"
+                      >
                         Disconnect
                       </button>
                     </>
                   ) : (
-                    <button
-                      onClick={() => handleConnect(intg)}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold">
-                      <Zap className="w-3.5 h-3.5" />
-                      Connect {intg.name}
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => void handleConnect(intg.id)}
+                        disabled={connecting === intg.id}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold disabled:opacity-50"
+                      >
+                        <Zap className="w-3.5 h-3.5" />
+                        {connecting === intg.id ? 'Redirecting…' : 'Connect via OAuth'}
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                      <a
+                        href={intg.settingsPath}
+                        className="px-3 py-1.5 rounded-lg bg-black/30 text-slate-300 hover:text-white text-xs"
+                      >
+                        Or paste credentials in Settings
+                      </a>
+                    </>
                   )}
-                  {intg.connectUrl !== '#' && (
-                    <a href={intg.connectUrl}
-                      className="p-1.5 rounded-lg bg-black/20 hover:bg-black/40 text-slate-400 hover:text-white">
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  )}
+                  <a
+                    href={intg.connectUrl}
+                    className="p-1.5 rounded-lg bg-black/20 hover:bg-black/40 text-slate-400 hover:text-white"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
                 </div>
 
-                {/* Expanded settings panel */}
-                {isSelected && connected && (
-                  <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
-                    <p className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Sync Settings</p>
-                    {[
-                      { label: 'Auto-sync on invoice approval', value: true },
-                      { label: 'Push payments to accounting', value: true },
-                      { label: 'Import vendor bills', value: false },
-                      { label: 'Sync GL account codes', value: true },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="flex items-center justify-between">
-                        <span className="text-xs text-slate-300">{label}</span>
-                        <div className={`w-8 h-4 rounded-full transition-colors cursor-pointer ${value ? 'bg-blue-600' : 'bg-slate-700'}`}>
-                          <div className={`w-3 h-3 rounded-full bg-white mt-0.5 transition-transform ${value ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                        </div>
-                      </div>
-                    ))}
+                {isSelected && (
+                  <div className="mt-4 pt-4 border-t border-white/10 space-y-2 text-xs text-slate-300">
+                    <p className="font-semibold uppercase tracking-wide">Connection details</p>
+                    <p>Configured: {st?.configured ? 'Yes (Settings)' : 'No'}</p>
+                    <p>ERP connection ID: {st?.connectionId ?? '—'}</p>
+                    <p>Status: {st?.lastSyncStatus ?? 'never'}</p>
                   </div>
                 )}
               </div>
@@ -237,7 +314,6 @@ export default function APIntegrations() {
         })}
       </div>
 
-      {/* Sync log */}
       {syncLogs.length > 0 && (
         <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
@@ -263,4 +339,3 @@ export default function APIntegrations() {
     </div>
   );
 }
-
