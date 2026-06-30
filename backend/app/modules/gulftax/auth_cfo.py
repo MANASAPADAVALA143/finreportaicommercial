@@ -1,11 +1,12 @@
 """CFO auth adapter for ported GulfTax (uaetax) routers.
 
 Maps FinReportAI X-Company-Id (UUID string) + X-Workspace-Id to the
-integer company_id used by the uaetax SQLAlchemy schema.
+string company_id used by the uaetax SQLAlchemy schema.
 """
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException
@@ -22,17 +23,15 @@ async def get_current_company_id(
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
     x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
     db: Session = Depends(_ported_db),
-) -> int:
-    """Resolve CFO company/workspace headers to uaetax integer company_id."""
+) -> str:
+    """Resolve CFO company/workspace headers to uaetax company_id."""
     from app.modules.gulftax.ported.models import Company
 
-    # Legacy uaetax numeric header
-    if x_company_id and x_company_id.isdigit():
-        cid = int(x_company_id)
-        if db.query(Company).filter(Company.id == cid).first():
-            return cid
+    cid = (x_company_id or "").strip()
+    if cid and db.query(Company).filter(Company.id == cid).first():
+        return cid
 
-    external = (x_company_id or "").strip()
+    external = cid
     workspace = (x_workspace_id or "").strip()
 
     if external:
@@ -48,6 +47,7 @@ async def get_current_company_id(
     # Auto-provision a company row for this workspace/company pair
     name = f"Workspace {workspace[:8]}" if workspace else "FinReportAI Company"
     row = Company(
+        id=str(uuid.uuid4()),
         name=name,
         trade_license_number=f"FR-{workspace[:8] or 'demo'}",
         trn=f"100{abs(hash(external or workspace or 'demo')) % 10**12:012d}"[:15],

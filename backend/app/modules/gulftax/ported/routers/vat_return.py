@@ -58,7 +58,7 @@ class VATReturnResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     return_id: int
-    company_id: int
+    company_id: str
     period_start: date
     period_end: date
     box1_standard_rated_supplies: float
@@ -453,7 +453,7 @@ def generate_excel_report(vat_return: VATReturn, company: Company, transactions:
 @router.post("/generate-return", response_model=VATReturnResponse)
 async def generate_return(
     request: GenerateReturnRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -540,7 +540,7 @@ async def generate_return(
 @router.get("/returns/{return_id}/pdf")
 async def get_return_pdf(
     return_id: int,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Download VAT return PDF"""
@@ -573,7 +573,7 @@ async def get_return_pdf(
 @router.get("/returns/{return_id}/excel")
 async def get_return_excel(
     return_id: int,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Download VAT return Excel"""
@@ -606,7 +606,7 @@ async def get_return_excel(
 @router.post("/returns/{return_id}/submit", response_model=VATSubmitResponse)
 async def submit_vat_return(
     return_id: int,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -666,7 +666,7 @@ async def submit_vat_return(
 
 class VATAssessedPayload(BaseModel):
     """Inbound VAT assessment payload from n8n UAE_VAT_Return_Prep workflow."""
-    company_id: int
+    company_id: str
     period: str  # e.g. "2024-Q1", "2024-01", "2024"
     fiscal_year: Optional[str] = None
     period_start: Optional[date] = None
@@ -815,7 +815,7 @@ async def inbound_vat_assessed(
 
 @router.get("/returns")
 async def list_vat_returns(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -845,7 +845,7 @@ async def list_vat_returns(
 @router.post("/reconcile/{vat_return_id}", response_model=ReconciliationResponse)
 async def reconcile_return(
     vat_return_id: int,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """

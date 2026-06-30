@@ -11,7 +11,7 @@ class Company(Base):
     """Company/Entity model"""
     __tablename__ = "companies"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String(255), primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     trade_license_number = Column(String(100), unique=True, index=True)
     trn = Column(String(50), unique=True, index=True)  # Tax Registration Number
@@ -28,6 +28,8 @@ class Company(Base):
     vat_registered_date = Column(Date, nullable=True)
     plan = Column(String(50), default="starter", nullable=True)
     settings = Column(JSON, nullable=True, default=dict)
+    external_id = Column(String(64), nullable=True, index=True)
+    workspace_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     transactions = relationship("Transaction", back_populates="company")
@@ -40,12 +42,12 @@ class Company(Base):
 
 
 class UserCompany(Base):
-    """Links Supabase auth users (UUID string) to integer-PK companies."""
+    """Links Supabase auth users (UUID string) to companies."""
     __tablename__ = "user_companies"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String(255), nullable=False, index=True)   # Supabase UUID as string
-    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False, default="member")  # owner / admin / member
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -57,7 +59,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     date = Column(Date, nullable=False, index=True)
     description = Column(Text, nullable=False)
     amount_aed = Column(Float, nullable=False)
@@ -89,7 +91,7 @@ class VATReturn(Base):
     __tablename__ = "vat_returns"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     period_start = Column(Date, nullable=False)
     period_end = Column(Date, nullable=False)
     box1_standard_rated_supplies = Column(Float, default=0.0)
@@ -120,7 +122,7 @@ class ReconciliationResult(Base):
     __tablename__ = "reconciliation_results"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     vat_return_id = Column(Integer, ForeignKey("vat_returns.id"), nullable=True, index=True)
     total_invoices_aed = Column(Float, default=0.0)
     total_output_vat_aed = Column(Float, default=0.0)
@@ -139,7 +141,7 @@ class EInvoicingAssessment(Base):
     __tablename__ = "einvoicing_assessments"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     assessed_at = Column(DateTime(timezone=True), nullable=False, index=True)
     overall_score = Column(Integer, nullable=True)
     readiness_level = Column(String(20), nullable=True)  # not_ready | partial | ready
@@ -156,7 +158,7 @@ class CTReturn(Base):
     __tablename__ = "ct_returns"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     tax_period_start = Column(Date, nullable=False)
     tax_period_end = Column(Date, nullable=False)
     accounting_profit = Column(Numeric(15, 2), nullable=True)
@@ -192,7 +194,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=True, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=True, index=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     actor = Column(String(255), nullable=False, default="system")
     entity_type = Column(String(50), nullable=True)
@@ -211,7 +213,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     filename = Column(String(255), nullable=True)
     vendor_name = Column(String(255), nullable=True, index=True)
     vendor_trn = Column(String(50), nullable=True)
@@ -242,7 +244,7 @@ class GLImportResult(Base):
     __tablename__ = "gl_import_results"
 
     id = Column(Integer, primary_key=True, index=True)
-    company_id = Column(Integer, nullable=True, index=True)
+    company_id = Column(String(255), nullable=True, index=True)
     parse_date = Column(DateTime(timezone=True), nullable=False)
     total_rows = Column(Integer, default=0)
     standard_rated = Column(Integer, default=0)

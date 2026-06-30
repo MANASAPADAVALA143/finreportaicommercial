@@ -24,7 +24,7 @@ router = APIRouter()
 
 class EInvoicingAssessmentPayload(BaseModel):
     """Inbound payload contract from n8n readiness workflow."""
-    company_id: int
+    company_id: str
     assessed_at: datetime
     overall_score: int
     readiness_level: Literal["not_ready", "partial", "ready"]
@@ -35,7 +35,7 @@ class EInvoicingAssessmentPayload(BaseModel):
 
 class TriggerPayload(BaseModel):
     """Payload used to manually trigger n8n assessment workflow."""
-    company_id: int
+    company_id: str
     triggered_at: str
 
 
@@ -142,7 +142,7 @@ async def inbound_einvoicing_assessed(
 
 @router.get("/assessments")
 async def list_assessments(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -174,8 +174,8 @@ async def list_assessments(
 @router.post("/trigger")
 @router.post("/trigger/{company_id}")
 async def trigger_einvoicing_assessment(
-    verified_id: int = Depends(get_current_company_id),
-    company_id: int | None = None,
+    verified_id: str = Depends(get_current_company_id),
+    company_id: str | None = None,
 ):
     """Trigger n8n e-invoicing workflow for a company."""
     cid = verified_id
@@ -253,7 +253,7 @@ async def inbound_gl_imported(
 
 @router.get("/gl-imports")
 async def list_gl_imports(
-    verified_company_id: int = Depends(get_current_company_id),
+    verified_company_id: str = Depends(get_current_company_id),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):

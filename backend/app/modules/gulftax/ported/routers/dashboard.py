@@ -44,7 +44,7 @@ def _days_between(d0: date, d1: date) -> int:
 
 @router.get("/summary")
 async def dashboard_summary(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -225,7 +225,7 @@ async def dashboard_summary(
 
 @router.get("/activity")
 async def dashboard_activity(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:

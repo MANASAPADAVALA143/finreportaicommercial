@@ -530,7 +530,7 @@ class SavePdfTransactionsRequest(BaseModel):
 @router.post("/vat/save-pdf-transactions")
 def save_pdf_transactions(
     body: SavePdfTransactionsRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_ported_db),
 ):
     """Save extracted PDF rows to VAT Classifier transaction table."""
@@ -638,7 +638,7 @@ def _checklist_item(
 def fta_audit_checklist(
     period_start: date = Query(...),
     period_end: date = Query(...),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_ported_db),
 ):
     """

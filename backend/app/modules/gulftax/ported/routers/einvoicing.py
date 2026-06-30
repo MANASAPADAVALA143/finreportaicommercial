@@ -49,7 +49,7 @@ class GenerateXmlRequest(BaseModel):
 @router.post("/calculate-phase")
 async def api_calculate_phase(
     body: CalculatePhaseRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Determine e-invoicing phase from annual revenue."""
     return calculate_phase(body.annual_revenue_aed)
@@ -58,7 +58,7 @@ async def api_calculate_phase(
 @router.post("/validate")
 async def api_validate_invoice(
     body: ValidateInvoiceRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Validate invoice fields against PINT AE mandatory requirements."""
     return validate_invoice(
@@ -80,7 +80,7 @@ async def api_validate_invoice(
 async def api_validate_xml_upload(
     file: UploadFile = File(...),
     is_b2b: bool = Form(default=True),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Validate an uploaded UBL XML invoice file."""
     content = await file.read()
@@ -94,9 +94,9 @@ async def api_validate_xml_upload(
 @router.get("/readiness")
 @router.get("/readiness/{company_id}")
 async def api_readiness(
-    auth_company_id: int = Depends(get_current_company_id),
+    auth_company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
-    company_id: int | None = None,
+    company_id: str | None = None,
 ):
     """Run ASP readiness checks for the selected company."""
     cid = company_id if company_id is not None else auth_company_id
@@ -111,7 +111,7 @@ async def api_readiness(
 @router.post("/generate-xml")
 async def api_generate_xml(
     body: GenerateXmlRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Generate PINT AE compliant UBL 2.1 Invoice XML."""
     expected_gross = round(body.net_amount + body.vat_amount, 2)

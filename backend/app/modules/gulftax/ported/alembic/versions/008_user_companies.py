@@ -21,7 +21,7 @@ def upgrade() -> None:
         "user_companies",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.String(length=255), nullable=False),
-        sa.Column("company_id", sa.Integer(), nullable=False),
+        sa.Column("company_id", sa.String(length=255), nullable=False),
         sa.Column("role", sa.String(length=20), nullable=False, server_default="member"),
         sa.Column(
             "created_at",

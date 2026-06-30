@@ -46,7 +46,7 @@ class TPCheckRequest(BaseModel):
 @router.post("/compute")
 async def api_compute_ct(
     body: ComputeCTRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Compute CT liability with mainland, QFZP, and Small Business Relief rules."""
     return compute_ct(
@@ -64,7 +64,7 @@ async def api_compute_ct(
 @router.post("/generate-return")
 async def api_generate_return(
     body: GenerateReturnRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Generate FTA-format CT return draft as PDF."""
@@ -93,7 +93,7 @@ async def api_generate_return(
 @router.post("/tp-check")
 async def api_tp_check(
     body: TPCheckRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
 ):
     """Check if related-party transaction requires TP documentation."""
     return tp_check(

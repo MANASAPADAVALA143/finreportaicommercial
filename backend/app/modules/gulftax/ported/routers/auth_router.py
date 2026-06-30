@@ -1,5 +1,6 @@
 """Auth endpoints — company setup, membership, and settings."""
 import secrets
+import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -51,7 +52,7 @@ class SetupCompanyRequest(BaseModel):
 
 
 class CompanyOut(BaseModel):
-    company_id: int
+    company_id: str
     company_name: str
     trn: Optional[str]
     entity_type: str
@@ -103,6 +104,7 @@ async def setup_company(
     # Create company
     entity_type = body.entity_type or "mainland"
     company = Company(
+        id=str(uuid.uuid4()),
         name=body.company_name,
         trn=body.trn or None,
         trade_license_number=body.trade_licence or None,
@@ -161,7 +163,7 @@ async def my_companies(
 
 
 class CompanyProfileOut(BaseModel):
-    company_id: int
+    company_id: str
     company_name: str
     trn: Optional[str]
     country: str
@@ -205,7 +207,7 @@ def _company_profile(company: Company) -> CompanyProfileOut:
 
 @router.get("/company-profile", response_model=CompanyProfileOut)
 async def get_company_profile(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -217,7 +219,7 @@ async def get_company_profile(
 @router.patch("/company-profile", response_model=CompanyProfileOut)
 async def update_company_profile(
     body: UpdateCompanyProfileRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -250,7 +252,7 @@ async def update_company_profile(
 @router.patch("/company-settings", response_model=CompanyProfileOut)
 async def update_company_settings(
     body: UpdateCompanySettingsRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -271,7 +273,7 @@ async def update_company_settings(
 
 @router.post("/regenerate-api-key", response_model=CompanyProfileOut)
 async def regenerate_api_key(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     company = db.query(Company).filter(Company.id == company_id).first()

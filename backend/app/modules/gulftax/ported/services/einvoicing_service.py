@@ -342,7 +342,7 @@ def validate_invoice(
     }
 
 
-def compute_readiness(db: Session, company_id: int) -> Dict[str, Any]:
+def compute_readiness(db: Session, company_id: str) -> Dict[str, Any]:
     """Run 5 ASP readiness checks for a company."""
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:

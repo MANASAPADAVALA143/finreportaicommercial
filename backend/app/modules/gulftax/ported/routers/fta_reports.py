@@ -23,7 +23,7 @@ def _tx_side(t: Transaction) -> str:
 def fta_summary(
     period_start: date = Query(...),
     period_end: date = Query(...),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """High-level VAT summary for the period — all boxes pre-computed."""
@@ -93,7 +93,7 @@ def fta_transaction_listing(
     period_end: date = Query(...),
     tx_type: Optional[str] = Query(None, description="sale | purchase | all"),
     vat_treatment: Optional[str] = Query(None),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Full transaction listing — FTA Tax Audit File (TAF) format."""
@@ -134,7 +134,7 @@ def fta_transaction_listing(
 
 @router.get("/ap-risk-summary")
 def fta_ap_risk_summary(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """AP Invoice anomaly summary — blocked VAT, missing TRNs, duplicates."""

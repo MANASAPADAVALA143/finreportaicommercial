@@ -87,21 +87,18 @@ async def get_current_company_id(
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-ID"),
     authorization: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
-) -> int:
+) -> str:
     """
     Dependency: verify token, then confirm user belongs to the requested company.
-    Returns company_id as int.
+    Returns company_id as str.
 
     LOCAL_DEV=true  → skips JWT; trusts X-Company-ID directly (first company
     in DB used as fallback). Safe because this mode is never set in production.
     """
     # ── Local dev bypass ─────────────────────────────────────────
     if _LOCAL_DEV:
-        if x_company_id:
-            try:
-                return int(x_company_id)
-            except ValueError:
-                pass
+        if x_company_id and x_company_id.strip():
+            return x_company_id.strip()
         # Fallback: use the first company in the database
         first = db.query(Company).order_by(Company.id).first()
         if first:
@@ -114,12 +111,9 @@ async def get_current_company_id(
     token = authorization.split(" ", 1)[1].strip()
     user = _verify_jwt(token)
 
-    if not x_company_id:
+    cid = (x_company_id or "").strip()
+    if not cid:
         raise HTTPException(status_code=400, detail="Missing X-Company-ID header")
-    try:
-        cid = int(x_company_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="X-Company-ID must be an integer")
 
     membership = (
         db.query(UserCompany)
@@ -143,12 +137,9 @@ def require_role(minimum_role: str):
         user: dict = Depends(get_current_user),
         db: Session = Depends(get_db),
     ) -> dict:
-        if not x_company_id:
+        cid = (x_company_id or "").strip()
+        if not cid:
             raise HTTPException(status_code=400, detail="Missing X-Company-ID header")
-        try:
-            cid = int(x_company_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid X-Company-ID")
         membership = (
             db.query(UserCompany)
             .filter(UserCompany.user_id == user["user_id"], UserCompany.company_id == cid)

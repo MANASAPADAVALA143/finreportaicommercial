@@ -81,7 +81,7 @@ def _parse_period(period: str) -> tuple[date, date]:
 
 # ── Data gathering (all Python, no JS) ───────────────────────────────────────
 
-def gather_memo_data(company_id: int, period: str, db: Session) -> Dict[str, Any]:
+def gather_memo_data(company_id: str, period: str, db: Session) -> Dict[str, Any]:
     """Pull all data from DB for memo generation. No calculations in Claude."""
     try:
         start, end = _parse_period(period)
@@ -309,7 +309,7 @@ Write the CFO memo now. Include exactly:
 # (stored via raw SQL insert since we add the ORM model in migration below)
 
 def _save_memo(
-    company_id: int,
+    company_id: str,
     memo_type: str,
     period: str,
     memo_text: str,
@@ -337,7 +337,7 @@ def _save_memo(
     return result.fetchone()[0]
 
 
-def _get_cached_memo(company_id: int, memo_type: str, period: str, db: Session):
+def _get_cached_memo(company_id: str, memo_type: str, period: str, db: Session):
     from sqlalchemy import text
     row = db.execute(
         text("""
@@ -356,7 +356,7 @@ def _get_cached_memo(company_id: int, memo_type: str, period: str, db: Session):
 @router.post("/generate-memo", response_model=MemoResponse)
 async def generate_memo(
     req: GenerateMemoRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Generate an AI-written tax memo from live company data."""
@@ -408,7 +408,7 @@ async def generate_memo(
 
 @router.get("/memos")
 async def list_memos(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):

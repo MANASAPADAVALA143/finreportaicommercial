@@ -36,7 +36,7 @@ class CTLineItem(BaseModel):
 
 
 class CalculateCTRequest(BaseModel):
-    company_id: int
+    company_id: str
     tax_period_start: date
     tax_period_end: date
     accounting_profit: float
@@ -47,7 +47,7 @@ class CalculateCTRequest(BaseModel):
 
 
 class SuggestAddbacksRequest(BaseModel):
-    company_id: int
+    company_id: str
     trial_balance_items: List[Dict[str, Any]]
 
 
@@ -67,7 +67,7 @@ def _json_from_claude_text(text: str) -> Dict[str, Any]:
 @router.post("/calculate")
 async def calculate_ct(
     request: CalculateCTRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     total_addbacks = sum(_as_decimal(item.amount) for item in request.addbacks)
@@ -141,7 +141,7 @@ async def calculate_ct(
 
 @router.get("/returns")
 async def list_ct_returns(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     rows = (
@@ -171,7 +171,7 @@ async def list_ct_returns(
 async def ct_from_transactions(
     period_start: date = Query(...),
     period_end: date = Query(...),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Auto-compute accounting profit from VAT Classifier transaction data."""
@@ -230,7 +230,7 @@ async def ct_from_transactions(
 @router.get("/returns/{return_id}")
 async def get_ct_return(
     return_id: int,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     row = db.query(CTReturn).filter(
@@ -270,7 +270,7 @@ class NarrativeRequest(BaseModel):
 @router.post("/narrative")
 async def generate_narrative(
     payload: NarrativeRequest,
-    _company_id: int = Depends(get_current_company_id),
+    _company_id: str = Depends(get_current_company_id),
 ):
     """Generate AI CT advisory narrative for CFO."""
     if claude_client is None:
@@ -320,7 +320,7 @@ Write in a professional but clear tone. Do not use markdown formatting."""
 @router.post("/suggest-addbacks")
 async def suggest_addbacks(
     payload: SuggestAddbacksRequest,
-    _company_id: int = Depends(get_current_company_id),
+    _company_id: str = Depends(get_current_company_id),
 ):
     if claude_client is None:
         raise HTTPException(
@@ -357,7 +357,7 @@ async def suggest_addbacks(
 # ── n8n CT Filing inbound webhook ─────────────────────────────────────────────
 
 class CTAssessmentInbound(BaseModel):
-    company_id: int
+    company_id: str
     tax_year: str
     taxable_income: float
     ct_payable: float
@@ -424,7 +424,7 @@ async def inbound_ct_assessed(
 
 @router.get("/deadlines/upcoming")
 async def upcoming_deadlines(
-    _company_id: int = Depends(get_current_company_id),
+    _company_id: str = Depends(get_current_company_id),
 ):
     """Return next 3 UAE tax deadlines for the company with urgency colour."""
     today = date.today()

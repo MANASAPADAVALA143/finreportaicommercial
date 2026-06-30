@@ -40,7 +40,7 @@ claude_client = Anthropic(api_key=anthropic_api_key) if anthropic_api_key else N
 
 # Pydantic models for request/response
 class ClassifyTransactionRequest(BaseModel):
-    company_id: int = Field(..., description="Company ID")
+    company_id: str = Field(..., description="Company ID")
     description: str = Field(..., description="Transaction description")
     amount_aed: float = Field(..., gt=0, description="Transaction amount in AED")
     vendor_or_customer: Optional[str] = Field(None, description="Vendor or customer name")
@@ -68,7 +68,7 @@ class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    company_id: int
+    company_id: str
     date: date
     description: str
     amount_aed: float
@@ -387,7 +387,7 @@ Return JSON only:
 @router.post("/classify-transaction", response_model=ClassificationResult)
 async def classify_transaction(
     request: ClassifyTransactionRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -457,7 +457,7 @@ def classify_bulk(
     file: UploadFile = File(...),
     entity_type: str = Query("mainland", pattern="^(mainland|free_zone|designated_zone)$"),
     transaction_type: str = Query("purchase", pattern="^(sale|purchase)$"),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -764,7 +764,7 @@ def classify_bulk(
 async def extract_pdf_invoices(
     files: List[UploadFile] = File(...),
     entity_type: str = Query("mainland", pattern="^(mainland|free_zone|designated_zone)$"),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Extract and classify up to 50 PDF/image invoices."""
@@ -838,7 +838,7 @@ async def extract_pdf_invoices(
 @router.post("/add-pdf-invoices")
 async def add_pdf_invoices_to_transactions(
     body: AddPdfInvoicesRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Save extracted PDF invoices to the transactions table."""
@@ -967,7 +967,7 @@ async def get_transactions(
     period_end: Optional[date] = Query(None, description="Filter by period end date"),
     vat_treatment: Optional[str] = Query(None, description="Filter by VAT treatment"),
     flag_for_review: Optional[bool] = Query(None, description="Filter by flag_for_review status"),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -1004,7 +1004,7 @@ async def get_transactions(
 @router.get("/transactions/enriched")
 async def get_transactions_enriched(
     limit: int = Query(200, ge=1, le=1000),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Transactions with entertainment, reverse charge, and review tier flags."""
@@ -1035,7 +1035,7 @@ def _transaction_flagged(t: Transaction) -> bool:
 
 @router.get("/vendors")
 async def list_vendors_from_classifier(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Supplier ledger — vendors aggregated from VAT Classifier transactions."""
@@ -1096,7 +1096,7 @@ async def list_vendors_from_classifier(
 @router.post("/transactions/bulk-approve-high-confidence")
 async def bulk_approve_high_confidence(
     body: BulkApproveHighConfidenceRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Approve all unverified transactions with confidence >= threshold (default 0.85)."""
@@ -1143,7 +1143,7 @@ async def bulk_approve_high_confidence(
 
 @router.delete("/transactions/all")
 async def delete_all_transactions(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -1171,7 +1171,7 @@ async def delete_all_transactions(
 async def verify_transaction(
     transaction_id: int,
     request: PatchVerifyTransactionRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -1229,7 +1229,7 @@ async def verify_transaction(
 @router.post("/transactions/bulk-verify")
 async def bulk_verify_transactions(
     body: BulkVerifyRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Mark many transactions as verified."""
@@ -1264,7 +1264,7 @@ async def bulk_verify_transactions(
 
 @router.post("/reclassify-exempt")
 async def reclassify_exempt_purchases(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """

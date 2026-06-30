@@ -14,7 +14,7 @@ def log_audit_event(
     entity_type: str,
     action: str,
     entity_id: int = None,
-    company_id: int = None,
+    company_id: str = None,
     actor: str = "system",
     before_state: dict = None,
     after_state: dict = None,

@@ -210,7 +210,7 @@ def calculate_confidence(risk_score: int, flag_count: int) -> float:
 
 def run_all_anomaly_checks(
     extracted: ExtractedInvoice,
-    company_id: int,
+    company_id: str,
     db: Session,
     invoice_id: int = 0,
     vat_treatment: str = "standard_rated",
@@ -748,7 +748,7 @@ def _extract_json(text: str) -> Dict[str, Any]:
 @router.post("/extract")
 def extract_invoice(
     file: UploadFile = File(...),
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Extract fields from a PDF or image invoice using Claude vision."""
@@ -875,7 +875,7 @@ def extract_invoice(
 @router.post("/classify-and-risk")
 def classify_and_risk(
     payload: ClassifyRiskRequest,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Run VAT classification + all 23 UAE anomaly checks."""
@@ -891,7 +891,7 @@ def classify_and_risk(
 
 def _classify_and_risk_inner(
     payload: ClassifyRiskRequest,
-    company_id: int,
+    company_id: str,
     db,
 ):
     if claude_client is None:
@@ -1081,7 +1081,7 @@ Return JSON only:
 @router.get("/invoices")
 def list_invoices(
     status: Optional[str] = None,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     q = db.query(Invoice).filter(Invoice.company_id == company_id)
@@ -1116,7 +1116,7 @@ def list_invoices(
 def review_invoice(
     invoice_id: int,
     payload: ReviewAction,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     inv = db.query(Invoice).filter(
@@ -1248,7 +1248,7 @@ def review_invoice(
 
 @router.get("/vendors")
 def list_vendors(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Return all unique vendors with aggregate stats and risk level."""
@@ -1326,7 +1326,7 @@ def list_vendors(
 @router.get("/supplier-profile/{vendor_name}")
 def supplier_profile(
     vendor_name: str,
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """Return AI-built supplier profile from invoice history."""
@@ -1364,7 +1364,7 @@ def supplier_profile(
 
 @router.delete("/demo/reset")
 def demo_reset(
-    company_id: int = Depends(get_current_company_id),
+    company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
     """
