@@ -172,6 +172,18 @@ export async function getAgingInvoices(bucket?: string): Promise<AgingInvoice[]>
     .filter((row) => !bucket || row.aging_bucket === bucket);
 }
 
+type PaidRow = AgingRow & {
+  paid_at?: string | null;
+  payment_date?: string | null;
+  paid_date?: string | null;
+};
+
+function resolvePaidDate(row: PaidRow): string | null {
+  // paid_at is canonical; payment_date is the legacy/date column on AP invoices.
+  const raw = row.paid_at ?? row.payment_date ?? row.paid_date;
+  return raw ? String(raw).slice(0, 10) : null;
+}
+
 /** DPO from paid invoice cycle times; on-time rate from paid vs due_date. */
 export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const since = new Date(Date.now() - periodDays * 86400000).toISOString().split('T')[0];
@@ -179,48 +191,77 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const company = await getMyCompany();
   const companyId = company?.id ?? null;
 
-  let allQ = supabase
-    .from('invoices')
-    .select('total_amount, invoice_date, due_date, payment_status, status, paid_at, payment_date')
-    .gte('invoice_date', since);
-  if (companyId) allQ = allQ.eq('company_id', companyId);
+  const paidSelect =
+    'total_amount, invoice_date, due_date, payment_status, status, paid_at, payment_date';
 
-  const [openRows, { data: periodRows, error: periodErr }] = await Promise.all([
+  let paidQ = supabase
+    .from('invoices')
+    .select(paidSelect)
+    .or('status.eq.Paid,status.eq.paid,status.eq.PAID')
+    .not('paid_at', 'is', null);
+
+  if (companyId) paidQ = paidQ.eq('company_id', companyId);
+
+  const paidQueryLog =
+    `invoices?select=${encodeURIComponent(paidSelect)}` +
+    `&or=(status.eq.Paid,status.eq.paid,status.eq.PAID)` +
+    `&paid_at=not.is.null` +
+    (companyId ? `&company_id=eq.${companyId}` : '');
+  console.info('[ap_aging] paid invoice query (PostgREST):', paidQueryLog);
+
+  const [openRows, { data: paidRowsRaw, error: paidErr }] = await Promise.all([
     fetchOpenInvoices('total_amount, due_date, payment_status, status'),
-    allQ,
+    paidQ,
   ]);
 
-  if (periodErr) throw periodErr;
+  if (paidErr) {
+    console.error('[ap_aging] paid invoice query error:', paidErr.message, paidQueryLog);
+    throw paidErr;
+  }
 
-  const rows = periodRows ?? [];
+  const allPaidRows = (paidRowsRaw ?? []) as PaidRow[];
+  const paidInPeriod = allPaidRows.filter((row) => {
+    const pd = resolvePaidDate(row);
+    return pd != null && pd >= since;
+  });
+  const paidRows = paidInPeriod.length > 0 ? paidInPeriod : allPaidRows;
+
+  console.info('[ap_aging] paid invoice rows', {
+    companyId,
+    since,
+    allPaid: allPaidRows.length,
+    inPeriod: paidInPeriod.length,
+    usedForDpo: paidRows.length,
+  });
+
   const totalOutstanding = openRows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
   const totalOverdue = openRows
     .filter((r) => isInvoiceOverdueByDate(r, today))
     .reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
 
-  const isPaidRow = (r: AgingRow & { paid_at?: string | null; payment_date?: string | null }) =>
-    r.status === 'Paid' ||
-    String(r.payment_status ?? '').toLowerCase() === 'paid';
-
-  const paidRows = rows.filter(isPaidRow);
   const paymentDays: number[] = [];
   let onTime = 0;
+  let onTimeDenominator = 0;
 
   for (const row of paidRows) {
     const invDate = row.invoice_date;
-    const paidDate = row.paid_at || row.payment_date;
+    const paidDate = resolvePaidDate(row);
     if (!invDate || !paidDate) continue;
+
     const days = Math.max(
       0,
       Math.floor(
-        (new Date(String(paidDate).slice(0, 10)).getTime() -
-          new Date(String(invDate).slice(0, 10)).getTime()) /
+        (new Date(paidDate).getTime() - new Date(String(invDate).slice(0, 10)).getTime()) /
           86400000,
       ),
     );
     paymentDays.push(days);
-    if (row.due_date && String(paidDate).slice(0, 10) <= String(row.due_date).slice(0, 10)) {
-      onTime += 1;
+
+    if (row.due_date) {
+      onTimeDenominator += 1;
+      if (paidDate <= String(row.due_date).slice(0, 10)) {
+        onTime += 1;
+      }
     }
   }
 
@@ -230,14 +271,9 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
       : 0;
 
   const onTimePaymentRate =
-    paidRows.length > 0 ? Math.round((onTime / paidRows.length) * 100) : 0;
+    onTimeDenominator > 0 ? Math.round((onTime / onTimeDenominator) * 100) : 0;
 
-  const totalPurchases = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
-  let dpo = avgPaymentDays;
-
-  if (dpo === 0 && totalOutstanding > 0 && totalPurchases > 0) {
-    dpo = Math.round((totalOutstanding / totalPurchases) * periodDays);
-  }
+  const dpo = avgPaymentDays;
 
   console.info('[ap_aging] DPO metrics', {
     companyId,
@@ -247,6 +283,7 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
     avgPaymentDays,
     onTimePaymentRate,
     paidCount: paidRows.length,
+    paymentDaysSample: paymentDays.slice(0, 5),
     openCount: openRows.length,
   });
 
