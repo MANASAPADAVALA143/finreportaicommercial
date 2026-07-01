@@ -38,10 +38,9 @@ import {
   Legend,
   Cell,
 } from 'recharts';
-import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
-import { useMarket } from '@/contexts/MarketContext';
+import { useDisplayCurrency } from '@/hooks/useDisplayCurrency';
 import { markOverdueInvoices } from '@/lib/ap-invoice/paymentService';
 import { Download, Printer, Loader2, ArrowUpDown } from 'lucide-react';
 
@@ -57,14 +56,8 @@ function bucketFilterKey(cardKey: string): string | undefined {
 
 export default function ApAging() {
   const navigate = useNavigate();
-  const { baseCurrency: settingsCurrency, settings, dateFormat } = useCompanySettings();
-  const { config, isUAE, market } = useMarket();
-  const baseCurrency = useMemo(() => {
-    if (isUAE || market === 'uae') return 'AED';
-    const country = (settings?.country ?? '').toUpperCase();
-    if (country === 'AE' || country === 'UAE' || settingsCurrency === 'AED') return 'AED';
-    return settingsCurrency ?? config.currency;
-  }, [isUAE, market, settings?.country, settingsCurrency, config.currency]);
+  const { dateFormat } = useCompanySettings();
+  const { currency: baseCurrency, fmt } = useDisplayCurrency();
   const [periodDays, setPeriodDays] = useState<number>(90);
   const [buckets, setBuckets] = useState<AgingBucket[]>([]);
   const [invoices, setInvoices] = useState<AgingInvoice[]>([]);
@@ -283,7 +276,7 @@ export default function ApAging() {
                 (dpo?.total_overdue ?? 0) > 0 ? 'text-red-600' : 'text-gray-900'
               }`}
             >
-              {formatCurrency(dpo?.total_overdue ?? 0, baseCurrency)}
+              {fmt(dpo?.total_overdue ?? 0)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">Unpaid invoices past due date</p>
           </CardContent>
@@ -303,7 +296,7 @@ export default function ApAging() {
           >
             <div className="text-sm font-medium text-muted-foreground">{b.label}</div>
             <div className="mt-2 text-2xl font-bold" style={{ color: b.color }}>
-              {formatCurrency(b.total_amount, baseCurrency)}
+              {fmt(b.total_amount)}
             </div>
             <div className="text-xs text-muted-foreground mt-1">
               {b.invoice_count} invoice{b.invoice_count !== 1 ? 's' : ''}
@@ -325,7 +318,7 @@ export default function ApAging() {
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip
                 formatter={(value: number, _n: string, props: { payload?: { count?: number } }) => [
-                  `${formatCurrency(value, baseCurrency)} (${props.payload?.count ?? 0} invoices)`,
+                  `${fmt(Number(value))} (${props.payload?.count ?? 0} invoices)`,
                   'Amount',
                 ]}
               />
@@ -408,7 +401,7 @@ export default function ApAging() {
                   <TableRow key={row.id}>
                     <TableCell className="font-medium">{row.invoice_number ?? '—'}</TableCell>
                     <TableCell>{row.vendor_name ?? '—'}</TableCell>
-                    <TableCell>{formatCurrency(row.amount, baseCurrency)}</TableCell>
+                    <TableCell>{fmt(row.amount)}</TableCell>
                     <TableCell>{displayDate(row.invoice_date ?? '', dateFormat)}</TableCell>
                     <TableCell>{displayDate(row.due_date ?? '', dateFormat)}</TableCell>
                     <TableCell>
@@ -485,7 +478,7 @@ export default function ApAging() {
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10 }} />
                 <Tooltip
-                  formatter={(value: number) => formatCurrency(value, baseCurrency)}
+                  formatter={(value: number) => fmt(Number(value))}
                 />
                 <Legend />
                 <Bar dataKey="current" stackId="v" fill="#1D9E75" name="Current / not past due" />
@@ -497,11 +490,11 @@ export default function ApAging() {
       </Card>
 
       <div className="text-sm text-muted-foreground print:block hidden">
-        Total outstanding (unpaid): {formatCurrency(dpo?.total_outstanding ?? 0, baseCurrency)}
+        Total outstanding (unpaid): {fmt(dpo?.total_outstanding ?? 0)}
         {overdueCount > 0 && (
           <span className="text-red-600">
             {' '}
-            — {overdueCount} overdue ({formatCurrency(overdueAmt, baseCurrency)})
+            — {overdueCount} overdue ({fmt(overdueAmt)})
           </span>
         )}
       </div>

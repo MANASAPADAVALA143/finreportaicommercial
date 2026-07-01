@@ -172,65 +172,90 @@ export async function getAgingInvoices(bucket?: string): Promise<AgingInvoice[]>
     .filter((row) => !bucket || row.aging_bucket === bucket);
 }
 
-/** DPO ≈ (outstanding / purchases in window) × days in window */
+/** DPO from paid invoice cycle times; on-time rate from paid vs due_date. */
 export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const since = new Date(Date.now() - periodDays * 86400000).toISOString().split('T')[0];
   const today = todayIso();
   const company = await getMyCompany();
   const companyId = company?.id ?? null;
 
-  let periodQ = supabase
-    .from('invoices')
-    .select('total_amount, invoice_date, due_date, payment_status, status')
-    .gte('invoice_date', since);
   let allQ = supabase
     .from('invoices')
-    .select('total_amount, invoice_date, due_date, payment_status, status');
-  if (companyId) {
-    periodQ = periodQ.eq('company_id', companyId);
-    allQ = allQ.eq('company_id', companyId);
-  }
+    .select('total_amount, invoice_date, due_date, payment_status, status, paid_at, payment_date')
+    .gte('invoice_date', since);
+  if (companyId) allQ = allQ.eq('company_id', companyId);
 
-  const [{ data: periodRows, error: periodErr }, { data: allRows, error: allErr }, openRows] =
-    await Promise.all([periodQ, allQ, fetchOpenInvoices('total_amount, due_date, payment_status, status')]);
+  const [openRows, { data: periodRows, error: periodErr }] = await Promise.all([
+    fetchOpenInvoices('total_amount, due_date, payment_status, status'),
+    allQ,
+  ]);
 
   if (periodErr) throw periodErr;
-  if (allErr) throw allErr;
 
   const rows = periodRows ?? [];
-  const all = allRows ?? [];
-
   const totalOutstanding = openRows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
-
   const totalOverdue = openRows
     .filter((r) => isInvoiceOverdueByDate(r, today))
     .reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
 
-  let totalPurchases = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
-  let dpoWindowDays = periodDays;
+  const isPaidRow = (r: AgingRow & { paid_at?: string | null; payment_date?: string | null }) =>
+    r.status === 'Paid' ||
+    String(r.payment_status ?? '').toLowerCase() === 'paid';
 
-  if (totalPurchases === 0 && totalOutstanding > 0) {
-    totalPurchases = all.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
-    dpoWindowDays = 365;
+  const paidRows = rows.filter(isPaidRow);
+  const paymentDays: number[] = [];
+  let onTime = 0;
+
+  for (const row of paidRows) {
+    const invDate = row.invoice_date;
+    const paidDate = row.paid_at || row.payment_date;
+    if (!invDate || !paidDate) continue;
+    const days = Math.max(
+      0,
+      Math.floor(
+        (new Date(String(paidDate).slice(0, 10)).getTime() -
+          new Date(String(invDate).slice(0, 10)).getTime()) /
+          86400000,
+      ),
+    );
+    paymentDays.push(days);
+    if (row.due_date && String(paidDate).slice(0, 10) <= String(row.due_date).slice(0, 10)) {
+      onTime += 1;
+    }
   }
 
-  const dpo =
-    totalPurchases > 0 ? Math.round((totalOutstanding / totalPurchases) * dpoWindowDays) : 0;
+  const avgPaymentDays =
+    paymentDays.length > 0
+      ? Math.round(paymentDays.reduce((a, b) => a + b, 0) / paymentDays.length)
+      : 0;
+
+  const onTimePaymentRate =
+    paidRows.length > 0 ? Math.round((onTime / paidRows.length) * 100) : 0;
+
+  const totalPurchases = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
+  let dpo = avgPaymentDays;
+
+  if (dpo === 0 && totalOutstanding > 0 && totalPurchases > 0) {
+    dpo = Math.round((totalOutstanding / totalPurchases) * periodDays);
+  }
 
   console.info('[ap_aging] DPO metrics', {
     companyId,
     totalOutstanding,
     totalOverdue,
     dpo,
+    avgPaymentDays,
+    onTimePaymentRate,
+    paidCount: paidRows.length,
     openCount: openRows.length,
   });
 
   return {
     dpo,
-    avg_payment_days: 0,
+    avg_payment_days: avgPaymentDays,
     total_outstanding: totalOutstanding,
     total_overdue: totalOverdue,
-    on_time_payment_rate: 0,
+    on_time_payment_rate: onTimePaymentRate,
   };
 }
 

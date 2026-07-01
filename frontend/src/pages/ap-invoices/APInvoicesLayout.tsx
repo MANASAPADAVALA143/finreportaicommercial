@@ -6,7 +6,8 @@
 import type React from 'react';
 import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { MarketProvider, useMarket } from '../../contexts/MarketContext';
+import { useMarket } from '../../contexts/MarketContext';
+import { MarketToggle } from '../../components/MarketToggle';
 import { useAuth } from '../../context/AuthContext';
 import { ensureApCompanySynced, setApSyncAccessToken } from '../../lib/ap-invoice/workspaceCompanySync';
 import { clearCompanyCache } from '../../lib/ap-invoice/companyService';
@@ -91,30 +92,10 @@ const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-me
 const linkIdle   = 'text-slate-300 hover:bg-slate-800 hover:text-white';
 const linkActive = 'bg-blue-700/80 text-white';
 
-function MarketToggle() {
-  const { market, setMarket } = useMarket();
+function MarketToggleSidebar() {
   return (
-    <div className="flex items-center gap-1 bg-slate-800 rounded-full p-0.5 mt-2">
-      <button
-        type="button"
-        onClick={() => void setMarket('uae')}
-        title="UAE mode — VAT, TRN, AED"
-        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          market === 'uae' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-        }`}
-      >
-        🇦🇪 UAE
-      </button>
-      <button
-        type="button"
-        onClick={() => void setMarket('india')}
-        title="India mode — GST, GSTIN, INR"
-        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          market === 'india' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
-        }`}
-      >
-        🇮🇳 India
-      </button>
+    <div className="mt-2">
+      <MarketToggle />
     </div>
   );
 }
@@ -153,7 +134,7 @@ function APInvoicesLayoutInner() {
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
             Live · InvoiceFlow
           </span>
-          <MarketToggle />
+          <MarketToggleSidebar />
         </div>
 
         {/* Nav — scrollable */}
@@ -206,10 +187,6 @@ function APInvoicesLayoutInner() {
 }
 
 export default function APInvoicesLayout() {
-  return (
-    <MarketProvider>
-      <APInvoicesLayoutInner />
-    </MarketProvider>
-  );
+  return <APInvoicesLayoutInner />;
 }
 

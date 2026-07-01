@@ -8,6 +8,8 @@ import { ClientProvider } from './context/ClientContext';
 import { WorkspaceProvider } from './context/WorkspaceContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { SuiteProvider } from './context/SuiteContext';
+import { MarketProvider } from './contexts/MarketContext';
+import { MarketToggle } from './components/MarketToggle';
 import { WorkspaceSelector } from './components/WorkspaceSelector';
 import { CompanySelector } from './components/CompanySelector';
 import PrivateRoute from './components/PrivateRoute';
@@ -51,6 +53,7 @@ function GnanovaBanner() {
       <span style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Gnanova Finance OS</span>
       {showWorkspaceControls && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <MarketToggle compact />
           <CompanySelector />
         </div>
       )}
@@ -491,6 +494,7 @@ function App() {
       <ClientProvider>
         <WorkspaceProvider>
           <CompanyProvider>
+            <MarketProvider>
             <SuiteProvider>
         <BrowserRouter
           basename={routerBasename}
@@ -740,6 +744,7 @@ function App() {
           </Suspense>
         </BrowserRouter>
             </SuiteProvider>
+            </MarketProvider>
           </CompanyProvider>
         </WorkspaceProvider>
         <Toaster position="top-right" />

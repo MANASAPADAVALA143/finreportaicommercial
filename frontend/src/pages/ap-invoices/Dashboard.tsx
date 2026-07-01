@@ -33,6 +33,7 @@ import { format } from 'date-fns';
 import { formatCurrency } from '../../utils/currency';
 import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useCompany } from '../../context/CompanyContext';
 import APInsightsPanel from '@/components/ap-invoices/APInsightsPanel';
 import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard';
@@ -64,7 +65,8 @@ function getAgentBadgeStyle(action: string): { bg: string; label: string } {
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { baseCurrency, dateFormat } = useCompanySettings();
+  const { dateFormat } = useCompanySettings();
+  const { currency: baseCurrencyDisplay, fmt } = useDisplayCurrency();
   const { activeCompanyId } = useCompany();
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
@@ -100,20 +102,20 @@ export function Dashboard() {
     invoices.forEach((inv) => {
       const invDate = new Date(inv.created_at);
       if (invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear) {
-        const c = (inv.currency || baseCurrency).toUpperCase();
+        const c = (inv.currency || baseCurrencyDisplay).toUpperCase();
         if (!acc[c]) acc[c] = { total: 0, tax: 0 };
         acc[c].total += Number(inv.total_amount);
         acc[c].tax += Number(inv.tax_amount || 0);
       }
     });
     return acc;
-  }, [invoices, baseCurrency]);
+  }, [invoices, baseCurrencyDisplay]);
 
-  const monthTotalInBase = monthTotalsByCurrency[baseCurrency]?.total ?? 0;
-  const monthTaxInBase = monthTotalsByCurrency[baseCurrency]?.tax ?? 0;
+  const monthTotalInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.total ?? 0;
+  const monthTaxInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.tax ?? 0;
   const otherCurrencyTotals = useMemo(
-    () => Object.entries(monthTotalsByCurrency).filter(([c]) => c !== baseCurrency),
-    [monthTotalsByCurrency, baseCurrency]
+    () => Object.entries(monthTotalsByCurrency).filter(([c]) => c !== baseCurrencyDisplay),
+    [monthTotalsByCurrency, baseCurrencyDisplay]
   );
 
   useEffect(() => {
@@ -369,9 +371,9 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {formatCurrency(monthTotalInBase, baseCurrency)}
+              {fmt(monthTotalInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Base currency: {baseCurrency}</p>
+            <p className="text-xs text-gray-500 mt-1">Base currency: {baseCurrencyDisplay}</p>
             {otherCurrencyTotals.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
                 Also this month:{' '}
@@ -392,9 +394,9 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {formatCurrency(monthTaxInBase, baseCurrency)}
+              {fmt(monthTaxInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Tax in {baseCurrency} (same-currency invoices)</p>
+            <p className="text-xs text-gray-500 mt-1">Tax in {baseCurrencyDisplay} (same-currency invoices)</p>
           </CardContent>
         </Card>
 
@@ -763,7 +765,7 @@ export function Dashboard() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Cash flow â€” next 30 days</CardTitle>
             <p className="text-xs text-muted-foreground font-normal">
-              By due date, unpaid / overdue vs scheduled ({baseCurrency})
+              By due date, unpaid / overdue vs scheduled ({baseCurrencyDisplay})
             </p>
           </CardHeader>
           <CardContent>
@@ -773,7 +775,7 @@ export function Dashboard() {
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip
-                  formatter={(value: number) => formatCurrency(value, baseCurrency)}
+                  formatter={(value: number) => fmt(value)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Bar dataKey="unpaid" stackId="pay" fill="#f59e0b" name="Unpaid / overdue" />
@@ -815,7 +817,7 @@ export function Dashboard() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">AP aging</CardTitle>
             <p className="text-xs text-muted-foreground font-normal">
-              Unpaid balances by days past due ({baseCurrency})
+              Unpaid balances by days past due ({baseCurrencyDisplay})
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -843,7 +845,7 @@ export function Dashboard() {
             <div className="text-sm">
               <span className="text-muted-foreground">Total outstanding: </span>
               <span className="font-semibold">
-                {formatCurrency(apAgingWidget.totalOutstanding, baseCurrency)}
+                {fmt(apAgingWidget.totalOutstanding)}
               </span>
             </div>
             {apAgingWidget.d1 + apAgingWidget.d2 + apAgingWidget.d60 > 0 && (
@@ -861,7 +863,7 @@ export function Dashboard() {
                   return (
                     <>
                       {overdueCount} invoices overdue â€”{' '}
-                      {formatCurrency(apAgingWidget.overdueTotal, baseCurrency)} at risk
+                      {fmt(apAgingWidget.overdueTotal)} at risk
                     </>
                   );
                 })()}
@@ -971,7 +973,7 @@ export function Dashboard() {
                       <XAxis type="number" />
                       <YAxis dataKey="name" type="category" width={120} />
                       <Tooltip
-                        formatter={(value: number) => formatCurrency(Number(value), baseCurrency)}
+                        formatter={(value: number) => fmt(Number(value))}
                       />
                       <Bar dataKey="totalSpend" fill="#0A4B8F" />
                     </BarChart>
@@ -988,7 +990,7 @@ export function Dashboard() {
                         </div>
                         <div className="text-right">
                           <div className="font-semibold">
-                            {formatCurrency(vendor.totalSpend, baseCurrency)}
+                            {fmt(vendor.totalSpend)}
                           </div>
                           <div className="text-xs text-gray-500">
                             {vendor.invoiceCount} invoice{vendor.invoiceCount !== 1 ? 's' : ''}
@@ -1067,7 +1069,7 @@ export function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" angle={-45} textAnchor="end" height={80} />
                     <YAxis />
-                    <Tooltip formatter={(value: number) => formatCurrency(Number(value), baseCurrency)} />
+                    <Tooltip formatter={(value: number) => fmt(Number(value))} />
                     <Legend />
                     {topVendors.map((vendorName, index) => (
                       <Line
@@ -1134,7 +1136,7 @@ export function Dashboard() {
                       <XAxis type="number" />
                       <YAxis dataKey="code" type="category" width={80} />
                       <Tooltip
-                        formatter={(value: number) => formatCurrency(Number(value), baseCurrency)}
+                        formatter={(value: number) => fmt(Number(value))}
                       />
                       <Bar dataKey="totalSpend" fill="#0A4B8F" />
                     </BarChart>
@@ -1152,7 +1154,7 @@ export function Dashboard() {
                         </div>
                         <div className="text-right">
                           <div className="font-semibold">
-                            {formatCurrency(gl.totalSpend, baseCurrency)}
+                            {fmt(gl.totalSpend)}
                           </div>
                           <div className="text-xs text-gray-500">
                             {gl.invoiceCount} invoice{gl.invoiceCount !== 1 ? 's' : ''}
@@ -1205,7 +1207,7 @@ export function Dashboard() {
                   </TableCell>
                   <TableCell>
                     <span className="font-semibold">
-                      {formatCurrency(Number(invoice.total_amount), invoice.currency || baseCurrency)}
+                      {formatCurrency(Number(invoice.total_amount), invoice.currency || baseCurrencyDisplay)}
                     </span>
                   </TableCell>
                   <TableCell>

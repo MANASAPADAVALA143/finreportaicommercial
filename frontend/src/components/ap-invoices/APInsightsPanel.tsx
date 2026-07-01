@@ -13,6 +13,7 @@ import {
   type APSummary,
   type InsightCard,
 } from '@/services/apInsights.service';
+import { useDisplayCurrency } from '@/hooks/useDisplayCurrency';
 
 const PRIORITY_BORDER: Record<string, string> = {
   HIGH: '#EF4444',
@@ -35,32 +36,15 @@ function InsightIcon({ icon }: { icon: InsightCard['icon'] }) {
   }
 }
 
-function formatAed(n: number) {
-  return `AED ${n.toLocaleString('en-AE', { maximumFractionDigits: 0 })}`;
-}
-
-function highlightAed(text: string) {
-  const parts = text.split(/(AED\s?[\d,]+(?:\.\d+)?)/gi);
-  return parts.map((part, i) =>
-    /^AED/i.test(part) ? (
-      <span key={i} className="font-medium text-slate-100">
-        {part}
-      </span>
-    ) : (
-      <span key={i}>{part}</span>
-    ),
-  );
-}
-
-function SummaryPills({ summary }: { summary: APSummary }) {
+function SummaryPills({ summary, fmt }: { summary: APSummary; fmt: (n: number) => string }) {
   const pills = [
-    { label: 'Total Billed', value: formatAed(summary.total_billed) },
+    { label: 'Total Billed', value: fmt(summary.total_billed) },
     {
       label: 'Paid',
-      value: `${formatAed(summary.total_paid)} (${summary.payment_rate_pct.toFixed(1)}%)`,
+      value: `${fmt(summary.total_paid)} (${summary.payment_rate_pct.toFixed(1)}%)`,
     },
-    { label: 'Open', value: formatAed(summary.open_balance) },
-    { label: 'Overdue', value: formatAed(summary.overdue_amount) },
+    { label: 'Open', value: fmt(summary.open_balance) },
+    { label: 'Overdue', value: fmt(summary.overdue_amount) },
     { label: 'DPO', value: `${summary.dpo.toFixed(1)} days` },
   ];
   return (
@@ -103,6 +87,7 @@ export default function APInsightsPanel({
   companyId,
   embedded = false,
 }: APInsightsPanelProps) {
+  const { fmt } = useDisplayCurrency();
   const [insights, setInsights] = useState<InsightCard[]>([]);
   const [summary, setSummary] = useState<APSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -207,7 +192,7 @@ export default function APInsightsPanel({
 
       {!loading && !error && !empty && summary && (
         <>
-          <SummaryPills summary={summary} />
+          <SummaryPills summary={summary} fmt={fmt} />
           <div
             className={`grid gap-4 sm:grid-cols-2 transition-all duration-500 ${
               animateIn ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-3'
@@ -232,7 +217,7 @@ export default function APInsightsPanel({
                   {card.actions.map((action, i) => (
                     <li key={i} className="flex gap-1.5">
                       <span className="text-slate-500 shrink-0">•</span>
-                      <span>{highlightAed(action)}</span>
+                      <span>{action}</span>
                     </li>
                   ))}
                 </ul>

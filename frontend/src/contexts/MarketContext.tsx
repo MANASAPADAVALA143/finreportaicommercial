@@ -94,6 +94,15 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   }, [loadMarket]);
 
   useEffect(() => {
+    const onMarket = (e: Event) => {
+      const m = (e as CustomEvent<string>).detail;
+      if (m === 'uae' || m === 'india') setMarketState(m);
+    };
+    window.addEventListener('finreportai-market-change', onMarket);
+    return () => window.removeEventListener('finreportai-market-change', onMarket);
+  }, []);
+
+  useEffect(() => {
     const onSynced = () => { void loadMarket(); };
     window.addEventListener('ap-company-synced', onSynced);
     return () => window.removeEventListener('ap-company-synced', onSynced);
@@ -103,6 +112,8 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     setMarketState(newMarket);
     try {
       localStorage.setItem(STORAGE_KEY, newMarket);
+      localStorage.setItem('gnanova_suite', newMarket);
+      window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: newMarket }));
     } catch {
       /* ignore */
     }
