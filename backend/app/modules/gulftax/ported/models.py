@@ -42,7 +42,7 @@ class Company(Base):
 
 
 class UserCompany(Base):
-    """Links Supabase auth users (UUID string) to companies."""
+    """Links Supabase auth users (UUID string) to companies — no separate User ORM table."""
     __tablename__ = "user_companies"
 
     id = Column(Integer, primary_key=True, index=True)

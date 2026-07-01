@@ -8,7 +8,7 @@ from app.core.security import (
     create_refresh_token,
     get_current_user
 )
-from app.api.models import User
+from app.api.models import JournalAuthUser
 from app.api.schemas import UserCreate, UserLogin, Token, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     """Register a new user."""
     # Check if user exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    existing_user = db.query(JournalAuthUser).filter(JournalAuthUser.email == user_data.email).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -26,7 +26,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         )
     
     # Create new user
-    new_user = User(
+    new_user = JournalAuthUser(
         email=user_data.email,
         hashed_password=get_password_hash(user_data.password),
         full_name=user_data.full_name,
@@ -45,7 +45,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 async def login(credentials: UserLogin, db: Session = Depends(get_db)):
     """Login and get access token."""
     # Find user
-    user = db.query(User).filter(User.email == credentials.email).first()
+    user = db.query(JournalAuthUser).filter(JournalAuthUser.email == credentials.email).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -83,7 +83,7 @@ async def get_current_user_info(
     db: Session = Depends(get_db)
 ):
     """Get current user information."""
-    user = db.query(User).filter(User.id == int(current_user["user_id"])).first()
+    user = db.query(JournalAuthUser).filter(JournalAuthUser.id == int(current_user["user_id"])).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -36,7 +36,9 @@ class Company(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class User(Base):
+class RbacUser(Base):
+    """FinReportAI RBAC user — distinct from legacy journal `users` table."""
+
     __tablename__ = "rbac_users"
 
     id = Column(String(36), primary_key=True)
@@ -50,6 +52,10 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login = Column(DateTime, nullable=True)
+
+
+# Backward-compatible import name; SQLAlchemy mapper is registered as RbacUser.
+User = RbacUser
 
 
 class AuditLog(Base):
