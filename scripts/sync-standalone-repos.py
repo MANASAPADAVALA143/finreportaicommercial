@@ -146,12 +146,23 @@ def copy_file(src: Path, dest: Path, label: str) -> bool:
     return True
 
 
+def _strip_gulftax_ported_models() -> None:
+    """Remove auth ORM classes reintroduced by standalone sync (see scripts/sync_gulftax.sh)."""
+    import subprocess
+
+    strip_script = ROOT / "scripts" / "strip_gulftax_ported_models.py"
+    if strip_script.is_file():
+        subprocess.run([sys.executable, str(strip_script)], check=False)
+
+
 def sync_gulftax_backend() -> int:
     print("\n=== GulfTax backend ===")
     n = 0
     for src_rel, dest_rel in GULFTAX_BACKEND_MAP.items():
         if copy_file(UAETAX / src_rel, ROOT / dest_rel, dest_rel):
             n += 1
+    print("\n=== GulfTax ported models cleanup (exclude User/auth ORM) ===")
+    _strip_gulftax_ported_models()
     return n
 
 

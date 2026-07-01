@@ -1,3 +1,7 @@
+# NOTE: This file is synced from the standalone GulfTax repo.
+# User/auth models are intentionally excluded — see scripts/sync_gulftax.sh.
+# Do not add auth models here; use app.models.users.User (RbacUser).
+
 """SQLAlchemy database models for GulfTax AI"""
 from datetime import datetime
 
