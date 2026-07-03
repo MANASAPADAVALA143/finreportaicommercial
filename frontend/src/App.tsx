@@ -20,6 +20,7 @@ import { canAccessPath, homePathForRole } from './config/productRole';
 import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
+import { LandingPage } from './components/landing/LandingPage';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
 
@@ -482,7 +483,7 @@ function RootRedirect() {
   }
 
   if (!isAuthenticated || !accessToken) {
-    return <Navigate to="/login" replace />;
+    return <LandingPage />;
   }
 
   return <Navigate to={homePathForRole(productRole, user?.role)} replace />;
