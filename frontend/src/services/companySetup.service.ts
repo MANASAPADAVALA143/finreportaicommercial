@@ -50,6 +50,30 @@ function hdrs(token: string | null, extra: Record<string, string> = {}): Record<
   return workspaceHeaders(token, extra);
 }
 
+function parseApiError(text: string, fallback: string): string {
+  if (!text) return fallback;
+  try {
+    const json = JSON.parse(text) as { detail?: unknown };
+    const detail = json.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && 'msg' in item) {
+            const loc = 'loc' in item && Array.isArray(item.loc) ? item.loc.join('.') : 'field';
+            return `${loc}: ${String((item as { msg: unknown }).msg)}`;
+          }
+          return String(item);
+        })
+        .join('; ');
+    }
+  } catch {
+    // not JSON — use raw text
+  }
+  return text;
+}
+
 async function api<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
   const res = await fetch(`${backendOrigin()}${path}`, {
     ...init,
@@ -58,7 +82,7 @@ async function api<T>(path: string, token: string | null, init?: RequestInit): P
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || res.statusText);
+    throw new Error(parseApiError(text, res.statusText));
   }
   return res.json();
 }
@@ -75,7 +99,23 @@ export const getProfile = (token: string | null) =>
 export const saveProfile = (token: string | null, body: Partial<CompanyProfile>) =>
   api<{ profile: CompanyProfile }>('/api/company-setup/profile', token, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      company_name: body.company_name?.trim() ?? '',
+      trade_name: body.trade_name?.trim() || null,
+      legal_type: body.legal_type?.trim() || null,
+      trn: body.trn?.trim() || null,
+      license_number: body.license_number?.trim() || null,
+      license_authority: body.license_authority?.trim() || null,
+      base_currency: body.base_currency || 'AED',
+      reporting_standard: body.reporting_standard || 'IFRS',
+      financial_year_start: body.financial_year_start ?? 1,
+      industry: body.industry?.trim() || null,
+      address: body.address?.trim() || null,
+      phone: body.phone?.trim() || null,
+      email: body.email?.trim() || null,
+      website: body.website?.trim() || null,
+      logo_url: body.logo_url || null,
+    }),
   });
 
 export const uploadLogo = async (token: string | null, file: File): Promise<string> => {

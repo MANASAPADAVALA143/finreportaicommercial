@@ -152,8 +152,34 @@ def init_db():
                     )
                 )
                 conn.commit()
+            if rbac_cols and "tenant_id" not in rbac_cols:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"
+                    )
+                )
+                conn.commit()
     except Exception:
         pass  # Non-SQLite or table doesn't exist yet — create_all handles it
+
+    # ORM columns missing on existing DBs (SQLite + PostgreSQL)
+    try:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(engine)
+        if insp.has_table("rbac_users"):
+            rbac_cols = {c["name"] for c in insp.get_columns("rbac_users")}
+            with engine.begin() as conn:
+                if "product_role" not in rbac_cols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE rbac_users ADD COLUMN product_role VARCHAR(32) DEFAULT 'full_access'"
+                        )
+                    )
+                if "tenant_id" not in rbac_cols:
+                    conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
+    except Exception:
+        pass
 
     db = SessionLocal()
     try:

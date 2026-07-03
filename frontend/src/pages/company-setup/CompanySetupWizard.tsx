@@ -30,7 +30,9 @@ const MONTHS = [
 ];
 
 const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-teal-500 focus:outline-none';
+const inputErrorCls = 'w-full bg-gray-800 border border-red-600 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none';
 const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
+const fieldErrorCls = 'mt-1 text-xs text-red-400';
 
 type CoaCsvRow = { code: string; name: string; type: string; sub_type: string };
 
@@ -68,6 +70,7 @@ export default function CompanySetupWizard() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [profile, setProfile] = useState<Partial<CompanyProfile>>({
     base_currency: 'AED',
@@ -182,20 +185,26 @@ export default function CompanySetupWizard() {
     if (opt !== 'csv') clearCsvImport();
   };
 
-  const saveProfile = async () => {
+  const validateProfile = (): boolean => {
+    const errors: Record<string, string> = {};
     if (!profile.company_name?.trim()) {
-      setError('Company name is required');
-      return;
+      errors.company_name = 'Company name is required';
     }
-    if (profile.trn && !/^\d{15}$/.test(profile.trn)) {
-      setError('TRN must be exactly 15 digits');
-      return;
+    if (profile.trn?.trim() && !/^\d{15}$/.test(profile.trn.trim())) {
+      errors.trn = 'TRN must be exactly 15 digits';
     }
-    setSaving(true);
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const saveProfile = async () => {
     setError('');
+    if (!validateProfile()) return;
+    setSaving(true);
     try {
       const res = await setup.saveProfile(accessToken, profile);
       setProfile(res.profile);
+      setFieldErrors({});
       setStep(2);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
@@ -362,7 +371,21 @@ export default function CompanySetupWizard() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={labelCls}>Company Name *</label>
-                    <input className={inputCls} value={profile.company_name || ''} onChange={e => setProfile(p => ({ ...p, company_name: e.target.value }))} />
+                    <input
+                      className={fieldErrors.company_name ? inputErrorCls : inputCls}
+                      value={profile.company_name || ''}
+                      onChange={e => {
+                        setProfile(p => ({ ...p, company_name: e.target.value }));
+                        if (fieldErrors.company_name) {
+                          setFieldErrors(fe => {
+                            const next = { ...fe };
+                            delete next.company_name;
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {fieldErrors.company_name && <p className={fieldErrorCls}>{fieldErrors.company_name}</p>}
                   </div>
                   <div>
                     <label className={labelCls}>Trade Name</label>
@@ -377,7 +400,22 @@ export default function CompanySetupWizard() {
                   </div>
                   <div>
                     <label className={labelCls}>TRN (15 digits)</label>
-                    <input className={inputCls} value={profile.trn || ''} maxLength={15} onChange={e => setProfile(p => ({ ...p, trn: e.target.value.replace(/\D/g, '') }))} />
+                    <input
+                      className={fieldErrors.trn ? inputErrorCls : inputCls}
+                      value={profile.trn || ''}
+                      maxLength={15}
+                      onChange={e => {
+                        setProfile(p => ({ ...p, trn: e.target.value.replace(/\D/g, '') }));
+                        if (fieldErrors.trn) {
+                          setFieldErrors(fe => {
+                            const next = { ...fe };
+                            delete next.trn;
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {fieldErrors.trn && <p className={fieldErrorCls}>{fieldErrors.trn}</p>}
                   </div>
                   <div>
                     <label className={labelCls}>Industry</label>
