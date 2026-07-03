@@ -17,9 +17,43 @@ import {
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
 import { useAuth } from '../../context/AuthContext';
+import { useMarket } from '../../contexts/MarketContext';
 import { isUaeFinanceSuiteOnly } from '../../config/productRole';
 
-const UAE_FINANCE_SUITE_MODULES = [
+type DashboardModule = {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  link: string;
+  bgColor: string;
+  badge?: string;
+};
+
+/** UAE dashboard: pin these modules first; all others keep their original relative order. */
+const UAE_MODULE_PRIORITY: readonly string[] = [
+  '/ap-invoices',
+  '/gulftax',
+  '/uae-full',
+  '/fpa',
+  '/ifrs-statement',
+  '/cfo',
+  '/r2r-pattern',
+];
+
+function sortModulesForUae(modules: DashboardModule[]): DashboardModule[] {
+  const priorityIndex = new Map(UAE_MODULE_PRIORITY.map((link, i) => [link, i]));
+  const originalIndex = new Map(modules.map((m, i) => [m.link, i]));
+  return [...modules].sort((a, b) => {
+    const pa = priorityIndex.get(a.link);
+    const pb = priorityIndex.get(b.link);
+    if (pa !== undefined && pb !== undefined) return pa - pb;
+    if (pa !== undefined) return -1;
+    if (pb !== undefined) return 1;
+    return (originalIndex.get(a.link) ?? 0) - (originalIndex.get(b.link) ?? 0);
+  });
+}
+
+const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
   {
     icon: <ShoppingCart className="w-14 h-14 text-teal-400" />,
     title: 'AP InvoiceFlow',
@@ -44,7 +78,7 @@ const UAE_FINANCE_SUITE_MODULES = [
     bgColor: 'bg-blue-500/10',
     badge: 'Peppol',
   },
-] as const;
+];
 
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
   { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
@@ -57,6 +91,7 @@ const AGENT_DEFS: { id: AgentId; name: string; route: string; description: strin
 export const Dashboard: React.FC = () => {
   const nav = useNavigate();
   const { productRole } = useAuth();
+  const { isUAE } = useMarket();
   const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const { actions, activeAgents, markActive } = useAgentActivity();
 
@@ -64,7 +99,7 @@ export const Dashboard: React.FC = () => {
     if (uaeOnly) nav('/gulftax', { replace: true });
   }, [uaeOnly, nav]);
 
-  const modules = [
+  const modules: DashboardModule[] = [
     {
       icon: <Brain className="w-16 h-16 text-violet-400" />,
       title: 'AGENTIC Command Center',
@@ -183,6 +218,10 @@ export const Dashboard: React.FC = () => {
     },
   ];
 
+  const displayModules = isUAE
+    ? sortModulesForUae([...UAE_FINANCE_SUITE_MODULES, ...modules])
+    : modules;
+
   if (uaeOnly) return null;
 
   return (
@@ -197,35 +236,37 @@ export const Dashboard: React.FC = () => {
         </p>
       </nav>
 
-      {/* UAE Finance Suite — primary entry for UAE clients */}
-      <div className="border-b border-teal-800/40 bg-teal-950/30">
-        <div className="container mx-auto px-6 py-8">
-          <div className="text-center mb-6">
-            <h2 className="text-2xl font-bold text-white">🇦🇪 UAE Finance Suite</h2>
-            <p className="text-sm text-teal-200/80 mt-1">
-              AP invoices, GulfTax VAT/CT, and Peppol e-invoicing for UAE entities
-            </p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-4 max-w-5xl mx-auto">
-            {UAE_FINANCE_SUITE_MODULES.map((mod) => (
-              <Link
-                key={mod.link}
-                to={mod.link}
-                className="bg-slate-800/50 rounded-xl p-5 border border-teal-700/40 hover:border-teal-500/60 hover:bg-slate-800/70 transition-all group"
-              >
-                <span className="inline-block px-2 py-0.5 mb-3 text-[10px] font-bold rounded-full bg-teal-700/50 text-teal-200">
-                  {mod.badge}
-                </span>
-                <div className={`${mod.bgColor} w-14 h-14 rounded-lg flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
-                  {mod.icon}
-                </div>
-                <h3 className="text-lg font-semibold text-white mb-1">{mod.title}</h3>
-                <p className="text-sm text-slate-400 leading-snug">{mod.description}</p>
-              </Link>
-            ))}
+      {/* UAE Finance Suite — India view only (UAE merges these into the main grid below) */}
+      {!isUAE && (
+        <div className="border-b border-teal-800/40 bg-teal-950/30">
+          <div className="container mx-auto px-6 py-8">
+            <div className="text-center mb-6">
+              <h2 className="text-2xl font-bold text-white">🇦🇪 UAE Finance Suite</h2>
+              <p className="text-sm text-teal-200/80 mt-1">
+                AP invoices, GulfTax VAT/CT, and Peppol e-invoicing for UAE entities
+              </p>
+            </div>
+            <div className="grid md:grid-cols-3 gap-4 max-w-5xl mx-auto">
+              {UAE_FINANCE_SUITE_MODULES.map((mod) => (
+                <Link
+                  key={mod.link}
+                  to={mod.link}
+                  className="bg-slate-800/50 rounded-xl p-5 border border-teal-700/40 hover:border-teal-500/60 hover:bg-slate-800/70 transition-all group"
+                >
+                  <span className="inline-block px-2 py-0.5 mb-3 text-[10px] font-bold rounded-full bg-teal-700/50 text-teal-200">
+                    {mod.badge}
+                  </span>
+                  <div className={`${mod.bgColor} w-14 h-14 rounded-lg flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
+                    {mod.icon}
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-1">{mod.title}</h3>
+                  <p className="text-sm text-slate-400 leading-snug">{mod.description}</p>
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Agent Network Header */}
       <div className="border-b border-slate-700 bg-slate-800/30">
@@ -281,9 +322,9 @@ export const Dashboard: React.FC = () => {
 
         {/* Features Grid */}
         <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto relative">
-          {modules.map((module, index) => (
+          {displayModules.map((module) => (
             <Link
-              key={index}
+              key={module.link}
               to={module.link}
               className="bg-slate-800/40 backdrop-blur-sm rounded-2xl p-8 hover:bg-slate-800/60 transition-all duration-300 border border-slate-700 hover:border-slate-600 group relative"
             >
