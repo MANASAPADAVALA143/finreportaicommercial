@@ -269,6 +269,8 @@ CREATE TABLE IF NOT EXISTS trial_balances (
     file_name     VARCHAR(512) NOT NULL,
     file_path     VARCHAR(1024)
 );
+-- Existing IFRS tables (from init_db) may lack tenant_id; patch before indexes.
+DO $$ BEGIN ALTER TABLE trial_balances ADD COLUMN tenant_id VARCHAR(64); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_trial_balances_tenant_id ON trial_balances (tenant_id);
 
 CREATE TABLE IF NOT EXISTS trial_balance_lines (
@@ -282,6 +284,7 @@ CREATE TABLE IF NOT EXISTS trial_balance_lines (
     net_amount       DOUBLE PRECISION NOT NULL DEFAULT 0,
     account_type     VARCHAR(32) NOT NULL DEFAULT 'asset'
 );
+DO $$ BEGIN ALTER TABLE trial_balance_lines ADD COLUMN tenant_id VARCHAR(64); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_trial_balance_lines_trial_balance_id ON trial_balance_lines (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_trial_balance_lines_tenant_id ON trial_balance_lines (tenant_id);
 
@@ -311,6 +314,7 @@ CREATE TABLE IF NOT EXISTS gl_mappings (
     is_contra             BOOLEAN NOT NULL DEFAULT FALSE,
     locked                BOOLEAN NOT NULL DEFAULT FALSE
 );
+DO $$ BEGIN ALTER TABLE gl_mappings ADD COLUMN tenant_id VARCHAR(64); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_gl_mappings_tenant_id ON gl_mappings (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_gl_mappings_trial_balance_id ON gl_mappings (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_gl_mappings_trial_balance_line_id ON gl_mappings (trial_balance_line_id);
@@ -326,6 +330,7 @@ CREATE TABLE IF NOT EXISTS mapping_templates (
     created_at         TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     entries            JSONB
 );
+DO $$ BEGIN ALTER TABLE mapping_templates ADD COLUMN tenant_id VARCHAR(64); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_mapping_templates_tenant_id ON mapping_templates (tenant_id);
 
 CREATE TABLE IF NOT EXISTS ifrs_line_item_master (
@@ -354,6 +359,7 @@ CREATE TABLE IF NOT EXISTS generated_statements (
     generated_by_ai  BOOLEAN NOT NULL DEFAULT TRUE,
     reviewed         BOOLEAN NOT NULL DEFAULT FALSE
 );
+DO $$ BEGIN ALTER TABLE generated_statements ADD COLUMN tenant_id VARCHAR(64); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_generated_statements_tenant_id ON generated_statements (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_generated_statements_trial_balance_id ON generated_statements (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_generated_statements_statement_type ON generated_statements (statement_type);
