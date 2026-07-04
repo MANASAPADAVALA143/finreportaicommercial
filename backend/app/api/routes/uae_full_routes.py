@@ -49,6 +49,7 @@ from app.services.uae_accruals_service import suggest_accruals, post_accrual, pe
 from app.services.uae_bank_recon_service import (
     import_bank_statement, run_reconciliation, get_reconciliation_summary,
 )
+from app.services.ar_aging_service import compute_ar_aging
 
 router = APIRouter(prefix="/api/uae/full", tags=["UAE Full Accounting"])
 
@@ -1031,32 +1032,36 @@ def post_invoice(inv_id: str, request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/ar-aging")
-def ar_aging(request: Request, as_of: Optional[str] = None, db: Session = Depends(get_db)):
+def ar_aging(
+    request: Request,
+    as_of: Optional[str] = None,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
     as_of_date = date.fromisoformat(as_of) if as_of else date.today()
-    invoices = (
-        db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id)
-        .filter(UAESalesInvoice.outstanding > 0).all()
-    )
-    buckets = {"current": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "over_90": 0.0}
-    details = []
-    for inv in invoices:
-        days = (as_of_date - inv.due_date).days
-        amt  = float(inv.outstanding or 0)
-        if days <= 0:
-            buckets["current"] += amt; bucket = "current"
-        elif days <= 30:
-            buckets["1_30"] += amt; bucket = "1-30 days"
-        elif days <= 60:
-            buckets["31_60"] += amt; bucket = "31-60 days"
-        elif days <= 90:
-            buckets["61_90"] += amt; bucket = "61-90 days"
-        else:
-            buckets["over_90"] += amt; bucket = "90+ days"
-        details.append({"invoice_number": inv.invoice_number, "customer_id": inv.customer_id,
-                        "due_date": str(inv.due_date), "amount_due": amt,
-                        "days_overdue": max(days, 0), "bucket": bucket})
-    return {"as_of": str(as_of_date), "buckets": buckets, "invoices": details}
+    report = compute_ar_aging(db, tenant_id, company_id, as_of_date)
+
+    # Preserve this endpoint's existing flat {bucket_key: amount} contract
+    # (consumed by frontend/src/pages/uae-accounting/SalesInvoices.tsx via
+    # aging.current / aging['1_30'] / … / aging['over_90']).
+    canonical_to_legacy_key = {
+        "current": "current", "1_30": "1_30", "31_60": "31_60",
+        "61_90": "61_90", "90_plus": "over_90",
+    }
+    buckets = {canonical_to_legacy_key[b["bucket"]]: b["amount"] for b in report["buckets"]}
+    invoices = [
+        {
+            "invoice_number": inv["invoice_number"],
+            "customer_id": inv["customer_id"],
+            "due_date": inv["due_date"],
+            "amount_due": inv["amount_due"],
+            "days_overdue": inv["days_overdue"],
+            "bucket": inv["bucket_label"],
+        }
+        for inv in report["invoices"]
+    ]
+    return {"as_of": report["as_of"], "buckets": buckets, "invoices": invoices}
 
 
 # ===========================================================================

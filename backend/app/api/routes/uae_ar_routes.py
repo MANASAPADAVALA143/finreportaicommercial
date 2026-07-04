@@ -29,6 +29,7 @@ from app.services.notification_service import get_workspace_role_email, send_not
 from app.services.payment_prediction_service import predict_payments
 from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 from app.services.uae_journal_service import create_journal_entry
+from app.services.ar_aging_service import compute_ar_aging
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +301,12 @@ def ar_aging(
     ws = _ws(request, workspace_id)
     cid = _company_id(request, company_id)
     today = date.today()
+
+    # Preserve existing side effect of this endpoint: auto-flag sent invoices as
+    # overdue and notify AR Manager/CFO on first detection. Kept scoped to this
+    # endpoint only — uae_full_routes and ar_collections never triggered this,
+    # and unifying the bucket math shouldn't spread the notification side effect
+    # to callers that didn't previously have it.
     q = db.query(UAESalesInvoice).filter(
         UAESalesInvoice.tenant_id == ws,
         UAESalesInvoice.status.notin_(["paid"]),
@@ -307,42 +314,22 @@ def ar_aging(
     )
     if cid:
         q = q.filter(UAESalesInvoice.company_id == cid)
-    invoices = q.all()
-
-    bucket_map: dict[str, dict[str, Any]] = {}
-    total_outstanding = 0.0
-    for inv in invoices:
+    for inv in q.all():
         _flag_overdue(inv, today, db)
-        amt = _f(inv.outstanding)
-        if amt <= 0:
-            continue
-        total_outstanding += amt
-        due = inv.due_date or today
-        days = (today - due).days
-        if due >= today:
-            bucket = "Current"
-        elif days <= 30:
-            bucket = "1-30 days"
-        elif days <= 60:
-            bucket = "31-60 days"
-        elif days <= 90:
-            bucket = "61-90 days"
-        else:
-            bucket = "90+ days"
-        if bucket not in bucket_map:
-            bucket_map[bucket] = {"bucket": bucket, "invoice_count": 0, "total_aed": 0.0, "customers": []}
-        bucket_map[bucket]["invoice_count"] += 1
-        bucket_map[bucket]["total_aed"] += amt
-        cust_name = inv.customer.name if inv.customer else "Customer"
-        if cust_name not in bucket_map[bucket]["customers"]:
-            bucket_map[bucket]["customers"].append(cust_name)
-
     db.commit()
-    order = ["Current", "1-30 days", "31-60 days", "61-90 days", "90+ days"]
-    buckets = [bucket_map[b] for b in order if b in bucket_map]
-    for b in buckets:
-        b["total_aed"] = round(b["total_aed"], 2)
-    return {"buckets": buckets, "total_outstanding": round(total_outstanding, 2), "currency": "AED"}
+
+    report = compute_ar_aging(db, ws, cid, today)
+    buckets = [
+        {
+            "bucket": b["label"],
+            "invoice_count": b["invoice_count"],
+            "total_aed": b["amount"],
+            "customers": b["customers"],
+        }
+        for b in report["buckets"]
+        if b["invoice_count"] > 0
+    ]
+    return {"buckets": buckets, "total_outstanding": report["total_outstanding"], "currency": "AED"}
 
 
 @router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
