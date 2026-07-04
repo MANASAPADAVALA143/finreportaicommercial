@@ -420,6 +420,7 @@ CREATE TABLE IF NOT EXISTS recon_workspaces (
     created_at              TIMESTAMP NOT NULL,
     updated_at              TIMESTAMP NOT NULL
 );
+DO $$ BEGIN ALTER TABLE recon_workspaces ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_recon_workspaces_tenant_id ON recon_workspaces (tenant_id);
 
 CREATE TABLE IF NOT EXISTS match_groups (
@@ -562,6 +563,7 @@ CREATE TABLE IF NOT EXISTS disclosure_notes (
     edited_by            VARCHAR(256)
 );
 CREATE INDEX IF NOT EXISTS ix_disclosure_notes_trial_balance_id ON disclosure_notes (trial_balance_id);
+DO $$ BEGIN ALTER TABLE disclosure_notes ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_disclosure_notes_tenant_id ON disclosure_notes (tenant_id);
 
 CREATE TABLE IF NOT EXISTS disclosure_sections (
@@ -601,6 +603,7 @@ CREATE TABLE IF NOT EXISTS statement_commentaries (
     created_at       TIMESTAMP NOT NULL,
     updated_at       TIMESTAMP NOT NULL
 );
+DO $$ BEGIN ALTER TABLE statement_commentaries ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_statement_commentaries_tenant_id ON statement_commentaries (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_statement_commentaries_trial_balance_id ON statement_commentaries (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_statement_commentaries_commentary_type ON statement_commentaries (commentary_type);
@@ -617,6 +620,7 @@ CREATE TABLE IF NOT EXISTS risk_flags (
     sort_order       INTEGER NOT NULL,
     created_at       TIMESTAMP NOT NULL
 );
+DO $$ BEGIN ALTER TABLE risk_flags ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_risk_flags_tenant_id ON risk_flags (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_risk_flags_trial_balance_id ON risk_flags (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_risk_flags_severity ON risk_flags (severity);
@@ -638,6 +642,7 @@ CREATE TABLE IF NOT EXISTS board_packs (
     shared_at        TIMESTAMP,
     view_count       INTEGER NOT NULL
 );
+DO $$ BEGIN ALTER TABLE board_packs ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_board_packs_tenant_id ON board_packs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_board_packs_trial_balance_id ON board_packs (trial_balance_id);
 CREATE INDEX IF NOT EXISTS ix_board_packs_public_token ON board_packs (public_token);
@@ -656,6 +661,7 @@ CREATE TABLE IF NOT EXISTS ct_bridge_results (
     inputs_json      JSONB,
     calculated_at    TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE ct_bridge_results ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_ct_bridge_results_tenant_id ON ct_bridge_results (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_ct_bridge_results_trial_balance_id ON ct_bridge_results (trial_balance_id);
 
@@ -679,6 +685,7 @@ CREATE TABLE IF NOT EXISTS erp_connections (
     created_at          TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     updated_at          TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE erp_connections ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_erp_connections_tenant_id ON erp_connections (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_erp_connections_entity_id ON erp_connections (entity_id);
 
@@ -697,6 +704,7 @@ CREATE TABLE IF NOT EXISTS tally_sync_logs (
     started_at       TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     completed_at     TIMESTAMP
 );
+DO $$ BEGIN ALTER TABLE tally_sync_logs ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_tally_sync_logs_tenant_id ON tally_sync_logs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_tally_sync_logs_connection_id ON tally_sync_logs (connection_id);
 CREATE INDEX IF NOT EXISTS ix_tally_sync_logs_trial_balance_id ON tally_sync_logs (trial_balance_id);
@@ -1152,6 +1160,7 @@ CREATE TABLE IF NOT EXISTS uae_accounts (
     parent_id         VARCHAR(36) REFERENCES uae_accounts(id),
     created_at        TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_accounts ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_accounts_tenant_id ON uae_accounts (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_accounts_company_id ON uae_accounts (company_id);
 
@@ -1173,6 +1182,7 @@ CREATE TABLE IF NOT EXISTS uae_journal_entries (
     rejection_reason VARCHAR(500),
     created_at       TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_journal_entries ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_journal_entries_tenant_id ON uae_journal_entries (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_journal_entries_company_id ON uae_journal_entries (company_id);
 
@@ -1205,6 +1215,7 @@ CREATE TABLE IF NOT EXISTS uae_customers (
     is_active          BOOLEAN DEFAULT TRUE,
     created_at         TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_customers ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_customers_tenant_id ON uae_customers (tenant_id);
 
 CREATE TABLE IF NOT EXISTS uae_sales_invoices (
@@ -1237,6 +1248,7 @@ CREATE TABLE IF NOT EXISTS uae_sales_invoices (
     created_at           TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc'),
     updated_at           TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_sales_invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_sales_invoices_tenant_id ON uae_sales_invoices (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_sales_invoices_company_id ON uae_sales_invoices (company_id);
 
@@ -1266,6 +1278,7 @@ CREATE TABLE IF NOT EXISTS uae_bank_accounts (
     is_active               BOOLEAN DEFAULT TRUE,
     created_at              TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_bank_accounts ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_bank_accounts_tenant_id ON uae_bank_accounts (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_bank_accounts_company_id ON uae_bank_accounts (company_id);
 
@@ -1279,6 +1292,7 @@ CREATE TABLE IF NOT EXISTS uae_bank_statements (
     uploaded_at     TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc'),
     status          VARCHAR(20) DEFAULT 'pending'
 );
+DO $$ BEGIN ALTER TABLE uae_bank_statements ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_bank_statements_tenant_id ON uae_bank_statements (tenant_id);
 
 CREATE TABLE IF NOT EXISTS uae_bank_statement_lines (
@@ -1321,6 +1335,7 @@ CREATE TABLE IF NOT EXISTS uae_fixed_assets (
     disposal_proceeds           NUMERIC(15, 2),
     created_at                  TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_fixed_assets ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_tenant_id ON uae_fixed_assets (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_company_id ON uae_fixed_assets (company_id);
 
@@ -1344,6 +1359,7 @@ CREATE TABLE IF NOT EXISTS uae_accruals (
     source_document     VARCHAR(200),
     created_at          TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_accruals ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_accruals_tenant_id ON uae_accruals (tenant_id);
 
 CREATE TABLE IF NOT EXISTS uae_period_closes (
@@ -1367,6 +1383,7 @@ CREATE TABLE IF NOT EXISTS uae_period_closes (
     closed_at                     TIMESTAMP,
     created_at                    TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_period_closes ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_period_closes_tenant_id ON uae_period_closes (tenant_id);
 
 CREATE TABLE IF NOT EXISTS uae_account_classifications (
@@ -1413,6 +1430,7 @@ CREATE TABLE IF NOT EXISTS uae_vendors (
     is_active          BOOLEAN DEFAULT TRUE,
     created_at         TIMESTAMP
 );
+DO $$ BEGIN ALTER TABLE uae_vendors ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_vendors_tenant_id ON uae_vendors (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_vendors_workspace_id ON uae_vendors (workspace_id);
 
@@ -1435,6 +1453,7 @@ CREATE TABLE IF NOT EXISTS uae_purchase_invoices (
     notes            TEXT,
     created_at       TIMESTAMP
 );
+DO $$ BEGIN ALTER TABLE uae_purchase_invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_purchase_invoices_tenant_id ON uae_purchase_invoices (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_purchase_invoices_workspace_id ON uae_purchase_invoices (workspace_id);
 
@@ -1480,6 +1499,7 @@ CREATE TABLE IF NOT EXISTS ap_companies (
     updated_at          TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc'),
     UNIQUE (tenant_id, slug)
 );
+DO $$ BEGIN ALTER TABLE ap_companies ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_ap_companies_tenant_id ON ap_companies (tenant_id);
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -1511,6 +1531,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     created_by       VARCHAR(36),
     UNIQUE (tenant_id, company_id, invoice_number)
 );
+DO $$ BEGIN ALTER TABLE invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_invoices_tenant_id ON invoices (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_invoices_company_id ON invoices (company_id);
 
@@ -1537,6 +1558,7 @@ CREATE TABLE IF NOT EXISTS vendors (
     extra      JSONB DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE vendors ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_vendors_tenant_id ON vendors (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_vendors_company_id ON vendors (company_id);
 
@@ -1551,6 +1573,7 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
     extra        JSONB DEFAULT '{}',
     created_at   TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE purchase_orders ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_purchase_orders_tenant_id ON purchase_orders (tenant_id);
 
 CREATE TABLE IF NOT EXISTS goods_receipts (
@@ -1563,6 +1586,7 @@ CREATE TABLE IF NOT EXISTS goods_receipts (
     extra      JSONB DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE goods_receipts ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_goods_receipts_tenant_id ON goods_receipts (tenant_id);
 
 CREATE TABLE IF NOT EXISTS company_config (
@@ -1573,6 +1597,7 @@ CREATE TABLE IF NOT EXISTS company_config (
     updated_at TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc'),
     UNIQUE (tenant_id, company_id)
 );
+DO $$ BEGIN ALTER TABLE company_config ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_company_config_tenant_id ON company_config (tenant_id);
 
 CREATE TABLE IF NOT EXISTS gulftax_transactions (
@@ -1594,6 +1619,7 @@ CREATE TABLE IF NOT EXISTS gulftax_transactions (
     status           VARCHAR(16) DEFAULT 'posted',
     created_at       TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE gulftax_transactions ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_gulftax_transactions_tenant_id ON gulftax_transactions (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_gulftax_transactions_company_id ON gulftax_transactions (company_id);
 
@@ -1611,6 +1637,7 @@ CREATE TABLE IF NOT EXISTS vat_return_entries (
     box_number     NUMERIC(4, 0),
     created_at     TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE vat_return_entries ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_vat_return_entries_tenant_id ON vat_return_entries (tenant_id);
 
 CREATE TABLE IF NOT EXISTS partial_exemption_calculations (
@@ -1629,6 +1656,7 @@ CREATE TABLE IF NOT EXISTS partial_exemption_calculations (
     created_at        TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     updated_at        TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE partial_exemption_calculations ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_partial_exemption_calculations_tenant_id ON partial_exemption_calculations (tenant_id);
 
 CREATE TABLE IF NOT EXISTS bad_debt_relief_claims (
@@ -1647,6 +1675,7 @@ CREATE TABLE IF NOT EXISTS bad_debt_relief_claims (
     created_at         TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     updated_at         TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE bad_debt_relief_claims ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_bad_debt_relief_claims_tenant_id ON bad_debt_relief_claims (tenant_id);
 
 CREATE TABLE IF NOT EXISTS designated_zone_transactions (
@@ -1662,6 +1691,7 @@ CREATE TABLE IF NOT EXISTS designated_zone_transactions (
     warning            TEXT,
     created_at         TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE designated_zone_transactions ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_designated_zone_transactions_tenant_id ON designated_zone_transactions (tenant_id);
 
 CREATE TABLE IF NOT EXISTS ap_audit_logs (
@@ -1674,6 +1704,7 @@ CREATE TABLE IF NOT EXISTS ap_audit_logs (
     details    JSONB DEFAULT '{}',
     created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE ap_audit_logs ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_ap_audit_logs_tenant_id ON ap_audit_logs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_ap_audit_logs_invoice_id ON ap_audit_logs (invoice_id);
 
@@ -1724,6 +1755,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     updated_at            TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
 CREATE INDEX IF NOT EXISTS ix_agent_runs_run_id ON agent_runs (run_id);
+DO $$ BEGIN ALTER TABLE agent_runs ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_agent_runs_tenant_id ON agent_runs (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_agent_runs_trial_balance_id ON agent_runs (trial_balance_id);
 
@@ -1766,6 +1798,7 @@ CREATE TABLE IF NOT EXISTS cfo_agent_runs (
     updated_at    TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
 CREATE INDEX IF NOT EXISTS ix_cfo_agent_runs_run_id ON cfo_agent_runs (run_id);
+DO $$ BEGIN ALTER TABLE cfo_agent_runs ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_cfo_agent_runs_tenant_id ON cfo_agent_runs (tenant_id);
 
 CREATE TABLE IF NOT EXISTS cfo_agent_logs (
@@ -1826,6 +1859,7 @@ CREATE TABLE IF NOT EXISTS uae_connected_accounts (
     created_at          TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     updated_at          TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_connected_accounts ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_connected_accounts_tenant_id ON uae_connected_accounts (tenant_id);
 
 CREATE TABLE IF NOT EXISTS uae_trial_balances (
@@ -1845,6 +1879,7 @@ CREATE TABLE IF NOT EXISTS uae_trial_balances (
     raw_data_json         JSONB,
     synced_at             TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
+DO $$ BEGIN ALTER TABLE uae_trial_balances ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_trial_balances_tenant_id ON uae_trial_balances (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_trial_balances_connected_account_id ON uae_trial_balances (connected_account_id);
 
