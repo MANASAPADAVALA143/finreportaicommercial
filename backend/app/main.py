@@ -107,6 +107,7 @@ from app.api.routes import (
     journal_entries,
     analytics,
     ap_invoices_rds,
+    ap_companies_rds,
     vat_advanced_rds,
     system_routes,
 )
@@ -274,6 +275,7 @@ app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ap_invoices_rds.router)
+app.include_router(ap_companies_rds.router)
 app.include_router(vat_advanced_rds.router)
 app.include_router(system_routes.router)
 

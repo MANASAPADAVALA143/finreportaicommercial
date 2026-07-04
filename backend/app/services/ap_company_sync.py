@@ -6,7 +6,10 @@ import logging
 import re
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.core.supabase import get_supabase
+from app.models.client_data import ApCompany
 from app.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,31 @@ def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
             pass
 
     return None
+
+
+def upsert_ap_company_rds(db: Session, workspace: Workspace, company: dict[str, Any]) -> ApCompany:
+    """Mirror Supabase companies row into RDS ap_companies (same id)."""
+    cid = str(company["id"])
+    slug = str(company.get("slug") or _slugify(str(company.get("name") or workspace.name)))
+    row = db.get(ApCompany, cid)
+    if row:
+        row.name = str(company.get("name") or row.name)
+        row.slug = slug
+        row.tenant_id = workspace.id
+        row.market = str(company.get("market") or row.market or "uae")
+    else:
+        row = ApCompany(
+            id=cid,
+            tenant_id=workspace.id,
+            name=str(company.get("name") or workspace.name),
+            slug=slug,
+            market=str(company.get("market") or "uae"),
+            accounting_standard=str(company.get("accounting_standard") or "IFRS"),
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 def _ensure_company_config(sb: Any, company_id: str) -> None:

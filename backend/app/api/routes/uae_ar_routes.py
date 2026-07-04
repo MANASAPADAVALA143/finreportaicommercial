@@ -27,6 +27,7 @@ from app.services.credit_risk_service import recalc_for_customer_name
 from app.services.dso_service import build_dso_metrics
 from app.services.notification_service import get_workspace_role_email, send_notification
 from app.services.payment_prediction_service import predict_payments
+from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 from app.services.uae_journal_service import create_journal_entry
 
 logger = logging.getLogger(__name__)
@@ -229,6 +230,12 @@ class CreateInvoiceIn(BaseModel):
     workspace_id: Optional[str] = None
 
 
+class ApproveAndPostIn(BaseModel):
+    invoice_id: str
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+
+
 class SendInvoiceIn(BaseModel):
     invoice_id: str
     customer_email: str
@@ -338,6 +345,20 @@ def ar_aging(
     return {"buckets": buckets, "total_outstanding": round(total_outstanding, 2), "currency": "AED"}
 
 
+@router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
+def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
+    ws = _ws(request, body.workspace_id)
+    result = post_sales_invoice_to_gl_and_tax(
+        body.invoice_id,
+        tenant_id=ws,
+        company_id=body.company_id or _company_id(request),
+        db=db,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
+    return result
+
+
 @router.post("/create-invoice")
 def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id)
@@ -387,39 +408,24 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
             vat_amount=line_vat,
             line_total=line_sub + line_vat,
         ))
+    db.flush()
 
-    je_lines = [
-        {"account_code": "1200", "account_name": "Trade Receivables",
-         "debit": total, "credit": 0, "description": f"AR {invoice_number}"},
-        {"account_code": "4100", "account_name": "Sales Revenue",
-         "debit": 0, "credit": subtotal, "description": f"Sales {body.customer_name}"},
-    ]
-    if vat_amount > 0:
-        je_lines.append({
-            "account_code": "2200", "account_name": "VAT Payable",
-            "debit": 0, "credit": vat_amount, "description": f"VAT {invoice_number}",
-        })
-
-    try:
-        je = create_journal_entry(
-            tenant_id=ws,
-            entry_date=inv_date,
-            description=f"Sales: {body.customer_name} - {invoice_number}",
-            lines=je_lines,
-            reference=invoice_number,
-            source="AR_INVOICE",
-            company_id=cid,
-            db=db,
-            auto_post=True,
-        )
-    except PeriodControlError as exc:
+    post_result = post_sales_invoice_to_gl_and_tax(
+        inv.id,
+        tenant_id=ws,
+        company_id=cid,
+        db=db,
+    )
+    if not post_result.get("ok"):
         db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        err = post_result.get("error", "post_failed")
+        if "period" in str(err).lower():
+            raise HTTPException(status_code=422, detail=err) from None
+        raise HTTPException(status_code=400, detail=err)
 
-    inv.journal_entry_id = je.id
-    db.add(inv)
     _recalc_credit(db, ws, cid, body.customer_name.strip())
     db.commit()
+    db.refresh(inv)
 
     return {
         "invoice_id": inv.id,
@@ -427,7 +433,10 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
         "subtotal": round(subtotal, 2),
         "vat_amount": round(vat_amount, 2),
         "total": round(total, 2),
-        "je_id": je.id,
+        "status": inv.status,
+        "je_id": post_result.get("je_id"),
+        "je_reference": post_result.get("je_reference"),
+        "gulftax": post_result.get("gulftax"),
     }
 
 
@@ -437,6 +446,17 @@ def send_invoice(body: SendInvoiceIn, request: Request, db: Session = Depends(ge
     inv = db.query(UAESalesInvoice).filter_by(id=body.invoice_id, tenant_id=ws).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if not inv.journal_entry_id and inv.status == "draft":
+        post_result = post_sales_invoice_to_gl_and_tax(
+            inv.id,
+            tenant_id=ws,
+            company_id=inv.company_id,
+            db=db,
+        )
+        if not post_result.get("ok"):
+            raise HTTPException(status_code=400, detail=post_result.get("error", "post_failed"))
+        db.refresh(inv)
 
     company = None
     if inv.company_id:

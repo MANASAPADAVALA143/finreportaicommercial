@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, Index
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, Index
 from app.core.database import Base
 
 
@@ -46,8 +46,8 @@ class FpaMasterRow(Base):
 
     notes           = Column(Text, nullable=True)
 
-    # Company / tenant
-    company_id      = Column(String(64), default="default", index=True)
+    # Company — must match ap_companies.id (set on upload, not free text)
+    company_id      = Column(String(36), ForeignKey("ap_companies.id"), nullable=False, index=True)
 
     __table_args__ = (
         Index("ix_fpa_master_upload_section", "upload_id", "section"),

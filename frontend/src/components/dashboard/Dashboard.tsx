@@ -53,6 +53,15 @@ function sortModulesForUae(modules: DashboardModule[]): DashboardModule[] {
   });
 }
 
+/** Show only the regional accounting suite that matches the active market toggle. */
+function filterModulesByMarket(modules: DashboardModule[], isUAE: boolean): DashboardModule[] {
+  return modules.filter((m) => {
+    if (m.link === '/uae-full') return isUAE;
+    if (m.link === '/india-full') return !isUAE;
+    return true;
+  });
+}
+
 const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
   {
     icon: <ShoppingCart className="w-14 h-14 text-teal-400" />,
@@ -218,9 +227,10 @@ export const Dashboard: React.FC = () => {
     },
   ];
 
+  const marketModules = filterModulesByMarket(modules, isUAE);
   const displayModules = isUAE
-    ? sortModulesForUae([...UAE_FINANCE_SUITE_MODULES, ...modules])
-    : modules;
+    ? sortModulesForUae([...UAE_FINANCE_SUITE_MODULES, ...marketModules])
+    : marketModules;
 
   if (uaeOnly) return null;
 

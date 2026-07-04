@@ -8,7 +8,6 @@ import {
   fetchMyApprovalHistory,
   processApprovalAction,
 } from '../../lib/ap-invoice/approvalService';
-import { postApprovedInvoiceToGL } from '../../lib/ap-invoice/glPostService';
 import { useCompany } from '../../context/CompanyContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -103,34 +102,20 @@ export function MyApprovals() {
     }
 
     if (action === 'approved') {
-      const { data: inv, error: invErr } = await supabase
-        .from('invoices')
-        .select('*')
-        .eq('id', invoiceId)
-        .single();
-
-      if (!invErr && inv && inv.approval_status === 'approved' && inv.status === 'Approved') {
-        try {
-          const gl = await postApprovedInvoiceToGL(inv as Invoice, activeCompanyId);
-          if (gl.je_posted) {
-            toast({
-              title: 'Approved — journal entry posted to GL',
-              description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
-            });
-            if (gl.je_reference) {
-              setJePosted((prev) => ({ ...prev, [invoiceId]: { reference: gl.je_reference! } }));
-            }
-          } else {
-            toast({
-              title: 'Approved — GL post incomplete',
-              description: 'Approval saved but journal entry was not posted. Retry from invoice list.',
-              variant: 'destructive',
-            });
-          }
-        } catch (e) {
+      if (res.fully_approved) {
+        const gl = res.gl_post;
+        if (gl?.je_posted || gl?.skipped) {
           toast({
-            title: 'Approved — GL post failed, retry manually',
-            description: e instanceof Error ? e.message : 'Could not post to UAE GL',
+            title: gl.skipped ? 'Approved — already in GL' : 'Approved — journal entry posted to GL',
+            description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
+          });
+          if (gl.je_reference) {
+            setJePosted((prev) => ({ ...prev, [invoiceId]: { reference: gl.je_reference! } }));
+          }
+        } else {
+          toast({
+            title: 'Approved — GL post incomplete',
+            description: 'Approval saved but journal entry was not posted. Retry from invoice list.',
             variant: 'destructive',
           });
         }

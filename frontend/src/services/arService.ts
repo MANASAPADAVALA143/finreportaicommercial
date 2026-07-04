@@ -94,10 +94,28 @@ export const getARAging = () =>
   get<{ buckets: ARAgingBucket[]; total_outstanding: number; currency: string }>('/aging');
 
 export const createARInvoice = (body: CreateInvoicePayload) =>
-  post<{ invoice_id: string; invoice_number: string; subtotal: number; vat_amount: number; total: number; je_id: string }>(
+  post<{ invoice_id: string; invoice_number: string; subtotal: number; vat_amount: number; total: number; status: string; je_id: string; je_reference?: string }>(
     '/create-invoice',
     body,
   );
+
+export const approveAndPostARInvoice = (invoice_id: string, company_id?: string) =>
+  post<{
+    ok: boolean;
+    skipped?: boolean;
+    je_posted: boolean;
+    je_id?: string;
+    je_reference?: string;
+    status?: string;
+    invoice_id?: string;
+    invoice_number?: string;
+    gulftax?: Record<string, unknown>;
+    message?: string;
+  }>('/approve-and-post', {
+    invoice_id,
+    company_id: company_id ?? localStorage.getItem('active_company_id'),
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
 
 export const sendARInvoice = (invoice_id: string, customer_email: string) =>
   post<{ sent: boolean; invoice_number: string; warning?: string }>('/send-invoice', {

@@ -1005,32 +1005,29 @@ def create_invoice(body: InvoiceCreate, request: Request, db: Session = Depends(
 
 @router.post("/invoices/{inv_id}/post")
 def post_invoice(inv_id: str, request: Request, db: Session = Depends(get_db)):
+    from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+
     tenant_id = _tenant(request.headers)
     inv = db.query(UAESalesInvoice).filter_by(id=inv_id, tenant_id=tenant_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if inv.status != "draft":
-        raise HTTPException(status_code=400, detail="Invoice already posted")
-    lines_in = [
-        {"account_code": "1200", "description": f"AR {inv.invoice_number}",
-         "debit": inv.total_amount, "credit": 0},
-    ]
-    for ln in inv.lines:
-        line_net = float(ln.line_total or 0) - float(ln.vat_amount or 0)
-        lines_in.append({"account_code": "4001",
-                         "description": ln.description, "debit": 0, "credit": line_net})
-    if float(inv.vat_amount or 0):
-        lines_in.append({"account_code": "2300", "description": f"VAT {inv.invoice_number}",
-                         "debit": 0, "credit": float(inv.vat_amount)})
-    je = create_journal_entry(
-        tenant_id=tenant_id, entry_date=inv.invoice_date,
-        description=f"Sales Invoice {inv.invoice_number}", lines=lines_in,
-        reference=inv.invoice_number, source="ar_invoice", db=db, auto_post=True,
+
+    result = post_sales_invoice_to_gl_and_tax(
+        inv_id,
+        tenant_id=tenant_id,
+        company_id=inv.company_id,
+        db=db,
     )
-    inv.status = "posted"
-    inv.journal_entry_id = je.id
-    db.commit()
-    return {"id": inv.id, "status": "posted", "je_id": je.id}
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
+    return {
+        "id": inv_id,
+        "status": result.get("status", "posted"),
+        "je_id": result.get("je_id"),
+        "je_reference": result.get("je_reference"),
+        "skipped": result.get("skipped", False),
+        "gulftax": result.get("gulftax"),
+    }
 
 
 @router.get("/ar-aging")
@@ -1575,16 +1572,21 @@ class PurchaseInvoiceCreate(BaseModel):
     description: str = "AP Invoice"
     vat_treatment: str = "standard_rated"
     source: str = "manual"
+    company_id: str = ""
 
 
 @router.post("/purchase-invoices")
 def create_purchase_invoice(body: PurchaseInvoiceCreate, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request.headers)
     from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine
+    from app.services.ap_company_resolver import resolve_ap_company_id
+
+    company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
     pi = UAEPurchaseInvoice(
         id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         workspace_id=tenant_id,
+        company_id=company_id,
         invoice_number=body.invoice_number,
         vendor_id=body.vendor_id,
         invoice_date=date.fromisoformat(body.invoice_date),

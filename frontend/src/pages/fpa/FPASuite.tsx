@@ -1,9 +1,13 @@
 // FP&A Suite - Landing Page with Sub-Module Cards
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { syncFpaMasterFromApi } from '../../utils/fpaDataLoader';
-import { useClient } from '../../context/ClientContext';
+import { useAuth } from '../../context/AuthContext';
+import { listApCompanies, type ApCompany } from '../../services/apCompanies.service';
+import { getActiveCompanyId } from '../../context/CompanyContext';
+import { workspaceHeaders } from '../../services/workspaceService';
+import { backendOrigin } from '../../utils/backendOrigin';
 import {
   BarChart3,
   TrendingUp,
@@ -20,18 +24,42 @@ import {
   Grid3x3,
 } from 'lucide-react';
 import { MultiUploadModal } from '../../components/fpa/MultiUploadModal';
-import { backendOrigin } from '../../utils/backendOrigin';
 
 export const FPASuite = () => {
   const navigate = useNavigate();
-  const { activeClient } = useClient();
-  const companyId = activeClient?.companyId || 'default';
+  const { accessToken } = useAuth();
+  const [apCompanies, setApCompanies] = useState<ApCompany[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState('');
+  const [companiesLoading, setCompaniesLoading] = useState(true);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showMasterUpload, setShowMasterUpload] = useState(false);
   const [masterUploading, setMasterUploading] = useState(false);
   const [masterStatus, setMasterStatus] = useState<string | null>(null);
   const [masterFile, setMasterFile] = useState<File | null>(null);
   const [exportingWorkbook, setExportingWorkbook] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setCompaniesLoading(true);
+      const companies = await listApCompanies(accessToken);
+      if (cancelled) return;
+      setApCompanies(companies);
+      const stored = getActiveCompanyId();
+      const match = companies.find((c) => c.id === stored);
+      if (match) {
+        setSelectedCompanyId(match.id);
+      } else if (companies.length === 1) {
+        setSelectedCompanyId(companies[0].id);
+      } else {
+        setSelectedCompanyId('');
+      }
+      setCompaniesLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
 
   const downloadMasterTemplate = () => {
     const rows = [
@@ -53,20 +81,25 @@ export const FPASuite = () => {
   };
 
   const handleMasterUpload = async () => {
-    if (!masterFile) return;
+    if (!masterFile || !selectedCompanyId) return;
     setMasterUploading(true);
     try {
       const form = new FormData();
       form.append('file', masterFile);
-      form.append('company_id', companyId);
+      form.append('company_id', selectedCompanyId);
       form.append('replace_existing', 'true');
       const base = backendOrigin();
-      const res = await fetch(`${base}/api/fpa/upload-master`, { method: 'POST', body: form });
+      const res = await fetch(`${base}/api/fpa/upload-master`, {
+        method: 'POST',
+        headers: workspaceHeaders(accessToken),
+        body: form,
+        credentials: 'include',
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Upload failed');
       setMasterStatus(data.message);
 
-      const sync = await syncFpaMasterFromApi(companyId);
+      const sync = await syncFpaMasterFromApi(selectedCompanyId);
       setShowMasterUpload(false);
       setMasterFile(null);
       if (sync.ok) {
@@ -418,6 +451,31 @@ export const FPASuite = () => {
               </button>
             </div>
 
+            {/* Company selector — must match ap_companies.id */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company</label>
+              {companiesLoading ? (
+                <p className="text-sm text-gray-500">Loading companies…</p>
+              ) : apCompanies.length === 0 ? (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  No AP companies found for this workspace. Set up a company in AP InvoiceFlow first.
+                </p>
+              ) : (
+                <select
+                  value={selectedCompanyId}
+                  onChange={(e) => setSelectedCompanyId(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                >
+                  <option value="">Select company…</option>
+                  {apCompanies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
             {/* File picker */}
             <label className="flex flex-col items-center gap-2 border-2 border-dashed border-emerald-300 hover:border-emerald-500 rounded-xl p-6 cursor-pointer transition mb-4">
               <Upload className="w-8 h-8 text-emerald-500" />
@@ -438,7 +496,7 @@ export const FPASuite = () => {
                 className="flex-1 py-2.5 rounded-xl border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium">
                 Cancel
               </button>
-              <button onClick={handleMasterUpload} disabled={!masterFile || masterUploading}
+              <button onClick={handleMasterUpload} disabled={!masterFile || !selectedCompanyId || masterUploading}
                 className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-semibold">
                 {masterUploading ? '⏳ Uploading…' : '🚀 Upload & Feed All Modules'}
               </button>

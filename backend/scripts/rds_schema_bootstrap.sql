@@ -1438,6 +1438,7 @@ CREATE TABLE IF NOT EXISTS uae_purchase_invoices (
     id               VARCHAR(36) PRIMARY KEY,
     tenant_id        VARCHAR(64) NOT NULL,
     workspace_id     VARCHAR(36),
+    company_id       VARCHAR(36),
     invoice_number   VARCHAR(50) NOT NULL,
     vendor_id        VARCHAR(36) NOT NULL REFERENCES uae_vendors(id),
     invoice_date     DATE NOT NULL,
@@ -1454,8 +1455,10 @@ CREATE TABLE IF NOT EXISTS uae_purchase_invoices (
     created_at       TIMESTAMP
 );
 DO $$ BEGIN ALTER TABLE uae_purchase_invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE uae_purchase_invoices ADD COLUMN company_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_uae_purchase_invoices_tenant_id ON uae_purchase_invoices (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_uae_purchase_invoices_workspace_id ON uae_purchase_invoices (workspace_id);
+CREATE INDEX IF NOT EXISTS ix_uae_purchase_invoices_company_id ON uae_purchase_invoices (company_id);
 
 CREATE TABLE IF NOT EXISTS uae_purchase_invoice_lines (
     id           VARCHAR(36) PRIMARY KEY,
@@ -1623,6 +1626,13 @@ DO $$ BEGIN ALTER TABLE gulftax_transactions ADD COLUMN tenant_id VARCHAR(36); E
 CREATE INDEX IF NOT EXISTS ix_gulftax_transactions_tenant_id ON gulftax_transactions (tenant_id);
 CREATE INDEX IF NOT EXISTS ix_gulftax_transactions_company_id ON gulftax_transactions (company_id);
 
+-- company_id FK unification (ap_companies.id is canonical)
+DO $$ BEGIN
+    ALTER TABLE uae_purchase_invoices
+        ADD CONSTRAINT fk_uae_purchase_invoices_company_id
+        FOREIGN KEY (company_id) REFERENCES ap_companies(id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 CREATE TABLE IF NOT EXISTS vat_return_entries (
     id             VARCHAR(36) PRIMARY KEY,
     tenant_id      VARCHAR(36) NOT NULL,
@@ -1721,8 +1731,36 @@ CREATE TABLE IF NOT EXISTS fpa_analysis_results (
 );
 
 CREATE TABLE IF NOT EXISTS fpa_master_data (
-    id SERIAL PRIMARY KEY
+    id               SERIAL PRIMARY KEY,
+    upload_id        VARCHAR(64) NOT NULL,
+    uploaded_at      TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc'),
+    section          VARCHAR(16) NOT NULL,
+    currency         VARCHAR(8) NOT NULL DEFAULT 'AED',
+    fiscal_year      VARCHAR(16) DEFAULT 'FY2025',
+    account_code     VARCHAR(32),
+    account_name     VARCHAR(255) NOT NULL,
+    account_type     VARCHAR(32),
+    category         VARCHAR(128),
+    department       VARCHAR(128),
+    owner            VARCHAR(128),
+    monthly_actuals  TEXT,
+    monthly_budgets  TEXT,
+    fy_prior_actual  DOUBLE PRECISION DEFAULT 0,
+    opening_cash     DOUBLE PRECISION DEFAULT 0,
+    notes            TEXT,
+    company_id       VARCHAR(36) NOT NULL
 );
+DO $$ BEGIN ALTER TABLE fpa_master_data ADD COLUMN company_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ix_fpa_master_data_upload_id ON fpa_master_data (upload_id);
+CREATE INDEX IF NOT EXISTS ix_fpa_master_data_section ON fpa_master_data (section);
+CREATE INDEX IF NOT EXISTS ix_fpa_master_data_company_id ON fpa_master_data (company_id);
+CREATE INDEX IF NOT EXISTS ix_fpa_master_upload_section ON fpa_master_data (upload_id, section);
+CREATE INDEX IF NOT EXISTS ix_fpa_master_company_section ON fpa_master_data (company_id, section, currency);
+DO $$ BEGIN
+    ALTER TABLE fpa_master_data
+        ADD CONSTRAINT fk_fpa_master_data_company_id
+        FOREIGN KEY (company_id) REFERENCES ap_companies(id);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS financial_models (
     id SERIAL PRIMARY KEY

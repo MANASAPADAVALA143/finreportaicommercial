@@ -24,7 +24,7 @@ import { callAI } from '../../services/aiProvider';
 import { loadFPABudget, loadFPAPriorYear, loadFPAActual, checkDataAvailability, getMissingDataMessage, convertBudgetToLineItems, syncFpaMasterFromApi } from '../../utils/fpaDataLoader';
 import { forwardFillMonthlyBudget, inferBudgetDepartment, isYoYComparable } from '../../utils/budgetUtils';
 import { postCfoAgentRun } from '../../services/cfoAgents';
-import { useClient } from '../../context/ClientContext';
+import { getActiveCompanyId } from '../../context/CompanyContext';
 
 const SELECTED_BUDGET_PERIOD = 'FY2025';
 const CURRENCY_SYMBOL: Record<string, string> = {
@@ -82,8 +82,7 @@ function buildBudgetCfoLineItems(rows: BudgetLineItem[]) {
 
 const BudgetManagement: React.FC = () => {
   const navigate = useNavigate();
-  const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
+  const tenantId = getActiveCompanyId() || '';
   
   // Check data availability
   const dataCheck = checkDataAvailability(['fpa_budget']);

@@ -569,10 +569,13 @@ export async function runAutoMatch(
 
   if (autoApproved && companyId) {
     try {
-      const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-      void syncApprovedInvoiceToGulfTax(invoiceId, companyId);
+      const { data: invRow } = await supabase.from('invoices').select('*').eq('id', invoiceId).single();
+      if (invRow) {
+        const { triggerGlPostForApprovedInvoice } = await import('./glPostService');
+        triggerGlPostForApprovedInvoice(invRow as import('./supabase').Invoice, companyId);
+      }
     } catch {
-      /* GulfTax sync is best-effort */
+      /* GL post is best-effort */
     }
   }
 

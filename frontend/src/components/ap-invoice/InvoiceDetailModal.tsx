@@ -98,6 +98,7 @@ import { getTaxLabel } from '@/utils/taxConfig';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { triggerGlPostForApprovedInvoice } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
   getAccountingStandard,
@@ -779,13 +780,10 @@ export function InvoiceDetailModal({
       });
 
       try {
-        const cid = invoice.company_id || (await getMyCompany())?.id;
-        if (cid) {
-          const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-          void syncApprovedInvoiceToGulfTax(invoice.id, cid);
-        }
+        const cid = invoice.company_id || (await getMyCompany())?.id || null;
+        if (cid) triggerGlPostForApprovedInvoice(invoice, cid);
       } catch {
-        /* GulfTax sync is best-effort */
+        /* GL post is best-effort */
       }
 
       toast({
@@ -1133,13 +1131,10 @@ export function InvoiceDetailModal({
 
       if (newStatus === 'Approved') {
         try {
-          const cid = invoice.company_id || (await getMyCompany())?.id;
-          if (cid) {
-            const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-            void syncApprovedInvoiceToGulfTax(invoice.id, cid);
-          }
+          const cid = invoice.company_id || (await getMyCompany())?.id || null;
+          if (cid) triggerGlPostForApprovedInvoice(invoice, cid);
         } catch {
-          /* GulfTax sync is best-effort */
+          /* GL post is best-effort */
         }
       }
 

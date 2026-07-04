@@ -138,7 +138,19 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
         toast({ title: 'Action failed', description: res.message, variant: 'destructive' });
         return;
       }
-      toast({ title: action === 'approved' ? 'Approved' : 'Rejected', description: 'Recorded.' });
+      if (action === 'approved' && res.fully_approved) {
+        const gl = res.gl_post;
+        if (gl?.je_posted || gl?.skipped) {
+          toast({
+            title: gl.skipped ? 'Approved — already in GL' : 'Approved — posted to GL',
+            description: gl.je_reference ? `JE ${gl.je_reference}` : 'Recorded.',
+          });
+        } else {
+          toast({ title: 'Approved', description: 'GL post pending — check invoice list.' });
+        }
+      } else {
+        toast({ title: action === 'approved' ? 'Approved' : 'Rejected', description: 'Recorded.' });
+      }
       setComment('');
       await loadRows();
       onRefresh();

@@ -5,6 +5,7 @@ import { logAction } from '@/lib/ap-invoice/auditService';
 import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
 import { requireCompanyId } from '@/lib/ap-invoice/companyService';
 import { notifyApproverViaWhatsApp } from '@/lib/ap-invoice/whatsappService';
+import type { ApproveAndPostResult } from '@/lib/ap-invoice/glPostService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 export type ApprovalRowStatus = 'pending' | 'approved' | 'rejected';
@@ -147,7 +148,10 @@ export async function processApprovalAction(
   actorEmail: string,
   action: 'approved' | 'rejected',
   comment?: string | null
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; fully_approved?: boolean; gl_post?: ApproveAndPostResult }
+  | { ok: false; message: string }
+> {
   const { data: row, error: rowErr } = await supabase
     .from('invoice_approvals')
     .select('*')
@@ -323,16 +327,17 @@ export async function processApprovalAction(
     });
   }
 
-  // Push to GulfTax transaction store (non-blocking)
+  // Post to UAE GL + GulfTax (idempotent — shared with all approval paths)
+  let gl_post: ApproveAndPostResult | undefined;
   try {
     const cid = invoice.company_id || (await requireCompanyId());
-    const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-    void syncApprovedInvoiceToGulfTax(invoice.id, cid);
-  } catch {
-    /* sync is best-effort; GL post may also trigger backend sync */
+    const { postApprovedInvoiceToGL } = await import('./glPostService');
+    gl_post = await postApprovedInvoiceToGL(invoice, cid);
+  } catch (e) {
+    console.warn('[AP] GL/GulfTax post after full approval failed:', e);
   }
 
-  return { ok: true };
+  return { ok: true, fully_approved: true, gl_post };
 }
 
 async function loadInvoicesByIds(ids: string[]): Promise<Map<string, Invoice>> {

@@ -41,6 +41,7 @@ class UAEPurchaseInvoice(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(64), nullable=False, index=True)
     workspace_id = Column(String(36), nullable=True, index=True)
+    company_id = Column(String(36), ForeignKey("ap_companies.id"), nullable=True, index=True)
     invoice_number = Column(String(50), nullable=False)
     vendor_id = Column(String(36), ForeignKey("uae_vendors.id"), nullable=False)
     invoice_date = Column(Date, nullable=False)

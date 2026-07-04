@@ -3,11 +3,26 @@ import { Eye, EyeOff } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
+import { useMarket } from '../contexts/MarketContext';
+import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
+
+function resolvePostLoginPath(
+  from: string | undefined,
+  productRole: ProductRole,
+  isUAE: boolean,
+): string {
+  if (from) return from;
+  if (productRole === 'full_access') {
+    return isUAE ? '/uae-full' : '/dashboard';
+  }
+  return loginRedirectFor(productRole);
+}
 
 export default function Login() {
   const nav = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
+  const { isUAE } = useMarket();
   const [email, setEmail] = useState('admin@gnanova.com');
   const [password, setPassword] = useState('Admin@123');
   const [showPwd, setShowPwd] = useState(false);
@@ -19,9 +34,10 @@ export default function Login() {
     setError(null);
     setLoading(true);
     try {
-      await login(email, password);
-      const dest = (location.state as { from?: string } | null)?.from ?? '/dashboard';
-      nav(dest, { replace: true });
+      const loggedIn = await login(email, password);
+      const from = (location.state as { from?: string } | null)?.from;
+      const role = normalizeProductRole(loggedIn.product_role);
+      nav(resolvePostLoginPath(from, role, isUAE), { replace: true });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       try {

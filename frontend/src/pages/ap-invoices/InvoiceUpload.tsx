@@ -13,6 +13,7 @@ import { CurrencyCombobox } from '../../components/ap-invoice/CurrencyCombobox';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
 import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeWayMatchService';
+import { triggerGlPostForApprovedInvoice } from '../../lib/ap-invoice/glPostService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
 import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
@@ -1157,6 +1158,10 @@ export function InvoiceUpload() {
           }
         }
 
+        if (initialStatus === 'Approved') {
+          triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+        }
+
         // Create audit log
         await supabase.from('audit_logs').insert({
           invoice_id: invoice.id,
@@ -1829,6 +1834,10 @@ export function InvoiceUpload() {
             }
           }
 
+          if (initialStatus === 'Approved') {
+            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+          }
+
           // Create audit log
           await supabase.from('audit_logs').insert({
             invoice_id: invoice.id,
@@ -2261,6 +2270,10 @@ export function InvoiceUpload() {
             }
           }
 
+          if (initialStatus === 'Approved') {
+            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+          }
+
           // Create audit log
           await supabase.from('audit_logs').insert({
             invoice_id: invoice.id,
@@ -2563,6 +2576,10 @@ export function InvoiceUpload() {
           updated_at: new Date().toISOString(),
         })
         .eq('id', newInvoice.id);
+
+      if (totalAmount < 500 && companyId) {
+        triggerGlPostForApprovedInvoice(newInvoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+      }
 
       // STEP 6: Duplicate detection
       const { data: dupes } = await supabase

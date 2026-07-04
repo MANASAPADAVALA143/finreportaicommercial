@@ -617,311 +617,56 @@ async def ap_approve_and_post(
     tenant_id: str = Depends(_tenant),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """
-    Records the approval decision and generates a Journal Entry stub.
-
-    GL mapping (UAE CoA):
-      - Expense DR  → 5xxx (based on IFRS category, defaulting to 5001 Expenses)
-      - Input VAT DR → 2301 (Input VAT Recoverable) — if not blocked
-      - Blocked VAT DR → 5099 (Non-recoverable VAT Expense) — Art.54
-      - AP Creditor CR → 2001 (Accounts Payable)
-    """
-    import uuid
-    from datetime import date
-
+    """Records approval and posts journal entries + GulfTax (idempotent)."""
     if body.decision == "HARD_BLOCK":
         raise HTTPException(
             status_code=422,
             detail="Invoice is HARD_BLOCKED by GulfTax — cannot post. Resolve TRN or VAT issue first.",
         )
+    from app.services.ap_invoice_post_service import ApInvoicePostRequest, post_invoice_to_gl_and_tax
 
-    je_ref = f"JE-AP-{uuid.uuid4().hex[:8].upper()}"
-    post_date = body.invoice_date or date.today().isoformat()
+    payload = ApInvoicePostRequest(**body.model_dump())
+    return post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
 
-    net_amount = round(body.total_amount - body.vat_amount_aed, 2)
-    vat_amount = round(body.vat_amount_aed, 2)
 
-    je_lines = [
-        {"account": "5001", "account_name": "Expenses / COGS",         "debit": net_amount,        "credit": 0.0,        "description": f"{body.vendor_name} — {body.vat_treatment}"},
-        {"account": "2001", "account_name": "Accounts Payable",         "debit": 0.0,               "credit": body.total_amount, "description": f"AP {body.invoice_number}"},
-    ]
+class PostApprovedInvoiceIn(BaseModel):
+    invoice_id: str = Field(..., description="Supabase AP invoice UUID")
+    workspace_id: str = ""
+    company_id: str = ""
 
-    if vat_amount > 0:
-        je_lines.insert(1, {
-            "account": "2301", "account_name": "Input VAT Recoverable",
-            "debit": vat_amount, "credit": 0.0,
-            "description": f"Input VAT @ {body.vat_amount_aed} AED — {body.vat_treatment}",
-        })
-        # Balance AP credit
-        je_lines[2]["credit"] = body.total_amount  # already set
 
-    purchase_invoice_id = None
-    try:
-        import uuid as _uuid
-        from datetime import date as _date
-        from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine, UAEVendor
-
-        vendor = (
-            db.query(UAEVendor)
-            .filter(UAEVendor.tenant_id == tenant_id, UAEVendor.name.ilike(f"%{body.vendor_name[:20]}%"))
-            .first()
-        )
-        if not vendor:
-            vendor = UAEVendor(
-                id=str(_uuid.uuid4()),
-                tenant_id=tenant_id,
-                workspace_id=tenant_id,
-                name=body.vendor_name,
-            )
-            db.add(vendor)
-            db.flush()
-
-        inv_date = _date.fromisoformat(post_date) if post_date else _date.today()
-        pi = UAEPurchaseInvoice(
-            id=str(_uuid.uuid4()),
-            tenant_id=tenant_id,
-            workspace_id=tenant_id,
-            invoice_number=body.invoice_number,
-            vendor_id=vendor.id,
-            invoice_date=inv_date,
-            due_date=inv_date,
-            subtotal=net_amount,
-            vat_amount=vat_amount,
-            total_amount=body.total_amount,
-            outstanding=body.total_amount,
-            status="posted",
-            vat_treatment=body.vat_treatment,
-            source="ocr",
-        )
-        db.add(pi)
-        db.add(UAEPurchaseInvoiceLine(
-            id=str(_uuid.uuid4()),
-            invoice_id=pi.id,
-            description=f"{body.vendor_name} — {body.vat_treatment}",
-            quantity=1,
-            unit_price=net_amount,
-            line_total=net_amount,
-            vat_rate=5,
-            vat_amount=vat_amount,
-        ))
-        db.commit()
-        purchase_invoice_id = pi.id
-    except Exception:
-        logger.exception("Failed to persist AP purchase invoice for %s", body.invoice_number)
-        db.rollback()
-
-    ws_id = body.workspace_id or tenant_id
-    period = post_date[:7] if post_date and len(post_date) >= 7 else date.today().strftime("%Y-%m")
-    company_id = (body.company_id or "").strip() or None
-
-    vat_entry_id = None
-    try:
-        from app.services.gulftax_supabase import insert_vat_return_entry
-        entry = insert_vat_return_entry(
-            workspace_id=ws_id,
-            company_id=company_id or ws_id,
-            period=period,
-            source="ap_invoice",
-            transaction_id=body.invoice_number,
-            vendor_name=body.vendor_name,
-            net_amount=net_amount,
-            vat_amount=vat_amount if not body.blocked_input_vat else 0.0,
-            vat_treatment=body.vat_treatment,
-            blocked_input_vat=body.blocked_input_vat,
-        )
-        if entry:
-            vat_entry_id = entry.get("id")
-    except Exception:
-        logger.exception("vat_return_entries insert failed for %s", body.invoice_number)
-
-    # ── Persist real UAE GL journal entries ──────────────────────────────────
-    je_id: str | None = None
-    je_id_vat: str | None = None
-    je_posted = False
-    period_row = None
-
-    try:
-        from datetime import date as _date
-        from app.models.company_setup import AccountingPeriod
-        from app.services.uae_journal_service import create_journal_entry
-
-        inv_date = _date.fromisoformat(post_date) if post_date else _date.today()
-        period_q = db.query(AccountingPeriod).filter(
-            AccountingPeriod.workspace_id == ws_id,
-            AccountingPeriod.start_date <= inv_date,
-            AccountingPeriod.end_date >= inv_date,
-        )
-        if company_id:
-            period_q = period_q.filter(AccountingPeriod.company_id == company_id)
-        period_row = period_q.first()
-
-        expense_acct = (body.gl_code or "6100").strip() or "6100"
-        ap_acct = "2100"
-        vat_acct = "1810"
-        je_reference = body.invoice_id or body.invoice_number
-
-        je_expense = create_journal_entry(
-            tenant_id=tenant_id,
-            entry_date=inv_date,
-            description=f"AP: {body.vendor_name} - {body.invoice_number}",
-            lines=[
-                {
-                    "account_code": expense_acct,
-                    "account_name": "Expenses",
-                    "debit": net_amount,
-                    "credit": 0.0,
-                    "description": f"{body.vendor_name} — {body.vat_treatment}",
-                },
-                {
-                    "account_code": ap_acct,
-                    "account_name": "Accounts Payable",
-                    "debit": 0.0,
-                    "credit": net_amount,
-                    "description": f"AP {body.invoice_number}",
-                },
-            ],
-            reference=je_reference,
-            source="AP_INVOICE",
-            company_id=company_id,
-            db=db,
-            auto_post=True,
-        )
-        je_id = je_expense.id
-        je_ref = je_expense.entry_number or je_ref
-        je_posted = True
-
-        if (
-            body.vat_treatment == "standard_rated"
-            and vat_amount > 0
-            and not body.blocked_input_vat
-        ):
-            je_vat = create_journal_entry(
-                tenant_id=tenant_id,
-                entry_date=inv_date,
-                description=f"VAT input: {body.vendor_name} - {body.invoice_number}",
-                lines=[
-                    {
-                        "account_code": vat_acct,
-                        "account_name": "Input VAT Recoverable",
-                        "debit": vat_amount,
-                        "credit": 0.0,
-                        "description": f"Input VAT — {body.invoice_number}",
-                    },
-                    {
-                        "account_code": ap_acct,
-                        "account_name": "Accounts Payable",
-                        "debit": 0.0,
-                        "credit": vat_amount,
-                        "description": f"AP VAT {body.invoice_number}",
-                    },
-                ],
-                reference=je_reference,
-                source="AP_INVOICE_VAT",
-                company_id=company_id,
-                db=db,
-                auto_post=True,
-            )
-            je_id_vat = je_vat.id
-
-        if body.invoice_id:
-            from app.services.gulftax_supabase import mark_invoice_je_posted
-            mark_invoice_je_posted(body.invoice_id, je_ref)
-    except Exception:
-        logger.exception("Failed to post AP invoice to UAE GL for %s", body.invoice_number)
-
-    try:
-        from app.services.audit_log_service import log_audit
-        from app.services.notification_service import send_notification
-
-        log_audit(
-            db, workspace_id=ws_id, company_id=company_id or None,
-            action="invoice_approved", entity_type="invoice",
-            entity_id=body.invoice_id or purchase_invoice_id or body.invoice_number,
-            details={
-                "invoice_number": body.invoice_number,
-                "vendor_name": body.vendor_name,
-                "total": body.total_amount,
-                "je_reference": je_ref,
-            },
-        )
-        if je_posted:
-            log_audit(
-                db, workspace_id=ws_id, company_id=company_id or None,
-                action="je_posted", entity_type="journal_entry", entity_id=je_id,
-                details={"source": "AP_INVOICE", "reference": je_ref},
-            )
-        if body.uploaded_by_email:
-            send_notification(
-                body.uploaded_by_email,
-                f"Invoice {body.invoice_number} approved",
-                (
-                    f"Your invoice from {body.vendor_name} AED {body.total_amount:,.2f} was approved.\n"
-                    f"JE Reference: {je_ref}\n"
-                    f"Payment due: {body.due_date or post_date}"
-                ),
-            )
-        db.commit()
-    except Exception:
-        logger.exception("Audit/notification after AP approve failed")
-
-    # ── GulfTax transaction pipeline (non-blocking) ───────────────────────────
-    if body.invoice_id and company_id:
-        try:
-            from app.services.gulftax_sync_service import (
-                log_sync_failure,
-                sync_approved_invoice_to_gulftax,
-            )
-
-            sync_result = sync_approved_invoice_to_gulftax(
-                body.invoice_id,
-                company_id,
-                workspace_id=ws_id,
-            )
-            if not sync_result.get("ok") and not sync_result.get("skipped"):
-                log_sync_failure(
-                    invoice_id=body.invoice_id,
-                    company_id=company_id,
-                    error=str(sync_result.get("error", "unknown")),
-                    workspace_id=ws_id,
-                )
-        except Exception as sync_exc:
-            logger.exception("GulfTax sync after approve failed for %s", body.invoice_number)
-            try:
-                from app.services.gulftax_sync_service import log_sync_failure
-
-                log_sync_failure(
-                    invoice_id=body.invoice_id,
-                    company_id=company_id,
-                    error=str(sync_exc),
-                    workspace_id=ws_id,
-                )
-            except Exception:
-                pass
-
-    logger.info(
-        "AP approve-and-post: invoice=%s vendor=%s JE=%s decision=%s risk=%.1f workspace=%s",
-        body.invoice_number, body.vendor_name, je_ref, body.decision, body.risk_score, ws_id,
+@router.post("/ap/post-approved-invoice", summary="Post approved AP invoice to GL + GulfTax by invoice_id")
+async def post_approved_invoice(
+    body: PostApprovedInvoiceIn,
+    tenant_id: str = Depends(_tenant),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Load invoice from Supabase, verify Approved status, post to uae_journal_entries + GulfTax.
+    Idempotent — safe from every approval UI path (My Approvals, WhatsApp, auto-match, bulk).
+    """
+    from app.services.ap_invoice_post_service import (
+        post_invoice_to_gl_and_tax,
+        request_from_supabase_invoice,
+        _fetch_supabase_invoice,
     )
 
-    return {
-        "ok":             True,
-        "je_reference":   je_ref,
-        "je_id":          je_id,
-        "je_id_vat":      je_id_vat,
-        "je_posted":      je_posted,
-        "post_date":      post_date,
-        "invoice_number": body.invoice_number,
-        "vendor_name":    body.vendor_name,
-        "decision":       body.decision,
-        "risk_score":     body.risk_score,
-        "vat_treatment":  body.vat_treatment,
-        "je_lines":       je_lines,
-        "workspace_id":   ws_id,
-        "purchase_invoice_id": purchase_invoice_id,
-        "vat_return_entry_id": vat_entry_id,
-        "period_id":      period_row.id if period_row else None,
-        "message":        f"Invoice {body.invoice_number} approved. JE {je_ref} posted to UAE GL.",
-    }
+    inv = _fetch_supabase_invoice(body.invoice_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    status = (inv.get("status") or "").strip()
+    if status != "Approved":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invoice must be Approved before GL post (current: {status or 'unknown'})",
+        )
+
+    ws_id = body.workspace_id or tenant_id
+    payload = request_from_supabase_invoice(inv, workspace_id=ws_id)
+    if body.company_id:
+        payload.company_id = body.company_id
+    return post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
 
 
 @router.get("/ap/gulftax-status", summary="GulfTax AI health check")

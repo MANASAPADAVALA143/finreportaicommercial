@@ -42,12 +42,11 @@ import {
 import { callAI } from '../../services/aiProvider';
 import * as XLSX from 'xlsx';
 import { postCfoAgentRun } from '../../services/cfoAgents';
-import { useClient } from '../../context/ClientContext';
+import { getActiveCompanyId } from '../../context/CompanyContext';
 
 const ForecastingEngine: React.FC = () => {
   const navigate = useNavigate();
-  const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
+  const tenantId = getActiveCompanyId() || '';
   
   // Check data availability
   const dataCheck = checkDataAvailability(['fpa_actual', 'fpa_budget']);

@@ -149,6 +149,7 @@ def sync_ap_company(
             status_code=503,
             detail="Could not sync AP company. Check SUPABASE_URL/SUPABASE_KEY and run migrations/003_companies_workspace_id.sql",
         )
+    upsert_ap_company_rds(db, ctx.workspace, company)
     return {"company": company, "company_id": company.get("id")}
 
 

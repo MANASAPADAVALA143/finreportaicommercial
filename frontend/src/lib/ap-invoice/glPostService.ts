@@ -1,13 +1,14 @@
 /**
- * Post a fully-approved AP invoice to UAE GL via embedded approve-and-post endpoint.
+ * Post a fully-approved AP invoice to UAE GL + GulfTax via shared backend service.
  */
 import type { Invoice } from './supabase';
-import { getStoredWorkspaceId } from '../../services/workspaceService';
+import { getStoredWorkspaceId, workspaceHeaders } from '../../services/workspaceService';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
 export type ApproveAndPostResult = {
   ok: boolean;
+  skipped?: boolean;
   je_posted?: boolean;
   je_reference?: string;
   je_id?: string;
@@ -18,36 +19,32 @@ function workspaceId(): string {
   return (
     localStorage.getItem('active_workspace_id') ||
     getStoredWorkspaceId() ||
+    localStorage.getItem('gnanova_workspace_id') ||
     localStorage.getItem('tenantId') ||
     ''
   );
 }
 
+function authToken(): string | null {
+  return localStorage.getItem('token');
+}
+
+/** Shared entry — call after any path sets invoice status to Approved. */
 export async function postApprovedInvoiceToGL(
-  invoice: Invoice,
+  invoice: Invoice | { id: string },
   companyId: string | null,
 ): Promise<ApproveAndPostResult> {
-  const taxAmount = Number(invoice.tax_amount ?? invoice.vat_amount ?? 0);
-  const totalAmount = Number(invoice.total_amount ?? 0);
-  const vatTreatment = String(invoice.vat_treatment || 'standard_rated');
-
-  const res = await fetch(`${API_BASE}/api/uae/ap/approve-and-post`, {
+  const token = authToken();
+  const res = await fetch(`${API_BASE}/api/uae/ap/post-approved-invoice`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      ...workspaceHeaders(token, { 'Content-Type': 'application/json' }),
+    },
+    credentials: 'include',
     body: JSON.stringify({
       invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      vendor_name: invoice.vendor_name,
-      total_amount: totalAmount,
-      vat_amount_aed: taxAmount,
-      vat_treatment: vatTreatment,
-      decision: String(invoice.gulftax_decision || 'AUTO_APPROVE'),
-      risk_score: Number(invoice.gulftax_risk_score ?? invoice.risk_score ?? 0),
-      invoice_date: invoice.invoice_date || new Date().toISOString().slice(0, 10),
-      gl_code: invoice.gl_code || '6100',
       company_id: companyId || '',
       workspace_id: workspaceId(),
-      blocked_input_vat: vatTreatment === 'blocked' || vatTreatment === 'non_recoverable',
     }),
   });
 
@@ -56,11 +53,21 @@ export async function postApprovedInvoiceToGL(
     throw new Error(typeof err.detail === 'string' ? err.detail : `GL post failed (${res.status})`);
   }
 
-  const result = await res.json() as ApproveAndPostResult;
+  const result = (await res.json()) as ApproveAndPostResult;
   if (result.ok && invoice.id && companyId) {
     emitGulfTaxTransactionAdded(invoice.id, companyId);
   }
   return result;
+}
+
+/** Fire-and-forget GL+GulfTax post (logs warning on failure). */
+export function triggerGlPostForApprovedInvoice(
+  invoice: Invoice,
+  companyId: string | null,
+): void {
+  void postApprovedInvoiceToGL(invoice, companyId).catch((e) => {
+    console.warn('[AP] GL/GulfTax post after approval failed:', e);
+  });
 }
 
 /** Notify GulfTax pages that a new AP transaction was synced */

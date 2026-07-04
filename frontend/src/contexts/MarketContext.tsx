@@ -23,6 +23,17 @@ const MarketContext = createContext<MarketContextType>({
 });
 
 const STORAGE_KEY = 'finreportai_ap_market';
+const SUITE_STORAGE_KEY = 'gnanova_suite';
+
+function persistMarketSelection(market: Market) {
+  try {
+    localStorage.setItem(STORAGE_KEY, market);
+    localStorage.setItem(SUITE_STORAGE_KEY, market);
+    window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: market }));
+  } catch {
+    /* ignore */
+  }
+}
 
 async function resolveCompanyIdForMarket(): Promise<string | null> {
   const wsId = getStoredWorkspaceId();
@@ -64,6 +75,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
         if (savedMarket) {
           setMarketState(savedMarket);
+          persistMarketSelection(savedMarket);
           if (company?.market !== savedMarket) {
             await supabase
               .from('companies')
@@ -75,14 +87,16 @@ export function MarketProvider({ children }: { children: ReactNode }) {
         }
 
         if (company?.market === 'uae' || company?.market === 'india') {
-          setMarketState(company.market as Market);
-          localStorage.setItem(STORAGE_KEY, company.market);
+          const m = company.market as Market;
+          setMarketState(m);
+          persistMarketSelection(m);
           return;
         }
       }
 
       if (savedMarket) {
         setMarketState(savedMarket);
+        persistMarketSelection(savedMarket);
       }
     } catch {
       // keep current selection
@@ -108,15 +122,16 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('ap-company-synced', onSynced);
   }, [loadMarket]);
 
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === 'uae' || saved === 'india') {
+      persistMarketSelection(saved);
+    }
+  }, []);
+
   async function setMarket(newMarket: Market) {
     setMarketState(newMarket);
-    try {
-      localStorage.setItem(STORAGE_KEY, newMarket);
-      localStorage.setItem('gnanova_suite', newMarket);
-      window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: newMarket }));
-    } catch {
-      /* ignore */
-    }
+    persistMarketSelection(newMarket);
     try {
       const companyId = await resolveCompanyIdForMarket();
       if (!companyId) return;
