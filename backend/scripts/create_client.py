@@ -7,9 +7,17 @@ Usage:
     --email finance@alnoor.ae \\
     --role uae_client \\
     --plan uae_finance_suite
-    --plan uae_finance_suite_full --role uae_suite
 
-Requires backend/.env: DATABASE_URL, SUPABASE_URL, SUPABASE_KEY (service role).
+  # User already created in Supabase dashboard — RDS records only:
+  python backend/scripts/create_client.py \\
+    --name "Gnanova Pro" \\
+    --email manusmile0587@gmail.com \\
+    --role uae_suite \\
+    --plan uae_finance_suite_full \\
+    --skip-supabase \\
+    --user-id <supabase-auth-uuid>
+
+Requires backend/.env: DATABASE_URL; SUPABASE_URL + SUPABASE_KEY unless --skip-supabase.
 """
 from __future__ import annotations
 
@@ -73,6 +81,14 @@ def create_supabase_user(url: str, headers: dict, email: str, password: str, met
     raise SystemExit(f"Supabase user create failed: {resp.status_code} {resp.text}")
 
 
+def _lookup_supabase_user_id(url: str, headers: dict, email: str) -> str | None:
+    resp = httpx.get(f"{url}/auth/v1/admin/users", headers=headers, params={"email": email}, timeout=30)
+    if resp.status_code != 200:
+        return None
+    users = resp.json().get("users") or []
+    return str(users[0]["id"]) if users else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create production client tenant + auth user")
     parser.add_argument("--name", required=True, help="Legal entity name")
@@ -80,12 +96,30 @@ def main() -> int:
     parser.add_argument("--role", default="uae_client", help="product_role metadata")
     parser.add_argument("--plan", default="starter", help="Subscription plan")
     parser.add_argument("--password", default="", help="Optional password (generated if empty)")
+    parser.add_argument(
+        "--skip-supabase",
+        action="store_true",
+        help="Skip Supabase user creation (user already exists in dashboard); RDS records only",
+    )
+    parser.add_argument(
+        "--user-id",
+        default="",
+        help="Supabase auth user UUID (required with --skip-supabase if admin lookup fails)",
+    )
     args = parser.parse_args()
 
+    email = args.email.lower().strip()
     password = args.password or secrets.token_urlsafe(12) + "A1!"
     tenant_id = str(uuid.uuid4())
     company_id = str(uuid.uuid4())
     slug = args.name.lower().replace(" ", "-")[:48]
+    user_metadata = {
+        "full_name": args.name,
+        "product_role": args.role,
+        "role": "accountant",
+        "tenant_id": tenant_id,
+        "company_id": company_id,
+    }
 
     db = SessionLocal()
     try:
@@ -110,20 +144,20 @@ def main() -> int:
     finally:
         db.close()
 
-    sb_url, sb_headers = _supabase_admin_headers()
-    uid = create_supabase_user(
-        sb_url,
-        sb_headers,
-        args.email.lower().strip(),
-        password,
-        {
-            "full_name": args.name,
-            "product_role": args.role,
-            "role": "accountant",
-            "tenant_id": tenant_id,
-            "company_id": company_id,
-        },
-    )
+    if args.skip_supabase:
+        uid = (args.user_id or "").strip()
+        if not uid:
+            sb_url, sb_headers = _supabase_admin_headers()
+            uid = _lookup_supabase_user_id(sb_url, sb_headers, email) or ""
+        if not uid:
+            raise SystemExit(
+                "With --skip-supabase, pass --user-id (Supabase auth UUID from Authentication → Users)."
+            )
+        password_hash = hash_password(args.password or secrets.token_urlsafe(32))
+    else:
+        sb_url, sb_headers = _supabase_admin_headers()
+        uid = create_supabase_user(sb_url, sb_headers, email, password, user_metadata)
+        password_hash = hash_password(password)
 
     db = SessionLocal()
     try:
@@ -132,8 +166,8 @@ def main() -> int:
             company_id=company_id,
             tenant_id=tenant_id,
             name=args.name,
-            email=args.email.lower().strip(),
-            password_hash=hash_password(password),
+            email=email,
+            password_hash=password_hash,
             role=UserRole.accountant,
             product_role=args.role,
             is_active=True,
@@ -149,10 +183,15 @@ def main() -> int:
     print("OK — client created")
     print(f"  tenant_id:  {tenant_id}")
     print(f"  company_id: {company_id}")
+    print(f"  user_id:    {uid}")
     print(f"  email:      {args.email}")
-    print(f"  password:   {password}")
     print(f"  role:       {args.role}")
-    print("\nSend welcome email with login URL and credentials (not stored in logs).")
+    if args.skip_supabase:
+        print("\nSupabase user was not created/updated. Set user_metadata in Supabase dashboard:")
+        print(f"  {user_metadata}")
+    else:
+        print(f"  password:   {password}")
+        print("\nSend welcome email with login URL and credentials (not stored in logs).")
     return 0
 
 
