@@ -83,28 +83,31 @@ def main() -> int:
         cust = UAECustomer(
             id=str(uuid.uuid4()),
             tenant_id=TENANT,
-            company_id=COMPANY_ID,
             name=f"{E2E_PREFIX}Customer",
             trn="100000000000004",
         )
         db.add(cust)
         db.flush()
 
+        inv_date = date(2026, 6, 15)
         inv = UAESalesInvoice(
             id=invoice_id,
             tenant_id=TENANT,
             company_id=COMPANY_ID,
             invoice_number=f"{E2E_PREFIX}001",
             customer_id=cust.id,
-            invoice_date=date(2026, 6, 15),
+            invoice_date=inv_date,
             due_date=date(2026, 7, 15),
+            period=inv_date.strftime("%Y-%m"),
             subtotal=Decimal("1000.00"),
             vat_amount=Decimal("50.00"),
             total_amount=Decimal("1050.00"),
+            paid_amount=Decimal("0"),
             outstanding=Decimal("1050.00"),
             status="draft",
             seller_trn=VALID_TRN,
             buyer_trn="100000000000004",
+            supply_type="standard",
         )
         db.add(inv)
         db.add(
@@ -163,7 +166,6 @@ def main() -> int:
         result["steps"].append({"asp_accepted": accepted.submission_status})
 
         persisted = db.query(EinvoicingSubmission).filter_by(id=row.id).first()
-        assert persisted.status if hasattr(persisted, "status") else persisted.submission_status == "accepted"
         assert persisted.submission_status == "accepted"
         assert persisted.asp_reference == "E2E-ASP-REF"
         result["pass"] = True
