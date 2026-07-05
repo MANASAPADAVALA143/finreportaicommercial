@@ -72,6 +72,7 @@ def init_db():
                 ("last_dunning_level", "ALTER TABLE uae_sales_invoices ADD COLUMN last_dunning_level INTEGER DEFAULT 0"),
                 ("last_dunning_sent_at", "ALTER TABLE uae_sales_invoices ADD COLUMN last_dunning_sent_at DATETIME"),
                 ("dunning_count", "ALTER TABLE uae_sales_invoices ADD COLUMN dunning_count INTEGER DEFAULT 0"),
+                ("recurring_template_id", "ALTER TABLE uae_sales_invoices ADD COLUMN recurring_template_id VARCHAR(36)"),
             ):
                 if ar_cols and col not in ar_cols:
                     conn.execute(__import__("sqlalchemy").text(ddl))

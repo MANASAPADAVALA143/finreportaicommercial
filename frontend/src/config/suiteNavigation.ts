@@ -77,6 +77,7 @@ export const UAE_NAV: NavEntry[] = [
       { label: 'Sales Invoices', path: '/uae-full/ar',           icon: 'receipt' },
       { label: 'Customer Risk',  path: '/uae-full/ar/customer-risk', icon: 'shield-alert' },
       { label: 'AR Dunning',     path: '/uae-full/ar/dunning',     icon: 'mail' },
+      { label: 'Recurring',      path: '/uae-full/ar/recurring',   icon: 'calendar-clock' },
       { label: 'AR Aging',       path: '/uae-full/ar#aging',     icon: 'bar-chart-2' },
       { label: 'O2C Dashboard',  path: '/o2c',                   icon: 'activity', badge: 'O2C' },
     ],

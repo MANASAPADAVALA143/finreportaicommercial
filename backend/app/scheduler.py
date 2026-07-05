@@ -92,6 +92,26 @@ async def run_forecast_agent(db):
         return None
 
 
+async def run_recurring_invoices_job():
+    """Generate draft AR invoices from due recurring templates (all tenants)."""
+    from datetime import date
+
+    from app.services.recurring_invoice_service import generate_due_invoices_all_tenants
+
+    db = SessionLocal()
+    try:
+        result = generate_due_invoices_all_tenants(db, date.today())
+        print(
+            f"[{datetime.now()}] Recurring invoices: "
+            f"{result.get('generated_count', 0)} generated across "
+            f"{result.get('tenant_count', 0)} tenant(s)"
+        )
+    except Exception as exc:
+        print(f"Recurring invoices job error: {exc}")
+    finally:
+        db.close()
+
+
 async def run_daily_watchdog():
     """Master orchestrator for scheduled daily runs."""
     db = SessionLocal()
@@ -195,6 +215,12 @@ def setup_scheduler():
         run_board_pack_agent,
         CronTrigger(day=1, hour=8, minute=0),
         id="monthly_board_pack",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_recurring_invoices_job,
+        CronTrigger(hour=4, minute=0, timezone="UTC"),
+        id="recurring_ar_invoices",
         replace_existing=True,
     )
     return scheduler

@@ -149,12 +149,18 @@ class UAESalesInvoice(Base):
     last_dunning_level = Column(Integer, default=0)
     last_dunning_sent_at = Column(DateTime, nullable=True)
     dunning_count = Column(Integer, default=0)
+    recurring_template_id = Column(String(36), ForeignKey("uae_recurring_invoices.id"), nullable=True, index=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer = relationship("UAECustomer", back_populates="invoices")
     lines    = relationship("UAESalesInvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
     credit_notes = relationship("UAECreditNote", back_populates="parent_invoice", foreign_keys="UAECreditNote.parent_invoice_id")
+    recurring_template = relationship(
+        "UAERecurringInvoice",
+        back_populates="generated_invoices",
+        foreign_keys=[recurring_template_id],
+    )
 
 
 class UAECreditNote(Base):
@@ -190,6 +196,34 @@ class UAESalesInvoiceLine(Base):
     account_id  = Column(String(36), ForeignKey("uae_accounts.id"), nullable=True)
 
     invoice = relationship("UAESalesInvoice", back_populates="lines")
+
+
+class UAERecurringInvoice(Base):
+    __tablename__ = "uae_recurring_invoices"
+
+    id                  = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id           = Column(String(36), nullable=False, index=True)
+    company_id          = Column(String(36), nullable=True, index=True)
+    customer_id         = Column(String(36), ForeignKey("uae_customers.id"), nullable=False)
+    description         = Column(String(500), nullable=False)
+    amount              = Column(Numeric(15, 2), nullable=False)
+    vat_rate            = Column(Numeric(5, 2), default=5)
+    recurrence_type     = Column(String(20), nullable=False)  # weekly/monthly/quarterly/annually
+    interval            = Column(Integer, default=1)
+    start_date          = Column(Date, nullable=False)
+    next_due_date       = Column(Date, nullable=False)
+    end_date            = Column(Date, nullable=True)
+    status              = Column(String(20), default="active")  # active/paused/cancelled
+    last_generated_at   = Column(DateTime, nullable=True)
+    generated_count     = Column(Integer, default=0)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+
+    customer = relationship("UAECustomer")
+    generated_invoices = relationship(
+        "UAESalesInvoice",
+        back_populates="recurring_template",
+        foreign_keys="UAESalesInvoice.recurring_template_id",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

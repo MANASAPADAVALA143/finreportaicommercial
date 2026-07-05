@@ -33,6 +33,15 @@ from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
 from app.services.dunning_service import get_dunning_history, get_dunning_templates, run_dunning as run_dunning_service
+from app.services.recurring_invoice_service import (
+    cancel_template,
+    create_template,
+    generate_due_invoices,
+    get_generated_invoices,
+    list_templates,
+    pause_template,
+    resume_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +286,24 @@ class IssueCreditNoteIn(BaseModel):
 class PredictPaymentIn(BaseModel):
     invoice_id: Optional[str] = None
     company_id: str
+    workspace_id: Optional[str] = None
+
+
+class CreateRecurringInvoiceIn(BaseModel):
+    customer_id: str
+    description: str
+    amount: float = Field(..., gt=0)
+    vat_rate: float = Field(5.0, ge=0)
+    recurrence_type: str
+    interval: int = Field(1, ge=1)
+    start_date: str
+    end_date: Optional[str] = None
+    company_id: str
+    workspace_id: Optional[str] = None
+
+
+class GenerateDueRecurringIn(BaseModel):
+    company_id: Optional[str] = None
     workspace_id: Optional[str] = None
 
 
@@ -740,6 +767,107 @@ def dunning_history(
 @router.get("/dunning-templates")
 def dunning_templates():
     return {"templates": get_dunning_templates()}
+
+
+@router.post("/recurring-invoices")
+def create_recurring_invoice(body: CreateRecurringInvoiceIn, request: Request, db: Session = Depends(get_db)):
+    ws = _ws(request, body.workspace_id)
+    try:
+        return create_template(
+            db,
+            tenant_id=ws,
+            company_id=body.company_id,
+            customer_id=body.customer_id,
+            description=body.description,
+            amount=body.amount,
+            vat_rate=body.vat_rate,
+            recurrence_type=body.recurrence_type.strip().lower(),
+            interval=body.interval,
+            start_date=date.fromisoformat(body.start_date),
+            end_date=date.fromisoformat(body.end_date) if body.end_date else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/recurring-invoices")
+def get_recurring_invoices(
+    request: Request,
+    company_id: Optional[str] = None,
+    status: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    return list_templates(db, ws, cid, status)
+
+
+@router.post("/recurring-invoices/generate-due")
+def generate_due_recurring(
+    body: GenerateDueRecurringIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, body.workspace_id)
+    cid = body.company_id or _company_id(request)
+    return generate_due_invoices(db, ws, date.today(), cid)
+
+
+@router.get("/recurring-invoices/{template_id}/generated")
+def recurring_generated_invoices(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return get_generated_invoices(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/pause")
+def pause_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return pause_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/resume")
+def resume_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return resume_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/cancel")
+def cancel_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return cancel_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/credit-notes")
