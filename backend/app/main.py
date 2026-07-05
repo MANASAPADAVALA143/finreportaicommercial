@@ -101,6 +101,7 @@ from app.api.routes import (
     audit_log_routes,
     cit_return,
     ct_return,
+    uae_suite_routes,
     gl_summary,
     notifications_routes,
     uae_account_classification,
@@ -268,6 +269,7 @@ app.include_router(ap_aging.router)
 app.include_router(audit_log_routes.router)
 app.include_router(cit_return.router)
 app.include_router(ct_return.router)
+app.include_router(uae_suite_routes.router)
 app.include_router(gl_summary.router)
 app.include_router(notifications_routes.router)
 app.include_router(uae_account_classification.router)

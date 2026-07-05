@@ -1,5 +1,6 @@
 export type ProductRole =
   | 'uae_client'
+  | 'uae_suite'
   | 'uae_full'
   | 'india_client'
   | 'india_full'
@@ -8,6 +9,7 @@ export type ProductRole =
 
 const ALL_PRODUCT_ROLES: ProductRole[] = [
   'uae_client',
+  'uae_suite',
   'uae_full',
   'india_client',
   'india_full',
@@ -15,9 +17,21 @@ const ALL_PRODUCT_ROLES: ProductRole[] = [
   'full_access',
 ];
 
+const BLOCKED_FOR_UAE_SUITE = [
+  '/fpa',
+  '/india-full',
+  '/o2c',
+  '/consolidation',
+  '/ifrs-statement',
+  '/ifrs/9',
+  '/ifrs/15',
+  '/ca-firm',
+];
+
 /** Path prefixes each product role may access. null = unrestricted. */
 const ROLE_PATH_PREFIXES: Record<ProductRole, string[] | null> = {
   uae_client: ['/ap-invoices', '/gulftax', '/ifrs/16'],
+  uae_suite: ['/uae-suite', '/ap-invoices', '/gulftax', '/ifrs/16', '/uae-full/ar'],
   uae_full: ['/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/crm', '/o2c', '/company-setup', '/ifrs/16'],
   india_client: ['/india-full', '/fpa', '/ca-firm', '/dashboard'],
   india_full: ['/india-full', '/fpa', '/ca-firm', '/dashboard', '/ifrs-statement'],
@@ -38,6 +52,8 @@ export function loginRedirectFor(productRole: ProductRole): string {
   switch (productRole) {
     case 'uae_client':
       return '/gulftax';
+    case 'uae_suite':
+      return '/uae-suite';
     case 'uae_full':
       return '/uae-full';
     case 'india_client':
@@ -54,6 +70,7 @@ export function loginRedirectFor(productRole: ProductRole): string {
 export function visibleSuiteIds(productRole: ProductRole): Array<'india' | 'uae' | 'fpa'> {
   switch (productRole) {
     case 'uae_client':
+    case 'uae_suite':
     case 'uae_full':
       return ['uae'];
     case 'india_client':
@@ -71,6 +88,10 @@ export function isUaeFinanceSuiteOnly(productRole: ProductRole): boolean {
   return productRole === 'uae_client';
 }
 
+export function isUaeSuite(productRole: ProductRole): boolean {
+  return productRole === 'uae_suite';
+}
+
 export function canAccessPath(
   productRole: ProductRole,
   pathname: string,
@@ -86,6 +107,15 @@ export function canAccessPath(
 
   if (SETUP_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return true;
+  }
+
+  if (productRole === 'uae_suite') {
+    if (BLOCKED_FOR_UAE_SUITE.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+      return false;
+    }
+    if (pathname.startsWith('/uae-full/') && !pathname.startsWith('/uae-full/ar')) {
+      return false;
+    }
   }
 
   const prefixes = ROLE_PATH_PREFIXES[productRole];

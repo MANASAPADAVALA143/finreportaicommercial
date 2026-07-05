@@ -184,6 +184,12 @@ async def dashboard_summary(
     )
 
     ct_status = "not_started"
+    try:
+        from app.services.uae_suite_service import get_latest_ct_status_for_company
+
+        ct_status = get_latest_ct_status_for_company(company_id)
+    except Exception:
+        pass
 
     return {
         "current_period": {

@@ -183,6 +183,8 @@ export default function UserManagement() {
                       >
                         <option value="full_access">Full Access</option>
                         <option value="uae_client">UAE Client</option>
+                        <option value="uae_suite">UAE Finance Suite</option>
+                        <option value="uae_full">UAE Full</option>
                         <option value="india_client">India Client</option>
                       </select>
                     </td>
