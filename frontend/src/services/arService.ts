@@ -70,6 +70,21 @@ export interface ARInvoice {
   line_items: ARLineItem[];
 }
 
+export interface ARCreditNote {
+  id: string;
+  credit_note_number: string;
+  parent_invoice_id: string;
+  invoice_number?: string | null;
+  customer_id?: string | null;
+  customer_name: string;
+  company_id?: string | null;
+  amount: number;
+  reason?: string | null;
+  status: string;
+  issued_date?: string | null;
+  created_at?: string | null;
+}
+
 export interface ARAgingBucket {
   bucket: string;
   invoice_count: number;
@@ -114,6 +129,43 @@ export const approveAndPostARInvoice = (invoice_id: string, company_id?: string)
   }>('/approve-and-post', {
     invoice_id,
     company_id: company_id ?? localStorage.getItem('active_company_id'),
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const listARCreditNotes = (params?: {
+  status?: string;
+  customer_id?: string;
+  parent_invoice_id?: string;
+}) =>
+  get<{ credit_notes: ARCreditNote[]; count: number }>(
+    '/credit-notes',
+    params as Record<string, string> | undefined,
+  );
+
+export const issueARCreditNote = (
+  invoiceId: string,
+  body: { amount: number; reason?: string; company_id?: string; issued_date?: string },
+) =>
+  post<{
+    ok: boolean;
+    credit_note: ARCreditNote;
+    outstanding_after: number;
+    invoice_status: string;
+    je_id?: string;
+    je_reference?: string;
+  }>(`/${invoiceId}/credit-note`, {
+    ...body,
+    company_id: body.company_id ?? localStorage.getItem('active_company_id'),
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const voidARCreditNote = (creditNoteId: string) =>
+  post<{
+    ok: boolean;
+    credit_note: ARCreditNote;
+    outstanding_after: number;
+    invoice_status: string;
+  }>(`/credit-notes/${creditNoteId}/void`, {
     workspace_id: localStorage.getItem('gnanova_workspace_id'),
   });
 

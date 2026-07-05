@@ -27,6 +27,7 @@ from app.services.credit_risk_service import recalc_for_customer_name
 from app.services.dso_service import build_dso_metrics
 from app.services.notification_service import get_workspace_role_email, send_notification
 from app.services.payment_prediction_service import predict_payments
+from app.services.credit_note_service import issue_credit_note, list_credit_notes, void_credit_note
 from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
@@ -261,6 +262,14 @@ class AutoMatchIn(BaseModel):
 class RunDunningIn(BaseModel):
     company_id: str
     workspace_id: Optional[str] = None
+
+
+class IssueCreditNoteIn(BaseModel):
+    amount: float = Field(..., gt=0)
+    reason: Optional[str] = None
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    issued_date: Optional[str] = None
 
 
 class PredictPaymentIn(BaseModel):
@@ -733,3 +742,67 @@ def run_dunning(body: RunDunningIn, request: Request, db: Session = Depends(get_
     else:
         summary.append("No overdue invoices to chase")
     return {"sent_count": len(sent), "sent": sent, "summary": summary}
+
+
+@router.get("/credit-notes")
+def get_credit_notes(
+    request: Request,
+    company_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    status: Optional[str] = None,
+    parent_invoice_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    return list_credit_notes(
+        db,
+        ws,
+        company_id=cid,
+        customer_id=customer_id,
+        status=status,
+        parent_invoice_id=parent_invoice_id,
+    )
+
+
+@router.post("/credit-notes/{credit_note_id}/void")
+def void_credit_note_route(
+    credit_note_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    result = void_credit_note(db, credit_note_id, tenant_id=ws)
+    if not result.get("ok"):
+        code = 409 if result.get("error") == "void_blocked_invoice_paid_after_credit_note" else 400
+        raise HTTPException(status_code=code, detail=result)
+    return result
+
+
+@router.post("/{invoice_id}/credit-note")
+def create_credit_note_for_invoice(
+    invoice_id: str,
+    body: IssueCreditNoteIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, body.workspace_id)
+    issued = date.fromisoformat(body.issued_date) if body.issued_date else None
+    result = issue_credit_note(
+        db,
+        invoice_id,
+        body.amount,
+        body.reason or "",
+        tenant_id=ws,
+        company_id=body.company_id or _company_id(request),
+        issued_date=issued,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    cust_name = result.get("credit_note", {}).get("customer_name", "")
+    if cust_name:
+        _recalc_credit(db, ws, body.company_id or _company_id(request), cust_name)
+        db.commit()
+    return result
