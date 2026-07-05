@@ -31,6 +31,7 @@ from app.services.credit_note_service import issue_credit_note, list_credit_note
 from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
+from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
 
 logger = logging.getLogger(__name__)
 
@@ -339,6 +340,20 @@ def ar_aging(
         if b["invoice_count"] > 0
     ]
     return {"buckets": buckets, "total_outstanding": report["total_outstanding"], "currency": "AED"}
+
+
+@router.get("/customer-risk")
+def ar_customer_risk(
+    request: Request,
+    company_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    risk_tier: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    report = compute_customer_risk(db, ws, cid, date.today())
+    return filter_by_risk_tier(report, risk_tier)
 
 
 @router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")

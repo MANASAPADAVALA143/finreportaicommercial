@@ -70,6 +70,19 @@ export interface ARInvoice {
   line_items: ARLineItem[];
 }
 
+export interface ARCustomerRiskRow {
+  customer_id: string | null;
+  customer_name: string;
+  risk_tier: 'low' | 'medium' | 'high' | 'critical';
+  total_outstanding: number;
+  total_overdue: number;
+  worst_bucket: string;
+  credit_notes_count: number;
+  total_credited: number;
+  avg_days_to_pay: number | null;
+  open_invoice_count: number;
+}
+
 export interface ARCreditNote {
   id: string;
   credit_note_number: string;
@@ -107,6 +120,17 @@ export const listARInvoices = (status?: string) =>
 
 export const getARAging = () =>
   get<{ buckets: ARAgingBucket[]; total_outstanding: number; currency: string }>('/aging');
+
+export const getARCustomerRisk = (risk_tier?: string) =>
+  get<{
+    as_of: string;
+    currency: string;
+    total_outstanding: number;
+    total_overdue: number;
+    customer_count: number;
+    customers: ARCustomerRiskRow[];
+    risk_tier_filter?: string;
+  }>('/customer-risk', risk_tier ? { risk_tier } : undefined);
 
 export const createARInvoice = (body: CreateInvoicePayload) =>
   post<{ invoice_id: string; invoice_number: string; subtotal: number; vat_amount: number; total: number; status: string; je_id: string; je_reference?: string }>(
