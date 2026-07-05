@@ -96,6 +96,7 @@ from app.api.routes import (
     agent_extract,
     ap_anomaly,
     ap_insights,
+    ap_aging,
     audit_log_routes,
     cit_return,
     gl_summary,
@@ -261,6 +262,7 @@ app.include_router(pipeline_router.router)
 app.include_router(agent_extract.router)
 app.include_router(ap_anomaly.router)
 app.include_router(ap_insights.router)
+app.include_router(ap_aging.router)
 app.include_router(audit_log_routes.router)
 app.include_router(cit_return.router)
 app.include_router(gl_summary.router)

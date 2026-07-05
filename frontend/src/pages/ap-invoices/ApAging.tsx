@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  getAgingSummary,
-  getAgingInvoices,
   getDpoMetrics,
   getAgingByVendor,
   exportAgingCsv,
   type AgingBucket,
   type AgingInvoice,
 } from '@/lib/ap-invoice/agingService';
+// Bucket totals + invoice drill-down now come from the backend (GET /api/ap/aging)
+// instead of querying Supabase directly — see apAgingApiService.ts. DPO/vendor
+// rollup and CSV export are unrelated concerns and stay on agingService.ts.
+import { getAgingSummary, getAgingInvoices } from '@/lib/ap-invoice/apAgingApiService';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
