@@ -13,7 +13,15 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-_BACKEND = Path(__file__).resolve().parents[1]
+def _resolve_backend() -> Path:
+    here = Path(__file__).resolve()
+    for candidate in (here.parent, *here.parents):
+        if (candidate / "app" / "services").is_dir():
+            return candidate
+    return here.parents[1]
+
+
+_BACKEND = _resolve_backend()
 sys.path.insert(0, str(_BACKEND))
 _PORTED = _BACKEND / "app" / "modules" / "gulftax" / "ported"
 if str(_PORTED) not in sys.path:

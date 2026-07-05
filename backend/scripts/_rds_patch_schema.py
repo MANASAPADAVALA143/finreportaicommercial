@@ -151,6 +151,23 @@ DDL = [
         created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
+    # GulfTax companies — extend legacy FinReportAI companies table for ported ORM
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS trade_license_number VARCHAR(100)",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS trn VARCHAR(50)",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50)",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS free_zone_name VARCHAR(255)",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_qfzp BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_registered BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS ct_registered BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS annual_revenue_aed DOUBLE PRECISION",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS asp_appointed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS country VARCHAR(50) DEFAULT 'UAE'",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS fiscal_year_start INTEGER DEFAULT 1",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_registered_date DATE",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS plan VARCHAR(50) DEFAULT 'starter'",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS settings JSONB",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS external_id VARCHAR(64)",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64)",
     # VAT recon — reconciliation_results extensions (ported GulfTax table)
     "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS tax_period VARCHAR(16)",
     "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS period_start DATE",
