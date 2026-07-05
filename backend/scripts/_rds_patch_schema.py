@@ -273,6 +273,24 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_company_id ON einvoicing_submissions (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_invoice_id ON einvoicing_submissions (invoice_id)",
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_status ON einvoicing_submissions (submission_status)",
+    # workspace_audit_log — audit trail for audit export pack + UAE controls
+    """
+    CREATE TABLE IF NOT EXISTS workspace_audit_log (
+        id            VARCHAR(36) PRIMARY KEY,
+        workspace_id  VARCHAR(100) NOT NULL,
+        company_id    VARCHAR(100),
+        action        VARCHAR(50) NOT NULL,
+        entity_type   VARCHAR(50) NOT NULL,
+        entity_id     VARCHAR(100),
+        user_email    VARCHAR(200),
+        details       JSONB,
+        created_at    TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_workspace_id ON workspace_audit_log (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_company_id ON workspace_audit_log (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_action ON workspace_audit_log (action)",
+    "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_created_at ON workspace_audit_log (created_at)",
 ]
 
 

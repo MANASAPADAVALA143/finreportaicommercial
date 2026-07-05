@@ -99,6 +99,31 @@ def save_partial_exemption(
     return _row_dict(row)
 
 
+@router.patch("/partial-exemption/{record_id}/approve")
+def approve_partial_exemption(
+    record_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Approve a saved partial exemption — only approved calcs adjust Box 11 on the VAT return."""
+    assert_write_allowed()
+    row = (
+        db.query(PartialExemptionCalculation)
+        .filter_by(id=record_id, tenant_id=tenant_id, company_id=company_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Partial exemption calculation not found")
+    if row.status == "approved":
+        return _row_dict(row)
+    row.status = "approved"
+    row.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(row)
+    return _row_dict(row)
+
+
 @router.get("/bad-debt")
 def list_bad_debt(
     tenant_id: str = Depends(get_tenant_id),
@@ -139,6 +164,33 @@ def save_bad_debt(
         created_at=datetime.utcnow(),
     )
     db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _bad_debt_dict(row)
+
+
+@router.patch("/bad-debt/{record_id}/approve")
+def approve_bad_debt(
+    record_id: str,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Approve a bad debt claim — only approved eligible claims adjust Box 7 on the VAT return."""
+    assert_write_allowed()
+    row = (
+        db.query(BadDebtReliefClaim)
+        .filter_by(id=record_id, tenant_id=tenant_id, company_id=company_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Bad debt claim not found")
+    if not row.eligible:
+        raise HTTPException(400, "Only eligible claims can be approved")
+    if row.status == "approved":
+        return _bad_debt_dict(row)
+    row.status = "approved"
+    row.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(row)
     return _bad_debt_dict(row)
@@ -198,6 +250,7 @@ def _row_dict(r: PartialExemptionCalculation) -> dict[str, Any]:
         "recoverable_vat": float(r.recoverable_vat),
         "irrecoverable_vat": float(r.irrecoverable_vat),
         "breakdown": r.breakdown,
+        "status": r.status or "draft",
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 
@@ -213,7 +266,9 @@ def _bad_debt_dict(r: BadDebtReliefClaim) -> dict[str, Any]:
         "status": r.status,
         "eligible": r.eligible,
         "eligibility_reason": r.eligibility_reason,
+        "claim_period": r.claim_period,
         "extra": r.extra,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 
 

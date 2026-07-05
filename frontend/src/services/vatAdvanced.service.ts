@@ -36,6 +36,7 @@ export interface PartialExemptionRecord {
   recoverable_vat: number;
   irrecoverable_vat: number;
   breakdown: unknown;
+  status?: string;
   created_at: string;
 }
 
@@ -49,6 +50,7 @@ export interface BadDebtClaimRecord {
   status: string;
   eligible: boolean;
   eligibility_reason: string | null;
+  claim_period?: string | null;
   extra?: Record<string, unknown>;
   created_at?: string;
 }
@@ -88,6 +90,18 @@ export async function listPartialExemptions(_workspaceId: string): Promise<Parti
     return data.items ?? [];
   } catch {
     return [];
+  }
+}
+
+export async function approvePartialExemption(recordId: string): Promise<PartialExemptionRecord | null> {
+  try {
+    return await apiFetch<PartialExemptionRecord>(
+      `/api/gulftax/vat-advanced/partial-exemption/${recordId}/approve`,
+      { method: 'PATCH' },
+    );
+  } catch (e) {
+    console.warn('[vatAdvanced] approve partial exemption:', e);
+    return null;
   }
 }
 
@@ -140,6 +154,18 @@ export async function listBadDebtClaims(_workspaceId: string): Promise<BadDebtCl
     return data.items ?? [];
   } catch {
     return [];
+  }
+}
+
+export async function approveBadDebtClaim(recordId: string): Promise<BadDebtClaimRecord | null> {
+  try {
+    return await apiFetch<BadDebtClaimRecord>(
+      `/api/gulftax/vat-advanced/bad-debt/${recordId}/approve`,
+      { method: 'PATCH' },
+    );
+  } catch (e) {
+    console.warn('[vatAdvanced] approve bad debt:', e);
+    return null;
   }
 }
 
