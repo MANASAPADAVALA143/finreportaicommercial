@@ -165,6 +165,94 @@ export async function syncGulfTaxPeriod(period: string, companyIdParam?: string)
   });
 }
 
+export type VatPeriodOption = {
+  tax_period: string;
+  transaction_count: number;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export type VatReconStatus = {
+  id?: number;
+  status: 'matched' | 'mismatch_found' | 'no_return' | 'never_run';
+  tax_period: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  difference_aed: number | null;
+  box_breakdown?: Record<string, number>;
+  mismatches: Array<{
+    invoice_number?: string;
+    issue: string;
+    transaction_amount?: number;
+    return_amount?: number;
+    difference?: number;
+  }>;
+  override_reason?: string | null;
+  last_run_at?: string | null;
+  source?: string | null;
+};
+
+export type VatReconRunResult = VatReconStatus & {
+  recommendation: string;
+  transaction_count: number;
+  computed_boxes?: Record<string, unknown>;
+  vat_return_id?: number | null;
+};
+
+export type VatReconHistoryItem = {
+  id: number;
+  status: string;
+  tax_period: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  difference_aed: number;
+  transaction_count: number;
+  override_reason: string | null;
+  source: string | null;
+  created_at: string | null;
+};
+
+export async function fetchVatPeriods(companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<{ periods: VatPeriodOption[] }>('/api/gulftax/vat-periods', { company_id: cid });
+}
+
+export async function runVatRecon(period: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return post<VatReconRunResult>('/api/gulftax/recon/run', {
+    period,
+    company_id: cid,
+    workspace_id: workspaceId(),
+  });
+}
+
+export async function fetchVatReconStatus(period: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<VatReconStatus>('/api/gulftax/recon/status', { period, company_id: cid });
+}
+
+export async function fetchVatReconHistory(companyIdParam?: string, limit = 20) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<{ items: VatReconHistoryItem[] }>('/api/gulftax/recon/history', {
+    company_id: cid,
+    limit: String(limit),
+  });
+}
+
+export async function submitVatReconOverride(period: string, reason: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return post<{ id: number; override_reason: string }>('/api/gulftax/recon/override', {
+    period,
+    reason,
+    company_id: cid,
+  });
+}
+
 export async function syncApprovedInvoiceToGulfTax(invoiceId: string, companyIdParam?: string) {
   const cid = companyIdParam || companyId();
   if (!cid) throw new Error('company_id is required');

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
-import { fetchVatReturnAllBoxes, fetchVatReturnSummary, recordVatPayment, type VatReturnSummary } from '../../services/gulfTaxApi';
+import { fetchVatReturnAllBoxes, fetchVatReturnSummary, fetchVatReconStatus, recordVatPayment, submitVatReconOverride, type VatReconStatus, type VatReturnSummary } from '../../services/gulfTaxApi';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
@@ -125,10 +125,30 @@ export default function VATReturn() {
   const [apSyncCount, setApSyncCount] = useState(0);
   const [apSummary, setApSummary] = useState<VatReturnSummary | null>(null);
   const [filingOverrides, setFilingOverrides] = useState<Record<FilingOverrideKey, string> | null>(null);
+  const [reconStatus, setReconStatus] = useState<VatReconStatus | null>(null);
+  const [showOverride, setShowOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideMsg, setOverrideMsg] = useState<string | null>(null);
+  const [filingOverrideAcknowledged, setFilingOverrideAcknowledged] = useState(false);
+
+  const loadReconStatus = async () => {
+    if (!activeCompanyId) {
+      setReconStatus(null);
+      return;
+    }
+    try {
+      const status = await fetchVatReconStatus(period, activeCompanyId);
+      setReconStatus(status);
+      setFilingOverrideAcknowledged(Boolean(status.override_reason));
+    } catch {
+      setReconStatus(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
     setPayMsg(null);
+    setOverrideMsg(null);
     try {
       const [res, summary] = await Promise.all([
         fetchVatReturnAllBoxes(period, activeCompanyId || undefined),
@@ -146,11 +166,13 @@ export default function VATReturn() {
       } else {
         setFilingOverrides(null);
       }
+      await loadReconStatus();
     } catch {
       setData(null);
       setApSyncCount(0);
       setApSummary(null);
       setFilingOverrides(null);
+      setReconStatus(null);
     } finally {
       setLoading(false);
     }
@@ -165,6 +187,85 @@ export default function VATReturn() {
   useEffect(() => {
     void load();
   }, [period, activeCompanyId]);
+
+  const submitFilingOverride = async () => {
+    if (!activeCompanyId || overrideReason.trim().length < 3) return;
+    try {
+      await submitVatReconOverride(period, overrideReason.trim(), activeCompanyId);
+      setFilingOverrideAcknowledged(true);
+      setOverrideMsg('Override recorded — you may proceed with filing.');
+      setShowOverride(false);
+      await loadReconStatus();
+    } catch (e) {
+      setOverrideMsg(e instanceof Error ? e.message : 'Override failed');
+    }
+  };
+
+  const reconBanner = () => {
+    if (!reconStatus || reconStatus.status === 'never_run' || reconStatus.status === 'no_return') {
+      return (
+        <div className="mb-6 rounded-xl border border-gray-500/40 bg-gray-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-gray-300">
+            Recon not yet run for this period — review transactions on{' '}
+            <Link to="/gulftax/reconciliation" className="text-amber-300 underline">
+              Recon Bot
+            </Link>{' '}
+            before filing.
+          </p>
+        </div>
+      );
+    }
+    if (reconStatus.status === 'matched') {
+      return (
+        <div className="mb-6 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-500/15 text-green-400 border border-green-500/30">
+            Recon passed
+          </span>
+          {reconStatus.last_run_at && (
+            <span className="text-xs text-gray-500">
+              Last run {new Date(reconStatus.last_run_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+      );
+    }
+    if (reconStatus.status === 'mismatch_found') {
+      return (
+        <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 space-y-3">
+          <p className="text-sm text-amber-100 font-medium">
+            Recon has mismatches — review before filing
+            {reconStatus.difference_aed != null && (
+              <> (total diff {fmt(reconStatus.difference_aed)})</>
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Link
+              to="/gulftax/reconciliation"
+              className="text-xs font-semibold text-amber-300 hover:text-amber-200 underline"
+            >
+              Open Recon Bot →
+            </Link>
+            {!filingOverrideAcknowledged && (
+              <button
+                type="button"
+                onClick={() => setShowOverride(true)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              >
+                Override and file anyway
+              </button>
+            )}
+            {filingOverrideAcknowledged && (
+              <span className="text-xs text-green-400">Filing override recorded</span>
+            )}
+          </div>
+          {reconStatus.override_reason && (
+            <p className="text-xs text-gray-400">Reason: {reconStatus.override_reason}</p>
+          )}
+        </div>
+      );
+    }
+    return null;
+  };
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -258,6 +359,9 @@ export default function VATReturn() {
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Refresh'}
         </button>
       </div>
+
+      {reconBanner()}
+      {overrideMsg && <p className="text-xs text-amber-300 mb-4">{overrideMsg}</p>}
 
       {apSyncCount > 0 && (
         <div className="mb-6 flex items-center gap-2 flex-wrap">
@@ -407,6 +511,41 @@ export default function VATReturn() {
             <div className="flex gap-2 pt-2">
               <button type="button" onClick={() => void recordPayment()} className="flex-1 py-2 rounded-lg bg-amber-500 text-deep font-semibold text-sm">Confirm &amp; Post JE</button>
               <button type="button" onClick={() => setShowPay(false)} className="flex-1 py-2 rounded-lg border border-white/10 text-sm text-gray-300">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showOverride && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-amber-500/30 rounded-xl p-6 max-w-md w-full space-y-3">
+            <h3 className="text-lg font-semibold text-white">Override and file anyway</h3>
+            <p className="text-sm text-gray-400">
+              Reconciliation found mismatches. Enter a reason to proceed with filing (logged for audit).
+            </p>
+            <textarea
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={4}
+              placeholder="e.g. Manual FTA adjustment approved by CFO"
+              className="w-full bg-gray-950 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+            />
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => void submitFilingOverride()}
+                disabled={overrideReason.trim().length < 3}
+                className="flex-1 py-2 rounded-lg bg-amber-500 text-deep font-semibold text-sm disabled:opacity-50"
+              >
+                Confirm override
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowOverride(false)}
+                className="flex-1 py-2 rounded-lg border border-white/10 text-sm text-gray-300"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

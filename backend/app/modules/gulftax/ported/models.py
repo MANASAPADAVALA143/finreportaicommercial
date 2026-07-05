@@ -128,12 +128,18 @@ class ReconciliationResult(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     vat_return_id = Column(Integer, ForeignKey("vat_returns.id"), nullable=True, index=True)
+    tax_period = Column(String(16), nullable=True, index=True)
+    period_start = Column(Date, nullable=True)
+    period_end = Column(Date, nullable=True)
     total_invoices_aed = Column(Float, default=0.0)
     total_output_vat_aed = Column(Float, default=0.0)
     vat_return_output_aed = Column(Float, default=0.0)
     difference_aed = Column(Float, default=0.0)
     mismatches = Column(JSON)  # JSON array of mismatch details
-    status = Column(String(50), default="matched")  # matched / mismatch_found
+    box_breakdown = Column(JSON, nullable=True)
+    status = Column(String(50), default="matched")  # matched / mismatch_found / no_return
+    source = Column(String(64), nullable=True)
+    override_reason = Column(String(2000), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     company = relationship("Company", back_populates="reconciliation_results")

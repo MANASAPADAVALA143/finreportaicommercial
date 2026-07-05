@@ -151,6 +151,17 @@ DDL = [
         created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
+    # VAT recon — reconciliation_results extensions (ported GulfTax table)
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS tax_period VARCHAR(16)",
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS period_start DATE",
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS period_end DATE",
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS box_breakdown JSONB",
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS source VARCHAR(64)",
+    "ALTER TABLE reconciliation_results ADD COLUMN IF NOT EXISTS override_reason VARCHAR(2000)",
+    """
+    CREATE INDEX IF NOT EXISTS ix_reconciliation_results_tax_period
+    ON reconciliation_results (company_id, tax_period)
+    """,
 ]
 
 
