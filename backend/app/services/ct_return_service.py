@@ -122,13 +122,16 @@ def _non_deductible_expenses(
     tb_lines: list[dict],
 ) -> float:
     """Sum expense account balances flagged cit_add_back (Phase 1 — zero if none flagged)."""
-    q = db.query(UAEAccountClassification).filter(
-        UAEAccountClassification.workspace_id == tenant_id,
-        UAEAccountClassification.cit_add_back.is_(True),
-    )
-    if company_id:
-        q = q.filter(UAEAccountClassification.company_id == company_id)
-    flagged = {row.account_code for row in q.all()}
+    try:
+        q = db.query(UAEAccountClassification).filter(
+            UAEAccountClassification.workspace_id == tenant_id,
+            UAEAccountClassification.cit_add_back.is_(True),
+        )
+        if company_id:
+            q = q.filter(UAEAccountClassification.company_id == company_id)
+        flagged = {row.account_code for row in q.all()}
+    except Exception:
+        return 0.0
     if not flagged:
         return 0.0
     total = 0.0
