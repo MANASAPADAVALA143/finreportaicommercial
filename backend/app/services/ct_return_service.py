@@ -131,6 +131,7 @@ def _non_deductible_expenses(
             q = q.filter(UAEAccountClassification.company_id == company_id)
         flagged = {row.account_code for row in q.all()}
     except Exception:
+        db.rollback()
         return 0.0
     if not flagged:
         return 0.0
