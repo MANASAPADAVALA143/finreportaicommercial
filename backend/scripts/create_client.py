@@ -7,6 +7,7 @@ Usage:
     --email finance@alnoor.ae \\
     --role uae_client \\
     --plan uae_finance_suite
+    --plan uae_finance_suite_full --role uae_suite
 
 Requires backend/.env: DATABASE_URL, SUPABASE_URL, SUPABASE_KEY (service role).
 """

@@ -339,6 +339,7 @@ const UAEPeriodEndClose      = safeLazy(() => import('./pages/uae-accounting/Per
 const UAEManagementAccounts  = safeLazy(() => import('./pages/uae-accounting/ManagementAccounts'));
 const AccountClassification    = safeLazy(() => import('./pages/uae-full/AccountClassification'));
 const CITReturn                = safeLazy(() => import('./pages/uae-full/CITReturn'));
+const UAEFinanceSuiteDashboard = safeLazy(() => import('./pages/uae-suite/UAEFinanceSuiteDashboard'));
 
 // â”€â”€ AP InvoiceFlow (embedded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const APInvoicesLayout  = safeLazy(() => import('./pages/ap-invoices/APInvoicesLayout'));
@@ -646,6 +647,7 @@ function App() {
                 <Route path="/uae-accounting/trial-balances/:id"           element={<UAETrialBalanceViewer />} />
                 {/* UAE Full Accounting Suite */}
                 <Route path="/company-setup" element={<CompanySetupWizard />} />
+                <Route path="/uae-suite" element={<UAEFinanceSuiteDashboard />} />
                 <Route path="/consolidation" element={<ConsolidationPage />} />
                 <Route path="/uae-full"                                    element={<UAEAccountingOverview />} />
                 <Route path="/uae-full/coa"                                element={<UAEChartOfAccounts />} />

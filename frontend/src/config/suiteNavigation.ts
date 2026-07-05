@@ -38,6 +38,30 @@ export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
   },
 ];
 
+// ── UAE Finance Suite Full (uae_suite role — AP + AR + Tax) ───────────────────
+export const UAE_SUITE_NAV: NavEntry[] = [
+  {
+    section: '🇦🇪 UAE Finance Suite',
+    items: [
+      { label: 'Home', path: '/uae-suite', icon: 'layout-dashboard' },
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP' },
+      { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
+      { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
+      { label: 'E-Invoicing', path: '/gulftax/e-invoicing', icon: 'receipt', badge: 'Peppol' },
+      { label: 'IFRS 16 Leases', path: '/ifrs/16', icon: 'building-2', badge: 'IFRS' },
+    ],
+  },
+  {
+    section: 'AR',
+    items: [
+      { label: 'Invoices & Aging', path: '/uae-full/ar', icon: 'file-text' },
+      { label: 'Customer Risk', path: '/uae-full/ar/customer-risk', icon: 'shield' },
+      { label: 'Dunning', path: '/uae-full/ar/dunning', icon: 'clock' },
+      { label: 'Recurring Invoices', path: '/uae-full/ar/recurring', icon: 'calendar' },
+    ],
+  },
+];
+
 // ── India Suite ───────────────────────────────────────────────────────────────
 export const INDIA_NAV: NavEntry[] = [
   { label: 'Dashboard',          path: '/india-full',           icon: 'layout-dashboard' },

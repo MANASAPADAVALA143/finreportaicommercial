@@ -11,8 +11,8 @@ import { useSuite } from '../context/SuiteContext';
 import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
-import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
-import { isUaeFinanceSuiteOnly, filterNavByRole } from '../config/productRole';
+import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { isUaeFinanceSuiteOnly, isUaeSuite, filterNavByRole } from '../config/productRole';
 import { ErrorBoundary } from '../ErrorBoundary';
 
 // ── Icon registry (lucide icons keyed by our string names) ───────────────────
@@ -214,11 +214,14 @@ export function SuiteSidebar() {
   const { companiesList } = useCompany();
   const { productRole, user } = useAuth();
   const uaeOnly = isUaeFinanceSuiteOnly(productRole);
+  const uaeSuite = isUaeSuite(productRole);
   const accentColor = SUITE_COLOR[activeSuite];
 
   const uaeNav = uaeOnly
     ? UAE_FINANCE_SUITE_NAV
-    : companiesList.length >= 2
+    : uaeSuite
+      ? UAE_SUITE_NAV
+      : companiesList.length >= 2
       ? [
           ...UAE_NAV.slice(0, 3),
           { label: 'Group Consolidation', path: '/consolidation', icon: 'layers', badge: 'Group' },
@@ -227,7 +230,7 @@ export function SuiteSidebar() {
       : UAE_NAV;
 
   const navItems = filterNavByRole(
-    uaeOnly
+    uaeOnly || uaeSuite
       ? uaeNav
       : activeSuite === 'india'
         ? INDIA_NAV
@@ -249,8 +252,8 @@ export function SuiteSidebar() {
         <div className="text-gray-500 text-xs mt-0.5">AI-native Finance Platform</div>
       </div>
 
-      {/* Suite switcher — hidden for uae_client */}
-      {!uaeOnly && (
+      {/* Suite switcher — hidden for uae_client and uae_suite */}
+      {!uaeOnly && !uaeSuite && (
         <div className="shrink-0">
           <SuiteSwitcher />
         </div>
@@ -262,7 +265,7 @@ export function SuiteSidebar() {
       </nav>
 
       {/* GulfTax AI widget — UAE suite only */}
-      {activeSuite === 'uae' && !uaeOnly && (
+      {activeSuite === 'uae' && !uaeOnly && !uaeSuite && (
         <div className="shrink-0">
           <ErrorBoundary>
             <GulfTaxWidget />
@@ -271,7 +274,7 @@ export function SuiteSidebar() {
       )}
 
       {/* Shared AI services panel */}
-      {!uaeOnly && (
+      {!uaeOnly && !uaeSuite && (
       <div className="shrink-0 px-3 pb-2">
         <div className="rounded-lg bg-white/[0.03] border border-white/8 p-2.5">
           <div className="text-[10px] text-gray-500 mb-2 font-medium uppercase tracking-wider">
@@ -298,7 +301,7 @@ export function SuiteSidebar() {
       )}
 
       {/* NEXUS-C footer */}
-      {!uaeOnly && (
+      {!uaeOnly && !uaeSuite && (
       <div className="px-4 py-3 border-t border-white/10 shrink-0">
         <div className="text-[10px] text-gray-500 mb-1">NEXUS-C Agentic Layer</div>
         <Link

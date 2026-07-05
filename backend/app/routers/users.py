@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/users", tags=["rbac-users"])
 
 VALID_PRODUCT_ROLES = (
     "uae_client",
+    "uae_suite",
     "uae_full",
     "india_client",
     "india_full",
