@@ -270,3 +270,31 @@ class ApAuditLog(Base):
     user_id = Column(String(36), nullable=True)
     details = Column(_json, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CtReturn(Base):
+    """UAE Corporate Tax return — RDS persistence (draft → approved → filed)."""
+
+    __tablename__ = "ct_returns"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id = Column(String(36), nullable=False, index=True)
+    company_id = Column(String(36), nullable=False, index=True)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    revenue = Column(Numeric(15, 2), nullable=True)
+    accounting_profit = Column(Numeric(15, 2), nullable=True)
+    non_deductible_expenses = Column(Numeric(15, 2), default=0)
+    taxable_income = Column(Numeric(15, 2), nullable=True)
+    ct_payable_aed = Column(Numeric(15, 2), nullable=True)
+    sbr_eligible = Column(Boolean, default=False, nullable=False)
+    qfzp_eligible = Column(Boolean, default=False, nullable=False)
+    free_zone_status = Column(String(32), default="mainland")
+    free_zone_income = Column(Numeric(15, 2), default=0)
+    breakdown = Column(_json, nullable=True)
+    status = Column(String(20), default="draft", nullable=False)
+    override_reason = Column(Text, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    filed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
