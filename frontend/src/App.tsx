@@ -323,6 +323,7 @@ const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/Cha
 const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
 const UAESalesInvoices       = safeLazy(() => import('./pages/uae-accounting/SalesInvoices'));
 const ARInvoices             = safeLazy(() => import('./pages/uae-full/ARInvoices'));
+const ARCustomerRisk         = safeLazy(() => import('./pages/uae-full/ARCustomerRisk'));
 const CRMLayout              = safeLazy(() => import('./pages/crm/CRMLayout'));
 const CRMDashboard           = safeLazy(() => import('./pages/crm/CRMDashboard'));
 const CRMContacts            = safeLazy(() => import('./pages/crm/CRMContacts'));
@@ -647,6 +648,7 @@ function App() {
                 <Route path="/uae-full/journals"                           element={<UAEJournalEntries />} />
                 <Route path="/uae-full/invoices"                           element={<UAESalesInvoices />} />
                 <Route path="/uae-full/ar"                                 element={<ARInvoices />} />
+                <Route path="/uae-full/ar/customer-risk"                 element={<ARCustomerRisk />} />
                 <Route path="/o2c"                                         element={<O2CDashboard />} />
                 <Route path="/crm" element={<CRMLayout />}>
                   <Route index element={<CRMDashboard />} />

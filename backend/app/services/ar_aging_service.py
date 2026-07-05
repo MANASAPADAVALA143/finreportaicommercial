@@ -32,6 +32,7 @@ BUCKET_RISK = {
     "61_90": "high",
     "90_plus": "critical",
 }
+RISK_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 def bucket_key(days_overdue: int) -> str:
