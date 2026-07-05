@@ -128,7 +128,7 @@ def _flag_overdue(inv: UAESalesInvoice, today: date, db: Session) -> bool:
     return inv.status == "overdue"
 
 
-def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session) -> dict[str, Any]:
+def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session, einvoicing_status: str | None = None) -> dict[str, Any]:
     is_overdue = _flag_overdue(inv, today, db)
     cust = inv.customer
     return {
@@ -143,6 +143,7 @@ def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session) -> dict[str, A
         "total": _f(inv.total_amount),
         "amount_due": _f(inv.outstanding),
         "status": inv.status or "draft",
+        "einvoicing_status": einvoicing_status,
         "is_overdue": is_overdue,
         "je_reference": inv.journal_entry_id,
         "sent_at": inv.sent_at.isoformat() if inv.sent_at else None,
@@ -324,7 +325,10 @@ def list_invoices(
     if status:
         q = q.filter(UAESalesInvoice.status == status.lower())
     invoices = q.order_by(UAESalesInvoice.invoice_date.desc()).limit(500).all()
-    result = [_invoice_dict(inv, today, db) for inv in invoices]
+    from app.services.einvoicing_service_unified import get_latest_submission_status
+
+    status_map = get_latest_submission_status(db, ws, [inv.id for inv in invoices])
+    result = [_invoice_dict(inv, today, db, status_map.get(inv.id)) for inv in invoices]
     db.commit()
     return {"invoices": result, "count": len(result)}
 

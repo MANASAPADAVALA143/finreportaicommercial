@@ -298,3 +298,22 @@ class CtReturn(Base):
     filed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class EinvoicingSubmission(Base):
+    """Peppol PINT AE e-invoice submission — persisted on RDS."""
+
+    __tablename__ = "einvoicing_submissions"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id = Column(String(36), nullable=False, index=True)
+    company_id = Column(String(36), nullable=False, index=True)
+    invoice_id = Column(String(36), nullable=True, index=True)
+    invoice_number = Column(String(128), nullable=False)
+    submission_status = Column(String(20), default="pending", nullable=False)
+    xml_payload = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    asp_reference = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
