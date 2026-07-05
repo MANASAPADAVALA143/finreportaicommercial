@@ -1,22 +1,23 @@
-"""GulfTax E-Invoicing — Peppol PINT AE (embedded in FinReportAI)."""
+"""GulfTax E-Invoicing — unified Peppol PINT AE API."""
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.services import einvoicing_service_unified as svc
 
 router = APIRouter(prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"])
 
 IntegrationStatus = Literal["not_started", "planning", "testing", "live"]
-AspSubmissionStatus = Literal["pending", "accepted", "rejected"]
-
-# In-memory ASP submission store (keyed by workspace_id or "default")
-_asp_submissions: dict[str, list[dict[str, Any]]] = {}
+AspSubmissionStatus = Literal["pending", "accepted", "rejected", "error"]
 
 
 class CalculatePhaseRequest(BaseModel):
@@ -28,13 +29,25 @@ class CalculatePhaseRequest(BaseModel):
 
 
 class ValidateInvoiceRequest(BaseModel):
-    invoice_number: str
-    supplier_trn: str = ""
-    buyer_trn: str = ""
-    net_amount: float = Field(..., ge=0)
-    vat_amount: float = Field(..., ge=0)
+    invoice_number: str = ""
     invoice_date: str = ""
+    supplier_trn: str = ""
+    seller_trn: str = ""
+    buyer_trn: str = ""
+    supplier_name: str = ""
+    vendor_name: str = ""
+    buyer_name: str = ""
+    net_amount: float = Field(default=0, ge=0)
+    vat_amount: float = Field(default=0, ge=0)
+    gross_amount: float = Field(default=0, ge=0)
+    vat_category: str = "S"
+    vat_rate: float = 5.0
+    vat_treatment: str = "standard"
+    currency: str = "AED"
     xml_content: str = ""
+    is_b2b: bool = True
+    is_credit_note: bool = False
+    document_type_code: str = "380"
     workspace_id: Optional[str] = None
 
 
@@ -54,29 +67,60 @@ class GenerateXmlRequest(BaseModel):
     invoice_number: str
     supplier_name: str
     supplier_trn: str
+    supplier_address: str = ""
     buyer_name: str = ""
     buyer_trn: str = ""
+    buyer_address: str = ""
     net_amount: float = Field(..., gt=0)
     vat_amount: float = Field(..., ge=0)
+    gross_amount: Optional[float] = None
     currency: str = "AED"
     invoice_date: str = ""
+    vat_category: str = "S"
+    vat_rate: float = 5.0
+    is_credit_note: bool = False
+    lines: list[dict[str, Any]] = Field(default_factory=list)
     workspace_id: Optional[str] = None
 
 
-def _phase_from_revenue(revenue: float) -> tuple[int, str, str]:
-    if revenue >= 50_000_000:
-        return 1, "2026-07-01", "Phase 1 — Revenue ≥ AED 50M (mandatory Jul 2026)"
-    if revenue >= 20_000_000:
-        return 2, "2027-01-01", "Phase 2 — Revenue ≥ AED 20M (mandatory Jan 2027)"
-    return 3, "2027-07-01", "Phase 3 — All remaining businesses (Jul 2027)"
+class AspSubmitRequest(BaseModel):
+    invoice_number: str
+    invoice_date: str = ""
+    seller_trn: str = ""
+    buyer_trn: str = ""
+    net_amount: float = Field(..., ge=0)
+    vat_amount: float = Field(..., ge=0)
+    gross_amount: float = Field(..., ge=0)
+    xml_content: str = ""
+    invoice_id: Optional[str] = None
+    submission_id: Optional[str] = None
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
 
 
-def _compute_readiness(params: ReadinessRequest) -> Dict[str, Any]:
-    rev = params.annual_revenue_aed
-    phase, deadline, phase_label = _phase_from_revenue(rev)
+class AspInboundRequest(BaseModel):
+    submission_id: str
+    status: AspSubmissionStatus
+    rejection_reason: str = ""
+    asp_reference: str = ""
 
+
+def _tenant(workspace_id: Optional[str]) -> str:
+    return (workspace_id or "default").strip() or "default"
+
+
+async def _trigger_asp_webhook(payload: dict[str, Any]) -> None:
+    url = os.getenv("GULFTAX_ASP_WEBHOOK_URL") or os.getenv("N8N_ASP_WEBHOOK_URL")
+    if not url:
+        return
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        await client.post(url, json=payload)
+
+
+def _compute_readiness(params: ReadinessRequest) -> dict[str, Any]:
+    phase = svc.calculate_phase(params.annual_revenue_aed)
     score = 100
-    gaps: List[Dict[str, str]] = []
+    gaps: list[dict[str, str]] = []
     if not params.asp_appointed:
         score -= 35
         gaps.append({"level": "critical", "text": "No accredited ASP appointed"})
@@ -92,169 +136,91 @@ def _compute_readiness(params: ReadinessRequest) -> Dict[str, Any]:
     if not params.budget_confirmed:
         score -= 8
         gaps.append({"level": "medium", "text": "ERP upgrade budget not confirmed"})
-    if params.invoices_per_month > 500 and params.integration_status != "live":
-        score -= 5
-        gaps.append({"level": "medium", "text": "High invoice volume without live integration"})
-    if params.business_type == "B2C" and rev < 50_000_000:
-        score -= 5
-
     score = max(0, min(100, score))
-    today = date.today()
-    asp_deadline = date(2026, 7, 31)
-    go_live = date.fromisoformat(deadline)
-    days_asp = (asp_deadline - today).days
-    days_live = (go_live - today).days
-
     urgency = "GREEN"
-    if phase == 1 and score < 40:
+    if phase["phase_num"] == 1 and score < 40:
         urgency = "RED"
-    elif phase == 1 or score < 55:
+    elif phase["phase_num"] == 1 or score < 55:
         urgency = "AMBER"
-
     return {
-        "phase": phase,
-        "phase_label": phase_label,
-        "mandatory_from": deadline,
+        **phase,
         "readiness_score": score,
         "urgency": urgency,
         "gaps": gaps,
-        "days_to_asp_deadline": days_asp,
-        "days_to_go_live": days_live,
-        "standard": "Peppol PINT AE",
-        "penalty_exposure_aed": 60_000 if (not params.asp_appointed and rev >= 50_000_000) else 5_000,
+        "days_to_go_live": phase["days_to_mandatory"],
     }
 
 
+@router.get("/calculate-phase")
 @router.post("/calculate-phase")
-def calculate_phase(body: CalculatePhaseRequest):
-    """UAE e-invoicing phase calculator (FTA timeline)."""
-    trn = body.trn.strip().replace(" ", "")
-    phase, deadline, label = _phase_from_revenue(body.annual_revenue_aed)
-    return {
-        "trn": trn or None,
-        "annual_revenue_aed": body.annual_revenue_aed,
-        "phase": phase,
-        "mandatory_from": deadline,
-        "phase_label": label,
-        "standard": "Peppol PINT AE",
-        "transaction_profile": body.transaction_profile,
-        "entity_type": body.entity_type,
-        "workspace_id": body.workspace_id,
-        "message": f"E-invoicing Phase {phase} from {deadline}",
-    }
+def calculate_phase_endpoint(
+    body: CalculatePhaseRequest | None = None,
+    annual_revenue_aed: float | None = Query(None, ge=0),
+):
+    """Unified FTA phase calculator — Phase 1 mandatory Jan 2027 for ≥ AED 50M."""
+    revenue = annual_revenue_aed
+    if body:
+        revenue = body.annual_revenue_aed
+    if revenue is None:
+        raise HTTPException(400, "annual_revenue_aed required")
+    result = svc.calculate_phase(revenue)
+    if body:
+        result["trn"] = body.trn.strip() or None
+        result["transaction_profile"] = body.transaction_profile
+        result["entity_type"] = body.entity_type
+        result["workspace_id"] = body.workspace_id
+    return result
 
 
 @router.post("/validate")
 def validate_invoice(body: ValidateInvoiceRequest):
-    """Validate invoice fields + optional UBL XML for Peppol PINT AE compliance."""
-    errors: List[str] = []
-    warnings: List[str] = []
-    passed: List[str] = []
+    """Unified PINT AE validation (15+ rules)."""
+    payload = body.model_dump()
+    payload["seller_trn"] = body.seller_trn or body.supplier_trn
+    payload["supplier_name"] = body.supplier_name or body.vendor_name
+    return svc.validate_pint_ae(payload)
 
-    trn = body.supplier_trn.strip().replace(" ", "")
-    if trn:
-        if len(trn) == 15 and trn.isdigit():
-            passed.append("Supplier TRN format valid (15 digits)")
-        else:
-            errors.append("Supplier TRN must be 15 numeric digits")
-    else:
-        warnings.append("Supplier TRN missing")
 
-    if body.net_amount <= 0:
-        errors.append("Net amount must be positive")
-    else:
-        passed.append("Net amount present")
-
-    expected_vat = round(body.net_amount * 0.05, 2)
-    if abs(body.vat_amount - expected_vat) > 0.05 and body.vat_amount > 0:
-        warnings.append(f"VAT amount {body.vat_amount} differs from expected 5% ({expected_vat})")
-    elif body.vat_amount > 0:
-        passed.append("VAT amount consistent with 5% standard rate")
-
-    if body.invoice_date:
-        passed.append("Invoice date provided")
-    else:
-        warnings.append("Invoice date missing")
-
-    xml_valid = True
-    if body.xml_content.strip():
-        required = ["Invoice", "cbc:ID", "cac:AccountingSupplierParty", "cac:TaxTotal"]
-        missing = [t for t in required if t not in body.xml_content]
-        if missing:
-            xml_valid = False
-            errors.extend([f"XML missing tag: {t}" for t in missing])
-        else:
-            passed.append("UBL 2.1 structure present")
-
-    score = max(0, min(100, 100 - len(errors) * 20 - len(warnings) * 5))
-    return {
-        "valid": len(errors) == 0,
-        "compliance_score": score,
-        "passed": passed,
-        "errors": errors,
-        "warnings": warnings,
-        "xml_valid": xml_valid,
-        "standard": "Peppol PINT AE / UBL 2.1",
-        "workspace_id": body.workspace_id,
-    }
+@router.post("/validate-xml")
+async def validate_xml_upload(
+    file: UploadFile = File(...),
+    is_b2b: bool = Form(default=True),
+):
+    content = await file.read()
+    try:
+        xml_content = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "File must be UTF-8 encoded XML") from exc
+    return svc.validate_pint_ae({"xml_content": xml_content, "is_b2b": is_b2b})
 
 
 @router.post("/readiness")
 def readiness_assessment(body: ReadinessRequest):
-    """Full Peppol readiness score with gap analysis."""
     result = _compute_readiness(body)
     return {"workspace_id": body.workspace_id, **result}
 
 
 @router.post("/generate-xml")
 def generate_xml(body: GenerateXmlRequest):
-    """Generate minimal UBL 2.1 Peppol PINT AE invoice XML."""
-    inv_date = body.invoice_date or date.today().isoformat()
-    trn = body.supplier_trn.strip().replace(" ", "")
-    if not trn or len(trn) != 15 or not trn.isdigit():
-        raise HTTPException(400, "Valid 15-digit supplier TRN required for Peppol XML")
-
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
-         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
-         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
-  <cbc:ID>{body.invoice_number}</cbc:ID>
-  <cbc:IssueDate>{inv_date}</cbc:IssueDate>
-  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
-  <cbc:DocumentCurrencyCode>{body.currency}</cbc:DocumentCurrencyCode>
-  <cac:AccountingSupplierParty>
-    <cac:Party>
-      <cac:PartyName><cbc:Name>{body.supplier_name}</cbc:Name></cac:PartyName>
-      <cac:PartyTaxScheme>
-        <cbc:CompanyID>{trn}</cbc:CompanyID>
-        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-      </cac:PartyTaxScheme>
-    </cac:Party>
-  </cac:AccountingSupplierParty>
-  <cac:AccountingCustomerParty>
-    <cac:Party>
-      <cac:PartyName><cbc:Name>{body.buyer_name or 'Buyer'}</cbc:Name></cac:PartyName>
-    </cac:Party>
-  </cac:AccountingCustomerParty>
-  <cac:TaxTotal>
-    <cbc:TaxAmount currencyID="{body.currency}">{body.vat_amount:.2f}</cbc:TaxAmount>
-    <cac:TaxSubtotal>
-      <cbc:TaxableAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:TaxableAmount>
-      <cbc:TaxAmount currencyID="{body.currency}">{body.vat_amount:.2f}</cbc:TaxAmount>
-      <cac:TaxCategory>
-        <cbc:ID>S</cbc:ID>
-        <cbc:Percent>5</cbc:Percent>
-        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-      </cac:TaxCategory>
-    </cac:TaxSubtotal>
-  </cac:TaxTotal>
-  <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:LineExtensionAmount>
-    <cbc:TaxExclusiveAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="{body.currency}">{(body.net_amount + body.vat_amount):.2f}</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="{body.currency}">{(body.net_amount + body.vat_amount):.2f}</cbc:PayableAmount>
-  </cac:LegalMonetaryTotal>
-</Invoice>"""
+    gross = body.gross_amount if body.gross_amount is not None else round(body.net_amount + body.vat_amount, 2)
+    xml = svc.generate_pint_ae_xml({
+        "invoice_number": body.invoice_number,
+        "invoice_date": body.invoice_date or date.today().isoformat(),
+        "supplier_name": body.supplier_name,
+        "supplier_address": body.supplier_address,
+        "seller_trn": body.supplier_trn,
+        "buyer_name": body.buyer_name,
+        "buyer_address": body.buyer_address,
+        "buyer_trn": body.buyer_trn,
+        "net_amount": body.net_amount,
+        "vat_amount": body.vat_amount,
+        "gross_amount": gross,
+        "currency": body.currency,
+        "vat_category": body.vat_category,
+        "vat_rate": body.vat_rate,
+        "is_credit_note": body.is_credit_note,
+        "lines": body.lines,
+    })
     return {
         "invoice_number": body.invoice_number,
         "xml_content": xml,
@@ -264,93 +230,106 @@ def generate_xml(body: GenerateXmlRequest):
     }
 
 
-class AspSubmitRequest(BaseModel):
-    invoice_number: str
-    invoice_date: str = ""
-    seller_trn: str = ""
-    buyer_trn: str = ""
-    net_amount: float = Field(..., ge=0)
-    vat_amount: float = Field(..., ge=0)
-    gross_amount: float = Field(..., ge=0)
-    xml_content: str = ""
-    workspace_id: Optional[str] = None
-
-
-class AspInboundRequest(BaseModel):
-    submission_id: str
-    status: AspSubmissionStatus
-    rejection_reason: str = ""
-
-
-def _ws_key(workspace_id: Optional[str]) -> str:
-    return (workspace_id or "default").strip() or "default"
-
-
-async def _trigger_asp_webhook(payload: dict[str, Any]) -> None:
-    url = os.getenv("GULFTAX_ASP_WEBHOOK_URL") or os.getenv("N8N_ASP_WEBHOOK_URL")
-    if not url:
-        return
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        await client.post(url, json=payload)
-
-
-@router.post("/asp/submit")
-async def submit_to_asp(body: AspSubmitRequest):
-    """Submit validated invoice to ASP via n8n/webhook trigger."""
-    if body.net_amount <= 0:
-        raise HTTPException(400, "net_amount must be positive")
-    sub_id = str(uuid.uuid4())
-    ws = _ws_key(body.workspace_id)
-    record = {
-        "id": sub_id,
+@router.post("/generate-xml/download")
+def generate_xml_download(body: GenerateXmlRequest):
+    gross = body.gross_amount if body.gross_amount is not None else round(body.net_amount + body.vat_amount, 2)
+    xml = svc.generate_pint_ae_xml({
         "invoice_number": body.invoice_number,
-        "invoice_date": body.invoice_date,
-        "seller_trn": body.seller_trn,
+        "invoice_date": body.invoice_date or date.today().isoformat(),
+        "supplier_name": body.supplier_name,
+        "supplier_address": body.supplier_address,
+        "seller_trn": body.supplier_trn,
+        "buyer_name": body.buyer_name,
         "buyer_trn": body.buyer_trn,
         "net_amount": body.net_amount,
         "vat_amount": body.vat_amount,
-        "gross_amount": body.gross_amount,
-        "status": "pending",
-        "rejection_reason": None,
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "workspace_id": ws,
-    }
-    _asp_submissions.setdefault(ws, []).insert(0, record)
+        "gross_amount": gross,
+        "currency": body.currency,
+        "lines": body.lines,
+    })
+    filename = f"invoice_{body.invoice_number.replace('/', '-')}.xml"
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/asp/submit")
+async def submit_to_asp(body: AspSubmitRequest, db: Session = Depends(get_db)):
+    if body.net_amount <= 0:
+        raise HTTPException(400, "net_amount must be positive")
+    tenant = _tenant(body.workspace_id)
+    company_id = body.company_id or tenant
+    xml = body.xml_content
+    if not xml.strip():
+        xml = svc.generate_pint_ae_xml({
+            "invoice_number": body.invoice_number,
+            "invoice_date": body.invoice_date,
+            "seller_trn": body.seller_trn,
+            "buyer_trn": body.buyer_trn,
+            "net_amount": body.net_amount,
+            "vat_amount": body.vat_amount,
+            "gross_amount": body.gross_amount,
+        })
+    row = svc.submit_to_asp(
+        db,
+        tenant_id=tenant,
+        company_id=company_id,
+        invoice_number=body.invoice_number,
+        xml_payload=xml,
+        invoice_id=body.invoice_id,
+        submission_id=body.submission_id,
+    )
+    record = svc._serialize_submission(row)
     await _trigger_asp_webhook({"event": "asp_submit", "submission": record})
-    return {"submission_id": sub_id, "status": "pending", "message": "Submitted to ASP — awaiting response"}
+    return {
+        "submission_id": row.id,
+        "status": row.submission_status,
+        "message": "Submitted to ASP — awaiting response",
+    }
 
 
 @router.get("/asp/submissions")
-def list_asp_submissions(workspace_id: Optional[str] = None, limit: int = 20):
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])[:limit]
-    return {"items": rows}
+def list_asp_submissions(
+    workspace_id: Optional[str] = None,
+    company_id: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    tenant = _tenant(workspace_id)
+    items = svc.list_submissions(db, tenant, company_id=company_id, limit=limit)
+    return {"items": items}
 
 
 @router.post("/asp/{submission_id}/redrive")
-async def redrive_asp_submission(submission_id: str, workspace_id: Optional[str] = None):
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])
-    rec = next((r for r in rows if r["id"] == submission_id), None)
-    if not rec:
+async def redrive_asp_submission(
+    submission_id: str,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    tenant = _tenant(workspace_id)
+    row = svc.update_submission_status(db, submission_id, status="pending", error_message="")
+    if not row or row.tenant_id != tenant:
         raise HTTPException(404, "Submission not found")
-    rec["status"] = "pending"
-    rec["rejection_reason"] = None
-    rec["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await _trigger_asp_webhook({"event": "asp_redrive", "submission": rec})
+    record = svc._serialize_submission(row)
+    await _trigger_asp_webhook({"event": "asp_redrive", "submission": record})
     return {"submission_id": submission_id, "status": "pending"}
 
 
 @router.post("/asp/inbound")
-def asp_inbound_status(body: AspInboundRequest, workspace_id: Optional[str] = None):
-    """n8n callback to update ASP submission status (accepted/rejected)."""
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])
-    rec = next((r for r in rows if r["id"] == body.submission_id), None)
-    if not rec:
+def asp_inbound_status(body: AspInboundRequest, db: Session = Depends(get_db)):
+    """n8n callback to update ASP submission status."""
+    status = body.status
+    if status == "rejected" and not body.rejection_reason:
+        body.rejection_reason = "Rejected by ASP"
+    row = svc.update_submission_status(
+        db,
+        body.submission_id,
+        status=status,
+        asp_reference=body.asp_reference or None,
+        error_message=body.rejection_reason or None,
+    )
+    if not row:
         raise HTTPException(404, "Submission not found")
-    rec["status"] = body.status
-    rec["rejection_reason"] = body.rejection_reason or None
-    rec["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return {"submission_id": body.submission_id, "status": body.status}
+    return {"submission_id": body.submission_id, "status": row.submission_status}

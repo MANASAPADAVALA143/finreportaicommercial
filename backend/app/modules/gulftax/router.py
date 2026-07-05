@@ -537,72 +537,25 @@ class PintAeValidateRequest(BaseModel):
 
 @router.post("/einvoicing/validate-pint-ae")
 def validate_pint_ae_invoice(body: PintAeValidateRequest):
-    """15-rule Peppol PINT AE compliance check for an AP invoice."""
-    try:
-        from app.modules.gulftax.advance_vat import trn_mod97_valid
+    """15+ rule Peppol PINT AE compliance check — unified validator."""
+    from app.services.einvoicing_service_unified import validate_pint_ae
 
-        rules: List[Dict[str, Any]] = []
-
-        def rule(rid: str, label: str, passed: bool, fix: str = "") -> None:
-            rules.append({"id": rid, "label": label, "passed": passed, "fix": fix if not passed else ""})
-
-        inv_no = (body.invoice_number or "").strip()
-        rule("inv_number", "Invoice number present", bool(inv_no), "Add a valid invoice / tax invoice number")
-
-        inv_date = (body.invoice_date or "").strip()
-        rule("inv_date", "Invoice date present", bool(inv_date), "Set invoice date (YYYY-MM-DD)")
-
-        vendor = (body.vendor_name or "").strip()
-        rule("supplier_name", "Supplier legal name", len(vendor) >= 2, "Add supplier legal name as on TRN certificate")
-
-        trn = (body.vendor_trn or "").strip().replace(" ", "")
-        rule("supplier_trn", "Supplier TRN (15 digits)", trn_mod97_valid(trn), "TRN must be 15 digits starting with 1")
-
-        buyer_trn = (body.buyer_trn or "").strip().replace(" ", "")
-        rule("buyer_trn", "Buyer TRN (B2B)", not buyer_trn or trn_mod97_valid(buyer_trn), "Buyer TRN must be 15 digits")
-
-        net = float(body.subtotal_amount if body.subtotal_amount is not None else body.total_amount or 0)
-        rule("net_amount", "Taxable amount > 0", net > 0, "Net / taxable amount must be positive")
-
-        vat = float(body.vat_amount or 0)
-        rule("vat_present", "VAT amount declared", vat > 0, "Declare VAT amount on the invoice")
-
-        expected_vat = round(net * (float(body.vat_rate or 5) / 100), 2)
-        vat_ok = abs(vat - expected_vat) <= 0.05 or (vat > 0 and net > 0)
-        rule("vat_rate", "VAT at standard 5%", vat_ok, f"Expected VAT ~AED {expected_vat:,.2f} at 5%")
-
-        curr = (body.currency or "AED").upper()
-        rule("currency", "Currency is AED", curr in ("AED", "د.إ"), "UAE e-invoices must use AED")
-
-        treatment = (body.vat_treatment or "standard").lower()
-        rule("vat_category", "VAT category code (standard)", treatment in ("standard", "standard-rated", "s"), "Map to Peppol tax category S (standard 5%)")
-
-        total = float(body.total_amount or 0)
-        rule("total", "Total = net + VAT", total <= 0 or abs(total - (net + vat)) <= 0.1, "Total must equal net + VAT")
-
-        rule("doc_type", "Document type code 380 (tax invoice)", True, "")
-
-        rule("line_items", "Line item detail implied", net > 0, "Include line items with description, qty, unit price")
-
-        rule("tax_total", "Tax total block present", vat > 0, "Include TaxTotal in UBL XML")
-
-        rule("monetary_total", "Legal monetary total present", total > 0, "Include LegalMonetaryTotal in UBL XML")
-
-        rule("issue_time", "Issue date ISO format", bool(inv_date and len(inv_date) >= 8), "Use ISO date YYYY-MM-DD")
-
-        rule("peppol_profile", "Peppol PINT AE profile", trn_mod97_valid(trn) and inv_no and vat > 0, "Complete TRN, invoice no, and VAT for PINT AE")
-
-        failed = [r for r in rules if not r["passed"]]
-        return {
-            "compliant": len(failed) == 0,
-            "rules_passed": len(rules) - len(failed),
-            "rules_total": len(rules),
-            "rules": rules,
-            "issues_found": len(failed),
-            "standard": "Peppol PINT AE",
-        }
-    except Exception as e:
-        raise HTTPException(500, f"PINT AE validation failed: {e}") from e
+    net = float(body.subtotal_amount if body.subtotal_amount is not None else body.total_amount or 0)
+    vat = float(body.vat_amount or 0)
+    return validate_pint_ae({
+        "invoice_number": body.invoice_number,
+        "invoice_date": body.invoice_date,
+        "vendor_name": body.vendor_name,
+        "seller_trn": body.vendor_trn,
+        "buyer_trn": body.buyer_trn,
+        "net_amount": net,
+        "vat_amount": vat,
+        "gross_amount": float(body.total_amount or 0),
+        "vat_rate": float(body.vat_rate or 5),
+        "vat_treatment": body.vat_treatment,
+        "currency": body.currency,
+        "is_b2b": True,
+    })
 
 
 @router.post("/vat/extract-pdf-invoices")

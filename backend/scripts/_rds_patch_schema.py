@@ -253,6 +253,26 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_tenant_id ON gulftax_ct_returns (tenant_id)",
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_company_id ON gulftax_ct_returns (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_status ON gulftax_ct_returns (status)",
+    """
+    CREATE TABLE IF NOT EXISTS einvoicing_submissions (
+        id VARCHAR(36) PRIMARY KEY,
+        tenant_id VARCHAR(36) NOT NULL,
+        company_id VARCHAR(36) NOT NULL,
+        invoice_id VARCHAR(36),
+        invoice_number VARCHAR(128) NOT NULL,
+        submission_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        xml_payload TEXT,
+        submitted_at TIMESTAMP,
+        asp_reference VARCHAR(128),
+        error_message TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_tenant_id ON einvoicing_submissions (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_company_id ON einvoicing_submissions (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_invoice_id ON einvoicing_submissions (invoice_id)",
+    "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_status ON einvoicing_submissions (submission_status)",
 ]
 
 

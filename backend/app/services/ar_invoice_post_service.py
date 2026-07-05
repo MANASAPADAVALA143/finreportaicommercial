@@ -113,7 +113,16 @@ def post_sales_invoice_to_gl_and_tax(
     if prior:
         if cid:
             sync_ar_invoice_to_gulftax(db, sales_invoice_id, cid, workspace_id=ws_id)
-        return {"ok": True, **prior}
+        einvoicing_result: dict[str, Any] = {}
+        try:
+            from app.services.einvoicing_service_unified import generate_and_store_ar_einvoice
+
+            einvoicing_result = generate_and_store_ar_einvoice(
+                db, sales_invoice_id, tenant_id=tenant_id, company_id=cid,
+            )
+        except Exception:
+            logger.exception("E-invoice XML generation failed for %s", sales_invoice_id)
+        return {"ok": True, **prior, "einvoicing": einvoicing_result}
 
     if inv.status == "paid":
         return {"ok": False, "je_posted": False, "error": "cannot_post_paid_invoice"}
@@ -202,6 +211,16 @@ def post_sales_invoice_to_gl_and_tax(
         except Exception:
             logger.exception("GulfTax sync after AR post failed for %s", inv.invoice_number)
 
+    einvoicing_result: dict[str, Any] = {}
+    try:
+        from app.services.einvoicing_service_unified import generate_and_store_ar_einvoice
+
+        einvoicing_result = generate_and_store_ar_einvoice(
+            db, sales_invoice_id, tenant_id=tenant_id, company_id=cid,
+        )
+    except Exception:
+        logger.exception("E-invoice XML generation failed for %s", inv.invoice_number)
+
     logger.info(
         "AR post_sales_invoice_to_gl_and_tax: invoice=%s customer=%s JE=%s",
         inv.invoice_number,
@@ -219,5 +238,6 @@ def post_sales_invoice_to_gl_and_tax(
         "invoice_number": inv.invoice_number,
         "status": inv.status,
         "gulftax": gulftax_result,
+        "einvoicing": einvoicing_result,
         "message": f"Sales invoice {inv.invoice_number} posted to UAE GL.",
     }

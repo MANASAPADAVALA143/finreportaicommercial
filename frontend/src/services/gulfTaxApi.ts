@@ -474,21 +474,34 @@ export async function triggerEInvoicingAutomation(companyId: string) {
 }
 
 // ── ASP submission (n8n webhook) ─────────────────────────────────────────────
-export type AspSubmissionStatus = 'pending' | 'accepted' | 'rejected';
+export type AspSubmissionStatus = 'pending' | 'accepted' | 'rejected' | 'error';
 
 export interface AspSubmission {
   id: string;
+  invoice_id?: string | null;
   invoice_number: string;
-  invoice_date: string;
-  seller_trn?: string;
-  buyer_trn?: string;
-  net_amount: number;
-  vat_amount: number;
-  gross_amount: number;
+  submission_status: AspSubmissionStatus;
   status: AspSubmissionStatus;
-  rejection_reason: string | null;
-  submitted_at: string;
-  updated_at: string;
+  xml_payload?: string | null;
+  asp_reference?: string | null;
+  error_message?: string | null;
+  rejection_reason?: string | null;
+  submitted_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function validateEInvoiceXml(file: File, isB2b = true) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('is_b2b', String(isB2b));
+  const res = await fetch(`${API}/api/gulftax/einvoicing/validate-xml`, {
+    method: 'POST',
+    headers: { 'X-Workspace-ID': workspaceId(), 'X-Tenant-ID': workspaceId() },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function submitToAsp(params: {
@@ -500,12 +513,23 @@ export async function submitToAsp(params: {
   vat_amount: number;
   gross_amount: number;
   xml_content?: string;
+  invoice_id?: string;
+  submission_id?: string;
+  company_id?: string;
 }): Promise<{ submission_id: string; status: AspSubmissionStatus; message: string }> {
-  return post('/api/gulftax/einvoicing/asp/submit', params);
+  return post('/api/gulftax/einvoicing/asp/submit', {
+    ...params,
+    workspace_id: workspaceId(),
+    company_id: params.company_id || companyId(),
+  });
 }
 
 export async function fetchAspSubmissions(limit = 20): Promise<{ items: AspSubmission[] }> {
-  return get('/api/gulftax/einvoicing/asp/submissions', { limit: String(limit) });
+  const cid = companyId();
+  return get('/api/gulftax/einvoicing/asp/submissions', {
+    limit: String(limit),
+    ...(cid ? { company_id: cid, workspace_id: workspaceId() } : {}),
+  });
 }
 
 export async function redriveAspSubmission(submissionId: string): Promise<{ submission_id: string; status: AspSubmissionStatus }> {

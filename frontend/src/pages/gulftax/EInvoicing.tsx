@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiClient } from '../../services/gulfTaxClient';
 import { useCompany } from '../../context/CompanyContext';
 import {
+  calculateEInvoicingPhase,
+  validateEInvoice,
+  validateEInvoiceXml,
+  assessEInvoicingReadiness,
+  generateEInvoiceXml,
   fetchAspSubmissions,
   redriveAspSubmission,
   submitToAsp,
@@ -259,10 +264,25 @@ export default function EInvoicingPage() {
     setPhaseLoading(true);
     try {
       const revenue = parseFloat(String(revInput).replace(/,/g, "")) || 0;
-      const res = await apiClient.post<PhaseResult>("/api/einvoicing/calculate-phase", {
-        annual_revenue_aed: revenue,
+      const res = await calculateEInvoicingPhase(revenue);
+      setPhaseResult({
+        phase: res.phase,
+        phase_label: res.phase_label,
+        annual_revenue_aed: res.annual_revenue_aed,
+        mandatory_date: res.mandatory_date ?? res.mandatory_from,
+        asp_registration_deadline: res.asp_registration_deadline,
+        days_to_mandatory: res.days_to_mandatory,
+        days_to_asp_deadline: res.days_to_asp_deadline,
+        voluntary_pilot_start: res.voluntary_pilot_start,
+        days_to_voluntary_pilot: res.days_to_voluntary_pilot,
+        voluntary_pilot_open: res.voluntary_pilot_open,
+        peppol_5_corner_adopted: res.peppol_5_corner_adopted,
+        monthly_penalty_aed: res.monthly_penalty_aed,
+        phase_1_asp_deadline_label: res.phase_1_asp_deadline_label,
+        phase_2_asp_deadline_label: res.phase_2_asp_deadline_label,
+        urgency_banner: res.urgency_banner,
+        urgency_message: res.urgency_message,
       });
-      setPhaseResult(res.data);
     } catch {
       setToast({ kind: "error", message: "Failed to calculate phase" });
     } finally {
@@ -275,18 +295,14 @@ export default function EInvoicingPage() {
     setValResult(null);
     try {
       if (valMode === "xml" && xmlFile) {
-        const form = new FormData();
-        form.append("file", xmlFile);
-        form.append("is_b2b", "true");
-        const res = await apiClient.post<ValidationResult>("/api/einvoicing/validate-xml", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-        setValResult(res.data);
+        const res = await validateEInvoiceXml(xmlFile, true);
+        setValResult(res as ValidationResult);
       } else {
-        const res = await apiClient.post<ValidationResult>("/api/einvoicing/validate", {
+        const res = await validateEInvoice({
           invoice_number: invNumber,
           invoice_date: invDate,
           seller_trn: sellerTrn,
+          supplier_trn: sellerTrn,
           buyer_trn: buyerTrn,
           net_amount: parseFloat(netAmount) || 0,
           vat_amount: parseFloat(vatAmount) || 0,
@@ -295,7 +311,7 @@ export default function EInvoicingPage() {
           vat_rate: parseFloat(vatRate) || 0,
           is_b2b: true,
         });
-        setValResult(res.data);
+        setValResult(res as ValidationResult);
       }
     } catch {
       setToast({ kind: "error", message: "Validation failed" });
@@ -307,14 +323,43 @@ export default function EInvoicingPage() {
   const fetchReadiness = useCallback(async () => {
     setReadinessLoading(true);
     try {
-      const res = await apiClient.get<ReadinessResult>(`/api/einvoicing/readiness`);
-      setReadinessResult(res.data);
+      const revenue = parseFloat(String(revInput).replace(/,/g, "")) || phaseResult?.annual_revenue_aed || 0;
+      const res = await assessEInvoicingReadiness({
+        annual_revenue_aed: revenue,
+        asp_appointed: false,
+        invoice_format: "PDF",
+        integration_status: "not_started",
+        master_data_clean: "PARTIAL",
+        budget_confirmed: false,
+      });
+      setReadinessResult({
+        company_id: 0,
+        readiness_score: res.readiness_score,
+        checks: (res.gaps ?? []).map((g: { text: string; level: string }, i: number) => ({
+          id: String(i),
+          label: g.text,
+          passed: false,
+          detail: g.level,
+        })),
+        action_items: (res.gaps ?? []).map((g: { text: string }) => g.text),
+        phase: res.phase_label ? {
+          phase: res.phase,
+          phase_label: res.phase_label,
+          annual_revenue_aed: revenue,
+          mandatory_date: res.mandatory_date ?? res.mandatory_from,
+          asp_registration_deadline: res.asp_registration_deadline,
+          days_to_mandatory: res.days_to_mandatory,
+          days_to_asp_deadline: res.days_to_asp_deadline,
+          urgency_banner: res.urgency_banner,
+          urgency_message: res.urgency_message,
+        } as PhaseResult : null,
+      });
     } catch {
       setToast({ kind: "error", message: "Failed to load readiness check" });
     } finally {
       setReadinessLoading(false);
     }
-  }, [companyId]);
+  }, [companyId, revInput, phaseResult]);
 
   useEffect(() => {
     if (tab === 2) fetchReadiness();
@@ -391,20 +436,17 @@ export default function EInvoicingPage() {
     e.preventDefault();
     setGenLoading(true);
     try {
-      const res = await apiClient.post(
-        "/api/einvoicing/generate-xml",
-        {
-          invoice_number: genNumber,
-          invoice_date: genDate,
-          seller_trn: genSeller,
-          buyer_trn: genBuyer,
-          net_amount: parseFloat(genNet) || 0,
-          vat_amount: parseFloat(genVat) || 0,
-          gross_amount: parseFloat(genGross) || 0,
-        },
-        { responseType: "blob" }
-      );
-      const blob = new Blob([res.data], { type: "application/xml" });
+      const res = await generateEInvoiceXml({
+        invoice_number: genNumber,
+        invoice_date: genDate,
+        supplier_name: genSeller,
+        supplier_trn: genSeller,
+        buyer_trn: genBuyer,
+        net_amount: parseFloat(genNet) || 0,
+        vat_amount: parseFloat(genVat) || 0,
+        gross_amount: parseFloat(genGross) || 0,
+      });
+      const blob = new Blob([res.xml_content], { type: "application/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
