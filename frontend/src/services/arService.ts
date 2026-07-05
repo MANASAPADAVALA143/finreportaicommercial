@@ -231,8 +231,43 @@ export const autoMatchPayments = (body: { company_id: string; bank_account_code?
     workspace_id: localStorage.getItem('gnanova_workspace_id'),
   });
 
+export interface ARDunningHistoryRow {
+  invoice_id: string;
+  invoice_number: string;
+  customer_name: string;
+  last_dunning_level: number;
+  last_dunning_sent_at: string | null;
+  dunning_count: number;
+  outstanding: number;
+  days_overdue: number;
+  due_date?: string | null;
+}
+
+export interface ARDunningTemplate {
+  level: number;
+  label: string;
+  days_overdue_range: string;
+  subject: string;
+  body: string;
+}
+
+export const getARDunningHistory = (dunning_level?: number) =>
+  get<{ as_of: string; count: number; invoices: ARDunningHistoryRow[]; dunning_level_filter?: number }>(
+    '/dunning-history',
+    dunning_level != null ? { dunning_level: String(dunning_level) } : undefined,
+  );
+
+export const getARDunningTemplates = () =>
+  get<{ templates: ARDunningTemplate[] }>('/dunning-templates');
+
 export const runCollectionsDunning = (company_id: string) =>
-  post<{ sent_count: number; sent: Array<{ invoice_number: string; customer: string; amount: number; level: number }>; summary: string[] }>(
+  post<{
+    sent_count: number;
+    skipped_count: number;
+    sent: Array<{ invoice_number: string; customer: string; amount: number; level: number; email?: string }>;
+    skipped: Array<{ invoice_number: string; customer: string; amount: number; level: number; reason: string }>;
+    summary: string[];
+  }>(
     '/run-dunning',
     { company_id, workspace_id: localStorage.getItem('gnanova_workspace_id') },
   );

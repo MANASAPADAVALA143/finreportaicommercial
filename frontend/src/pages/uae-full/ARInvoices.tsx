@@ -2,11 +2,12 @@
  * Sales Invoices (AR) — create, send, record payment, aging
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { format, addDays, parseISO, startOfWeek, endOfWeek, isWithinInterval, startOfMonth } from 'date-fns';
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, Mail, TrendingUp, FileMinus,
+  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
@@ -339,21 +340,6 @@ export default function ARInvoices() {
     setCnReason('');
   };
 
-  const handleRunDunning = async () => {
-    if (!companyId) return;
-    setSubmitting(true);
-    try {
-      const res = await arSvc.runCollectionsDunning(companyId);
-      if (res.sent_count === 0) toast('No dunning emails sent — ensure customers have email addresses', { icon: 'ℹ️' });
-      else toast.success(`Sent ${res.sent_count} reminder email(s)`);
-      void load();
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Dunning failed');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   if (!companyId) {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-100 p-6 flex items-center justify-center">
@@ -390,14 +376,12 @@ export default function ARInvoices() {
           >
             <TrendingUp size={14} /> Run Payment Predictions
           </button>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void handleRunDunning()}
-            className="flex items-center gap-2 bg-amber-800 hover:bg-amber-700 px-3 py-2 rounded-lg text-sm disabled:opacity-50"
+          <Link
+            to="/uae-full/ar/dunning"
+            className="flex items-center gap-2 bg-amber-800 hover:bg-amber-700 px-3 py-2 rounded-lg text-sm"
           >
-            <Mail size={14} /> Run Collections Chase
-          </button>
+            AR Dunning →
+          </Link>
           <button
             onClick={() => setShowNew(true)}
             className="flex items-center gap-2 bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-medium"
