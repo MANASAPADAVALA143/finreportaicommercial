@@ -55,16 +55,18 @@ def _existing_gl_post(invoice_id: str, tenant_id: str, db: Session) -> dict[str,
     try:
         from app.models.uae_accounting_full import UAEJournalEntry
 
-        existing = (
-            db.query(UAEJournalEntry)
-            .filter(
-                UAEJournalEntry.tenant_id == tenant_id,
-                UAEJournalEntry.reference == invoice_id,
-                UAEJournalEntry.source.in_((AR_JE_SOURCE, "ar_invoice")),
+        # Savepoint so a schema mismatch does not abort the outer transaction.
+        with db.begin_nested():
+            existing = (
+                db.query(UAEJournalEntry)
+                .filter(
+                    UAEJournalEntry.tenant_id == tenant_id,
+                    UAEJournalEntry.reference == invoice_id,
+                    UAEJournalEntry.source.in_((AR_JE_SOURCE, "ar_invoice")),
+                )
+                .order_by(UAEJournalEntry.created_at.desc())
+                .first()
             )
-            .order_by(UAEJournalEntry.created_at.desc())
-            .first()
-        )
         if existing and inv:
             inv.journal_entry_id = existing.id
             if inv.status == "draft":

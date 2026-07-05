@@ -59,8 +59,32 @@ def _db_url(allow_sqlite: bool) -> tuple[str, str]:
 
 
 def _ensure_schema(engine, dialect: str) -> None:
+    # RDS may be bootstrap-managed without alembic_version; create only missing tables.
+    ApCompany.__table__.create(engine, checkfirst=True)
     UAECreditNote.__table__.create(engine, checkfirst=True)
     GulftaxTransaction.__table__.create(engine, checkfirst=True)
+    # Period control table — empty means all periods open (assert_period_open no-ops).
+    # Avoid model create (FKs to workspaces / uae_company_profiles may be absent).
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS accounting_periods (
+                    id VARCHAR(36) PRIMARY KEY,
+                    workspace_id VARCHAR(36) NOT NULL,
+                    company_id VARCHAR(36),
+                    period_number INTEGER NOT NULL,
+                    period_name VARCHAR(32) NOT NULL,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'open',
+                    locked_by VARCHAR(36),
+                    locked_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+                )
+                """
+            )
+        )
 
 
 def _seed_basics(db) -> UAECustomer:
@@ -80,22 +104,7 @@ def _seed_basics(db) -> UAECustomer:
         name=f"{E2E_PREFIX}Customer",
     )
     db.add(cust)
-    for code, name in [
-        ("1200", "Trade Receivables"),
-        ("4100", "Sales Revenue"),
-        ("2200", "VAT Payable"),
-    ]:
-        db.add(
-            UAEAccount(
-                id=str(uuid.uuid4()),
-                tenant_id=TENANT,
-                company_id=COMPANY_ID,
-                code=code,
-                name=name,
-                account_type="asset" if code == "1200" else ("liability" if code == "2200" else "revenue"),
-                is_active=True,
-            )
-        )
+    # JE lines carry account_code/name directly — no CoA seed required.
     db.commit()
     return cust
 
