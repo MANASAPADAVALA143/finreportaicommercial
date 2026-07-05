@@ -5,10 +5,26 @@ import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { evaluateBadDebtRelief } from '../../lib/gulftax/vatAdvanced';
 import {
+  approveBadDebtClaim,
   listBadDebtClaims,
   saveBadDebtClaim,
   type BadDebtClaimRecord,
 } from '../../services/vatAdvanced.service';
+
+function ClaimStatusBadge({ status }: { status: string }) {
+  const approved = status === 'approved';
+  return (
+    <span
+      className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+        approved
+          ? 'bg-green-900/40 text-green-300 border border-green-700/50'
+          : 'bg-gray-800 text-gray-400 border border-gray-600/50'
+      }`}
+    >
+      {approved ? 'Approved' : status === 'eligible' ? 'Draft' : status}
+    </span>
+  );
+}
 
 export default function BadDebtRelief() {
   const { activeWorkspace } = useWorkspace();
@@ -29,6 +45,7 @@ export default function BadDebtRelief() {
   });
   const [claims, setClaims] = useState<BadDebtClaimRecord[]>([]);
   const [saving, setSaving] = useState(false);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const result = evaluateBadDebtRelief({
     invoiceNumber: form.invoiceNumber,
@@ -74,6 +91,15 @@ export default function BadDebtRelief() {
     if (saved) setClaims((c) => [saved, ...c]);
   };
 
+  const onApprove = async (id: string) => {
+    setApprovingId(id);
+    const updated = await approveBadDebtClaim(id);
+    setApprovingId(null);
+    if (updated) {
+      setClaims((c) => c.map((row) => (row.id === id ? updated : row)));
+    }
+  };
+
   return (
     <div>
       <p className="text-[11px] font-mono uppercase tracking-widest text-amber-500 mb-1">VAT Advanced</p>
@@ -83,6 +109,9 @@ export default function BadDebtRelief() {
       </h1>
       <p className="text-sm text-gray-400 mb-6 max-w-2xl">
         Recover VAT already paid to the FTA on invoices unpaid for more than 6 months, once written off and recovery steps documented.
+        <span className="block mt-2 text-amber-400/90">
+          Only <strong>approved</strong> eligible claims reduce Box 7 (output adjustments) on the VAT return.
+        </span>
       </p>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -214,6 +243,7 @@ export default function BadDebtRelief() {
                 <th className="text-right p-3">VAT</th>
                 <th className="text-left p-3">Status</th>
                 <th className="text-left p-3">Claim period</th>
+                <th className="text-right p-3">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -224,15 +254,26 @@ export default function BadDebtRelief() {
                     {Number(c.vat_amount).toLocaleString('en-AE', { minimumFractionDigits: 2 })}
                   </td>
                   <td className="p-3">
-                    <span
-                      className={
-                        c.eligible ? 'text-green-400' : 'text-red-400'
-                      }
-                    >
-                      {c.status}
-                    </span>
+                    <ClaimStatusBadge status={c.status} />
+                    {!c.eligible && (
+                      <span className="ml-2 text-[10px] text-red-400">Ineligible</span>
+                    )}
                   </td>
-                  <td className="p-3 text-gray-400">{c.claim_period ?? '—'}</td>
+                  <td className="p-3 text-gray-400">
+                    {c.claim_period ?? (c.extra?.claim_period as string) ?? '—'}
+                  </td>
+                  <td className="p-3 text-right">
+                    {c.eligible && c.status !== 'approved' && (
+                      <button
+                        type="button"
+                        onClick={() => void onApprove(c.id)}
+                        disabled={approvingId === c.id}
+                        className="px-2 py-1 rounded text-[10px] font-semibold uppercase tracking-wide bg-green-900/30 text-green-300 border border-green-700/40 hover:bg-green-900/50 disabled:opacity-50"
+                      >
+                        {approvingId === c.id ? '…' : 'Approve'}
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -4,10 +4,26 @@ import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { calculatePartialExemption } from '../../lib/gulftax/vatAdvanced';
 import {
+  approvePartialExemption,
   listPartialExemptions,
   savePartialExemption,
   type PartialExemptionRecord,
 } from '../../services/vatAdvanced.service';
+
+function StatusBadge({ status }: { status?: string }) {
+  const approved = status === 'approved';
+  return (
+    <span
+      className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+        approved
+          ? 'bg-green-900/40 text-green-300 border border-green-700/50'
+          : 'bg-gray-800 text-gray-400 border border-gray-600/50'
+      }`}
+    >
+      {approved ? 'Approved' : 'Draft'}
+    </span>
+  );
+}
 
 function currentQuarter(): string {
   const d = new Date();
@@ -27,6 +43,7 @@ export default function PartialExemption() {
   const [provisionalPct, setProvisionalPct] = useState('');
   const [history, setHistory] = useState<PartialExemptionRecord[]>([]);
   const [saving, setSaving] = useState(false);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const result = calculatePartialExemption({
@@ -69,6 +86,15 @@ export default function PartialExemption() {
     }
   };
 
+  const onApprove = async (id: string) => {
+    setApprovingId(id);
+    const updated = await approvePartialExemption(id);
+    setApprovingId(null);
+    if (updated) {
+      setHistory((h) => h.map((row) => (row.id === id ? updated : row)));
+    }
+  };
+
   return (
     <div>
       <p className="text-[11px] font-mono uppercase tracking-widest text-amber-500 mb-1">VAT Compliance</p>
@@ -79,6 +105,9 @@ export default function PartialExemption() {
       <p className="text-sm text-gray-400 mb-6 max-w-2xl">
         Mixed taxable and exempt supplies limit input VAT recovery. Recovery % = Taxable Supplies ÷ Total Supplies × 100.
         Common cases: real estate (commercial vs residential), banks (fees vs interest), hospitals (taxable vs exempt healthcare).
+        <span className="block mt-2 text-amber-400/90">
+          Only <strong>approved</strong> calculations reduce Box 11 (input VAT) on the VAT return.
+        </span>
       </p>
 
       <div className="grid lg:grid-cols-2 gap-6">
@@ -211,7 +240,9 @@ export default function PartialExemption() {
                   <th className="text-right p-3">Recovery %</th>
                   <th className="text-right p-3">Recoverable</th>
                   <th className="text-right p-3">Irrecoverable</th>
+                  <th className="text-left p-3">Status</th>
                   <th className="text-left p-3">Saved</th>
+                  <th className="text-right p-3">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -225,8 +256,23 @@ export default function PartialExemption() {
                     <td className="p-3 text-right font-mono text-red-400">
                       {Number(h.irrecoverable_vat).toLocaleString('en-AE', { minimumFractionDigits: 2 })}
                     </td>
+                    <td className="p-3">
+                      <StatusBadge status={h.status} />
+                    </td>
                     <td className="p-3 text-gray-500">
                       {new Date(h.created_at).toLocaleDateString('en-GB')}
+                    </td>
+                    <td className="p-3 text-right">
+                      {h.status !== 'approved' && (
+                        <button
+                          type="button"
+                          onClick={() => void onApprove(h.id)}
+                          disabled={approvingId === h.id}
+                          className="px-2 py-1 rounded text-[10px] font-semibold uppercase tracking-wide bg-green-900/30 text-green-300 border border-green-700/40 hover:bg-green-900/50 disabled:opacity-50"
+                        >
+                          {approvingId === h.id ? '…' : 'Approve'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
