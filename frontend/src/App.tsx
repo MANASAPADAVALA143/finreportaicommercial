@@ -412,6 +412,7 @@ const GulfTaxInvoiceFlowReview = safeLazy(() => import('./pages/gulftax/InvoiceF
 const GulfTaxPartialExemption = safeLazy(() => import('./pages/gulftax/PartialExemption'));
 const GulfTaxDesignatedZones = safeLazy(() => import('./pages/gulftax/DesignatedZones'));
 const GulfTaxBadDebtRelief = safeLazy(() => import('./pages/gulftax/BadDebtRelief'));
+const GulfTaxAuditExports = safeLazy(() => import('./pages/gulftax/AuditExports'));
 
 // Workspaces
 const WorkspaceList       = safeLazy(() => import('./pages/workspaces/WorkspaceList'));
@@ -587,6 +588,7 @@ function App() {
                     <Route path="invoice-flow/review" element={<GulfTaxInvoiceFlowReview />} />
                     <Route path="tax-memo" element={<GulfTaxTaxMemo />} />
                     <Route path="fta-reports" element={<GulfTaxFTAReports />} />
+                    <Route path="audit-exports" element={<GulfTaxAuditExports />} />
                     <Route path="suppliers" element={<GulfTaxSuppliers />} />
                     <Route path="settings" element={<GulfTaxSettings />} />
                   </Route>

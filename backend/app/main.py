@@ -40,6 +40,7 @@ from app.routers import gulftax_team as gulftax_team_router
 from app.routers import workspaces as workspaces_router
 from app.routers import company_setup as company_setup_router
 from app.routers import ap_settings as ap_settings_router
+from app.api.routes import gulftax_audit_routes
 from app.api.routes import (
     fpa_master_upload,
     upload_routes,
@@ -288,6 +289,7 @@ from app.modules.gulftax.ported_mount import register_gulftax_ported_routers
 
 app.include_router(gulftax_router)
 app.include_router(gulftax_einvoicing_router)
+app.include_router(gulftax_audit_routes.router)
 register_gulftax_ported_routers(app)
 
 if settings.ENABLE_FASTAPI_MCP:

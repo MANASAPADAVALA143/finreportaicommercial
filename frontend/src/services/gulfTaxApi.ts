@@ -535,3 +535,64 @@ export async function fetchAspSubmissions(limit = 20): Promise<{ items: AspSubmi
 export async function redriveAspSubmission(submissionId: string): Promise<{ submission_id: string; status: AspSubmissionStatus }> {
   return post(`/api/gulftax/einvoicing/asp/${submissionId}/redrive`, {});
 }
+
+// ── Audit-ready period exports ────────────────────────────────────────────────
+
+export type AuditPeriod = {
+  tax_period: string;
+  transaction_count: number;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export type AuditManifestArtifact = {
+  sheet: string;
+  description: string;
+  row_count: number;
+};
+
+export type AuditManifest = {
+  company_name: string;
+  trn: string;
+  tax_period: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  generated_by: string;
+  excel_filename: string;
+  artifacts: AuditManifestArtifact[];
+  excel_sha256?: string;
+  preview?: boolean;
+};
+
+export async function fetchAuditPeriods(): Promise<{ items: AuditPeriod[] }> {
+  return get('/api/gulftax/audit/periods');
+}
+
+export async function fetchAuditManifest(taxPeriod: string): Promise<AuditManifest> {
+  return get(`/api/gulftax/audit/manifest/${encodeURIComponent(taxPeriod)}`);
+}
+
+export async function downloadAuditPack(taxPeriod: string): Promise<void> {
+  const qs = new URLSearchParams({
+    workspace_id: workspaceId(),
+    ...(companyId() ? { company_id: companyId() } : {}),
+  });
+  const res = await fetch(
+    `${API}/api/gulftax/audit/pack/${encodeURIComponent(taxPeriod)}?${qs}`,
+    { headers: headers() },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `audit_pack_${taxPeriod.replace(/\//g, '-')}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+

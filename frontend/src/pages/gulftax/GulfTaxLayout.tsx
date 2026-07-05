@@ -4,7 +4,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard, Mail, Percent, FileText, GitMerge, Building2,
   ScrollText, BarChart3, Factory, Receipt, Settings, Scale, Globe2, FileCheck,
-  Calculator, MapPin, FileWarning,
+  Calculator, MapPin, FileWarning, Shield,
 } from 'lucide-react';
 
 import { useWorkspace } from '../../context/WorkspaceContext';
@@ -63,6 +63,8 @@ const COMPLIANCE_NAV: NavItem[] = [
 
 
 const REPORTS_NAV: NavItem[] = [
+
+  { to: '/gulftax/audit-exports', label: 'Audit Exports', icon: Shield },
 
   { to: '/gulftax/tax-memo', label: 'Tax Memo', icon: ScrollText },
 
