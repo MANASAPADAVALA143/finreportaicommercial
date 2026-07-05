@@ -6,12 +6,12 @@ import { format, addDays, parseISO, startOfWeek, endOfWeek, isWithinInterval, st
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, Mail, TrendingUp,
+  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, Mail, TrendingUp, FileMinus,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import * as arSvc from '../../services/arService';
-import type { ARInvoice, ARLineItem } from '../../services/arService';
+import type { ARInvoice, ARLineItem, ARCreditNote } from '../../services/arService';
 import { listAccounts } from '../../services/uaeFullAccounting.service';
 import PeriodSelector from '../../components/PeriodSelector';
 
@@ -25,6 +25,7 @@ const STATUS_STYLE: Record<string, string> = {
 
 const TABS = ['all', 'draft', 'sent', 'overdue', 'paid'] as const;
 type Tab = (typeof TABS)[number];
+type PageView = 'invoices' | 'credit-notes';
 
 function fmtAED(n: number): string {
   return `AED ${n.toLocaleString('en-AE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -50,6 +51,8 @@ export default function ARInvoices() {
   const workspaceId = activeWorkspace?.id ?? localStorage.getItem('gnanova_workspace_id');
 
   const [invoices, setInvoices] = useState<ARInvoice[]>([]);
+  const [creditNotes, setCreditNotes] = useState<ARCreditNote[]>([]);
+  const [pageView, setPageView] = useState<PageView>('invoices');
   const [aging, setAging] = useState<arSvc.ARAgingBucket[]>([]);
   const [totalOutstanding, setTotalOutstanding] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,9 @@ export default function ARInvoices() {
   const [showSend, setShowSend] = useState<ARInvoice | null>(null);
   const [showPay, setShowPay] = useState<ARInvoice | null>(null);
   const [showDetail, setShowDetail] = useState<ARInvoice | null>(null);
+  const [showCreditNote, setShowCreditNote] = useState<ARInvoice | null>(null);
+  const [cnAmount, setCnAmount] = useState('');
+  const [cnReason, setCnReason] = useState('');
 
   const [custName, setCustName] = useState('');
   const [custTrn, setCustTrn] = useState('');
@@ -78,6 +84,16 @@ export default function ARInvoices() {
   const [matchSummary, setMatchSummary] = useState<string | null>(null);
   const [predictions, setPredictions] = useState<Record<string, arSvc.PaymentPrediction>>({});
 
+  const loadCreditNotes = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const res = await arSvc.listARCreditNotes();
+      setCreditNotes(res.credit_notes);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load credit notes');
+    }
+  }, [companyId]);
+
   const load = useCallback(async () => {
     if (!companyId) return;
     setLoading(true);
@@ -89,14 +105,23 @@ export default function ARInvoices() {
       setInvoices(invRes.invoices);
       setAging(agingRes.buckets);
       setTotalOutstanding(agingRes.total_outstanding);
+      if (pageView === 'credit-notes') {
+        await loadCreditNotes();
+      }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to load AR data');
     } finally {
       setLoading(false);
     }
-  }, [companyId]);
+  }, [companyId, pageView, loadCreditNotes]);
 
   useEffect(() => { void load(); }, [load, periodRange]);
+
+  useEffect(() => {
+    if (pageView === 'credit-notes' && companyId) {
+      void loadCreditNotes();
+    }
+  }, [pageView, companyId, loadCreditNotes]);
 
   useEffect(() => {
     listAccounts()
@@ -277,6 +302,43 @@ export default function ARInvoices() {
     }
   };
 
+  const handleIssueCreditNote = async () => {
+    if (!showCreditNote || !companyId) return;
+    const amount = parseFloat(cnAmount);
+    const maxDue = showCreditNote.amount_due || showCreditNote.total;
+    if (!amount || amount <= 0) {
+      toast.error('Enter a valid amount');
+      return;
+    }
+    if (amount > maxDue + 0.001) {
+      toast.error(`Amount cannot exceed outstanding ${fmtAED(maxDue)}`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await arSvc.issueARCreditNote(showCreditNote.id, {
+        amount,
+        reason: cnReason.trim() || undefined,
+        company_id: companyId,
+      });
+      toast.success(`Credit note ${res.credit_note.credit_note_number} issued`);
+      setShowCreditNote(null);
+      setCnAmount('');
+      setCnReason('');
+      void load();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Credit note failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openCreditNote = (inv: ARInvoice) => {
+    setShowCreditNote(inv);
+    setCnAmount(String(inv.amount_due || inv.total));
+    setCnReason('');
+  };
+
   const handleRunDunning = async () => {
     if (!companyId) return;
     setSubmitting(true);
@@ -351,6 +413,53 @@ export default function ARInvoices() {
         </div>
       )}
 
+      {/* Page view: Invoices vs Credit Notes */}
+      <div className="flex gap-1 bg-gray-800/60 p-1 rounded-xl w-fit mb-4">
+        {(['invoices', 'credit-notes'] as PageView[]).map(v => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => setPageView(v)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${
+              pageView === v ? 'bg-teal-700 text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            {v === 'invoices' ? 'Invoices' : 'Credit Notes'}
+          </button>
+        ))}
+      </div>
+
+      {pageView === 'credit-notes' ? (
+        <div className="bg-gray-800/60 border border-gray-700 rounded-xl overflow-hidden mb-8">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-700 bg-gray-800/80">
+                {['CN #', 'Invoice', 'Customer', 'Issued', 'Amount', 'Reason', 'Status'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs text-gray-400 font-semibold">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {creditNotes.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-500">No credit notes yet.</td></tr>
+              ) : (
+                creditNotes.map(cn => (
+                  <tr key={cn.id} className="border-b border-gray-700/30 hover:bg-gray-700/20">
+                    <td className="px-4 py-3 font-mono text-teal-400 text-xs">{cn.credit_note_number}</td>
+                    <td className="px-4 py-3 text-gray-300 text-xs">{cn.invoice_number ?? '—'}</td>
+                    <td className="px-4 py-3 text-gray-300">{cn.customer_name}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(cn.issued_date ?? null)}</td>
+                    <td className="px-4 py-3 text-white font-medium">{fmtAED(cn.amount)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs max-w-[200px] truncate">{cn.reason ?? '—'}</td>
+                    <td className="px-4 py-3 capitalize text-xs">{cn.status}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+      <>
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
@@ -478,7 +587,10 @@ export default function ARInvoices() {
         </div>
       </div>
 
-      {/* AR Aging */}
+      </>
+      )}
+
+      {/* AR Aging — always visible */}
       <div id="ar-aging" className="scroll-mt-6">
         <h2 className="text-lg font-semibold text-white mb-4">AR Aging</h2>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -630,6 +742,16 @@ export default function ARInvoices() {
             <Row label="Due Date" value={fmtDate(showDetail.due_date)} />
             <Row label="Status" value={showDetail.status} />
             <Row label="Total" value={fmtAED(showDetail.total)} />
+            <Row label="Outstanding" value={fmtAED(showDetail.amount_due || showDetail.total)} />
+            {showDetail.status !== 'draft' && (showDetail.amount_due || showDetail.total) > 0 && (
+              <button
+                type="button"
+                onClick={() => { openCreditNote(showDetail); setShowDetail(null); }}
+                className="w-full mt-4 flex items-center justify-center gap-2 bg-teal-800 hover:bg-teal-700 py-2 rounded-lg text-sm font-medium"
+              >
+                <FileMinus size={14} /> Issue Credit Note
+              </button>
+            )}
             {showDetail.line_items?.length > 0 && (
               <div className="mt-3 border-t border-gray-700 pt-3">
                 <p className="text-xs text-gray-400 mb-2">Line Items</p>
@@ -640,6 +762,44 @@ export default function ARInvoices() {
                 ))}
               </div>
             )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Issue Credit Note Modal */}
+      {showCreditNote && (
+        <Modal title={`Issue Credit Note — ${showCreditNote.invoice_number}`} onClose={() => setShowCreditNote(null)}>
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">
+              Outstanding: <span className="text-white font-medium">{fmtAED(showCreditNote.amount_due || showCreditNote.total)}</span>
+            </p>
+            <Field label="Credit Amount (AED)">
+              <input
+                type="number"
+                min={0.01}
+                max={showCreditNote.amount_due || showCreditNote.total}
+                step="0.01"
+                value={cnAmount}
+                onChange={e => setCnAmount(e.target.value)}
+                className="input-dark w-full"
+              />
+            </Field>
+            <Field label="Reason">
+              <textarea
+                value={cnReason}
+                onChange={e => setCnReason(e.target.value)}
+                className="input-dark w-full min-h-[80px]"
+                placeholder="Return, pricing adjustment, etc."
+              />
+            </Field>
+            <button
+              type="button"
+              onClick={() => void handleIssueCreditNote()}
+              disabled={submitting}
+              className="w-full bg-teal-700 hover:bg-teal-600 disabled:opacity-50 py-2 rounded-lg text-sm font-medium"
+            >
+              {submitting ? 'Issuing…' : 'Issue Credit Note'}
+            </button>
           </div>
         </Modal>
       )}

@@ -154,6 +154,26 @@ class UAESalesInvoice(Base):
 
     customer = relationship("UAECustomer", back_populates="invoices")
     lines    = relationship("UAESalesInvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
+    credit_notes = relationship("UAECreditNote", back_populates="parent_invoice", foreign_keys="UAECreditNote.parent_invoice_id")
+
+
+class UAECreditNote(Base):
+    __tablename__ = "uae_credit_notes"
+
+    id                  = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id           = Column(String(36), nullable=False, index=True)
+    company_id          = Column(String(36), nullable=True, index=True)
+    customer_id         = Column(String(36), ForeignKey("uae_customers.id"), nullable=True)
+    parent_invoice_id   = Column(String(36), ForeignKey("uae_sales_invoices.id"), nullable=False, index=True)
+    credit_note_number  = Column(String(30), nullable=False)
+    amount              = Column(Numeric(15, 2), nullable=False, default=0)
+    reason              = Column(Text)
+    status              = Column(String(20), default="draft")  # draft/issued/voided
+    issued_date         = Column(Date, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+
+    parent_invoice = relationship("UAESalesInvoice", back_populates="credit_notes", foreign_keys=[parent_invoice_id])
+    customer = relationship("UAECustomer")
 
 
 class UAESalesInvoiceLine(Base):

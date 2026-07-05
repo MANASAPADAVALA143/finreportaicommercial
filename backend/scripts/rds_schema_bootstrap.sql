@@ -1264,6 +1264,23 @@ CREATE TABLE IF NOT EXISTS uae_sales_invoice_lines (
     account_id  VARCHAR(36) REFERENCES uae_accounts(id)
 );
 
+CREATE TABLE IF NOT EXISTS uae_credit_notes (
+    id                  VARCHAR(36) PRIMARY KEY,
+    tenant_id           VARCHAR(36) NOT NULL,
+    company_id          VARCHAR(36),
+    customer_id         VARCHAR(36) REFERENCES uae_customers(id),
+    parent_invoice_id   VARCHAR(36) NOT NULL REFERENCES uae_sales_invoices(id),
+    credit_note_number  VARCHAR(30) NOT NULL,
+    amount              NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    reason              TEXT,
+    status              VARCHAR(20) DEFAULT 'issued',
+    issued_date         DATE,
+    created_at          TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
+);
+CREATE INDEX IF NOT EXISTS ix_uae_credit_notes_tenant_id ON uae_credit_notes (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_uae_credit_notes_company_id ON uae_credit_notes (company_id);
+CREATE INDEX IF NOT EXISTS ix_uae_credit_notes_parent_invoice_id ON uae_credit_notes (parent_invoice_id);
+
 CREATE TABLE IF NOT EXISTS uae_bank_accounts (
     id                      VARCHAR(36) PRIMARY KEY,
     tenant_id               VARCHAR(36) NOT NULL,
