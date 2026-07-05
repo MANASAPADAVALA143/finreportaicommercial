@@ -70,7 +70,7 @@ def _fetch_company_config(company_id: str) -> dict[str, Any]:
         sb = get_supabase()
         res = (
             sb.table("companies")
-            .select("id, vat_filing_frequency, vat_rate, workspace_id, name")
+            .select("id, vat_filing_frequency, vat_rate, workspace_id, name, entity_type")
             .eq("id", company_id)
             .maybe_single()
             .execute()
@@ -139,6 +139,16 @@ def build_transaction_row(
     vat_category = _norm_treatment(invoice.get("vat_treatment"))
     fta_box = _fta_box(vat_category, direction)
 
+    from app.modules.gulftax.vat_return_service import resolve_dz_locations_for_transaction
+
+    entity_type = company.get("entity_type") or "mainland"
+    inv_dz = bool(invoice.get("designated_zone"))
+    dz_flag, tx_kind, sup_loc, cust_loc = resolve_dz_locations_for_transaction(
+        direction=direction,
+        company_entity_type=entity_type,
+        invoice_designated_zone=inv_dz,
+    )
+
     return {
         "source": "ap_invoiceflow",
         "ap_invoice_id": invoice.get("id"),
@@ -155,6 +165,10 @@ def build_transaction_row(
         "fta_box": fta_box,
         "direction": direction,
         "status": "posted",
+        "designated_zone": dz_flag,
+        "transaction_kind": tx_kind,
+        "dz_supplier_location": sup_loc,
+        "dz_customer_location": cust_loc,
         "updated_at": date.today().isoformat(),
     }
 

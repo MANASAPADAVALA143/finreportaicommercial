@@ -179,6 +179,10 @@ class GulftaxTransaction(Base):
     fta_box = Column(String(8), nullable=True)
     direction = Column(String(16), default="input")
     status = Column(String(16), default="posted")
+    designated_zone = Column(Boolean, default=False)
+    transaction_kind = Column(String(16), default="goods")
+    dz_supplier_location = Column(String(64), nullable=True)
+    dz_customer_location = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -214,6 +218,7 @@ class PartialExemptionCalculation(Base):
     recoverable_vat = Column(Numeric(15, 2), nullable=False)
     irrecoverable_vat = Column(Numeric(15, 2), nullable=False)
     breakdown = Column(_json, nullable=True)
+    status = Column(String(32), default="draft")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -232,6 +237,7 @@ class BadDebtReliefClaim(Base):
     status = Column(String(32), default="draft")
     eligible = Column(Boolean, default=False)
     eligibility_reason = Column(Text, nullable=True)
+    claim_period = Column(String(16), nullable=True)
     extra = Column(_json, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

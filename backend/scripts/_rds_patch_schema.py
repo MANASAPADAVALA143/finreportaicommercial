@@ -179,6 +179,51 @@ DDL = [
     CREATE INDEX IF NOT EXISTS ix_reconciliation_results_tax_period
     ON reconciliation_results (company_id, tax_period)
     """,
+    # Advanced VAT integration
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS designated_zone BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(16) DEFAULT 'goods'",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_supplier_location VARCHAR(64)",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_customer_location VARCHAR(64)",
+    "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
+    "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
+    """
+    CREATE TABLE IF NOT EXISTS partial_exemption_calculations (
+        id                VARCHAR(36) PRIMARY KEY,
+        tenant_id         VARCHAR(36) NOT NULL,
+        company_id        VARCHAR(36) NOT NULL,
+        period            VARCHAR(16) NOT NULL,
+        period_type       VARCHAR(16) DEFAULT 'quarterly',
+        taxable_supplies  NUMERIC(15, 2) NOT NULL,
+        exempt_supplies   NUMERIC(15, 2) NOT NULL,
+        input_vat_paid    NUMERIC(15, 2) NOT NULL,
+        recovery_pct      NUMERIC(8, 4) NOT NULL,
+        recoverable_vat   NUMERIC(15, 2) NOT NULL,
+        irrecoverable_vat NUMERIC(15, 2) NOT NULL,
+        breakdown         JSONB,
+        status            VARCHAR(32) DEFAULT 'draft',
+        created_at        TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at        TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS bad_debt_relief_claims (
+        id                 VARCHAR(36) PRIMARY KEY,
+        tenant_id          VARCHAR(36) NOT NULL,
+        company_id         VARCHAR(36) NOT NULL,
+        invoice_number     VARCHAR(128) NOT NULL,
+        invoice_date       DATE NOT NULL,
+        due_date           DATE NOT NULL,
+        invoice_amount     NUMERIC(15, 2) NOT NULL,
+        vat_amount         NUMERIC(15, 2) NOT NULL,
+        status             VARCHAR(32) DEFAULT 'draft',
+        eligible           BOOLEAN DEFAULT FALSE,
+        eligibility_reason TEXT,
+        claim_period       VARCHAR(16),
+        extra              JSONB DEFAULT '{}',
+        created_at         TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at         TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
 ]
 
 
