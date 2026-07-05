@@ -91,6 +91,28 @@ DDL = [
         created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
+    # crm_contacts — required by credit_risk_service.recalc_for_customer_name (dunning E2E)
+    """
+    CREATE TABLE IF NOT EXISTS crm_contacts (
+        id VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(64) NOT NULL,
+        company_id VARCHAR(36),
+        name VARCHAR(200) NOT NULL,
+        company_name VARCHAR(200),
+        email VARCHAR(200),
+        phone VARCHAR(30),
+        contact_type VARCHAR(20) DEFAULT 'Lead',
+        source VARCHAR(50),
+        assigned_to VARCHAR(200),
+        notes TEXT,
+        credit_score NUMERIC(5, 1),
+        risk_category VARCHAR(20),
+        credit_limit_aed NUMERIC(15, 2),
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_crm_contacts_workspace_id ON crm_contacts (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_crm_contacts_company_id ON crm_contacts (company_id)",
     """
     CREATE TABLE IF NOT EXISTS accounting_periods (
         id VARCHAR(36) PRIMARY KEY,
