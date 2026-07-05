@@ -13,7 +13,7 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         """
-        CREATE TABLE IF NOT EXISTS ct_returns (
+        CREATE TABLE IF NOT EXISTS gulftax_ct_returns (
             id VARCHAR(36) PRIMARY KEY,
             tenant_id VARCHAR(36) NOT NULL,
             company_id VARCHAR(36) NOT NULL,
@@ -38,10 +38,10 @@ def upgrade() -> None:
         )
         """
     )
-    op.execute("CREATE INDEX IF NOT EXISTS ix_ct_returns_tenant_id ON ct_returns (tenant_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_ct_returns_company_id ON ct_returns (company_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_ct_returns_status ON ct_returns (status)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_tenant_id ON gulftax_ct_returns (tenant_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_company_id ON gulftax_ct_returns (company_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_status ON gulftax_ct_returns (status)")
 
 
 def downgrade() -> None:
-    op.execute("DROP TABLE IF EXISTS ct_returns")
+    op.execute("DROP TABLE IF EXISTS gulftax_ct_returns")

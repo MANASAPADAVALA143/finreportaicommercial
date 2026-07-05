@@ -224,9 +224,9 @@ DDL = [
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_customer_location VARCHAR(64)",
     "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
     "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
-  # ct_returns — UAE CT return workflow on RDS
+  # gulftax_ct_returns — UAE CT return workflow on RDS (separate from ported ct_returns)
     """
-    CREATE TABLE IF NOT EXISTS ct_returns (
+    CREATE TABLE IF NOT EXISTS gulftax_ct_returns (
         id VARCHAR(36) PRIMARY KEY,
         tenant_id VARCHAR(36) NOT NULL,
         company_id VARCHAR(36) NOT NULL,
@@ -250,9 +250,9 @@ DDL = [
         updated_at TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
-    "CREATE INDEX IF NOT EXISTS ix_ct_returns_tenant_id ON ct_returns (tenant_id)",
-    "CREATE INDEX IF NOT EXISTS ix_ct_returns_company_id ON ct_returns (company_id)",
-    "CREATE INDEX IF NOT EXISTS ix_ct_returns_status ON ct_returns (status)",
+    "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_tenant_id ON gulftax_ct_returns (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_company_id ON gulftax_ct_returns (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_status ON gulftax_ct_returns (status)",
 ]
 
 

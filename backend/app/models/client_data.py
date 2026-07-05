@@ -275,7 +275,7 @@ class ApAuditLog(Base):
 class CtReturn(Base):
     """UAE Corporate Tax return — RDS persistence (draft → approved → filed)."""
 
-    __tablename__ = "ct_returns"
+    __tablename__ = "gulftax_ct_returns"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), nullable=False, index=True)
