@@ -179,13 +179,7 @@ DDL = [
     CREATE INDEX IF NOT EXISTS ix_reconciliation_results_tax_period
     ON reconciliation_results (company_id, tax_period)
     """,
-    # Advanced VAT integration
-    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS designated_zone BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(16) DEFAULT 'goods'",
-    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_supplier_location VARCHAR(64)",
-    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_customer_location VARCHAR(64)",
-    "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
-    "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
+    # Advanced VAT integration — create tables first, then column patches
     """
     CREATE TABLE IF NOT EXISTS partial_exemption_calculations (
         id                VARCHAR(36) PRIMARY KEY,
@@ -224,6 +218,12 @@ DDL = [
         updated_at         TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS designated_zone BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(16) DEFAULT 'goods'",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_supplier_location VARCHAR(64)",
+    "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_customer_location VARCHAR(64)",
+    "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
+    "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
 ]
 
 
