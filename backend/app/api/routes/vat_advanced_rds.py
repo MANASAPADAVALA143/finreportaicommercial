@@ -90,6 +90,7 @@ def save_partial_exemption(
         recoverable_vat=body.recoverable_vat,
         irrecoverable_vat=body.irrecoverable_vat,
         breakdown=body.breakdown,
+        status="draft",
         created_at=datetime.utcnow(),
     )
     db.add(row)
@@ -133,6 +134,7 @@ def save_bad_debt(
         status=body.status,
         eligible=body.eligible,
         eligibility_reason=body.eligibility_reason,
+        claim_period=(body.extra or {}).get("claim_period") if body.extra else None,
         extra=body.extra or {},
         created_at=datetime.utcnow(),
     )

@@ -67,6 +67,10 @@ def build_ar_transaction_row(
     company_id: str,
     workspace_id: str,
 ) -> dict[str, Any]:
+    from app.modules.gulftax.vat_return_service import (
+        _company_entity_type,
+        resolve_dz_locations_for_transaction,
+    )
     from app.services.gulftax_sync_service import (
         _fta_box,
         _norm_treatment,
@@ -86,6 +90,13 @@ def build_ar_transaction_row(
     vat_category = _norm_treatment(_supply_to_vat_treatment(inv.supply_type))
     fta_box = _fta_box(vat_category, "output")
 
+    entity_type = _company_entity_type(company_id)
+    dz_flag, tx_kind, sup_loc, cust_loc = resolve_dz_locations_for_transaction(
+        direction="output",
+        company_entity_type=entity_type,
+        invoice_designated_zone=False,
+    )
+
     return {
         "tenant_id": workspace_id or inv.tenant_id,
         "source": "ar_sales",
@@ -102,6 +113,10 @@ def build_ar_transaction_row(
         "fta_box": fta_box,
         "direction": "output",
         "status": "posted",
+        "designated_zone": dz_flag,
+        "transaction_kind": tx_kind,
+        "dz_supplier_location": sup_loc,
+        "dz_customer_location": cust_loc,
     }
 
 
@@ -123,6 +138,10 @@ def _insert_rds_row(db: Session, row: dict[str, Any]) -> GulftaxTransaction:
         fta_box=row.get("fta_box"),
         direction=row.get("direction", "output"),
         status=row.get("status", "posted"),
+        designated_zone=row.get("designated_zone", False),
+        transaction_kind=row.get("transaction_kind", "goods"),
+        dz_supplier_location=row.get("dz_supplier_location"),
+        dz_customer_location=row.get("dz_customer_location"),
         created_at=datetime.utcnow(),
     )
     db.add(tx)
@@ -262,5 +281,65 @@ def sync_ar_credit_note_to_gulftax(
         }
     except Exception as exc:
         logger.exception("AR credit note gulftax sync failed for %s", cn.credit_note_number)
+        db.rollback()
+        return {"ok": False, "error": str(exc)}
+
+
+def _existing_ap_in_rds(db: Session, ap_invoice_id: str) -> GulftaxTransaction | None:
+    return (
+        db.query(GulftaxTransaction)
+        .filter(
+            GulftaxTransaction.ap_invoice_id == ap_invoice_id,
+            GulftaxTransaction.direction == "input",
+            GulftaxTransaction.status == "posted",
+            GulftaxTransaction.source == "ap_invoiceflow",
+        )
+        .first()
+    )
+
+
+def sync_ap_invoice_to_rds_gulftax(
+    db: Session,
+    invoice_id: str,
+    company_id: str,
+    *,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Mirror approved AP invoice into RDS gulftax_transactions (idempotent)."""
+    if not invoice_id or not company_id:
+        return {"ok": False, "error": "invoice_id and company_id required"}
+
+    existing = _existing_ap_in_rds(db, invoice_id)
+    if existing:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_synced",
+            "transaction_id": existing.id,
+        }
+
+    from app.services.gulftax_sync_service import _fetch_invoice, build_transaction_row
+
+    invoice = _fetch_invoice(invoice_id)
+    if not invoice:
+        return {"ok": False, "error": "invoice_not_found"}
+    if (invoice.get("status") or "").strip() != "Approved":
+        return {"ok": False, "error": f"invoice_not_approved:{invoice.get('status')}"}
+
+    row = build_transaction_row(invoice, company_id=company_id, workspace_id=workspace_id)
+    row["tenant_id"] = workspace_id or row.get("workspace_id") or company_id
+    row["transaction_date"] = date.fromisoformat(str(row["transaction_date"])[:10])
+
+    try:
+        tx = _insert_rds_row(db, row)
+        return {
+            "ok": True,
+            "transaction_id": tx.id,
+            "tax_period": row["tax_period"],
+            "store": "rds",
+            "designated_zone": row.get("designated_zone", False),
+        }
+    except Exception as exc:
+        logger.exception("AP RDS gulftax sync failed for invoice %s", invoice_id)
         db.rollback()
         return {"ok": False, "error": str(exc)}

@@ -5,7 +5,6 @@ import { fetchVatReturnAllBoxes, fetchVatReturnSummary, fetchVatReconStatus, rec
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
-import { getPendingBadDebtTotal } from '../../services/vatAdvanced.service';
 
 function currentQuarter(): string {
   const d = new Date();
@@ -28,7 +27,11 @@ type AllBoxes = {
   box9_standard_rated_expenses: number;
   box10_reverse_charge_expenses: number;
   box11_total_input_vat: number;
+  box11_total_input_vat_raw?: number;
   box12_net_vat_payable_or_refundable: number;
+  partial_exemption_applied?: boolean;
+  recovery_percentage?: number;
+  bad_debt_relief_applied?: number;
   payable: boolean;
   sales_invoice_count: number;
   purchase_entry_count: number;
@@ -116,7 +119,6 @@ export default function VATReturn() {
   const [period, setPeriod] = useState(currentQuarter());
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AllBoxes | null>(null);
-  const [pendingBadDebt, setPendingBadDebt] = useState(0);
   const [showPay, setShowPay] = useState(false);
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payRef, setPayRef] = useState('');
@@ -267,11 +269,6 @@ export default function VATReturn() {
     return null;
   };
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    void getPendingBadDebtTotal(workspaceId).then(setPendingBadDebt);
-  }, [workspaceId]);
-
   const fmt = (n: number) => `AED ${Number(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2 })}`;
 
   const overrideDiff = (key: FilingOverrideKey): number | null => {
@@ -330,18 +327,33 @@ export default function VATReturn() {
         {activeCompany?.company_name ? ` · ${activeCompany.company_name}` : ''}
       </p>
 
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-        <span className="text-sm text-amber-100">
-          Pending Bad Debt Relief:{' '}
-          <strong className="font-mono">{fmt(pendingBadDebt)}</strong>
-        </span>
-        <Link
-          to="/gulftax/bad-debt-relief"
-          className="text-xs font-semibold text-amber-300 hover:text-amber-200 underline"
-        >
-          Review claims →
-        </Link>
-      </div>
+      {(data?.bad_debt_relief_applied ?? 0) > 0 && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
+          <span className="text-sm text-green-100">
+            Bad Debt Relief Applied:{' '}
+            <strong className="font-mono">{fmt(data!.bad_debt_relief_applied!)}</strong>
+            <span className="text-green-200/80 ml-2">(reduces Box 7 output VAT)</span>
+          </span>
+          <Link
+            to="/gulftax/bad-debt-relief"
+            className="text-xs font-semibold text-green-300 hover:text-green-200 underline"
+          >
+            View claims →
+          </Link>
+        </div>
+      )}
+
+      {data?.partial_exemption_applied && (
+        <div className="mb-6 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+          Partial exemption applied — Box 11 adjusted to{' '}
+          <strong className="font-mono">{Number(data.recovery_percentage ?? 0).toFixed(2)}%</strong> recovery
+          {data.box11_total_input_vat_raw != null && (
+            <span className="text-blue-200/80 ml-2">
+              (raw input VAT {fmt(data.box11_total_input_vat_raw)} → {fmt(data.box11_total_input_vat)})
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-3 mb-6 flex-wrap">
         <label className="text-sm text-gray-400">Period</label>

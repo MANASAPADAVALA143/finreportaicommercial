@@ -164,6 +164,17 @@ def post_invoice_to_gl_and_tax(
                             error=str(sync_result.get("error", "unknown")),
                             workspace_id=ws_id,
                         )
+                    try:
+                        from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
+
+                        sync_ap_invoice_to_rds_gulftax(
+                            db,
+                            body.invoice_id,
+                            company_id,
+                            workspace_id=ws_id,
+                        )
+                    except Exception:
+                        logger.exception("RDS GulfTax sync on idempotent skip failed for %s", body.invoice_id)
                 except Exception:
                     logger.exception("GulfTax sync on idempotent skip failed for %s", body.invoice_id)
             return {"ok": True, **prior}
@@ -458,6 +469,17 @@ def post_invoice_to_gl_and_tax(
                     error=str(sync_result.get("error", "unknown")),
                     workspace_id=ws_id,
                 )
+            try:
+                from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
+
+                sync_ap_invoice_to_rds_gulftax(
+                    db,
+                    body.invoice_id,
+                    company_id,
+                    workspace_id=ws_id,
+                )
+            except Exception:
+                logger.exception("RDS GulfTax sync failed for %s", body.invoice_id)
         except Exception as sync_exc:
             logger.exception("GulfTax sync after approve failed for %s", body.invoice_number)
             try:
