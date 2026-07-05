@@ -41,6 +41,16 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+async function patch<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: hdrs(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export interface ARLineItem {
   description: string;
   qty: number;
@@ -271,6 +281,82 @@ export const runCollectionsDunning = (company_id: string) =>
     '/run-dunning',
     { company_id, workspace_id: localStorage.getItem('gnanova_workspace_id') },
   );
+
+export interface ARRecurringTemplate {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  description: string;
+  amount: number;
+  vat_rate: number;
+  recurrence_type: 'weekly' | 'monthly' | 'quarterly' | 'annually';
+  interval: number;
+  start_date: string;
+  next_due_date: string;
+  end_date: string | null;
+  status: 'active' | 'paused' | 'cancelled';
+  last_generated_at: string | null;
+  generated_count: number;
+}
+
+export interface ARGeneratedInvoice {
+  invoice_id: string;
+  invoice_number: string;
+  invoice_date: string | null;
+  due_date: string | null;
+  subtotal: number;
+  vat_amount: number;
+  total: number;
+  status: string;
+}
+
+export const listARRecurringTemplates = (status?: string) =>
+  get<{ count: number; templates: ARRecurringTemplate[] }>(
+    '/recurring-invoices',
+    status ? { status } : undefined,
+  );
+
+export const createARRecurringTemplate = (body: {
+  customer_id: string;
+  description: string;
+  amount: number;
+  vat_rate: number;
+  recurrence_type: string;
+  interval: number;
+  start_date: string;
+  end_date?: string;
+  company_id: string;
+}) =>
+  post<ARRecurringTemplate>('/recurring-invoices', {
+    ...body,
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const generateDueARRecurring = (company_id?: string) =>
+  post<{ as_of: string; generated_count: number; generated: Array<Record<string, unknown>> }>(
+    '/recurring-invoices/generate-due',
+    { company_id, workspace_id: localStorage.getItem('gnanova_workspace_id') },
+  );
+
+export const getARRecurringGenerated = (templateId: string) =>
+  get<{ template_id: string; customer_name: string; count: number; invoices: ARGeneratedInvoice[] }>(
+    `/recurring-invoices/${templateId}/generated`,
+  );
+
+export const pauseARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/pause`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const resumeARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/resume`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const cancelARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/cancel`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
 
 export interface DSOMetrics {
   dso_current: number;

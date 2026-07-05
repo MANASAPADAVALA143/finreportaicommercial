@@ -114,6 +114,29 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_crm_contacts_workspace_id ON crm_contacts (workspace_id)",
     "CREATE INDEX IF NOT EXISTS ix_crm_contacts_company_id ON crm_contacts (company_id)",
     """
+    CREATE TABLE IF NOT EXISTS uae_recurring_invoices (
+        id VARCHAR(36) PRIMARY KEY,
+        tenant_id VARCHAR(36) NOT NULL,
+        company_id VARCHAR(36),
+        customer_id VARCHAR(36) NOT NULL REFERENCES uae_customers(id),
+        description VARCHAR(500) NOT NULL,
+        amount NUMERIC(15, 2) NOT NULL,
+        vat_rate NUMERIC(5, 2) DEFAULT 5,
+        recurrence_type VARCHAR(20) NOT NULL,
+        interval INTEGER DEFAULT 1,
+        start_date DATE NOT NULL,
+        next_due_date DATE NOT NULL,
+        end_date DATE,
+        status VARCHAR(20) DEFAULT 'active',
+        last_generated_at TIMESTAMP,
+        generated_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_uae_recurring_invoices_tenant_id ON uae_recurring_invoices (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_uae_recurring_invoices_company_id ON uae_recurring_invoices (company_id)",
+    "ALTER TABLE uae_sales_invoices ADD COLUMN IF NOT EXISTS recurring_template_id VARCHAR(36)",
+    """
     CREATE TABLE IF NOT EXISTS accounting_periods (
         id VARCHAR(36) PRIMARY KEY,
         workspace_id VARCHAR(36) NOT NULL,
