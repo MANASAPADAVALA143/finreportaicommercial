@@ -162,12 +162,23 @@ def main() -> int:
             db, workspace_id=TENANT, company_id=COMPANY_ID, period=PERIOD
         )
 
+        box11_raw = float(after.get("box11_total_input_vat_raw") or 0)
+        box11_adj = float(after.get("box11_total_input_vat") or 0)
+        box7 = float(after.get("box7_output_adjustments") or 0)
+        bad_debt = float(after.get("bad_debt_relief_applied") or 0)
+        before_box11 = float(before.get("box11_total_input_vat") or 0)
+
+        # STD adds 100 recoverable VAT; DZ-DZ row is out of scope (excluded)
+        expected_raw = round(before_box11 + 100.0, 2)
+        expected_adj = round(expected_raw * 0.8, 2)
+
         report = {
             "ok": (
                 after.get("partial_exemption_applied") is True
-                and after.get("box11_total_input_vat") == 80.0
-                and after.get("bad_debt_relief_applied") == 30.0
-                and after.get("box7_output_adjustments") == -30.0
+                and abs(box11_raw - expected_raw) < 0.02
+                and abs(box11_adj - expected_adj) < 0.02
+                and bad_debt == 30.0
+                and box7 == -30.0
             ),
             "before": {
                 "box11": before.get("box11_total_input_vat"),
@@ -175,12 +186,14 @@ def main() -> int:
                 "box12": before.get("box12_net_vat_payable_or_refundable"),
             },
             "after": {
-                "box11_raw": after.get("box11_total_input_vat_raw"),
-                "box11": after.get("box11_total_input_vat"),
-                "box7": after.get("box7_output_adjustments"),
+                "box11_raw": box11_raw,
+                "box11": box11_adj,
+                "box11_expected_raw": expected_raw,
+                "box11_expected_adj": expected_adj,
+                "box7": box7,
                 "box12": after.get("box12_net_vat_payable_or_refundable"),
                 "recovery_percentage": after.get("recovery_percentage"),
-                "bad_debt_relief_applied": after.get("bad_debt_relief_applied"),
+                "bad_debt_relief_applied": bad_debt,
                 "partial_exemption_applied": after.get("partial_exemption_applied"),
             },
             "dialect": "postgresql",
