@@ -6,6 +6,84 @@ import os
 from sqlalchemy import create_engine, text
 
 DDL = [
+    # ── create_client.py onboarding (tenants, workspaces, RBAC) ───────────────
+    """
+    CREATE TABLE IF NOT EXISTS tenants (
+        id         VARCHAR(36) PRIMARY KEY,
+        name       VARCHAR(256) NOT NULL,
+        plan       VARCHAR(32) NOT NULL DEFAULT 'starter',
+        is_demo    BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rbac_companies (
+        id         VARCHAR(36) PRIMARY KEY,
+        name       VARCHAR(256) NOT NULL,
+        plan       VARCHAR(32) NOT NULL DEFAULT 'starter',
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workspaces (
+        id                      VARCHAR(36) PRIMARY KEY,
+        name                    VARCHAR(256) NOT NULL,
+        legal_entity_name       VARCHAR(256) NOT NULL,
+        trn_number              VARCHAR(20),
+        country                 VARCHAR(64) NOT NULL DEFAULT 'UAE',
+        currency                VARCHAR(3) NOT NULL DEFAULT 'AED',
+        fiscal_year_start_month INTEGER NOT NULL DEFAULT 1,
+        fiscal_year_end_month   INTEGER NOT NULL DEFAULT 12,
+        industry                VARCHAR(128),
+        is_active               BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at              TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at              TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workspace_vat_settings (
+        id               VARCHAR(36) PRIMARY KEY,
+        workspace_id     VARCHAR(36) NOT NULL UNIQUE REFERENCES workspaces(id),
+        entity_type      VARCHAR(32) DEFAULT 'mainland',
+        vat_registered   BOOLEAN DEFAULT TRUE,
+        standard_rate    VARCHAR(10) DEFAULT '5',
+        filing_frequency VARCHAR(20) DEFAULT 'quarterly',
+        notes            TEXT,
+        created_at       TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rbac_users (
+        id            VARCHAR(36) PRIMARY KEY,
+        company_id    VARCHAR(36) NOT NULL REFERENCES rbac_companies(id),
+        name          VARCHAR(256) NOT NULL,
+        email         VARCHAR(256) NOT NULL UNIQUE,
+        password_hash VARCHAR(512) NOT NULL,
+        role          VARCHAR(32) NOT NULL DEFAULT 'accountant',
+        product_role  VARCHAR(32) NOT NULL DEFAULT 'full_access',
+        tenant_id     VARCHAR(36),
+        is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at    TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        last_login    TIMESTAMP
+    )
+    """,
+    "ALTER TABLE rbac_users ADD COLUMN IF NOT EXISTS product_role VARCHAR(32) NOT NULL DEFAULT 'full_access'",
+    "ALTER TABLE rbac_users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_rbac_users_company_id ON rbac_users (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_rbac_users_email ON rbac_users (email)",
+    "CREATE INDEX IF NOT EXISTS ix_rbac_users_tenant_id ON rbac_users (tenant_id)",
+    """
+    CREATE TABLE IF NOT EXISTS workspace_members (
+        id           VARCHAR(36) PRIMARY KEY,
+        workspace_id VARCHAR(36) NOT NULL REFERENCES workspaces(id),
+        user_id      VARCHAR(36) NOT NULL REFERENCES rbac_users(id),
+        role         VARCHAR(32) NOT NULL DEFAULT 'accountant',
+        created_at   TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        UNIQUE (workspace_id, user_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_workspace_members_workspace_id ON workspace_members (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_workspace_members_user_id ON workspace_members (user_id)",
     # company_id unification + AR fields on sales invoices
     "ALTER TABLE uae_sales_invoices ADD COLUMN IF NOT EXISTS company_id VARCHAR(36)",
     "ALTER TABLE uae_sales_invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR(30) DEFAULT 'standard'",
@@ -53,6 +131,8 @@ DDL = [
         updated_at TIMESTAMP
     )
     """,
+    "CREATE INDEX IF NOT EXISTS ix_ap_companies_tenant_id ON ap_companies (tenant_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_ap_company_tenant_slug ON ap_companies (tenant_id, slug)",
     # gulftax_transactions (RDS shape — no FK to invoices)
     """
     CREATE TABLE IF NOT EXISTS gulftax_transactions (
