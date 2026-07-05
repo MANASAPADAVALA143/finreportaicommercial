@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, ReferenceLine } from 'recharts';
-import { Sparkles, Mail, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
+import { Sparkles, RefreshCw } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { cfoGet, cfoPost, fmtMoney } from '../../services/cfoDesk.service';
-import { getARAging, getDSOMetrics, predictPayments, runCollectionsDunning, type DSOMetrics, type PaymentPrediction } from '../../services/arService';
+import { getARAging, getDSOMetrics, predictPayments, type DSOMetrics, type PaymentPrediction } from '../../services/arService';
 
 const C = {
   bg: '#060A12', surface: '#0B1120', panel: '#0F1829', border: '#1A2640',
@@ -28,7 +28,6 @@ export default function ARCollectionsLive() {
   const [cashForecast, setCashForecast] = useState({ d30: 0, d60: 0, d90: 0 });
   const [insight, setInsight] = useState<InsightCard | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
-  const [dunningResult, setDunningResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const currency = 'AED';
 
@@ -95,17 +94,6 @@ export default function ARCollectionsLive() {
       setInsight({ module: 'AR & COLLECTIONS', impact: 'high impact', title: 'Error', body: 'Failed to load.', data_tag: '', action: '' });
     }
     setInsightLoading(false);
-  }
-
-  async function handleDunning() {
-    if (!activeCompanyId) return;
-    try {
-      const res = await runCollectionsDunning(activeCompanyId);
-      setDunningResult(res.summary.join(' · '));
-      toast.success(`Sent ${res.sent_count} reminder(s)`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Dunning failed');
-    }
   }
 
   if (!activeCompanyId) {
@@ -248,11 +236,15 @@ export default function ARCollectionsLive() {
 
       {tab === 'dunning' && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4, padding: 20 }}>
-          <p style={{ fontSize: 13, color: C.textDim, marginBottom: 16 }}>Send escalating reminders to overdue customers (4 levels based on days overdue).</p>
-          <button type="button" onClick={() => void handleDunning()} style={{ background: C.amber, color: C.bg, border: 'none', borderRadius: 4, padding: '10px 20px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Mail size={16} /> Run Collections Dunning
-          </button>
-          {dunningResult && <p style={{ marginTop: 16, fontSize: 12, color: C.teal }}>{dunningResult}</p>}
+          <p style={{ fontSize: 13, color: C.textDim, marginBottom: 16 }}>
+            Escalating payment reminders (L1–L4) are managed on the dedicated AR Dunning page.
+          </p>
+          <Link
+            to="/uae-full/ar/dunning"
+            style={{ background: C.amber, color: C.bg, borderRadius: 4, padding: '10px 20px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}
+          >
+            Open AR Dunning →
+          </Link>
           {predictions.filter((p) => p.days_overdue > 0).length > 0 && (
             <div style={{ marginTop: 24 }}>
               <div style={{ fontSize: 10, color: C.textDim, textTransform: 'uppercase', marginBottom: 8 }}>Overdue invoices</div>

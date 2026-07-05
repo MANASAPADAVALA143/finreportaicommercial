@@ -115,6 +115,7 @@ const finreportaiSections: NavSection[] = [
       { label: 'Sales Invoices',      path: '/uae-full/invoices',             icon: 'Receipt' },
       { label: 'AR Invoices',         path: '/uae-full/ar',                   icon: 'Receipt' },
       { label: 'Customer Risk',       path: '/uae-full/ar/customer-risk',     icon: 'ShieldAlert' },
+      { label: 'AR Dunning',          path: '/uae-full/ar/dunning',           icon: 'Mail' },
       { label: 'Bank Reconciliation', path: '/uae-full/bank-recon',           icon: 'Landmark' },
       { label: 'Fixed Assets',        path: '/uae-full/fixed-assets',         icon: 'Building2' },
       { label: 'Accruals',            path: '/uae-full/accruals',             icon: 'AlertCircle' },

@@ -32,6 +32,7 @@ from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_ta
 from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
+from app.services.dunning_service import get_dunning_history, get_dunning_templates, run_dunning as run_dunning_service
 
 logger = logging.getLogger(__name__)
 
@@ -715,48 +716,30 @@ def run_dunning(body: RunDunningIn, request: Request, db: Session = Depends(get_
         )
         .all()
     )
-
-    sent: list[dict[str, Any]] = []
-    summary: list[str] = []
     for inv in overdue:
         _flag_overdue(inv, today, db)
-        days = (today - (inv.due_date or today)).days
-        if days <= 15:
-            level = 1
-        elif days <= 30:
-            level = 2
-        elif days <= 60:
-            level = 3
-        else:
-            level = 4
-        cust = inv.customer
-        email = cust.email if cust else None
-        if email:
-            send_notification(
-                email,
-                f"Payment reminder — {inv.invoice_number}",
-                f"Invoice {inv.invoice_number} for AED {_f(inv.outstanding):,.2f} "
-                f"was due on {inv.due_date}. Please arrange payment.",
-            )
-        inv.last_dunning_level = level
-        inv.last_dunning_sent_at = datetime.utcnow()
-        inv.dunning_count = (inv.dunning_count or 0) + 1
-        db.add(inv)
-        if cust:
-            _recalc_credit(db, ws, body.company_id, cust.name)
-        sent.append({
-            "invoice_number": inv.invoice_number,
-            "customer": cust.name if cust else "Customer",
-            "amount": _f(inv.outstanding),
-            "level": level,
-        })
+    db.flush()
+    return run_dunning_service(db, ws, body.company_id, today)
 
-    db.commit()
-    if sent:
-        summary.append(f"Sent {len(sent)} dunning reminder(s)")
-    else:
-        summary.append("No overdue invoices to chase")
-    return {"sent_count": len(sent), "sent": sent, "summary": summary}
+
+@router.get("/dunning-history")
+def dunning_history(
+    request: Request,
+    company_id: Optional[str] = None,
+    dunning_level: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id required")
+    return get_dunning_history(db, ws, cid, dunning_level=dunning_level)
+
+
+@router.get("/dunning-templates")
+def dunning_templates():
+    return {"templates": get_dunning_templates()}
 
 
 @router.get("/credit-notes")
