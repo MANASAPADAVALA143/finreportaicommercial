@@ -67,6 +67,12 @@ def _run_migrations() -> None:
     migrations = [
         "ALTER TABLE companies ADD COLUMN external_id VARCHAR(64)",
         "ALTER TABLE companies ADD COLUMN workspace_id VARCHAR(64)",
+        "ALTER TABLE reconciliation_results ADD COLUMN tax_period VARCHAR(16)",
+        "ALTER TABLE reconciliation_results ADD COLUMN period_start DATE",
+        "ALTER TABLE reconciliation_results ADD COLUMN period_end DATE",
+        "ALTER TABLE reconciliation_results ADD COLUMN box_breakdown JSON",
+        "ALTER TABLE reconciliation_results ADD COLUMN source VARCHAR(64)",
+        "ALTER TABLE reconciliation_results ADD COLUMN override_reason VARCHAR(2000)",
     ]
     try:
         with engine.connect() as conn:

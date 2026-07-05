@@ -389,6 +389,109 @@ def sync_gulftax_period(body: SyncPeriodBody):
     return sync_period(cid, body.tax_period)
 
 
+# ── VAT reconciliation (gulftax_transactions source of truth) ─────────────────
+
+class VatReconRunBody(BaseModel):
+    period: str = Field(..., description="Tax period e.g. 2025-Q1")
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+
+
+class VatReconOverrideBody(BaseModel):
+    period: str
+    reason: str = Field(..., min_length=3, max_length=2000)
+    company_id: Optional[str] = None
+
+
+@router.get("/vat-periods")
+def list_vat_periods(
+    company_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Distinct tax periods from RDS gulftax_transactions."""
+    from app.services.vat_recon_service import get_vat_periods
+
+    cid = company_id or workspace_id
+    if not cid:
+        raise HTTPException(400, detail="company_id or workspace_id required")
+    tenant = workspace_id or cid
+    return {"periods": get_vat_periods(db, tenant_id=tenant, company_id=cid)}
+
+
+@router.post("/recon/run")
+def run_gulftax_recon(
+    body: VatReconRunBody,
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Run VAT recon for a period — aggregates gulftax_transactions, compares to vat_returns."""
+    from app.modules.gulftax.vat_return_service import parse_period
+    from app.services.vat_recon_service import run_vat_recon
+
+    cid = body.company_id or company_id
+    tenant = body.workspace_id or cid
+    period_start, period_end = parse_period(body.period)
+    try:
+        return run_vat_recon(
+            db,
+            ported_db,
+            tenant_id=tenant,
+            company_id=cid,
+            period_start=period_start,
+            period_end=period_end,
+            tax_period=body.period,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Reconciliation failed: {exc}") from exc
+
+
+@router.get("/recon/status")
+def gulftax_recon_status(
+    period: str = Query(...),
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Latest recon status for a period (filing gate)."""
+    from app.services.vat_recon_service import get_recon_status
+
+    return get_recon_status(ported_db, company_id=company_id, period=period)
+
+
+@router.get("/recon/history")
+def gulftax_recon_history(
+    limit: int = Query(20, ge=1, le=100),
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Past reconciliation runs for the company."""
+    from app.services.vat_recon_service import get_recon_history
+
+    return {"items": get_recon_history(ported_db, company_id=company_id, limit=limit)}
+
+
+@router.post("/recon/override")
+def gulftax_recon_override(
+    body: VatReconOverrideBody,
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Log override reason when filing despite recon mismatches."""
+    from app.services.vat_recon_service import set_recon_override
+
+    cid = body.company_id or company_id
+    try:
+        return set_recon_override(
+            ported_db,
+            company_id=cid,
+            period=body.period,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 # ── Advance Payment VAT (FTA two-step rule) ───────────────────────────────────
 
 class AdvanceVatRequest(BaseModel):
