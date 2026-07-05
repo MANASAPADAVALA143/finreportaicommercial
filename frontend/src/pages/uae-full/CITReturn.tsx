@@ -51,6 +51,7 @@ export default function CITReturn() {
   const [ctReturn, setCtReturn] = useState<CtReturnRecord | null>(null);
   const [ctHistory, setCtHistory] = useState<CtReturnRecord[]>([]);
   const [ctLoading, setCtLoading] = useState(false);
+  const [electSbr, setElectSbr] = useState(false);
   const [showFileOverride, setShowFileOverride] = useState(false);
   const [fileOverrideReason, setFileOverrideReason] = useState('');
   const [fileMsg, setFileMsg] = useState<string | null>(null);
@@ -78,7 +79,7 @@ export default function CITReturn() {
     setCtLoading(true);
     setFileMsg(null);
     try {
-      const r = await citSvc.generateCtReturn(fromDate, toDate);
+      const r = await citSvc.generateCtReturn(fromDate, toDate, electSbr);
       setCtReturn(r);
       await loadCtHistory();
       toast.success('CT return draft saved');
@@ -196,6 +197,15 @@ export default function CITReturn() {
             className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">
             {ctLoading ? 'Saving…' : 'Generate CT Return'}
           </button>
+          <label className="flex items-center gap-2 text-sm text-gray-300 bg-gray-800/80 border border-gray-700 rounded-lg px-3 py-2">
+            <input
+              type="checkbox"
+              checked={electSbr}
+              onChange={(e) => setElectSbr(e.target.checked)}
+              className="rounded"
+            />
+            Elect SBR (when eligible)
+          </label>
           {data && (
             <button onClick={() => setShowVoucher(true)}
               className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-lg text-sm font-medium">
@@ -241,16 +251,25 @@ export default function CITReturn() {
           <div className="grid md:grid-cols-2 gap-4 text-sm">
             <div className="space-y-2">
               <p><span className="text-gray-500">Revenue:</span> <span className="font-mono">{fmt(ctReturn.revenue)}</span></p>
+              <p><span className="text-gray-500">Accounting profit:</span> <span className="font-mono">{fmt(ctReturn.accounting_profit)}</span></p>
               <p><span className="text-gray-500">Taxable income:</span> <span className="font-mono">{fmt(ctReturn.taxable_income)}</span></p>
               <p><span className="text-gray-500">CT payable:</span> <span className="font-mono text-emerald-400">{fmt(ctReturn.ct_payable_aed)}</span></p>
               {ctReturn.non_deductible_expenses > 0 && (
-                <p><span className="text-gray-500">Non-deductible add-backs:</span> <span className="font-mono">{fmt(ctReturn.non_deductible_expenses)}</span></p>
+                <p><span className="text-gray-500">Total add-backs:</span> <span className="font-mono">{fmt(ctReturn.non_deductible_expenses)}</span></p>
+              )}
+              {(ctReturn.exempt_income_deductions ?? 0) > 0 && (
+                <p><span className="text-gray-500">Exempt income deductions:</span> <span className="font-mono text-blue-300">{fmt(ctReturn.exempt_income_deductions)}</span></p>
               )}
             </div>
             <div className="space-y-2">
               <p>
                 <span className="text-gray-500">SBR eligible:</span>{' '}
                 <span className={ctReturn.sbr_eligible ? 'text-green-400' : 'text-gray-300'}>{ctReturn.sbr_eligible ? 'Yes' : 'No'}</span>
+                {ctReturn.sbr_eligible && (
+                  <span className="ml-2 text-xs text-gray-400">
+                    {ctReturn.sbr_elected ? '(elected — 0% CT)' : '(not elected)'}
+                  </span>
+                )}
               </p>
               <p>
                 <span className="text-gray-500">QFZP:</span>{' '}
@@ -261,6 +280,60 @@ export default function CITReturn() {
               <p><span className="text-gray-500">Zone status:</span> {ctReturn.free_zone_status}</p>
             </div>
           </div>
+          {(ctReturn.adjustments?.length ?? 0) > 0 && (
+            <div className="mt-4 space-y-4">
+              {ctReturn.adjustments.some((a) => a.type === 'add_back') && (
+                <div>
+                  <h3 className="text-xs font-bold text-amber-400 uppercase mb-2">Add-back adjustments</h3>
+                  <table className="w-full text-sm border border-gray-700/50 rounded-lg overflow-hidden">
+                    <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">
+                      <tr>
+                        <th className="text-left px-3 py-2">Account</th>
+                        <th className="text-right px-3 py-2">Gross</th>
+                        <th className="text-right px-3 py-2">%</th>
+                        <th className="text-right px-3 py-2">Add-back</th>
+                        <th className="text-left px-3 py-2">Law</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700/50">
+                      {ctReturn.adjustments.filter((a) => a.type === 'add_back').map((a) => (
+                        <tr key={`${a.account_code}-add`}>
+                          <td className="px-3 py-2"><span className="font-mono text-teal-400">{a.account_code}</span> {a.account_name}</td>
+                          <td className="px-3 py-2 text-right font-mono">{a.gross_amount.toLocaleString('en-AE', { minimumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-2 text-right font-mono">{a.add_back_pct != null ? `${(a.add_back_pct * 100).toFixed(0)}%` : '—'}</td>
+                          <td className="px-3 py-2 text-right font-mono text-amber-300">{a.add_back_amount.toLocaleString('en-AE', { minimumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-2 text-xs text-gray-400">{a.law_reference}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {ctReturn.adjustments.some((a) => a.type === 'exempt_deduction') && (
+                <div>
+                  <h3 className="text-xs font-bold text-blue-400 uppercase mb-2">Exempt income deductions</h3>
+                  <table className="w-full text-sm border border-gray-700/50 rounded-lg overflow-hidden">
+                    <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">
+                      <tr>
+                        <th className="text-left px-3 py-2">Account</th>
+                        <th className="text-right px-3 py-2">Amount</th>
+                        <th className="text-left px-3 py-2">Law</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-700/50">
+                      {ctReturn.adjustments.filter((a) => a.type === 'exempt_deduction').map((a) => (
+                        <tr key={`${a.account_code}-ex`}>
+                          <td className="px-3 py-2"><span className="font-mono text-teal-400">{a.account_code}</span> {a.account_name}</td>
+                          <td className="px-3 py-2 text-right font-mono text-blue-300">{a.add_back_amount.toLocaleString('en-AE', { minimumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-2 text-xs text-gray-400">{a.law_reference}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
           {ctReturn.breakdown?.computation?.breakdown && (
             <table className="w-full text-sm mt-4 border border-gray-700/50 rounded-lg overflow-hidden">
               <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">

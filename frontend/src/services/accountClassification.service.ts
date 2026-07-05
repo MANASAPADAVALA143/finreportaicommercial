@@ -95,4 +95,13 @@ export const BS_PL_MAIN_OPTIONS = [
 
 export const CASH_FLOW_OPTIONS = ['Operating', 'Investing', 'Financing', 'Not Applicable'];
 
-export const CIT_OPTIONS = ['Revenue', 'Deductible Expense', 'Non-Deductible', 'Capital', 'Tax Payable', 'Not Applicable'];
+export const CIT_OPTIONS = [
+  'Revenue',
+  'Deductible Expense',
+  'Non-Deductible',
+  'Entertainment',
+  'Fines',
+  'Capital',
+  'Tax Payable',
+  'Not Applicable',
+];

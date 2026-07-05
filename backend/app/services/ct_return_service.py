@@ -16,6 +16,29 @@ from app.services.uae_journal_service import get_trial_balance
 SBR_REVENUE_CAP = 3_000_000
 CT_ZERO_BAND = 375_000
 
+ADD_BACK_RULES: dict[str, tuple[float, str]] = {
+    "entertainment": (0.5, "UAE CT Law Art. 32"),
+    "fines": (1.0, "UAE CT Law Art. 33"),
+    "penalties": (1.0, "UAE CT Law Art. 33"),
+    "non-deductible": (1.0, "UAE CT Law Art. 28"),
+    "non-business": (1.0, "UAE CT Law Art. 28"),
+    "capital": (1.0, "UAE CT Law Art. 28"),
+}
+
+EXEMPT_RULES: dict[str, str] = {
+    "exempt dividend": "UAE CT Law Art. 23",
+    "dividends from uae subsidiaries": "UAE CT Law Art. 23",
+    "qualifying capital gain": "UAE CT Law Art. 23",
+    "qualifying capital gains": "UAE CT Law Art. 23",
+    "qfzp qualifying income": "UAE CT Law Art. 18",
+}
+
+CIT_TARGET_CATEGORIES = frozenset(ADD_BACK_RULES) | frozenset(EXEMPT_RULES)
+
+
+def _norm_category(value: str | None) -> str:
+    return (value or "").strip().lower()
+
 
 def _month_periods(period_start: date, period_end: date) -> list[str]:
     """YYYY-MM keys covering [period_start, period_end]."""
@@ -115,32 +138,128 @@ def _gl_totals(tb: dict) -> dict[str, float]:
     }
 
 
-def _non_deductible_expenses(
+def _load_classifications(
+    db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> dict[str, UAEAccountClassification]:
+    try:
+        q = db.query(UAEAccountClassification).filter(
+            UAEAccountClassification.workspace_id == tenant_id,
+        )
+        if company_id:
+            q = q.filter(UAEAccountClassification.company_id == company_id)
+        rows = q.all()
+    except Exception:
+        db.rollback()
+        return {}
+
+    selected: dict[str, UAEAccountClassification] = {}
+    for row in rows:
+        cat = _norm_category(row.cit_category)
+        if row.cit_add_back or cat in CIT_TARGET_CATEGORIES:
+            selected[row.account_code] = row
+    return selected
+
+
+def _compute_adjustments(
     db: Session,
     tenant_id: str,
     company_id: str | None,
     tb_lines: list[dict],
-) -> float:
-    """Sum expense account balances flagged cit_add_back (Phase 1 — zero if none flagged)."""
-    try:
-        q = db.query(UAEAccountClassification).filter(
-            UAEAccountClassification.workspace_id == tenant_id,
-            UAEAccountClassification.cit_add_back.is_(True),
-        )
-        if company_id:
-            q = q.filter(UAEAccountClassification.company_id == company_id)
-        flagged = {row.account_code for row in q.all()}
-    except Exception:
-        db.rollback()
-        return 0.0
-    if not flagged:
-        return 0.0
-    total = 0.0
+    *,
+    qfzp_eligible: bool,
+    net_profit: float,
+) -> dict[str, Any]:
+    """Return per-line add-backs and exempt deductions with totals."""
+    classifications = _load_classifications(db, tenant_id, company_id)
+    adjustments: list[dict[str, Any]] = []
+    total_add_backs = 0.0
+    total_exempt = 0.0
+    qfzp_from_accounts = 0.0
+    has_qfzp_accounts = False
+
     for line in tb_lines:
         code = line.get("account_code", "")
-        if code in flagged:
-            total += max(0.0, float(line.get("net_balance", 0)))
-    return round(total, 2)
+        row = classifications.get(code)
+        if not row:
+            continue
+
+        cat = _norm_category(row.cit_category)
+        net_balance = float(line.get("net_balance", 0))
+        account_name = line.get("account_name") or row.account_name or code
+
+        if cat in EXEMPT_RULES:
+            gross = abs(net_balance) if net_balance != 0 else 0.0
+            if gross <= 0:
+                continue
+            if cat == "qfzp qualifying income":
+                has_qfzp_accounts = True
+                qfzp_from_accounts += gross
+                if qfzp_eligible:
+                    adjustments.append({
+                        "type": "exempt_deduction",
+                        "account_code": code,
+                        "account_name": account_name,
+                        "gross_amount": round(gross, 2),
+                        "add_back_pct": None,
+                        "add_back_amount": round(gross, 2),
+                        "law_reference": EXEMPT_RULES[cat],
+                        "cit_category": row.cit_category,
+                    })
+                continue
+            amount = round(gross, 2)
+            total_exempt += amount
+            adjustments.append({
+                "type": "exempt_deduction",
+                "account_code": code,
+                "account_name": account_name,
+                "gross_amount": amount,
+                "add_back_pct": None,
+                "add_back_amount": amount,
+                "law_reference": EXEMPT_RULES[cat],
+                "cit_category": row.cit_category,
+            })
+            continue
+
+        pct: float | None = None
+        law_ref = "UAE CT Law Art. 28"
+        if cat in ADD_BACK_RULES:
+            pct, law_ref = ADD_BACK_RULES[cat]
+        elif row.cit_add_back:
+            pct = 1.0
+        else:
+            continue
+
+        gross = max(0.0, net_balance)
+        if gross <= 0:
+            continue
+        add_back_amount = round(gross * pct, 2)
+        total_add_backs += add_back_amount
+        adjustments.append({
+            "type": "add_back",
+            "account_code": code,
+            "account_name": account_name,
+            "gross_amount": round(gross, 2),
+            "add_back_pct": pct,
+            "add_back_amount": add_back_amount,
+            "law_reference": law_ref,
+            "cit_category": row.cit_category,
+        })
+
+    qfzp_qualifying_income: float | None = None
+    if qfzp_eligible:
+        if has_qfzp_accounts:
+            qfzp_qualifying_income = round(qfzp_from_accounts, 2)
+        else:
+            qfzp_qualifying_income = round(net_profit, 2)
+
+    return {
+        "adjustments": adjustments,
+        "total_add_backs": round(total_add_backs, 2),
+        "total_exempt_deductions": round(total_exempt, 2),
+        "qfzp_qualifying_income": qfzp_qualifying_income,
+    }
 
 
 def _resolve_free_zone_status(company_id: str | None) -> str:
@@ -170,6 +289,12 @@ def _aggregate_trial_balance(
 
 
 def _serialize(row: CtReturn) -> dict[str, Any]:
+    adjustments = row.adjustments or []
+    exempt_total = sum(
+        float(a.get("add_back_amount", 0))
+        for a in adjustments
+        if a.get("type") == "exempt_deduction"
+    )
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -179,12 +304,15 @@ def _serialize(row: CtReturn) -> dict[str, Any]:
         "revenue": float(row.revenue or 0),
         "accounting_profit": float(row.accounting_profit or 0),
         "non_deductible_expenses": float(row.non_deductible_expenses or 0),
+        "exempt_income_deductions": round(exempt_total, 2),
         "taxable_income": float(row.taxable_income or 0),
         "ct_payable_aed": float(row.ct_payable_aed or 0),
         "sbr_eligible": bool(row.sbr_eligible),
+        "sbr_elected": bool(row.sbr_elected),
         "qfzp_eligible": bool(row.qfzp_eligible),
         "free_zone_status": row.free_zone_status,
         "free_zone_income": float(row.free_zone_income or 0),
+        "adjustments": adjustments,
         "breakdown": row.breakdown or {},
         "status": row.status,
         "override_reason": row.override_reason,
@@ -200,29 +328,45 @@ def generate_ct_return(
     company_id: str,
     period_start: date,
     period_end: date,
+    *,
+    elect_sbr: bool = False,
 ) -> dict[str, Any]:
     """Pull GL trial balance, compute CT, persist draft ct_returns row."""
     tb = _aggregate_trial_balance(tenant_id, period_start, period_end, db, company_id)
     gl = _gl_totals(tb)
     revenue = gl["revenue"]
     net_profit = gl["net_profit"]
-    non_ded = _non_deductible_expenses(db, tenant_id, company_id, tb.get("lines", []))
     free_zone_status = _resolve_free_zone_status(company_id)
-    sbr_eligible = revenue > 0 and revenue <= SBR_REVENUE_CAP
     qfzp_eligible = free_zone_status == "free_zone_qfzp"
+    sbr_eligible = revenue > 0 and revenue <= SBR_REVENUE_CAP and free_zone_status == "mainland"
 
-    qualifying_income = net_profit if qfzp_eligible else None
+    adj = _compute_adjustments(
+        db,
+        tenant_id,
+        company_id,
+        tb.get("lines", []),
+        qfzp_eligible=qfzp_eligible,
+        net_profit=net_profit,
+    )
+    total_add_backs = adj["total_add_backs"]
+    exempt_income = adj["total_exempt_deductions"]
+    qualifying_income = adj["qfzp_qualifying_income"] if qfzp_eligible else None
+
+    apply_sbr = bool(elect_sbr and sbr_eligible)
     computed = compute_ct(
         accounting_profit=net_profit,
         free_zone_status=free_zone_status,  # type: ignore[arg-type]
         revenue=revenue,
-        non_deductible_expenses=non_ded,
+        non_deductible_expenses=total_add_backs,
+        exempt_income=exempt_income,
         qualifying_income=qualifying_income,
-        small_business_relief=False,
+        small_business_relief=apply_sbr,
     )
 
     free_zone_income = Decimal("0")
-    if qfzp_eligible:
+    if qfzp_eligible and qualifying_income is not None:
+        free_zone_income = Decimal(str(qualifying_income))
+    elif qfzp_eligible:
         for item in computed.get("breakdown", []):
             if "qualifying income" in str(item.get("label", "")).lower():
                 free_zone_income = Decimal(str(item.get("amount_aed", 0)))
@@ -236,6 +380,11 @@ def generate_ct_return(
             "sbr_revenue_cap_aed": SBR_REVENUE_CAP,
         },
         "computation": computed,
+        "adjustments_summary": {
+            "total_add_backs": total_add_backs,
+            "total_exempt_deductions": exempt_income,
+            "qfzp_qualifying_income": qualifying_income,
+        },
     }
 
     row = CtReturn(
@@ -245,13 +394,15 @@ def generate_ct_return(
         period_end=period_end,
         revenue=Decimal(str(round(revenue, 2))),
         accounting_profit=Decimal(str(round(net_profit, 2))),
-        non_deductible_expenses=Decimal(str(non_ded)),
+        non_deductible_expenses=Decimal(str(total_add_backs)),
         taxable_income=Decimal(str(computed["taxable_income_aed"])),
         ct_payable_aed=Decimal(str(computed["ct_payable_aed"])),
         sbr_eligible=sbr_eligible,
+        sbr_elected=apply_sbr,
         qfzp_eligible=qfzp_eligible,
         free_zone_status=free_zone_status,
         free_zone_income=free_zone_income,
+        adjustments=adj["adjustments"],
         breakdown=breakdown,
         status="draft",
     )

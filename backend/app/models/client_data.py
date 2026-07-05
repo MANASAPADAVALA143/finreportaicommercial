@@ -291,6 +291,8 @@ class CtReturn(Base):
     qfzp_eligible = Column(Boolean, default=False, nullable=False)
     free_zone_status = Column(String(32), default="mainland")
     free_zone_income = Column(Numeric(15, 2), default=0)
+    adjustments = Column(_json, nullable=True)
+    sbr_elected = Column(Boolean, default=False, nullable=False)
     breakdown = Column(_json, nullable=True)
     status = Column(String(20), default="draft", nullable=False)
     override_reason = Column(Text, nullable=True)

@@ -72,6 +72,7 @@ export default function AccountClassification() {
         fs_note_number: patch.fs_note_number ?? acct.fs_note_number,
         cash_flow_category: patch.cash_flow_category ?? acct.cash_flow_category,
         cit_category: patch.cit_category ?? acct.cit_category,
+        cit_add_back: patch.cit_add_back ?? acct.cit_add_back,
       });
       toast.success(`Saved ${acct.account_code}`);
       await load();
@@ -158,7 +159,7 @@ export default function AccountClassification() {
 
       {/* Main table */}
       <div className="bg-gray-800/40 border border-gray-700 rounded-xl overflow-x-auto mb-8">
-        <table className="w-full text-sm min-w-[1100px]">
+        <table className="w-full text-sm min-w-[1300px]">
           <thead className="bg-gray-800/80 text-gray-400 text-xs uppercase">
             <tr>
               <th className="px-3 py-3 text-left">Sr</th>
@@ -169,12 +170,14 @@ export default function AccountClassification() {
               <th className="px-3 py-3 text-left">2nd BS PLS</th>
               <th className="px-3 py-3 text-left">Note BS/PLS</th>
               <th className="px-3 py-3 text-left">Note Cash Flow</th>
+              <th className="px-3 py-3 text-left">CIT Category</th>
+              <th className="px-3 py-3 text-center">CIT Add-back</th>
               <th className="px-3 py-3 text-left">Action</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
             ) : accounts.map((a, i) => {
               const edit = edits[a.account_id] ?? {};
               return (
@@ -211,6 +214,24 @@ export default function AccountClassification() {
                       <option value="">—</option>
                       {svc.CASH_FLOW_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select
+                      value={edit.cit_category ?? a.cit_category ?? ''}
+                      onChange={(e) => setEdits((p) => ({ ...p, [a.account_id]: { ...p[a.account_id], cit_category: e.target.value } }))}
+                      className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs w-full max-w-[140px]"
+                    >
+                      <option value="">—</option>
+                      {svc.CIT_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      checked={edit.cit_add_back ?? a.cit_add_back ?? false}
+                      onChange={(e) => setEdits((p) => ({ ...p, [a.account_id]: { ...p[a.account_id], cit_add_back: e.target.checked } }))}
+                      className="rounded"
+                    />
                   </td>
                   <td className="px-3 py-2">
                     <button onClick={() => void handleSaveRow(a)}

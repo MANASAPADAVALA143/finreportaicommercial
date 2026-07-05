@@ -1,4 +1,4 @@
-"""Unit tests for CT return service — rate bands, SBR, QFZP, status workflow."""
+"""Unit tests for CT return service — rate bands, SBR, QFZP, adjustments, status workflow."""
 
 from __future__ import annotations
 
@@ -84,8 +84,27 @@ class CtReturnServiceTests(unittest.TestCase):
             self.db, self.tenant, self.company_id, self.period_start, self.period_end
         )
         self.assertTrue(row["sbr_eligible"])
+        self.assertFalse(row["sbr_elected"])
         self.assertEqual(row["taxable_income"], 500_000)
         self.assertEqual(row["ct_payable_aed"], 11_250.0)
+
+    @patch.object(svc, "_aggregate_trial_balance")
+    @patch.object(svc, "_resolve_free_zone_status", return_value="mainland")
+    def test_sbr_election_zero_ct(self, _fz, mock_tb):
+        """Eligible entity with elect_sbr=True → CT payable = 0."""
+        mock_tb.return_value = _mock_tb(revenue=2_000_000, expense=1_500_000)
+        row = svc.generate_ct_return(
+            self.db,
+            self.tenant,
+            self.company_id,
+            self.period_start,
+            self.period_end,
+            elect_sbr=True,
+        )
+        self.assertTrue(row["sbr_eligible"])
+        self.assertTrue(row["sbr_elected"])
+        self.assertEqual(row["ct_payable_aed"], 0.0)
+        self.assertTrue(row["breakdown"]["computation"]["small_business_relief_applied"])
 
     @patch.object(svc, "_aggregate_trial_balance")
     @patch.object(svc, "_resolve_free_zone_status", return_value="free_zone_qfzp")
@@ -99,10 +118,11 @@ class CtReturnServiceTests(unittest.TestCase):
         self.assertEqual(row["free_zone_status"], "free_zone_qfzp")
         labels = [b["label"] for b in row["breakdown"]["computation"]["breakdown"]]
         self.assertTrue(any("QFZP" in label for label in labels))
+        self.assertEqual(row["free_zone_income"], 600_000)
 
     @patch.object(svc, "_aggregate_trial_balance")
     @patch.object(svc, "_resolve_free_zone_status", return_value="mainland")
-    def test_cit_add_back_flags(self, _fz, mock_tb):
+    def test_fines_100_percent_add_back(self, _fz, mock_tb):
         tb = _mock_tb(revenue=500_000, expense=200_000)
         tb["lines"].append(
             {"account_code": "7199", "account_name": "Fines", "debit": 50_000, "credit": 0, "net_balance": 50_000}
@@ -115,6 +135,7 @@ class CtReturnServiceTests(unittest.TestCase):
                 company_id=self.company_id,
                 account_code="7199",
                 account_name="Fines",
+                cit_category="Fines",
                 cit_add_back=True,
             )
         )
@@ -124,6 +145,79 @@ class CtReturnServiceTests(unittest.TestCase):
         )
         self.assertEqual(row["non_deductible_expenses"], 50_000)
         self.assertEqual(row["taxable_income"], 300_000)
+        add_backs = [a for a in row["adjustments"] if a["type"] == "add_back"]
+        self.assertEqual(len(add_backs), 1)
+        self.assertEqual(add_backs[0]["add_back_pct"], 1.0)
+        self.assertEqual(add_backs[0]["add_back_amount"], 50_000)
+        self.assertIn("Art. 33", add_backs[0]["law_reference"])
+
+    @patch.object(svc, "_aggregate_trial_balance")
+    @patch.object(svc, "_resolve_free_zone_status", return_value="mainland")
+    def test_entertainment_50_percent_add_back(self, _fz, mock_tb):
+        tb = _mock_tb(revenue=500_000, expense=200_000)
+        tb["lines"].append(
+            {
+                "account_code": "7188",
+                "account_name": "Entertainment",
+                "debit": 100_000,
+                "credit": 0,
+                "net_balance": 100_000,
+            }
+        )
+        tb["totals"]["expense"] = 300_000
+        mock_tb.return_value = tb
+        self.db.add(
+            UAEAccountClassification(
+                workspace_id=self.tenant,
+                company_id=self.company_id,
+                account_code="7188",
+                account_name="Entertainment",
+                cit_category="Entertainment",
+                cit_add_back=True,
+            )
+        )
+        self.db.commit()
+        row = svc.generate_ct_return(
+            self.db, self.tenant, self.company_id, self.period_start, self.period_end
+        )
+        self.assertEqual(row["non_deductible_expenses"], 50_000)
+        self.assertEqual(row["taxable_income"], 250_000)
+        add_backs = [a for a in row["adjustments"] if a["type"] == "add_back"]
+        self.assertEqual(add_backs[0]["add_back_pct"], 0.5)
+        self.assertEqual(add_backs[0]["add_back_amount"], 50_000)
+        self.assertIn("Art. 32", add_backs[0]["law_reference"])
+
+    @patch.object(svc, "_aggregate_trial_balance")
+    @patch.object(svc, "_resolve_free_zone_status", return_value="free_zone_qfzp")
+    def test_qfzp_flagged_revenue_accounts(self, _fz, mock_tb):
+        tb = _mock_tb(revenue=1_000_000, expense=400_000)
+        tb["lines"].append(
+            {
+                "account_code": "7020",
+                "account_name": "FZ Revenue",
+                "debit": 0,
+                "credit": 200_000,
+                "net_balance": -200_000,
+            }
+        )
+        mock_tb.return_value = tb
+        self.db.add(
+            UAEAccountClassification(
+                workspace_id=self.tenant,
+                company_id=self.company_id,
+                account_code="7020",
+                account_name="FZ Revenue",
+                cit_category="QFZP Qualifying Income",
+            )
+        )
+        self.db.commit()
+        row = svc.generate_ct_return(
+            self.db, self.tenant, self.company_id, self.period_start, self.period_end
+        )
+        self.assertEqual(row["free_zone_income"], 200_000)
+        exempt = [a for a in row["adjustments"] if a["type"] == "exempt_deduction"]
+        self.assertEqual(len(exempt), 1)
+        self.assertEqual(exempt[0]["add_back_amount"], 200_000)
 
     def test_status_transitions_draft_approved_filed(self):
         row = CtReturn(

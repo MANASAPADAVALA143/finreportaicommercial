@@ -22,6 +22,7 @@ class GenerateCtReturnBody(BaseModel):
     company_id: Optional[str] = None
     period_start: str = Field(..., description="ISO date YYYY-MM-DD")
     period_end: str = Field(..., description="ISO date YYYY-MM-DD")
+    elect_sbr: bool = Field(False, description="Elect Small Business Relief when eligible")
 
 
 class FileCtReturnBody(BaseModel):
@@ -47,7 +48,9 @@ def generate_ct_return_endpoint(
     if period_end < period_start:
         raise HTTPException(400, "period_end must be on or after period_start")
     try:
-        return svc.generate_ct_return(db, tenant, company_id, period_start, period_end)
+        return svc.generate_ct_return(
+            db, tenant, company_id, period_start, period_end, elect_sbr=body.elect_sbr
+        )
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
 

@@ -253,6 +253,38 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_tenant_id ON gulftax_ct_returns (tenant_id)",
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_company_id ON gulftax_ct_returns (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_gulftax_ct_returns_status ON gulftax_ct_returns (status)",
+    "ALTER TABLE gulftax_ct_returns ADD COLUMN IF NOT EXISTS adjustments JSONB",
+    "ALTER TABLE gulftax_ct_returns ADD COLUMN IF NOT EXISTS sbr_elected BOOLEAN NOT NULL DEFAULT FALSE",
+    # uae_account_classifications — CIT add-back flags for CT return Phase 2
+    """
+    CREATE TABLE IF NOT EXISTS uae_account_classifications (
+        id                    VARCHAR(36) PRIMARY KEY,
+        workspace_id          VARCHAR(64) NOT NULL,
+        company_id            VARCHAR(36),
+        account_id            VARCHAR(36),
+        account_code          VARCHAR(20) NOT NULL,
+        account_name          VARCHAR(200) NOT NULL DEFAULT '',
+        balance               NUMERIC(18, 2) DEFAULT 0,
+        bs_pl_main            VARCHAR(64),
+        bs_pl_sub             VARCHAR(128),
+        fs_note_number        INTEGER,
+        fs_note_heading       TEXT,
+        cash_flow_category    VARCHAR(32),
+        cit_category          VARCHAR(64),
+        cit_add_back          BOOLEAN DEFAULT FALSE,
+        classification_status VARCHAR(20) NOT NULL DEFAULT 'not_classified',
+        classified_by         VARCHAR(16),
+        ai_confidence         NUMERIC(5, 2),
+        ai_reasoning          TEXT,
+        created_at            TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at            TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        UNIQUE (workspace_id, company_id, account_code)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_uae_account_classifications_workspace_id ON uae_account_classifications (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_uae_account_classifications_company_id ON uae_account_classifications (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_uae_account_classifications_account_id ON uae_account_classifications (account_id)",
+    "CREATE INDEX IF NOT EXISTS ix_uae_account_classifications_account_code ON uae_account_classifications (account_code)",
     """
     CREATE TABLE IF NOT EXISTS einvoicing_submissions (
         id VARCHAR(36) PRIMARY KEY,

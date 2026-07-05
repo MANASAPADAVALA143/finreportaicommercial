@@ -52,6 +52,17 @@ export async function recordCITVoucher(body: {
   return res.json() as Promise<{ je_id: string; voucher_number: string }>;
 }
 
+export interface CtAdjustment {
+  type: 'add_back' | 'exempt_deduction';
+  account_code: string;
+  account_name: string;
+  gross_amount: number;
+  add_back_pct: number | null;
+  add_back_amount: number;
+  law_reference: string;
+  cit_category?: string | null;
+}
+
 export interface CtReturnRecord {
   id: string;
   tenant_id: string;
@@ -61,12 +72,15 @@ export interface CtReturnRecord {
   revenue: number;
   accounting_profit: number;
   non_deductible_expenses: number;
+  exempt_income_deductions: number;
   taxable_income: number;
   ct_payable_aed: number;
   sbr_eligible: boolean;
+  sbr_elected: boolean;
   qfzp_eligible: boolean;
   free_zone_status: string;
   free_zone_income: number;
+  adjustments: CtAdjustment[];
   breakdown: {
     computation?: {
       breakdown?: { label: string; amount_aed: number; note?: string }[];
@@ -85,7 +99,11 @@ export interface CtReturnRecord {
   requires_approval?: boolean;
 }
 
-export async function generateCtReturn(periodStart: string, periodEnd: string): Promise<CtReturnRecord> {
+export async function generateCtReturn(
+  periodStart: string,
+  periodEnd: string,
+  electSbr = false,
+): Promise<CtReturnRecord> {
   const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
   const cid = localStorage.getItem('active_company_id');
   const res = await fetch(`${CT_BASE}/generate`, {
@@ -95,6 +113,7 @@ export async function generateCtReturn(periodStart: string, periodEnd: string): 
       company_id: cid,
       period_start: periodStart,
       period_end: periodEnd,
+      elect_sbr: electSbr,
     }),
   });
   if (!res.ok) throw new Error(await res.text());
