@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services import llm_service
+from app.services.rev_rec_leakage_service import (
+    get_leakage_snapshot,
+    leakage_from_three_way_result,
+    leakage_module_status,
+    save_leakage_snapshot,
+)
 from app.services.ifrs15_service import (
     calculate_percentage_complete,
     calculate_recognition,
@@ -133,6 +139,7 @@ class PeriodCloseSummaryRequest(BaseModel):
     anomaly_result: Optional[dict] = None
     rpo_result: Optional[dict] = None
     commission_result: Optional[dict] = None
+    leakage_result: Optional[dict] = None
 
 
 class PeriodClosePackRequest(BaseModel):
@@ -144,6 +151,14 @@ class PeriodClosePackRequest(BaseModel):
     rpo_result: Optional[dict] = None
     commission_result: Optional[dict] = None
     period_close_result: Optional[dict] = None
+    leakage_result: Optional[dict] = None
+
+
+class LeakageSnapshotSaveRequest(BaseModel):
+    period: str
+    items: list[dict] = Field(default_factory=list)
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
 
 
 def _parse_posted_hour(posted_date: str) -> Optional[int]:
@@ -710,6 +725,17 @@ async def period_close_summary(request: PeriodCloseSummaryRequest):
         if not reconciled:
             total_exceptions += 1
 
+    leakage = request.leakage_result
+    if not leakage and request.three_way_match_result:
+        leakage = leakage_from_three_way_result(request.three_way_match_result)
+    leakage_status = leakage_module_status(leakage) if request.three_way_match_result else None
+    if leakage_status:
+        module_statuses.append(leakage_status)
+        if leakage_status["status"] != "clean":
+            total_exceptions += int((leakage or {}).get("item_count") or 0)
+            if leakage_status["status"] == "high":
+                high_risk_exceptions += 1
+
     overall_status = (
         "High Risk" if high_risk_exceptions > 0 else "Exceptions" if total_exceptions > 0 else "Clean"
     )
@@ -753,6 +779,7 @@ Style: Big 4 senior manager memo. Professional, direct, specific.
         "modules_run": modules_run,
         "overall_status": overall_status,
         "module_statuses": module_statuses,
+        "leakage_result": leakage,
         "total_exceptions": total_exceptions,
         "high_risk_exceptions": high_risk_exceptions,
         "nova_executive_summary": nova_executive_summary,
@@ -917,6 +944,36 @@ def _ws(request: Request, query_ws: str | None = None) -> str:
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
     return query_cid or request.headers.get("x-company-id")
+
+
+@router.post("/leakage-snapshot")
+def persist_leakage_snapshot(
+    body: LeakageSnapshotSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Persist revenue leakage rollup for a period (from three-way match items)."""
+    if not body.items:
+        raise HTTPException(status_code=400, detail="items required")
+    ws = _ws(request, body.workspace_id or None)
+    cid = body.company_id or _company_id(request)
+    return save_leakage_snapshot(db, ws, cid, body.period, body.items)
+
+
+@router.get("/leakage-snapshot")
+def fetch_leakage_snapshot(
+    request: Request,
+    period: str = Query(..., description="YYYY-MM"),
+    company_id: str | None = None,
+    workspace_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    row = get_leakage_snapshot(db, ws, cid, period)
+    if not row:
+        raise HTTPException(status_code=404, detail="No leakage snapshot for this period")
+    return row
 
 
 class PerformanceObligationIn(BaseModel):

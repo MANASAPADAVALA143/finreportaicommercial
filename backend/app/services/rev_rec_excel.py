@@ -10,6 +10,8 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+from app.services.rev_rec_leakage_service import leakage_from_three_way_result
+
 # FinReportAI palette (ARGB without alpha prefix works in openpyxl 3.1)
 NAVY = "0F2D5E"
 BLUE = "1D4ED8"
@@ -80,11 +82,15 @@ def generate_period_close_pack(data: dict) -> dict:
     """
     data keys (all optional except period):
     period, customer_name, roll_forward_result, three_way_match_result,
-    anomaly_result, rpo_result, commission_result, period_close_result
+    anomaly_result, rpo_result, commission_result, period_close_result,
+    leakage_result
     """
     wb = Workbook()
     period = data.get("period") or "Unknown Period"
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    leakage = data.get("leakage_result")
+    if not leakage and data.get("three_way_match_result"):
+        leakage = leakage_from_three_way_result(data.get("three_way_match_result"))
 
     # ── Sheet 1 ───────────────────────────────────────────────────────────
     ws1 = wb.active
@@ -397,6 +403,31 @@ def generate_period_close_pack(data: dict) -> dict:
                 )
         nova_tm_row = 7 + len(items) + 2
 
+    if leakage:
+        leak_row = nova_tm_row
+        title_row(ws3, leak_row, 1, 7, "REVENUE LEAKAGE IDENTIFIED", ORANGE)
+        hdr_row(ws3, leak_row + 1, ["Leakage Total ($)", "Leakage %", "Contracts Affected", "Prior Period", "Trend ($)", "", ""])
+        trend_amt = leakage.get("trend_amount")
+        trend_txt = "—"
+        if trend_amt is not None and leakage.get("trend_direction") not in (None, "none"):
+            arrow = "↑" if leakage.get("trend_direction") == "increase" else "↓" if leakage.get("trend_direction") == "decrease" else "→"
+            trend_txt = f"{arrow} {float(trend_amt):,.2f}"
+        for col, val in enumerate(
+            [
+                float(leakage.get("leakage_total") or 0),
+                f"{float(leakage.get('leakage_pct') or 0):.1f}%",
+                int(leakage.get("item_count") or 0),
+                leakage.get("prior_period") or "—",
+                trend_txt,
+                "",
+                "",
+            ],
+            1,
+        ):
+            fill = LIGHT_RED if col == 1 and float(leakage.get("leakage_total") or 0) > 0 else WHITE
+            data_cell(ws3, leak_row + 2, col, val, fill=fill, bold=(col <= 3), align="center")
+        nova_tm_row = leak_row + 4
+
     title_row(ws3, nova_tm_row, 1, 7, "AI SUMMARY", BLUE)
     ws3.merge_cells(start_row=nova_tm_row + 1, start_column=1, end_row=nova_tm_row + 3, end_column=7)
     nc3 = ws3.cell(row=nova_tm_row + 1, column=1, value=str(tm.get("nova_summary", "") or ""))
@@ -693,6 +724,68 @@ def generate_period_close_pack(data: dict) -> dict:
     dc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     ws6.row_dimensions[disclaimer_row].height = 24
 
+    # ── Sheet 7 — Revenue Leakage detail ────────────────────────────────────
+    ws7 = wb.create_sheet("Revenue Leakage Summary")
+    ws7.sheet_view.showGridLines = False
+    for col, w in zip("ABCDEFG", [18, 22, 16, 16, 16, 18, 14]):
+        ws7.column_dimensions[col].width = w
+    ws7.sheet_properties.tabColor = ORANGE
+
+    title_row(ws7, 1, 1, 7, f"REVENUE LEAKAGE SUMMARY — {period}", ORANGE)
+    spacer(ws7, 2)
+    if leakage:
+        hdr_row(ws7, 3, ["Leakage Total ($)", "Leakage % of Expected", "Expected Revenue ($)", "Contracts", "Prior Leakage ($)", "Trend", ""])
+        trend_amt = leakage.get("trend_amount")
+        trend_txt = "No prior period"
+        if trend_amt is not None and leakage.get("trend_direction") not in (None, "none"):
+            arrow = "↑" if leakage.get("trend_direction") == "increase" else "↓" if leakage.get("trend_direction") == "decrease" else "→"
+            trend_txt = f"{arrow} ${abs(float(trend_amt)):,.2f}"
+        for col, val in enumerate(
+            [
+                float(leakage.get("leakage_total") or 0),
+                f"{float(leakage.get('leakage_pct') or 0):.1f}%",
+                float(leakage.get("expected_revenue_total") or 0),
+                int(leakage.get("item_count") or 0),
+                leakage.get("prior_leakage_total") if leakage.get("prior_leakage_total") is not None else "—",
+                trend_txt,
+                "",
+            ],
+            1,
+        ):
+            data_cell(ws7, 4, col, val, fill=LIGHT_ORANGE if col == 1 else WHITE, bold=(col <= 4), align="center")
+        spacer(ws7, 5)
+        hdr_row(ws7, 6, ["Contract ID", "Customer", "Status", "Leakage ($)", "Billing ($)", "GL ($)", "Schedule ($)"])
+        leak_items = leakage.get("items") or []
+        if leak_items:
+            for i, item in enumerate(leak_items):
+                row = 7 + i
+                status = str(item.get("status", "")).replace("_", " ").upper()
+                vals = [
+                    item.get("contract_id", ""),
+                    item.get("customer", ""),
+                    status,
+                    item.get("leakage_amount") or 0,
+                    item.get("billing_amount") or 0,
+                    item.get("gl_amount") or 0,
+                    item.get("schedule_amount") or 0,
+                ]
+                for col, val in enumerate(vals, 1):
+                    data_cell(
+                        ws7,
+                        row,
+                        col,
+                        val,
+                        fill=LIGHT_ORANGE,
+                        num_fmt="#,##0.00" if col >= 4 else None,
+                        align="right" if col >= 4 else "left",
+                    )
+        else:
+            ws7.merge_cells(start_row=7, start_column=1, end_row=7, end_column=7)
+            data_cell(ws7, 7, 1, "No revenue leakage identified for this period.", fill=LIGHT_GREEN, color=GREEN, bold=True)
+    else:
+        ws7.merge_cells(start_row=3, start_column=1, end_row=3, end_column=7)
+        data_cell(ws7, 3, 1, "No three-way match / leakage data available.", fill=GREY, color="6B7280")
+
     # ── Save ──────────────────────────────────────────────────────────────
     file_id = str(uuid.uuid4())[:8]
     safe_period = str(period).replace(" ", "_").replace("/", "-")
@@ -701,4 +794,4 @@ def generate_period_close_pack(data: dict) -> dict:
     filepath = os.path.join(REV_REC_EXCEL_OUTPUT_DIR, filename)
     wb.save(filepath)
 
-    return {"file_id": file_id, "filename": filename, "sheets": 6, "path": filepath}
+    return {"file_id": file_id, "filename": filename, "sheets": 7, "path": filepath}

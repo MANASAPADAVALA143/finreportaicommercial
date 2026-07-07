@@ -371,6 +371,30 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_company_id ON workspace_audit_log (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_action ON workspace_audit_log (action)",
     "CREATE INDEX IF NOT EXISTS ix_workspace_audit_log_created_at ON workspace_audit_log (created_at)",
+    # rev_rec_leakage_snapshots — monthly revenue leakage rollup (IFRS 15 three-way match)
+    """
+    CREATE TABLE IF NOT EXISTS rev_rec_leakage_snapshots (
+        id                      VARCHAR(36) PRIMARY KEY,
+        workspace_id            VARCHAR(36) NOT NULL,
+        company_id              VARCHAR(36),
+        period                  VARCHAR(7) NOT NULL,
+        leakage_total           DOUBLE PRECISION NOT NULL DEFAULT 0,
+        leakage_pct             DOUBLE PRECISION NOT NULL DEFAULT 0,
+        expected_revenue_total  DOUBLE PRECISION NOT NULL DEFAULT 0,
+        item_count              INTEGER NOT NULL DEFAULT 0,
+        prior_period            VARCHAR(7),
+        prior_leakage_total     DOUBLE PRECISION,
+        trend_amount            DOUBLE PRECISION,
+        trend_direction         VARCHAR(16),
+        items_json              JSONB NOT NULL DEFAULT '[]',
+        created_at              TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        updated_at              TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
+        UNIQUE (workspace_id, company_id, period)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_workspace_id ON rev_rec_leakage_snapshots (workspace_id)",
+    "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_company_id ON rev_rec_leakage_snapshots (company_id)",
+    "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_period ON rev_rec_leakage_snapshots (period)",
 ]
 
 
