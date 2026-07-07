@@ -6,6 +6,7 @@ const ROUTE_TO_SUITE: Array<[string, Suite]> = [
   ['/india-full',    'india'],
   ['/ca-firm',       'india'],
   ['/erp/tally',     'india'],
+  ['/uae-select',    'uae'],
   ['/uae-suite',     'uae'],
   ['/uae-full',      'uae'],
   ['/uae-accounting','uae'],

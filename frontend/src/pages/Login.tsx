@@ -13,7 +13,7 @@ function resolvePostLoginPath(
 ): string {
   if (from) return from;
   if (productRole === 'full_access') {
-    return isUAE ? '/uae-full' : '/dashboard';
+    return isUAE ? '/uae-select' : '/dashboard';
   }
   return loginRedirectFor(productRole);
 }

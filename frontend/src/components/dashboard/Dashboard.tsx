@@ -33,7 +33,7 @@ type DashboardModule = {
 const UAE_MODULE_PRIORITY: readonly string[] = [
   '/ap-invoices',
   '/gulftax',
-  '/uae-full',
+  '/uae-select',
   '/fpa',
   '/ifrs-statement',
   '/cfo',
@@ -56,7 +56,7 @@ function sortModulesForUae(modules: DashboardModule[]): DashboardModule[] {
 /** Show only the regional accounting suite that matches the active market toggle. */
 function filterModulesByMarket(modules: DashboardModule[], isUAE: boolean): DashboardModule[] {
   return modules.filter((m) => {
-    if (m.link === '/uae-full') return isUAE;
+    if (m.link === '/uae-select') return isUAE;
     if (m.link === '/india-full') return !isUAE;
     return true;
   });
@@ -213,7 +213,7 @@ export const Dashboard: React.FC = () => {
       icon: <Globe className="w-16 h-16 text-blue-400" />,
       title: '🇦🇪 UAE Accounting',
       description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
-      link: '/uae-full',
+      link: '/uae-select',
       bgColor: 'bg-blue-500/10',
       badge: 'UAE'
     },
