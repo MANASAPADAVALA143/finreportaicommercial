@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Toaster as ShadcnToaster } from './components/ui/toaster';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -27,11 +27,17 @@ const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/
 /** Cross-app navigation banner — links filtered by product role */
 function GnanovaBanner() {
   const { pathname } = useLocation();
-  const { productRole, user, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const { productRole, user, isAuthenticated, logout } = useAuth();
   const showWorkspaceControls = !PUBLIC_PATHS.has(pathname);
 
   const showAp = !isAuthenticated || canAccessPath(productRole, '/ap-invoices', user?.role);
   const showGulfTax = !isAuthenticated || canAccessPath(productRole, '/gulftax', user?.role);
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div
@@ -93,6 +99,32 @@ function GnanovaBanner() {
       >
         🇦🇪 GulfTax →
       </a>
+      )}
+      {isAuthenticated && (
+        <button
+          type="button"
+          onClick={() => void handleLogout()}
+          style={{
+            background: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 6,
+            padding: '4px 10px',
+            color: '#fca5a5',
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(248,113,113,0.15)';
+            e.currentTarget.style.color = '#fecaca';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
+            e.currentTarget.style.color = '#fca5a5';
+          }}
+        >
+          Log out
+        </button>
       )}
       </div>
     </div>
