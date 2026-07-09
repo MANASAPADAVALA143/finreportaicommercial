@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 
 import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
 import { clearAllAuthStorage, setMemoryAccessToken } from '../utils/authToken';
-import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
+import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, type ProductRole } from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
@@ -157,6 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('token', j.access_token);
     setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
+    if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
@@ -210,6 +211,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('token', j.access_token);
     setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
+    if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
@@ -322,6 +324,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setMemoryAccessToken(storedToken);
             setAccessToken(storedToken);
             setUser({ ...parsed, product_role: normalizeProductRole(parsed.product_role) });
+            if (isUaeProductRole(normalizeProductRole(parsed.product_role))) pinUaeSuiteMarket();
             scheduleRefresh(storedToken);
           }
           finish();

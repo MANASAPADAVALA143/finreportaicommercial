@@ -1,16 +1,10 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useWorkspace } from '../context/WorkspaceContext';
-
-const SETUP_PATHS = new Set([
-  '/company-setup',
-  '/workspaces',
-  '/workspaces/create',
-  '/unauthorized',
-]);
+import { isWorkspaceOptionalPath, noWorkspaceFallback } from '../config/productRole';
 
 export default function WorkspaceGuard() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, productRole } = useAuth();
   const { workspaces, loading } = useWorkspace();
   const location = useLocation();
 
@@ -26,11 +20,14 @@ export default function WorkspaceGuard() {
     );
   }
 
-  const onSetupPath = SETUP_PATHS.has(location.pathname)
-    || location.pathname.startsWith('/workspaces/');
-
-  if (!onSetupPath && workspaces.length === 0) {
-    return <Navigate to="/company-setup" replace state={{ from: location.pathname }} />;
+  if (workspaces.length === 0 && !isWorkspaceOptionalPath(location.pathname)) {
+    return (
+      <Navigate
+        to={noWorkspaceFallback(productRole)}
+        replace
+        state={{ from: location.pathname }}
+      />
+    );
   }
 
   return <Outlet />;

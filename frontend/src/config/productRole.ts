@@ -41,6 +41,45 @@ const ROLE_PATH_PREFIXES: Record<ProductRole, string[] | null> = {
 
 const SETUP_PATHS = ['/company-setup', '/workspaces'];
 
+export function isUaeProductRole(productRole: ProductRole): boolean {
+  return productRole === 'uae_client' || productRole === 'uae_suite' || productRole === 'uae_full';
+}
+
+/** Card-based module picker — default UAE landing after login. */
+export function uaeHubPath(): string {
+  return '/uae-select';
+}
+
+export function noWorkspaceFallback(productRole: ProductRole): string {
+  if (isUaeProductRole(productRole)) return uaeHubPath();
+  if (productRole === 'india_client' || productRole === 'india_full') return '/dashboard';
+  return '/workspaces/create';
+}
+
+/** Routes reachable before a workspace exists (module hub / setup). */
+export const WORKSPACE_OPTIONAL_PREFIXES = [
+  '/uae-select',
+  '/uae-suite',
+  '/company-setup',
+  '/workspaces',
+  '/unauthorized',
+  '/dashboard',
+  '/gulftax',
+  '/ap-invoices',
+  '/ifrs/16',
+];
+
+export function isWorkspaceOptionalPath(pathname: string): boolean {
+  return WORKSPACE_OPTIONAL_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  ) || pathname.startsWith('/workspaces/');
+}
+
+export function pinUaeSuiteMarket(): void {
+  localStorage.setItem('gnanova_suite', 'uae');
+  localStorage.setItem('finreportai_ap_market', 'uae');
+}
+
 export function normalizeProductRole(value: string | null | undefined): ProductRole {
   if (value && ALL_PRODUCT_ROLES.includes(value as ProductRole)) {
     return value as ProductRole;

@@ -4,17 +4,20 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
-import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
+import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
 
 function resolvePostLoginPath(
   from: string | undefined,
   productRole: ProductRole,
   isUAE: boolean,
 ): string {
-  if (from) return from;
-  if (productRole === 'full_access') {
-    return isUAE ? '/uae-select' : '/dashboard';
+  const uaeLanding = isUaeProductRole(productRole) || (productRole === 'full_access' && isUAE);
+  if (uaeLanding) pinUaeSuiteMarket();
+  // Never resume the setup wizard after login — land on the module card dashboard instead.
+  if (from && from !== '/company-setup' && !from.startsWith('/login')) {
+    return from;
   }
+  if (uaeLanding) return uaeHubPath();
   return loginRedirectFor(productRole);
 }
 
