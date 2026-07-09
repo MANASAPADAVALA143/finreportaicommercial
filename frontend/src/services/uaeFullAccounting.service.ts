@@ -3,6 +3,8 @@
  * Wraps all /api/uae/full/* endpoints.
  */
 
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
 function resolveBase(): string {
   const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
   if (explicit) return `${explicit}/api/uae/full`;
@@ -18,13 +20,7 @@ function companyParams(extra: Record<string, string> = {}): Record<string, strin
 }
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-    ...extra,
-  };
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -34,7 +30,7 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   if (q) url += '?' + q;
   let res: Response;
   try {
-    res = await fetch(url, { headers: hdrs() });
+    res = await fetch(url, { headers: hdrs(), credentials: 'include' });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
   }
@@ -51,6 +47,7 @@ async function post<T>(path: string, body?: unknown, params?: Record<string, str
     res = await fetch(url, {
       method: 'POST', headers: hdrs(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: 'include',
     });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
@@ -65,7 +62,7 @@ async function del<T>(path: string): Promise<T> {
   if (q) url += (path.includes('?') ? '&' : '?') + q;
   let res: Response;
   try {
-    res = await fetch(url, { method: 'DELETE', headers: hdrs() });
+    res = await fetch(url, { method: 'DELETE', headers: hdrs(), credentials: 'include' });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000');
   }
@@ -77,6 +74,7 @@ async function patch<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH', headers: hdrs(),
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -220,14 +218,22 @@ export interface JournalImportResult {
 export async function importJournalsCSV(file: File): Promise<JournalImportResult> {
   const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
   const cid = localStorage.getItem('active_company_id');
+  const token = getStoredAccessToken();
   const form = new FormData();
   form.append('file', file);
   let url = `${BASE}/journals/import`;
   if (cid) url += `?company_id=${encodeURIComponent(cid)}`;
+  const uploadHeaders: Record<string, string> = {};
+  if (wsId) {
+    uploadHeaders['X-Workspace-ID'] = wsId;
+    uploadHeaders['X-Tenant-ID'] = wsId;
+  }
+  if (token) uploadHeaders.Authorization = `Bearer ${token}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId },
+    headers: uploadHeaders,
     body: form,
+    credentials: 'include',
   });
   if (!res.ok) {
     const text = await res.text();
@@ -355,6 +361,7 @@ export async function runFxRevaluation(body: {
     method: 'POST',
     headers: hdrs(),
     body: JSON.stringify(body),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

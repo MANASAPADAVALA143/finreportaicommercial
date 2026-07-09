@@ -1,13 +1,13 @@
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? '';
 
-function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+function hdrs(extra: Record<string, string> = {}): Record<string, string> {
   const cid = localStorage.getItem('active_company_id');
-  return {
-    'Content-Type': 'application/json',
-    ...(wsId ? { 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId } : {}),
+  return workspaceHeaders(getStoredAccessToken(), {
     ...(cid ? { 'X-Company-ID': cid } : {}),
-  };
+    ...extra,
+  });
 }
 
 export interface UaeSuiteSummary {
@@ -58,7 +58,7 @@ export interface UaeSuiteSummary {
 export async function fetchUaeSuiteSummary(period?: string): Promise<UaeSuiteSummary> {
   const cid = localStorage.getItem('active_company_id');
   const q = new URLSearchParams({ ...(cid ? { company_id: cid } : {}), ...(period ? { period } : {}) });
-  const res = await fetch(`${API_BASE}/api/uae-suite/summary?${q}`, { headers: hdrs() });
+  const res = await fetch(`${API_BASE}/api/uae-suite/summary?${q}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

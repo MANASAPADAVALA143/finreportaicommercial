@@ -1,16 +1,12 @@
 /** UAE AR — /api/uae/ar endpoints */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/uae/ar`;
 
-function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+function hdrs(extra: Record<string, string> = {}): Record<string, string> {
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 function companyParams(extra: Record<string, string> = {}): Record<string, string> {
@@ -26,7 +22,7 @@ function companyParams(extra: Record<string, string> = {}): Record<string, strin
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
   const q = new URLSearchParams(companyParams(params ?? {})).toString();
   const url = `${BASE}${path}${q ? `?${q}` : ''}`;
-  const res = await fetch(url, { headers: hdrs() });
+  const res = await fetch(url, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -36,6 +32,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: hdrs(),
     body: JSON.stringify(body),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -46,6 +43,7 @@ async function patch<T>(path: string, body: unknown = {}): Promise<T> {
     method: 'PATCH',
     headers: hdrs(),
     body: JSON.stringify(body),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -406,7 +404,7 @@ export const predictPayments = (body: { company_id: string; invoice_id?: string;
   });
 
 export async function downloadARPdf(invoiceId: string, filename: string): Promise<void> {
-  const res = await fetch(`${BASE}/invoices/${invoiceId}/pdf`, { headers: hdrs() });
+  const res = await fetch(`${BASE}/invoices/${invoiceId}/pdf`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

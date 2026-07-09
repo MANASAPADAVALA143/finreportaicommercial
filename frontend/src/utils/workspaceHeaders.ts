@@ -3,6 +3,15 @@
  */
 import { getStoredWorkspaceId } from '../services/workspaceService';
 
+/** JWT from RBAC login (AuthContext stores as `token`). */
+export function getStoredAccessToken(): string | null {
+  return (
+    localStorage.getItem('token')
+    ?? localStorage.getItem('accessToken')
+    ?? localStorage.getItem('access_token')
+  );
+}
+
 export function getActiveWorkspaceId(): string | null {
   return getStoredWorkspaceId();
 }
