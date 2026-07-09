@@ -69,7 +69,7 @@ export default function UAEFinanceSuiteDashboard() {
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">UAE Finance Suite</h1>
-          <p className="text-gray-400 text-sm mt-1">AP · AR · UAE Tax — unified operations view</p>
+          <p className="text-gray-400 text-sm mt-1">AP · AR · UAE Taxation — unified operations view</p>
         </div>
         <button onClick={() => void load()} disabled={loading}
           className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-3 py-2 rounded-lg text-sm">

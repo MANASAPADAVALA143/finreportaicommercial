@@ -43,7 +43,7 @@ export const UAE_SUITE_NAV: NavEntry[] = [
   {
     section: '🇦🇪 UAE Finance Suite',
     items: [
-      { label: 'Home', path: '/uae-suite', icon: 'layout-dashboard' },
+      { label: 'UAE Taxation', path: '/uae-suite', icon: 'layout-dashboard', badge: 'AP+Tax' },
       { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP' },
       { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
       { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
@@ -90,6 +90,7 @@ export const INDIA_NAV: NavEntry[] = [
 export const UAE_NAV: NavEntry[] = [
   { label: 'Workspaces',         path: '/workspaces',            icon: 'building-2' },
   { label: 'Company Setup',      path: '/company-setup',         icon: 'sliders', badge: 'Setup' },
+  { label: 'UAE Taxation',       path: '/uae-suite',             icon: 'shield', badge: 'AP+Tax' },
   { label: 'Dashboard',          path: '/uae-full',              icon: 'layout-dashboard' },
   { label: 'Chart of Accounts',  path: '/uae-full/coa',          icon: 'book' },
   { label: 'Journal Entries',    path: '/uae-full/journals',     icon: 'file-text' },

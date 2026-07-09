@@ -30,10 +30,10 @@ type ModuleCard = {
 
 const MODULES: ModuleCard[] = [
   {
-    label: 'AP + GulfTax (UAE Tax)',
+    label: 'UAE Taxation (AP + GulfTax)',
     path: '/uae-suite',
     icon: Shield,
-    desc: 'Accounts Payable, VAT/CT compliance, Peppol e-invoicing — unified operations',
+    desc: 'Combined AP, VAT/CT compliance, and Peppol e-invoicing — unified operations dashboard',
     color: 'text-indigo-300',
     bg: 'bg-indigo-900/30',
     border: 'border-indigo-500/50',
