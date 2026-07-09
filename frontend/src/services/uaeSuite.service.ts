@@ -56,8 +56,11 @@ export interface UaeSuiteSummary {
   generated_at: string;
 }
 
-export async function fetchUaeSuiteSummary(period?: string): Promise<UaeSuiteSummary> {
-  const cid = localStorage.getItem('active_company_id');
+export async function fetchUaeSuiteSummary(
+  period?: string,
+  companyId?: string | null,
+): Promise<UaeSuiteSummary & { setup_required?: boolean }> {
+  const cid = companyId ?? localStorage.getItem('active_company_id');
   const q = new URLSearchParams({ ...(cid ? { company_id: cid } : {}), ...(period ? { period } : {}) });
   const res = await fetch(`${API_BASE || ''}/api/uae-suite/summary?${q}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());

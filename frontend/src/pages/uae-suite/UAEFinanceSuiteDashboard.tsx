@@ -2,12 +2,13 @@
  * UAE Finance Suite — unified AP + AR + UAE Tax dashboard (uae_suite role home)
  */
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Download, FileText, Receipt, RefreshCw, Scale, Send, Shield,
 } from 'lucide-react';
 import * as suiteSvc from '../../services/uaeSuite.service';
 import type { UaeSuiteSummary } from '../../services/uaeSuite.service';
+import { useCompany } from '../../context/CompanyContext';
 
 function fmt(n: number) {
   return `AED ${n.toLocaleString('en-AE', { minimumFractionDigits: 0 })}`;
@@ -29,15 +30,19 @@ function statusBadge(status: string) {
 }
 
 export default function UAEFinanceSuiteDashboard() {
-  const [data, setData] = useState<UaeSuiteSummary | null>(null);
+  const navigate = useNavigate();
+  const { activeCompanyId, companiesList } = useCompany();
+  const [data, setData] = useState<(UaeSuiteSummary & { setup_required?: boolean }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const resolvedCompanyId = activeCompanyId ?? companiesList[0]?.id ?? null;
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      setData(await suiteSvc.fetchUaeSuiteSummary());
+      setData(await suiteSvc.fetchUaeSuiteSummary(undefined, resolvedCompanyId));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load dashboard');
     } finally {
@@ -45,7 +50,7 @@ export default function UAEFinanceSuiteDashboard() {
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [resolvedCompanyId]);
 
   if (loading && !data) {
     return <div className="min-h-screen bg-gray-950 text-gray-400 p-8">Loading UAE Finance Suite…</div>;
@@ -55,7 +60,11 @@ export default function UAEFinanceSuiteDashboard() {
     return (
       <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
         <p className="text-red-400 mb-4">{error}</p>
-        <button onClick={() => void load()} className="bg-gray-700 px-4 py-2 rounded-lg text-sm">Retry</button>
+        <div className="flex gap-3">
+          <button onClick={() => void load()} className="bg-gray-700 px-4 py-2 rounded-lg text-sm">Retry</button>
+          <button onClick={() => navigate('/company-setup')} className="bg-teal-700 px-4 py-2 rounded-lg text-sm">Company Setup</button>
+          <button onClick={() => navigate('/uae-select')} className="bg-gray-800 px-4 py-2 rounded-lg text-sm">All modules</button>
+        </div>
       </div>
     );
   }
@@ -76,6 +85,21 @@ export default function UAEFinanceSuiteDashboard() {
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
+
+      {data.setup_required && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-700/50 bg-amber-900/20 px-4 py-3">
+          <p className="text-sm text-amber-200">
+            Complete company setup to load live AP, AR, and VAT data for your entity.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/company-setup')}
+            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500"
+          >
+            Finish Company Setup
+          </button>
+        </div>
+      )}
 
       {/* Banner */}
       <section className="bg-gradient-to-r from-indigo-950/80 to-gray-900 border border-indigo-500/30 rounded-xl p-5 mb-6">
