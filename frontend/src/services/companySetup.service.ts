@@ -2,8 +2,9 @@
  * Company Setup wizard API — /api/company-setup/*
  */
 
-import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredWorkspaceId, workspaceHeaders } from './workspaceService';
+import { backendOrigin, joinApiUrl } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+import { getStoredWorkspaceId } from './workspaceService';
 
 export interface CompanyProfile {
   id: string;
@@ -47,7 +48,7 @@ export interface SetupStatus {
 }
 
 function hdrs(token: string | null, extra: Record<string, string> = {}): Record<string, string> {
-  return workspaceHeaders(token, extra);
+  return workspaceHeaders(token ?? getStoredAccessToken(), extra);
 }
 
 function parseApiError(text: string, fallback: string): string {
@@ -75,7 +76,7 @@ function parseApiError(text: string, fallback: string): string {
 }
 
 async function api<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${backendOrigin()}${path}`, {
+  const res = await fetch(joinApiUrl(path), {
     ...init,
     headers: hdrs(token, Object.fromEntries(new Headers(init?.headers || {}).entries())),
     credentials: 'include',
@@ -122,12 +123,14 @@ export const uploadLogo = async (token: string | null, file: File): Promise<stri
   const form = new FormData();
   form.append('file', file);
   const wsId = getStoredWorkspaceId();
-  const headers: Record<string, string> = {
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${backendOrigin()}/api/company-setup/logo`, {
+  const headers: Record<string, string> = {};
+  if (wsId) {
+    headers['X-Workspace-ID'] = wsId;
+    headers['X-Tenant-ID'] = wsId;
+  }
+  const bearer = token ?? getStoredAccessToken();
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  const res = await fetch(joinApiUrl('/api/company-setup/logo'), {
     method: 'POST',
     headers,
     body: form,

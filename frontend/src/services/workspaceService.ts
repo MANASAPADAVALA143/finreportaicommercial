@@ -3,6 +3,7 @@
  */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken } from '../utils/authToken';
 import { getActiveWorkspaceId } from '../utils/workspaceHeaders';
 
 const STORAGE_KEY = 'gnanova_workspace_id';
@@ -71,7 +72,8 @@ export function workspaceHeaders(token: string | null, extra: Record<string, str
     headers['X-Workspace-ID'] = wsId;
     headers['X-Tenant-ID'] = wsId;
   }
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const bearer = token ?? getStoredAccessToken();
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
   return headers;
 }
 
