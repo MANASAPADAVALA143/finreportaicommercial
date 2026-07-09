@@ -6,18 +6,23 @@ import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
 import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
 
+/** Never resume the old module-picker after login. */
+function normalizePostLoginPath(path: string | undefined): string | undefined {
+  if (!path || path === '/company-setup' || path.startsWith('/login')) return undefined;
+  if (path === '/uae-select' || path.startsWith('/uae-select/')) return '/dashboard';
+  return path;
+}
+
 function resolvePostLoginPath(
   from: string | undefined,
   productRole: ProductRole,
   isUAE: boolean,
 ): string {
   const uaeLanding = isUaeProductRole(productRole) || (productRole === 'full_access' && isUAE);
-  if (uaeLanding) pinUaeSuiteMarket();
-  // Never resume the setup wizard after login — land on the module card dashboard instead.
-  if (from && from !== '/company-setup' && !from.startsWith('/login')) {
-    return from;
-  }
-  if (uaeLanding) return uaeHubPath();
+  if (uaeLanding || isUAE) pinUaeSuiteMarket();
+  const resume = normalizePostLoginPath(from);
+  if (resume) return resume;
+  if (uaeLanding || (productRole === 'full_access' && isUAE)) return uaeHubPath();
   return loginRedirectFor(productRole);
 }
 

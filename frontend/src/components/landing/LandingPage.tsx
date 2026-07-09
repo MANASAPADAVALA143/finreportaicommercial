@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, ArrowRight } from 'lucide-react';
 import { LandingNovaBot } from './LandingNovaBot';
+import { pinUaeSuiteMarket } from '../../config/productRole';
 import { useMarket } from '../../contexts/MarketContext';
 
 export const LandingPage: React.FC = () => {
@@ -9,6 +10,7 @@ export const LandingPage: React.FC = () => {
   const { market, setMarket } = useMarket();
 
   const pickMarket = (next: 'uae' | 'india') => {
+    if (next === 'uae') pinUaeSuiteMarket();
     void setMarket(next);
     navigate('/login');
   };
