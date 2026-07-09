@@ -29,6 +29,59 @@ function statusBadge(status: string) {
   return <span className={`px-2 py-0.5 rounded text-xs capitalize ${cls}`}>{s}</span>;
 }
 
+function isCompanySetupRequiredError(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return msg.includes('company_id required') || msg.includes('"company_id required"');
+}
+
+function emptySuiteSummary(): UaeSuiteSummary & { setup_required: boolean } {
+  const nowIso = new Date().toISOString();
+  const today = nowIso.slice(0, 10);
+  return {
+    setup_required: true,
+    generated_at: nowIso,
+    company: { name: null, trn: null },
+    banner: {
+      vat_period_label: 'Setup required',
+      vat_period_start: today,
+      vat_period_end: today,
+      days_to_vat_filing: 0,
+      vat_filing_deadline: today,
+      ct_return_status: 'not_started',
+      ct_filing_deadline: today,
+    },
+    ap: {
+      total_outstanding: 0,
+      total_overdue: 0,
+      pending_approvals: 0,
+      pending_amount: 0,
+      top_overdue_vendor: null,
+    },
+    ar: {
+      total_outstanding: 0,
+      total_overdue: 0,
+      worst_aging_bucket: null,
+      credit_notes_issued: { count: 0, total_amount: 0 },
+    },
+    uae_tax: {
+      tax_period: today,
+      recon_status: 'not_started',
+      recon_difference_aed: null,
+      estimated_vat_payable_aed: 0,
+      ct_return: {
+        status: 'not_started',
+        ct_payable_aed: 0,
+        period_start: null,
+        period_end: null,
+        return_id: null,
+      },
+      e_invoicing: {
+        readiness_score: 0,
+      },
+    },
+  };
+}
+
 export default function UAEFinanceSuiteDashboard() {
   const navigate = useNavigate();
   const { activeCompanyId, companiesList } = useCompany();
@@ -44,7 +97,13 @@ export default function UAEFinanceSuiteDashboard() {
     try {
       setData(await suiteSvc.fetchUaeSuiteSummary(undefined, resolvedCompanyId));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load dashboard');
+      const msg = e instanceof Error ? e.message : 'Failed to load dashboard';
+      if (isCompanySetupRequiredError(msg)) {
+        // Backward-compatible fallback for older APIs still returning 400 company_id required.
+        setData(emptySuiteSummary());
+        return;
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
