@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
-import { setMemoryAccessToken } from '../utils/authToken';
+import { clearAllAuthStorage, setMemoryAccessToken } from '../utils/authToken';
 import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
@@ -218,24 +218,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     clearTimer();
-    if (isBackendConfigured() && base) {
-      const rt = sessionStorage.getItem(REFRESH_KEY);
-      await fetch(`${base}/api/auth/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ refresh_token: rt || undefined }),
-      });
-    } else if (isSupabaseConfigured) {
-      await supabase.auth.signOut();
+    try {
+      if (isBackendConfigured() && base) {
+        const rt = sessionStorage.getItem(REFRESH_KEY);
+        const token = accessToken ?? localStorage.getItem('token');
+        await fetch(`${base}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ refresh_token: rt || undefined }),
+          signal: AbortSignal.timeout(8000),
+        }).catch(() => undefined);
+      }
+      if (isSupabaseConfigured) {
+        await supabase.auth.signOut().catch(() => undefined);
+      }
+    } finally {
+      clearAllAuthStorage();
+      setAccessToken(null);
+      setUser(null);
     }
-    sessionStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setMemoryAccessToken(null);
-    setAccessToken(null);
-    setUser(null);
-  }, [base]);
+  }, [base, accessToken]);
 
   const hasPermission = useCallback((module: string) => {
     if (!user) return false;

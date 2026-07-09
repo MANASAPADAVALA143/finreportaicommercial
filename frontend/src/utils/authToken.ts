@@ -31,3 +31,23 @@ export function getStoredAccessToken(): string | null {
     ?? supabaseAccessToken()
   );
 }
+
+const REFRESH_KEY = 'finreport_refresh_token';
+
+/** Wipe all client-side auth state (RBAC + Supabase). */
+export function clearAllAuthStorage(): void {
+  memoryAccessToken = null;
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(REFRESH_KEY);
+  }
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('access_token');
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+      localStorage.removeItem(key);
+    }
+  }
+}
