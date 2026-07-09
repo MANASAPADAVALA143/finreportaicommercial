@@ -3,11 +3,12 @@
  * Wraps all /api/uae/full/* endpoints.
  */
 
+import { backendOrigin } from '../utils/backendOrigin';
 import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 function resolveBase(): string {
-  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
-  if (explicit) return `${explicit}/api/uae/full`;
+  const origin = backendOrigin();
+  if (origin) return `${origin}/api/uae/full`;
   // Dev: Vite proxies /api → localhost:8000 (same-origin, avoids connection-reset/CORS issues)
   return '/api/uae/full';
 }
@@ -355,8 +356,8 @@ export async function runFxRevaluation(body: {
   revaluation_date: string;
   exchange_rates: Record<string, number | { current_rate: number; original_rate?: number }>;
 }): Promise<FxRevalueResult> {
-  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
-  const url = explicit ? `${explicit}/api/uae/fx/revalue` : '/api/uae/fx/revalue';
+  const origin = backendOrigin();
+  const url = origin ? `${origin}/api/uae/fx/revalue` : '/api/uae/fx/revalue';
   const res = await fetch(url, {
     method: 'POST',
     headers: hdrs(),

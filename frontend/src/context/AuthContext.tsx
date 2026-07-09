@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
+import { setMemoryAccessToken } from '../utils/authToken';
 import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
@@ -88,10 +89,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applySession = useCallback((session: Session | null) => {
     if (!session?.access_token) {
+      setMemoryAccessToken(null);
       setUser(null);
       setAccessToken(null);
       return;
     }
+    setMemoryAccessToken(session.access_token);
+    localStorage.setItem('token', session.access_token);
     setAccessToken(session.access_token);
     setUser(userFromSupabaseSession(session));
   }, []);
@@ -151,6 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       product_role: normalizeProductRole(j.user?.product_role),
     } as AuthUser;
     localStorage.setItem('token', j.access_token);
+    setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
     setUser(loggedIn);
     setAccessToken(j.access_token);
@@ -203,6 +208,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       product_role: normalizeProductRole(j.user?.product_role),
     } as AuthUser;
     localStorage.setItem('token', j.access_token);
+    setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
     setUser(loggedIn);
     setAccessToken(j.access_token);
@@ -226,6 +232,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    setMemoryAccessToken(null);
     setAccessToken(null);
     setUser(null);
   }, [base]);
@@ -288,6 +295,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => () => clearTimer(), []);
 
   useEffect(() => {
+    setMemoryAccessToken(accessToken);
+    if (accessToken) localStorage.setItem('token', accessToken);
+  }, [accessToken]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const finish = () => {
@@ -301,6 +313,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const parsed = JSON.parse(storedUser) as AuthUser;
           if (!cancelled) {
+            setMemoryAccessToken(storedToken);
             setAccessToken(storedToken);
             setUser({ ...parsed, product_role: normalizeProductRole(parsed.product_role) });
             scheduleRefresh(storedToken);
@@ -341,6 +354,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         if (!cancelled) {
           localStorage.setItem('token', token);
+          setMemoryAccessToken(token);
           localStorage.setItem('user', JSON.stringify(restoredUser));
           setAccessToken(token);
           setUser(restoredUser);

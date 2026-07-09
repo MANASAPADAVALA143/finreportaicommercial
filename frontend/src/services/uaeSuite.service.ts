@@ -1,6 +1,7 @@
+import { backendOrigin } from '../utils/backendOrigin';
 import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
-const API_BASE = (import.meta as any).env?.VITE_API_URL ?? '';
+const API_BASE = backendOrigin();
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
   const cid = localStorage.getItem('active_company_id');
@@ -58,7 +59,7 @@ export interface UaeSuiteSummary {
 export async function fetchUaeSuiteSummary(period?: string): Promise<UaeSuiteSummary> {
   const cid = localStorage.getItem('active_company_id');
   const q = new URLSearchParams({ ...(cid ? { company_id: cid } : {}), ...(period ? { period } : {}) });
-  const res = await fetch(`${API_BASE}/api/uae-suite/summary?${q}`, { headers: hdrs(), credentials: 'include' });
+  const res = await fetch(`${API_BASE || ''}/api/uae-suite/summary?${q}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
