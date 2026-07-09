@@ -333,11 +333,29 @@ export default function CompanySetupWizard() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="flex items-center gap-3 mb-8">
-          <StepIcon className="w-8 h-8 text-teal-400" />
-          <div>
-            <h1 className="text-2xl font-bold">Company Setup</h1>
-            <p className="text-gray-400 text-sm">Step {step} of 6 — {STEPS[step - 1]?.label}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
+          <div className="flex items-center gap-3">
+            <StepIcon className="w-8 h-8 text-teal-400" />
+            <div>
+              <h1 className="text-2xl font-bold">Company Setup</h1>
+              <p className="text-gray-400 text-sm">Step {step} of 6 — {STEPS[step - 1]?.label}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => navigate('/uae-suite')}
+              className="px-3 py-1.5 rounded-lg border border-indigo-500/40 text-indigo-300 hover:bg-indigo-900/30"
+            >
+              UAE Taxation (AP + Tax) →
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/uae-select')}
+              className="px-3 py-1.5 rounded-lg border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800"
+            >
+              All modules
+            </button>
           </div>
         </div>
 
@@ -543,6 +561,9 @@ export default function CompanySetupWizard() {
 
             {step === 3 && (
               <div className="space-y-4">
+                <p className="text-sm text-gray-400">
+                  Optional — leave debits and credits at zero to skip, or enter your opening trial balance. You can return later from Company Setup.
+                </p>
                 <div>
                   <label className={labelCls}>Opening Balance Date</label>
                   <input type="date" className={inputCls} value={openingDate} onChange={e => setOpeningDate(e.target.value)} />
@@ -579,6 +600,16 @@ export default function CompanySetupWizard() {
                   Debits: {balanceTotals.dr.toFixed(2)} | Credits: {balanceTotals.cr.toFixed(2)}
                   {!balanceTotals.balanced && balanceTotals.dr + balanceTotals.cr > 0 && ' — must balance'}
                 </div>
+                {balanceTotals.balanced && balanceTotals.dr === 0 && balanceTotals.cr === 0 && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void saveOpening()}
+                    className="text-sm text-teal-400 hover:text-teal-300 underline"
+                  >
+                    Skip opening balances for now (save zeros and continue) →
+                  </button>
+                )}
               </div>
             )}
 
