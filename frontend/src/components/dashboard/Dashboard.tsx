@@ -18,7 +18,7 @@ import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
 import { useAuth } from '../../context/AuthContext';
 import { useMarket } from '../../contexts/MarketContext';
-import { isUaeFinanceSuiteOnly } from '../../config/productRole';
+import { isUaeFinanceSuiteOnly, canAccessPath } from '../../config/productRole';
 
 type DashboardModule = {
   icon: React.ReactNode;
@@ -33,7 +33,8 @@ type DashboardModule = {
 const UAE_MODULE_PRIORITY: readonly string[] = [
   '/ap-invoices',
   '/gulftax',
-  '/uae-select',
+  '/uae-suite',
+  '/uae-full',
   '/fpa',
   '/ifrs-statement',
   '/cfo',
@@ -56,11 +57,54 @@ function sortModulesForUae(modules: DashboardModule[]): DashboardModule[] {
 /** Show only the regional accounting suite that matches the active market toggle. */
 function filterModulesByMarket(modules: DashboardModule[], isUAE: boolean): DashboardModule[] {
   return modules.filter((m) => {
-    if (m.link === '/uae-select') return isUAE;
+    if (m.link === '/uae-full') return isUAE;
     if (m.link === '/india-full') return !isUAE;
     return true;
   });
 }
+
+/** Top-level UAE sections — separate cards like the main FinReport hub. */
+const UAE_PRIMARY_HUB: DashboardModule[] = [
+  {
+    icon: <ShoppingCart className="w-16 h-16 text-teal-400" />,
+    title: 'AP InvoiceFlow',
+    description: 'Upload invoices, approvals, VAT recon, Zoho/QBO integrations',
+    link: '/ap-invoices',
+    bgColor: 'bg-teal-500/10',
+    badge: 'AP',
+  },
+  {
+    icon: <Shield className="w-16 h-16 text-amber-400" />,
+    title: 'UAE Tax (GulfTax)',
+    description: 'VAT classifier, VAT return, corporate tax, FTA reports, reconciliation',
+    link: '/gulftax',
+    bgColor: 'bg-amber-500/10',
+    badge: 'GulfTax',
+  },
+  {
+    icon: <Receipt className="w-16 h-16 text-teal-300" />,
+    title: 'UAE Finance Suite',
+    description: 'Combined AP, AR, VAT/CT compliance, and Peppol e-invoicing — unified operations dashboard',
+    link: '/uae-suite',
+    bgColor: 'bg-teal-500/10',
+    badge: 'Suite',
+  },
+  {
+    icon: <Globe className="w-16 h-16 text-blue-400" />,
+    title: '🇦🇪 UAE Accounting',
+    description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
+    link: '/uae-full',
+    bgColor: 'bg-blue-500/10',
+    badge: 'UAE',
+  },
+  {
+    icon: <BarChart3 className="w-16 h-16 text-green-400" />,
+    title: 'FP&A Suite',
+    description: 'Comprehensive planning, budgeting, and forecasting',
+    link: '/fpa',
+    bgColor: 'bg-green-500/10',
+  },
+];
 
 const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
   {
@@ -99,7 +143,7 @@ const AGENT_DEFS: { id: AgentId; name: string; route: string; description: strin
 
 export const Dashboard: React.FC = () => {
   const nav = useNavigate();
-  const { productRole } = useAuth();
+  const { productRole, user } = useAuth();
   const { isUAE } = useMarket();
   const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const { actions, activeAgents, markActive } = useAgentActivity();
@@ -213,7 +257,7 @@ export const Dashboard: React.FC = () => {
       icon: <Globe className="w-16 h-16 text-blue-400" />,
       title: '🇦🇪 UAE Accounting',
       description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
-      link: '/uae-select',
+      link: '/uae-full',
       bgColor: 'bg-blue-500/10',
       badge: 'UAE'
     },
@@ -228,8 +272,18 @@ export const Dashboard: React.FC = () => {
   ];
 
   const marketModules = filterModulesByMarket(modules, isUAE);
+  const hubLinks = new Set(UAE_PRIMARY_HUB.map((m) => m.link));
+  const uaeHubCards = UAE_PRIMARY_HUB.filter((m) =>
+    canAccessPath(productRole, m.link, user?.role),
+  );
+  const extraModules = marketModules.filter((m) => !hubLinks.has(m.link));
   const displayModules = isUAE
-    ? sortModulesForUae([...UAE_FINANCE_SUITE_MODULES, ...marketModules])
+    ? [
+        ...uaeHubCards,
+        ...(productRole === 'full_access'
+          ? sortModulesForUae(extraModules)
+          : []),
+      ]
     : marketModules;
 
   if (uaeOnly) return null;

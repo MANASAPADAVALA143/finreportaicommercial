@@ -30,9 +30,9 @@ const BLOCKED_FOR_UAE_SUITE = [
 
 /** Path prefixes each product role may access. null = unrestricted. */
 const ROLE_PATH_PREFIXES: Record<ProductRole, string[] | null> = {
-  uae_client: ['/ap-invoices', '/gulftax', '/ifrs/16', '/uae-select'],
-  uae_suite: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/ifrs/16', '/uae-full/ar'],
-  uae_full: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/crm', '/o2c', '/company-setup', '/ifrs/16'],
+  uae_client: ['/ap-invoices', '/gulftax', '/ifrs/16', '/uae-select', '/dashboard'],
+  uae_suite: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/ifrs/16', '/uae-full', '/uae-full/ar', '/dashboard'],
+  uae_full: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/crm', '/o2c', '/company-setup', '/ifrs/16', '/dashboard', '/fpa'],
   india_client: ['/india-full', '/fpa', '/ca-firm', '/dashboard'],
   india_full: ['/india-full', '/fpa', '/ca-firm', '/dashboard', '/ifrs-statement'],
   fpa_client: ['/fpa', '/dashboard'],
@@ -45,9 +45,9 @@ export function isUaeProductRole(productRole: ProductRole): boolean {
   return productRole === 'uae_client' || productRole === 'uae_suite' || productRole === 'uae_full';
 }
 
-/** Card-based module picker — default UAE landing after login. */
+/** Main FinReport card dashboard — separate UAE Suite, UAE Accounting, FP&A sections. */
 export function uaeHubPath(): string {
-  return '/uae-select';
+  return '/dashboard';
 }
 
 export function noWorkspaceFallback(productRole: ProductRole): string {
@@ -76,8 +76,13 @@ export function isWorkspaceOptionalPath(pathname: string): boolean {
 }
 
 export function pinUaeSuiteMarket(): void {
-  localStorage.setItem('gnanova_suite', 'uae');
-  localStorage.setItem('finreportai_ap_market', 'uae');
+  try {
+    localStorage.setItem('gnanova_suite', 'uae');
+    localStorage.setItem('finreportai_ap_market', 'uae');
+    window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'uae' }));
+  } catch {
+    /* ignore */
+  }
 }
 
 export function normalizeProductRole(value: string | null | undefined): ProductRole {
@@ -92,9 +97,9 @@ export function loginRedirectFor(productRole: ProductRole): string {
     case 'uae_client':
       return '/gulftax';
     case 'uae_suite':
-      return '/uae-select';
+      return '/dashboard';
     case 'uae_full':
-      return '/uae-select';
+      return '/dashboard';
     case 'india_client':
       return '/dashboard';
     case 'india_full':

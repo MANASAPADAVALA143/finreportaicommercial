@@ -351,7 +351,7 @@ export default function CompanySetupWizard() {
             </button>
             <button
               type="button"
-              onClick={() => navigate('/uae-select')}
+              onClick={() => navigate('/dashboard')}
               className="px-3 py-1.5 rounded-lg border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800"
             >
               All modules

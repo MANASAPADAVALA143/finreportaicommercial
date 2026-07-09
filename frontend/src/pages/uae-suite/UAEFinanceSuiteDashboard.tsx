@@ -63,7 +63,7 @@ export default function UAEFinanceSuiteDashboard() {
         <div className="flex gap-3">
           <button onClick={() => void load()} className="bg-gray-700 px-4 py-2 rounded-lg text-sm">Retry</button>
           <button onClick={() => navigate('/company-setup')} className="bg-teal-700 px-4 py-2 rounded-lg text-sm">Company Setup</button>
-          <button onClick={() => navigate('/uae-select')} className="bg-gray-800 px-4 py-2 rounded-lg text-sm">All modules</button>
+          <button onClick={() => navigate('/dashboard')} className="bg-gray-800 px-4 py-2 rounded-lg text-sm">All sections</button>
         </div>
       </div>
     );

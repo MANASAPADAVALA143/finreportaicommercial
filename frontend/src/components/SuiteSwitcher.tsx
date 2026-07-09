@@ -18,7 +18,7 @@ const SUITES = [
     flag: '🇦🇪',
     color: '#0D9488',
     subtitle: 'VAT · CT · EOSB · IFRS',
-    defaultPath: '/uae-select',
+    defaultPath: '/dashboard',
   },
   {
     id: 'fpa' as const,
