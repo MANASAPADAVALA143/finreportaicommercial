@@ -40,6 +40,7 @@ from app.routers import gulftax_team as gulftax_team_router
 from app.routers import workspaces as workspaces_router
 from app.routers import company_setup as company_setup_router
 from app.routers import ap_settings as ap_settings_router
+from app.routers import ap_email_privacy as ap_email_privacy_router
 from app.api.routes import gulftax_audit_routes
 from app.api.routes import (
     fpa_master_upload,
@@ -243,6 +244,7 @@ app.include_router(gulftax_team_router.router)
 app.include_router(workspaces_router.router)
 app.include_router(company_setup_router.router)
 app.include_router(ap_settings_router.router)
+app.include_router(ap_email_privacy_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(o2c_routes.router)
 app.include_router(crm_routes.router)
