@@ -66,6 +66,8 @@ export default function InvoiceFlowPage() {
   const [results, setResults] = useState<ProcessedInvoice[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [einvoiceLoading, setEinvoiceLoading] = useState<number | null>(null);
+  const [einvoiceMsg, setEinvoiceMsg] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false); // prevents double-submit race condition
 
@@ -147,6 +149,33 @@ export default function InvoiceFlowPage() {
     setResults(processed);
     setStage("done");
     processingRef.current = false;
+  };
+
+  const handleGenerateEinvoice = async (invoiceId: number) => {
+    if (!invoiceId || einvoiceLoading === invoiceId) return;
+    setEinvoiceLoading(invoiceId);
+    setEinvoiceMsg((prev) => {
+      const next = { ...prev };
+      delete next[invoiceId];
+      return next;
+    });
+    try {
+      const res = await apiClient.post(`/api/invoice/${invoiceId}/generate-einvoice`);
+      const sid = res.data?.submission_id;
+      setEinvoiceMsg((prev) => ({
+        ...prev,
+        [invoiceId]: sid
+          ? `Structured vendor invoice record saved (internal archive · ref ${String(sid).slice(0, 8)}…)`
+          : "Structured vendor invoice record saved (internal archive — not for ASP submission)",
+      }));
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "Failed to generate e-invoice";
+      setEinvoiceMsg((prev) => ({ ...prev, [invoiceId]: String(msg) }));
+    } finally {
+      setEinvoiceLoading(null);
+    }
   };
 
   const STAGES = ["uploading", "extracting", "classifying", "done"];
@@ -346,13 +375,30 @@ export default function InvoiceFlowPage() {
                       <p className="text-[11px] text-muted2 mt-0.5">Risk score {inv.risk_score}/100 — below threshold · no human review needed</p>
                     </div>
                   </div>
-                  <Link
-                    href="/dashboard/vat-classifier"
-                    className="text-[12px] text-gold-lt hover:underline font-medium flex-shrink-0"
-                  >
-                    View in VAT Classifier →
-                  </Link>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {inv.invoice_id > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateEinvoice(inv.invoice_id)}
+                        disabled={einvoiceLoading === inv.invoice_id}
+                        className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium border border-border-g text-gold-lt bg-gold-pale hover:opacity-90 transition disabled:opacity-50"
+                      >
+                        {einvoiceLoading === inv.invoice_id ? "Saving…" : "Generate Structured Invoice Record"}
+                      </button>
+                    )}
+                    <Link
+                      href="/dashboard/vat-classifier"
+                      className="text-[12px] text-gold-lt hover:underline font-medium"
+                    >
+                      View in VAT Classifier →
+                    </Link>
+                  </div>
                 </div>
+              )}
+              {inv.invoice_id > 0 && einvoiceMsg[inv.invoice_id] && (
+                <p className={`text-[11px] ${einvoiceMsg[inv.invoice_id].includes("saved") ? "text-green" : "text-red"}`}>
+                  {einvoiceMsg[inv.invoice_id]}
+                </p>
               )}
 
               {inv.invoice_id > 0 && (

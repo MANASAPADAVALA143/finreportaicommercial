@@ -380,13 +380,18 @@ def vat_return_summary(
 
 
 @router.post("/sync-period")
-def sync_gulftax_period(body: SyncPeriodBody):
+def sync_gulftax_period(body: SyncPeriodBody, db: Session = Depends(get_db)):
     from app.services.gulftax_sync_service import sync_period
 
     cid = body.company_id or body.tenant_id
     if not cid:
         raise HTTPException(400, detail="company_id or tenant_id required")
-    return sync_period(cid, body.tax_period)
+    return sync_period(
+        cid,
+        body.tax_period,
+        db=db,
+        workspace_id=body.tenant_id,
+    )
 
 
 # ── VAT reconciliation (gulftax_transactions source of truth) ─────────────────
@@ -610,23 +615,29 @@ class PeppolXmlValidateRequest(BaseModel):
 @router.post("/peppol/phase")
 def peppol_phase_calculator(body: PeppolPhaseRequest):
     """
-    UAE e-invoicing phase calculator (FTA timeline).
-    Phase 1 (>AED 50M): Jul 2026 | Phase 2 (>AED 20M): Jan 2027 | Phase 3: Jul 2027
+    Legacy alias — delegates to einvoicing_constants.calculate_phase (FTA timeline).
+    Prefer POST /api/gulftax/einvoicing/calculate-phase for new integrations.
     """
-    rev = body.annual_revenue_aed
-    if rev >= 50_000_000:
-        phase, deadline = 1, "2026-07-01"
-    elif rev >= 20_000_000:
-        phase, deadline = 2, "2027-01-01"
-    else:
-        phase, deadline = 3, "2027-07-01"
+    from app.services import einvoicing_service_unified as einv_svc
+
+    result = einv_svc.calculate_phase(body.annual_revenue_aed)
+    phase_num = result["phase_num"]
+    mandatory = result["mandatory_date"]
+    asp_deadline = result["asp_registration_deadline"]
     return {
         "trn": body.trn,
-        "annual_revenue_aed": rev,
-        "phase": phase,
-        "mandatory_from": deadline,
+        "annual_revenue_aed": result["annual_revenue_aed"],
+        "phase": phase_num,
+        "phase_key": result["phase"],
+        "mandatory_from": mandatory,
+        "mandatory_date": mandatory,
+        "asp_registration_deadline": asp_deadline,
+        "voluntary_pilot_start": result["voluntary_pilot_start"],
         "standard": "Peppol PINT AE",
-        "message": f"TRN {body.trn} — Phase {phase} e-invoicing from {deadline}",
+        "message": (
+            f"TRN {body.trn} — Phase {phase_num} mandatory e-invoicing from {mandatory}; "
+            f"ASP appointment by {asp_deadline}"
+        ),
     }
 
 

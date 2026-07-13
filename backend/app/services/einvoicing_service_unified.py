@@ -25,6 +25,8 @@ from app.services.einvoicing_constants import (
     PHASE_2_THRESHOLD_AED,
     PINT_AE_CUSTOMIZATION_ID,
     PINT_AE_PROFILE_ID,
+    RECORD_TYPE_INTERNAL_VENDOR,
+    RECORD_TYPE_OUTBOUND_AR,
     VOLUNTARY_PILOT_START,
 )
 
@@ -452,6 +454,34 @@ def generate_pint_ae_xml(invoice_data: dict[str, Any]) -> str:
 </Invoice>"""
 
 
+def is_internal_vendor_submission(row: EinvoicingSubmission) -> bool:
+    """True for vendor-received internal archives — never ASP-submittable as outbound."""
+    record_type = getattr(row, "record_type", None) or RECORD_TYPE_OUTBOUND_AR
+    if record_type == RECORD_TYPE_INTERNAL_VENDOR:
+        return True
+    inv_id = str(row.invoice_id or "")
+    return inv_id.startswith("gulftax-flow-")
+
+
+def assert_asp_submittable(row: EinvoicingSubmission) -> None:
+    if is_internal_vendor_submission(row):
+        raise ValueError(
+            "Vendor-received internal structured invoice records cannot be submitted to ASP "
+            "as outbound e-invoices."
+        )
+
+
+def assert_outbound_asp_seller(seller_trn: str, company_trn: str | None) -> None:
+    """Block ASP submit when the seller TRN is not the issuing company's TRN (vendor-received AP)."""
+    seller = _clean_trn(seller_trn)
+    company = _clean_trn(company_trn)
+    if seller and company and seller != company:
+        raise ValueError(
+            "Only outbound e-invoices where your company is the supplier (seller TRN) "
+            "may be submitted to ASP. Vendor-received invoices cannot be submitted."
+        )
+
+
 def _serialize_submission(row: EinvoicingSubmission) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -459,6 +489,7 @@ def _serialize_submission(row: EinvoicingSubmission) -> dict[str, Any]:
         "company_id": row.company_id,
         "invoice_id": row.invoice_id,
         "invoice_number": row.invoice_number,
+        "record_type": getattr(row, "record_type", None) or RECORD_TYPE_OUTBOUND_AR,
         "submission_status": row.submission_status,
         "status": row.submission_status,
         "xml_payload": row.xml_payload,
@@ -479,6 +510,7 @@ def create_pending_submission(
     invoice_id: str | None,
     invoice_number: str,
     xml_payload: str,
+    record_type: str = RECORD_TYPE_OUTBOUND_AR,
 ) -> EinvoicingSubmission:
     existing = (
         db.query(EinvoicingSubmission)
@@ -494,6 +526,7 @@ def create_pending_submission(
     if existing:
         existing.xml_payload = xml_payload
         existing.invoice_number = invoice_number
+        existing.record_type = record_type
         existing.updated_at = datetime.utcnow()
         db.commit()
         db.refresh(existing)
@@ -504,6 +537,7 @@ def create_pending_submission(
         company_id=company_id,
         invoice_id=invoice_id,
         invoice_number=invoice_number,
+        record_type=record_type,
         submission_status="pending",
         xml_payload=xml_payload,
     )
@@ -563,7 +597,13 @@ def submit_to_asp(
         row = db.query(EinvoicingSubmission).filter_by(id=submission_id, tenant_id=tenant_id).first()
         if not row:
             raise ValueError("Submission not found")
+        assert_asp_submittable(row)
     else:
+        if invoice_id and str(invoice_id).startswith("gulftax-flow-"):
+            raise ValueError(
+                "Vendor-received internal structured invoice records cannot be submitted to ASP "
+                "as outbound e-invoices."
+            )
         row = create_pending_submission(
             db,
             tenant_id=tenant_id,
@@ -572,6 +612,7 @@ def submit_to_asp(
             invoice_number=invoice_number,
             xml_payload=xml_payload,
         )
+        assert_asp_submittable(row)
     row.submission_status = "pending"
     row.xml_payload = xml_payload or row.xml_payload
     row.submitted_at = datetime.utcnow()
@@ -670,5 +711,101 @@ def generate_and_store_ar_einvoice(
         invoice_id=inv.id,
         invoice_number=inv.invoice_number or inv.id,
         xml_payload=xml,
+        record_type=RECORD_TYPE_OUTBOUND_AR,
     )
     return {"ok": True, "submission_id": row.id, "einvoicing_status": row.submission_status}
+
+
+_GULFTAX_VAT_TO_PINT: dict[str, tuple[str, float]] = {
+    "standard_rated": ("S", 5.0),
+    "zero_rated": ("Z", 0.0),
+    "exempt": ("E", 0.0),
+    "reverse_charge": ("AE", 5.0),
+    "out_of_scope": ("E", 0.0),
+}
+
+
+def build_invoice_data_from_gulftax_flow(inv: Any, company: Any | None) -> dict[str, Any]:
+    """Map GulfTax Invoice Flow (ported AP invoice) → generate_pint_ae_xml shape."""
+    extracted: dict[str, Any] = inv.extracted_json if isinstance(getattr(inv, "extracted_json", None), dict) else {}
+    vat_treatment = str(getattr(inv, "vat_treatment", None) or "standard_rated").lower()
+    vat_category, vat_rate = _GULFTAX_VAT_TO_PINT.get(vat_treatment, ("S", 5.0))
+
+    lines: list[dict[str, Any]] = []
+    for li in (getattr(inv, "line_items", None) or []):
+        if not isinstance(li, dict):
+            continue
+        qty = _f(li.get("quantity"), 1.0)
+        unit_price = _f(li.get("unit_price"))
+        lines.append({
+            "description": li.get("description") or "Line item",
+            "quantity": qty,
+            "unit_price": unit_price,
+            "line_extension_amount": round(qty * unit_price, 2),
+            "vat_rate": _f(li.get("vat_rate"), vat_rate),
+        })
+
+    subtotal = _f(getattr(inv, "subtotal_aed", None))
+    vat = _f(getattr(inv, "vat_amount_aed", None))
+    total = _f(getattr(inv, "total_aed", None))
+    if subtotal <= 0 and total > 0:
+        if vat_treatment == "standard_rated" and vat > 0:
+            subtotal = round(total - vat, 2)
+        elif vat_treatment == "standard_rated":
+            subtotal = round(total / 1.05, 2)
+            vat = round(total - subtotal, 2)
+        else:
+            subtotal = total
+
+    company_name = getattr(company, "name", None) if company else None
+    company_trn = getattr(company, "trn", None) if company else None
+
+    return {
+        "invoice_number": str(getattr(inv, "invoice_number", None) or "").strip(),
+        "invoice_date": str(getattr(inv, "invoice_date", None) or "")[:10],
+        "supplier_name": getattr(inv, "vendor_name", None) or extracted.get("vendor_name") or "Supplier",
+        "supplier_address": extracted.get("vendor_address") or "",
+        "seller_trn": getattr(inv, "vendor_trn", None) or extracted.get("vendor_trn") or "",
+        "buyer_name": extracted.get("customer_name") or company_name or "Buyer",
+        "buyer_address": extracted.get("customer_address") or "",
+        "buyer_trn": extracted.get("customer_trn") or company_trn or "",
+        "net_amount": subtotal,
+        "vat_amount": vat,
+        "gross_amount": total if total > 0 else round(subtotal + vat, 2),
+        "vat_category": vat_category,
+        "vat_rate": vat_rate,
+        "currency": str(extracted.get("currency") or "AED").upper(),
+        "lines": lines,
+        "is_b2b": True,
+        "vat_treatment": vat_treatment,
+    }
+
+
+def generate_and_store_gulftax_flow_einvoice(
+    db: Session,
+    *,
+    tenant_id: str,
+    company_id: str,
+    flow_invoice_id: int,
+    invoice_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Vendor-received AP invoice → PINT AE-shaped internal archive (not outbound e-invoicing)."""
+    xml = generate_pint_ae_xml(invoice_data)
+    external_id = f"gulftax-flow-{flow_invoice_id}"
+    inv_no = str(invoice_data.get("invoice_number") or external_id)
+    row = create_pending_submission(
+        db,
+        tenant_id=tenant_id,
+        company_id=company_id,
+        invoice_id=external_id,
+        invoice_number=inv_no,
+        xml_payload=xml,
+        record_type=RECORD_TYPE_INTERNAL_VENDOR,
+    )
+    return {
+        "ok": True,
+        "submission_id": row.id,
+        "einvoicing_status": row.submission_status,
+        "record_type": RECORD_TYPE_INTERNAL_VENDOR,
+        "invoice_id": external_id,
+    }

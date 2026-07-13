@@ -120,6 +120,73 @@ class EinvoicingUnifiedTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["submission_status"], "accepted")
 
+    def test_build_invoice_data_from_gulftax_flow(self):
+        class FakeCompany:
+            name = "Acme LLC"
+            trn = "100000000000003"
+
+        class FakeInv:
+            invoice_number = "VF-001"
+            invoice_date = "2026-06-15"
+            vendor_name = "Vendor Co"
+            vendor_trn = "100000000000004"
+            subtotal_aed = 1000.0
+            vat_amount_aed = 50.0
+            total_aed = 1050.0
+            vat_treatment = "standard_rated"
+            line_items = [{"description": "Services", "quantity": 1, "unit_price": 1000, "vat_rate": 5}]
+            extracted_json = {"vendor_address": "Dubai", "currency": "AED"}
+
+        data = svc.build_invoice_data_from_gulftax_flow(FakeInv(), FakeCompany())
+        self.assertEqual(data["invoice_number"], "VF-001")
+        self.assertEqual(data["seller_trn"], "100000000000004")
+        self.assertEqual(data["buyer_trn"], "100000000000003")
+        self.assertEqual(data["net_amount"], 1000.0)
+        self.assertEqual(data["vat_category"], "S")
+
+    def test_generate_and_store_gulftax_flow_einvoice(self):
+        data = self._valid_invoice()
+        result = svc.generate_and_store_gulftax_flow_einvoice(
+            self.db,
+            tenant_id="ws-flow",
+            company_id="co-flow",
+            flow_invoice_id=42,
+            invoice_data=data,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["invoice_id"], "gulftax-flow-42")
+        row = self.db.query(EinvoicingSubmission).filter_by(id=result["submission_id"]).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.record_type, "internal_vendor_record")
+        self.assertIn("CustomizationID", row.xml_payload)
+
+    def test_submit_to_asp_blocks_internal_vendor_record(self):
+        data = self._valid_invoice()
+        stored = svc.generate_and_store_gulftax_flow_einvoice(
+            self.db,
+            tenant_id="ws-flow",
+            company_id="co-flow",
+            flow_invoice_id=99,
+            invoice_data=data,
+        )
+        with self.assertRaises(ValueError) as ctx:
+            svc.submit_to_asp(
+                self.db,
+                tenant_id="ws-flow",
+                company_id="co-flow",
+                invoice_number=data["invoice_number"],
+                xml_payload=stored and self.db.query(EinvoicingSubmission).filter_by(id=stored["submission_id"]).first().xml_payload,
+                submission_id=stored["submission_id"],
+            )
+        self.assertIn("submitted to asp", str(ctx.exception).lower())
+
+    def test_assert_outbound_asp_seller_blocks_vendor_trn(self):
+        with self.assertRaises(ValueError):
+            svc.assert_outbound_asp_seller("100000000000004", "100000000000003")
+
+    def test_assert_outbound_asp_seller_allows_company_trn(self):
+        svc.assert_outbound_asp_seller("100000000000003", "100000000000003")
+
 
 if __name__ == "__main__":
     unittest.main()

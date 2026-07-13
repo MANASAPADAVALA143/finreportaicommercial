@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import { getMyCompany, getCompanyConfig } from './companyService';
 import { getAgentAutonomyConfig } from './agentConfigService';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
+import { deriveInvoiceRiskDisplayScore } from './invoiceRiskDisplay';
 import type { Invoice } from './supabase';
 
 export interface MatchTolerance {
@@ -136,6 +137,124 @@ function vendorTokensMatch(a: string, b: string): boolean {
   return av.includes(bv) || bv.includes(av) || (aw.length > 2 && bv.includes(aw)) || (bw.length > 2 && av.includes(bw));
 }
 
+/** Numeric 0–100 risk for agent threshold checks (GulfTax score preferred). */
+function resolveNumericRiskScore(invoice: Invoice): number | null {
+  if (typeof invoice.gulftax_risk_score === 'number' && Number.isFinite(invoice.gulftax_risk_score)) {
+    return Math.round(invoice.gulftax_risk_score);
+  }
+  return deriveInvoiceRiskDisplayScore(invoice);
+}
+
+async function vendorHasPriorApprovedInvoice(
+  companyId: string,
+  vendorName: string,
+  excludeInvoiceId: string,
+): Promise<boolean> {
+  const vn = vendorName?.trim();
+  if (!vn) return false;
+  const { count, error } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('vendor_name', vn)
+    .eq('status', 'Approved')
+    .neq('id', excludeInvoiceId);
+  if (error) {
+    console.warn('[threeWayMatchService] prior vendor history check failed:', error.message);
+    return true;
+  }
+  return (count ?? 0) > 0;
+}
+
+/** Duplicate signals already on the row or a matching approved invoice for same vendor+number. */
+async function invoiceHasDuplicateSignal(invoice: Invoice, companyId: string): Promise<boolean> {
+  if (invoice.duplicate_flag === true) return true;
+  if (invoice.duplicate_of_id) return true;
+
+  const invNum = (invoice.invoice_number || '').trim();
+  const vendor = (invoice.vendor_name || '').trim();
+  if (!invNum || !vendor) return false;
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('invoice_number', invNum)
+    .eq('vendor_name', vendor)
+    .neq('id', invoice.id)
+    .in('status', ['Approved', 'Paid', 'Processing', 'On Hold', 'Queried'])
+    .limit(1);
+  if (error) {
+    console.warn('[threeWayMatchService] duplicate check failed:', error.message);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+const GATE_REASON_MESSAGES: Record<string, string> = {
+  high_value_threshold: 'Invoice exceeds high-value auto-approve threshold',
+  risk_score_exceeds_threshold: 'Risk score exceeds threshold',
+  risk_score_high: 'Risk score is high',
+  new_vendor_requires_human: 'New vendor — first invoice requires human approval',
+  potential_duplicate_detected: 'Potential duplicate detected',
+  duplicate_flag: 'Potential duplicate detected',
+  critical_risk_flag: 'Critical risk flag present',
+  ocr_below_min_confidence: 'OCR confidence below minimum for auto-approve',
+};
+
+function gateReasonMessage(code: string | undefined): string {
+  if (!code) return 'Agent rules blocked auto-approve';
+  return GATE_REASON_MESSAGES[code] ?? code.replace(/_/g, ' ');
+}
+
+/**
+ * Flag invoices pending longer than sla_hours_before_escalation (does not block approval).
+ * Natural call sites: InvoiceList.fetchInvoices, ActionQueue.load, MyApprovals refresh.
+ */
+export async function markEscalationDueIfNeeded(
+  invoices: Invoice[],
+  _companyId?: string | null,
+): Promise<void> {
+  const agent = await getAgentAutonomyConfig();
+  const slaHours = agent.sla_hours_before_escalation;
+  if (!slaHours || slaHours <= 0) return;
+
+  const now = Date.now();
+  const due = invoices.filter((inv) => {
+    if (inv.status !== 'Processing' && inv.status !== 'On Hold' && inv.status !== 'Queried') {
+      return false;
+    }
+    if (inv.approval_status === 'approved' || inv.approval_status === 'rejected') return false;
+    const anchor = inv.submitted_for_approval_at || inv.created_at;
+    if (!anchor) return false;
+    const hoursPending = (now - new Date(anchor).getTime()) / 3_600_000;
+    return hoursPending >= slaHours;
+  });
+
+  for (const inv of due) {
+    const existing = Array.isArray(inv.risk_flags) ? inv.risk_flags : [];
+    if (
+      existing.some(
+        (f) => f && typeof f === 'object' && String((f as { type?: string }).type) === 'sla_escalation',
+      )
+    ) {
+      continue;
+    }
+    const nextFlags = [
+      ...existing,
+      {
+        type: 'sla_escalation',
+        severity: 'high' as const,
+        message: `Pending approval over ${slaHours}h — escalation review required`,
+      },
+    ];
+    await supabase
+      .from('invoices')
+      .update({ risk_flags: nextFlags, updated_at: new Date().toISOString() })
+      .eq('id', inv.id);
+  }
+}
+
 async function canAgentAutoApprove(
   invoice: Invoice,
   companyId: string
@@ -147,13 +266,36 @@ async function canAgentAutoApprove(
   if (inInr != null && inInr > agent.high_value_threshold_inr) {
     return { ok: false, reason: 'high_value_threshold' };
   }
-  if (invoice.duplicate_flag) {
-    return { ok: false, reason: 'duplicate_flag' };
+
+  const numericRisk = resolveNumericRiskScore(invoice);
+  if (numericRisk != null && numericRisk > agent.auto_approve_max_risk_score) {
+    return { ok: false, reason: 'risk_score_exceeds_threshold' };
   }
   const risk = (invoice.risk_score || '').toLowerCase();
   if (risk === 'high') {
     return { ok: false, reason: 'risk_score_high' };
   }
+
+  if (agent.require_human_duplicate) {
+    if (invoice.duplicate_flag) {
+      return { ok: false, reason: 'duplicate_flag' };
+    }
+    if (await invoiceHasDuplicateSignal(invoice, companyId)) {
+      return { ok: false, reason: 'potential_duplicate_detected' };
+    }
+  }
+
+  if (agent.require_human_new_vendor) {
+    const hasPrior = await vendorHasPriorApprovedInvoice(
+      companyId,
+      invoice.vendor_name,
+      invoice.id,
+    );
+    if (!hasPrior) {
+      return { ok: false, reason: 'new_vendor_requires_human' };
+    }
+  }
+
   if (agent.require_human_critical_risk && Array.isArray(invoice.risk_flags)) {
     const critical = invoice.risk_flags.some(
       (f) => f && typeof f === 'object' && String(f.severity).toLowerCase() === 'critical'
@@ -500,7 +642,7 @@ export async function runAutoMatch(
     const gate = await canAgentAutoApprove(inv, companyId);
     if (!gate.ok) {
       autoApproved = false;
-      exceptions.push(`Auto-approve blocked (${gate.reason ?? 'agent rules'})`);
+      exceptions.push(`Auto-approve blocked: ${gateReasonMessage(gate.reason)}`);
     }
   }
 

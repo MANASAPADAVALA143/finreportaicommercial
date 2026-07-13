@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.client_data import CtReturn
 from app.models.company_setup import UaeCompanyProfile
-from app.modules.gulftax.gulftax_einvoicing import ReadinessRequest, _compute_readiness
+from app.modules.gulftax.gulftax_einvoicing import compute_company_readiness
 from app.services.ap_aging_service import compute_ap_aging
 from app.services.ap_insights_service import _compute_metrics, _fetch_invoices
 from app.services.ar_aging_service import BUCKET_LABELS, BUCKET_ORDER, compute_ar_aging
@@ -132,27 +132,13 @@ def get_latest_ct_status_for_company(company_id: str) -> str:
         return "not_started"
 
 
-def _einvoicing_readiness(db: Session, tenant_id: str, company_id: str | None) -> dict[str, Any]:
-    profile = (
-        db.query(UaeCompanyProfile)
-        .filter(UaeCompanyProfile.workspace_id == tenant_id)
-        .first()
-    )
-    revenue = 5_000_000.0
-    asp = False
-    if profile:
-        revenue = float(getattr(profile, "annual_revenue_aed", None) or revenue)
-        asp = bool(getattr(profile, "asp_appointed", False))
-    return _compute_readiness(
-        ReadinessRequest(
-            annual_revenue_aed=revenue,
-            asp_appointed=asp,
-            invoice_format="PDF",
-            integration_status="not_started",
-            master_data_clean="PARTIAL",
-            budget_confirmed=False,
-        )
-    )
+def _einvoicing_readiness(
+    db: Session,
+    ported_db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    return compute_company_readiness(db, ported_db, tenant_id, company_id)
 
 
 def _ap_metrics(company_id: str | None) -> dict[str, Any]:
@@ -220,7 +206,7 @@ def build_uae_suite_summary(
         estimated_vat = 0.0
 
     ct = _latest_ct_return(db, tenant_id, company_id)
-    einvoicing = _einvoicing_readiness(db, tenant_id, company_id)
+    einvoicing = _einvoicing_readiness(db, ported_db, tenant_id, company_id)
     credit_notes = _credit_notes_in_period(db, tenant_id, company_id, period_start, period_end)
 
     last_fy_end = date(today.year - 1, 12, 31)

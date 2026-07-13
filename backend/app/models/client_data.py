@@ -310,6 +310,8 @@ class EinvoicingSubmission(Base):
     company_id = Column(String(36), nullable=False, index=True)
     invoice_id = Column(String(36), nullable=True, index=True)
     invoice_number = Column(String(128), nullable=False)
+    # outbound_ar = our issued sales invoice; internal_vendor_record = vendor-received AP archive
+    record_type = Column(String(32), default="outbound_ar", nullable=False, index=True)
     submission_status = Column(String(20), default="pending", nullable=False)
     xml_payload = Column(Text, nullable=True)
     submitted_at = Column(DateTime, nullable=True)

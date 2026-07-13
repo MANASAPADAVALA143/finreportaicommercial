@@ -3,9 +3,23 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def _assert_invoice_company_match(invoice: dict[str, Any], company_id: str) -> str | None:
+    """Return an error code when the invoice does not belong to the requested company."""
+    invoice_company = str(invoice.get("company_id") or "").strip()
+    requested = str(company_id).strip()
+    if not invoice_company:
+        return "invoice_missing_company_id"
+    if invoice_company != requested:
+        return "company_id_mismatch"
+    return None
 
 
 def _norm_treatment(raw: str | None) -> str:
@@ -212,6 +226,17 @@ def sync_approved_invoice_to_gulftax(
     if status != "Approved":
         return {"ok": False, "error": f"invoice_not_approved:{status}"}
 
+    company_err = _assert_invoice_company_match(invoice, company_id)
+    if company_err:
+        logger.warning(
+            "GulfTax sync rejected for invoice %s: %s (invoice company=%s, requested=%s)",
+            invoice_id,
+            company_err,
+            invoice.get("company_id"),
+            company_id,
+        )
+        return {"ok": False, "error": company_err}
+
     row = build_transaction_row(invoice, company_id=company_id, workspace_id=workspace_id)
 
     try:
@@ -297,8 +322,14 @@ def aggregate_vat_return_summary(company_id: str, tax_period: str) -> dict[str, 
     }
 
 
-def sync_period(company_id: str, tax_period: str) -> dict[str, Any]:
-    """Backfill approved invoices in period that lack gulftax_transactions rows."""
+def sync_period(
+    company_id: str,
+    tax_period: str,
+    *,
+    db: "Session | None" = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Backfill approved invoices in period into Supabase and RDS gulftax_transactions."""
     period_start, period_end = parse_period_range(tax_period)
     try:
         from app.core.supabase import get_supabase
@@ -318,6 +349,9 @@ def sync_period(company_id: str, tax_period: str) -> dict[str, Any]:
         logger.exception("sync_period invoice fetch failed")
         return {"ok": False, "error": str(exc), "synced": 0, "skipped": 0}
 
+    company = _fetch_company_config(company_id)
+    ws_id = workspace_id or company.get("workspace_id") or company_id
+
     synced = 0
     skipped = 0
     errors: list[str] = []
@@ -325,14 +359,38 @@ def sync_period(company_id: str, tax_period: str) -> dict[str, Any]:
         iid = inv.get("id")
         if not iid:
             continue
-        if _existing_for_invoice(iid):
-            skipped += 1
-            continue
-        result = sync_approved_invoice_to_gulftax(iid, company_id)
-        if result.get("ok"):
-            synced += 1
+
+        sup_result = sync_approved_invoice_to_gulftax(iid, company_id, workspace_id=ws_id)
+        sup_skipped = bool(sup_result.get("skipped"))
+        if not sup_result.get("ok") and not sup_skipped:
+            errors.append(f"{iid}:supabase:{sup_result.get('error')}")
+
+        rds_skipped = True
+        rds_new = False
+        if db is not None:
+            from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
+
+            rds_result = sync_ap_invoice_to_rds_gulftax(
+                db,
+                iid,
+                company_id,
+                workspace_id=ws_id,
+            )
+            rds_skipped = bool(rds_result.get("skipped"))
+            rds_new = bool(rds_result.get("ok")) and not rds_skipped
+            if not rds_result.get("ok") and not rds_skipped:
+                errors.append(f"{iid}:rds:{rds_result.get('error')}")
         else:
-            errors.append(f"{iid}:{result.get('error')}")
+            logger.warning(
+                "sync_period: no RDS session — skipped RDS backfill for invoice %s",
+                iid,
+            )
+
+        sup_new = bool(sup_result.get("ok")) and not sup_skipped
+        if sup_new or rds_new:
+            synced += 1
+        elif sup_skipped and (db is None or rds_skipped):
+            skipped += 1
 
     return {
         "ok": True,

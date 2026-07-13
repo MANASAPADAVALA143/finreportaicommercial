@@ -6,12 +6,14 @@ from datetime import date, datetime, timezone
 from typing import Any, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.client_data import EinvoicingSubmission
+from app.models.company_setup import UaeCompanyProfile
 from app.services import einvoicing_service_unified as svc
 
 router = APIRouter(prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"])
@@ -117,6 +119,154 @@ async def _trigger_asp_webhook(payload: dict[str, Any]) -> None:
         await client.post(url, json=payload)
 
 
+def _asp_appointed_from_company(company: Any) -> bool:
+    if bool(getattr(company, "asp_appointed", False)):
+        return True
+    settings = getattr(company, "settings", None) or {}
+    return bool(str(settings.get("asp_provider") or "").strip())
+
+
+def _invoice_format_from_company(company: Any) -> str:
+    settings = getattr(company, "settings", None) or {}
+    explicit = str(settings.get("invoice_format") or "").strip()
+    if explicit:
+        return explicit
+    if str(settings.get("peppol_participant_id") or "").strip():
+        return "Peppol PINT AE"
+    return "PDF"
+
+
+def _integration_status_from_company(
+    company: Any,
+    *,
+    submission_count: int = 0,
+    accepted_count: int = 0,
+) -> IntegrationStatus:
+    settings = getattr(company, "settings", None) or {}
+    explicit = settings.get("integration_status")
+    if explicit in ("not_started", "planning", "testing", "live"):
+        return explicit  # type: ignore[return-value]
+    if accepted_count > 0:
+        return "live"
+    if submission_count > 0:
+        return "testing"
+    if str(settings.get("peppol_participant_id") or "").strip():
+        return "planning"
+    return "not_started"
+
+
+def readiness_request_from_company(
+    company: Any,
+    *,
+    submission_count: int = 0,
+    accepted_count: int = 0,
+) -> ReadinessRequest:
+    settings = getattr(company, "settings", None) or {}
+    revenue = float(
+        getattr(company, "annual_revenue_aed", None)
+        or settings.get("annual_revenue_aed")
+        or 0
+    )
+    master = settings.get("master_data_clean")
+    if master not in ("YES", "PARTIAL", "NO"):
+        master = "PARTIAL"
+    return ReadinessRequest(
+        annual_revenue_aed=revenue,
+        asp_appointed=_asp_appointed_from_company(company),
+        invoice_format=_invoice_format_from_company(company),
+        integration_status=_integration_status_from_company(
+            company,
+            submission_count=submission_count,
+            accepted_count=accepted_count,
+        ),
+        master_data_clean=master,
+        budget_confirmed=bool(settings.get("budget_confirmed")),
+    )
+
+
+def resolve_gulftax_company(ported_db: Session, company_id: str | None, tenant_id: str):
+    """Map FinReport company / workspace id to GulfTax companies row."""
+    try:
+        from app.modules.gulftax.ported.models import Company
+    except Exception:
+        return None
+
+    if company_id:
+        row = ported_db.query(Company).filter(Company.id == company_id).first()
+        if row:
+            return row
+        row = ported_db.query(Company).filter(Company.external_id == company_id).first()
+        if row:
+            return row
+
+    return (
+        ported_db.query(Company)
+        .filter(Company.workspace_id == tenant_id)
+        .order_by(Company.created_at.desc())
+        .first()
+    )
+
+
+def _einvoicing_submission_counts(
+    db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> tuple[int, int]:
+    q = db.query(EinvoicingSubmission).filter(EinvoicingSubmission.tenant_id == tenant_id)
+    if company_id:
+        q = q.filter(EinvoicingSubmission.company_id == company_id)
+    rows = q.all()
+    accepted = sum(1 for r in rows if (r.submission_status or "").lower() == "accepted")
+    return len(rows), accepted
+
+
+def compute_company_readiness(
+    db: Session,
+    ported_db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Shared readiness path for UAE Suite dashboard and GulfTax E-Invoicing page."""
+    company = resolve_gulftax_company(ported_db, company_id, tenant_id)
+    if company:
+        sub_count, accepted = _einvoicing_submission_counts(db, tenant_id, company_id)
+        params = readiness_request_from_company(
+            company,
+            submission_count=sub_count,
+            accepted_count=accepted,
+        )
+        result = _compute_readiness(params)
+        result["inputs"] = {
+            "annual_revenue_aed": params.annual_revenue_aed,
+            "asp_appointed": params.asp_appointed,
+            "invoice_format": params.invoice_format,
+            "integration_status": params.integration_status,
+            "master_data_clean": params.master_data_clean,
+            "budget_confirmed": params.budget_confirmed,
+        }
+        return result
+
+    profile = (
+        db.query(UaeCompanyProfile)
+        .filter(UaeCompanyProfile.workspace_id == tenant_id)
+        .first()
+    )
+    revenue = 5_000_000.0
+    if profile:
+        revenue = float(getattr(profile, "annual_revenue_aed", None) or revenue)
+    params = ReadinessRequest(
+        annual_revenue_aed=revenue,
+        asp_appointed=False,
+        invoice_format="PDF",
+        integration_status="not_started",
+        master_data_clean="PARTIAL",
+        budget_confirmed=False,
+    )
+    result = _compute_readiness(params)
+    result["inputs"] = params.model_dump()
+    return result
+
+
 def _compute_readiness(params: ReadinessRequest) -> dict[str, Any]:
     phase = svc.calculate_phase(params.annual_revenue_aed)
     score = 100
@@ -197,7 +347,29 @@ async def validate_xml_upload(
 @router.post("/readiness")
 def readiness_assessment(body: ReadinessRequest):
     result = _compute_readiness(body)
-    return {"workspace_id": body.workspace_id, **result}
+    return {"workspace_id": body.workspace_id, "inputs": body.model_dump(), **result}
+
+
+def _ported_db():
+    from app.modules.gulftax.ported_mount import get_ported_db
+
+    yield from get_ported_db()
+
+
+@router.get("/readiness/company")
+def company_readiness_assessment(
+    workspace_id: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
+    x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(_ported_db),
+):
+    """Readiness from persisted GulfTax company settings (same path as UAE Suite dashboard)."""
+    tenant = (x_workspace_id or workspace_id or "demo").strip() or "demo"
+    cid = (company_id or x_company_id or "").strip() or None
+    result = compute_company_readiness(db, ported_db, tenant, cid)
+    return {"workspace_id": tenant, "company_id": cid, **result}
 
 
 @router.post("/generate-xml")
@@ -256,11 +428,23 @@ def generate_xml_download(body: GenerateXmlRequest):
 
 
 @router.post("/asp/submit")
-async def submit_to_asp(body: AspSubmitRequest, db: Session = Depends(get_db)):
+async def submit_to_asp(
+    body: AspSubmitRequest,
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(_ported_db),
+):
     if body.net_amount <= 0:
         raise HTTPException(400, "net_amount must be positive")
     tenant = _tenant(body.workspace_id)
     company_id = body.company_id or tenant
+    company_trn: str | None = None
+    prof = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == company_id).first()
+    if prof and prof.trn:
+        company_trn = prof.trn
+    else:
+        gulf_co = resolve_gulftax_company(ported_db, company_id, tenant)
+        if gulf_co and getattr(gulf_co, "trn", None):
+            company_trn = gulf_co.trn
     xml = body.xml_content
     if not xml.strip():
         xml = svc.generate_pint_ae_xml({
@@ -272,15 +456,20 @@ async def submit_to_asp(body: AspSubmitRequest, db: Session = Depends(get_db)):
             "vat_amount": body.vat_amount,
             "gross_amount": body.gross_amount,
         })
-    row = svc.submit_to_asp(
-        db,
-        tenant_id=tenant,
-        company_id=company_id,
-        invoice_number=body.invoice_number,
-        xml_payload=xml,
-        invoice_id=body.invoice_id,
-        submission_id=body.submission_id,
-    )
+    try:
+        if not body.submission_id:
+            svc.assert_outbound_asp_seller(body.seller_trn, company_trn)
+        row = svc.submit_to_asp(
+            db,
+            tenant_id=tenant,
+            company_id=company_id,
+            invoice_number=body.invoice_number,
+            xml_payload=xml,
+            invoice_id=body.invoice_id,
+            submission_id=body.submission_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
     record = svc._serialize_submission(row)
     await _trigger_asp_webhook({"event": "asp_submit", "submission": record})
     return {
@@ -309,8 +498,15 @@ async def redrive_asp_submission(
     db: Session = Depends(get_db),
 ):
     tenant = _tenant(workspace_id)
-    row = svc.update_submission_status(db, submission_id, status="pending", error_message="")
+    row = db.query(EinvoicingSubmission).filter_by(id=submission_id).first()
     if not row or row.tenant_id != tenant:
+        raise HTTPException(404, "Submission not found")
+    try:
+        svc.assert_asp_submittable(row)
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    row = svc.update_submission_status(db, submission_id, status="pending", error_message="")
+    if not row:
         raise HTTPException(404, "Submission not found")
     record = svc._serialize_submission(row)
     await _trigger_asp_webhook({"event": "asp_redrive", "submission": record})

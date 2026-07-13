@@ -70,6 +70,7 @@ export interface ARInvoice {
   total: number;
   amount_due: number;
   status: string;
+  einvoicing_status?: string | null;
   is_overdue: boolean;
   je_reference?: string | null;
   sent_at?: string | null;

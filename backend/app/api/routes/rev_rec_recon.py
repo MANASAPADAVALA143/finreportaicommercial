@@ -152,6 +152,11 @@ class PeriodClosePackRequest(BaseModel):
     commission_result: Optional[dict] = None
     period_close_result: Optional[dict] = None
     leakage_result: Optional[dict] = None
+    ifrs15_engine_results: Optional[list[dict]] = Field(default_factory=list)
+    ifrs15_contract_ids: Optional[list[str]] = Field(default_factory=list)
+    include_ifrs15_calculated: bool = True
+    workspace_id: Optional[str] = None
+    company_id: Optional[str] = None
 
 
 class LeakageSnapshotSaveRequest(BaseModel):
@@ -908,11 +913,53 @@ Plain professional English. No boilerplate.
 
 
 @router.post("/download-excel")
-async def download_excel_pack(request: PeriodClosePackRequest):
+async def download_excel_pack(
+    request: PeriodClosePackRequest,
+    req: Request,
+    db: Session = Depends(get_db),
+):
     from app.services.rev_rec_excel import generate_period_close_pack
+    from app.modules.ifrs15.ifrs15_repository import get_contract, list_calculated_contract_ids
+    import json as _json
 
     def _run() -> dict:
-        return generate_period_close_pack(request.model_dump())
+        data = request.model_dump()
+        engine_payloads = list(data.get("ifrs15_engine_results") or [])
+        ws = _ws(req, request.workspace_id)
+        cid = request.company_id or _company_id(req)
+
+        contract_ids = list(request.ifrs15_contract_ids or [])
+        if not contract_ids and request.include_ifrs15_calculated:
+            contract_ids = list_calculated_contract_ids(db, ws, cid, period=request.period)
+
+        if contract_ids:
+            seen: set[str] = set()
+            for contract_id in contract_ids:
+                if contract_id in seen:
+                    continue
+                seen.add(contract_id)
+                row = get_contract(db, contract_id, ws, cid)
+                if not row or not row.calculation_json:
+                    continue
+                try:
+                    calc = _json.loads(row.calculation_json)
+                except _json.JSONDecodeError:
+                    continue
+                engine_payloads.append(
+                    {
+                        "contract_meta": {
+                            "customer_name": row.customer_name,
+                            "contract_id": row.contract_number,
+                            "currency": "AED",
+                            "contract_date": row.contract_date,
+                        },
+                        "calculation_results": calc,
+                    }
+                )
+        if engine_payloads:
+            data["ifrs15_engine_results"] = engine_payloads
+            data["ifrs15_contract_ids"] = contract_ids
+        return generate_period_close_pack(data)
 
     return await asyncio.to_thread(_run)
 
@@ -1111,63 +1158,15 @@ async def extract_contract(
     file: UploadFile = File(...),
     workspace_id: str | None = Query(None),
     company_id: str | None = Query(None),
+    contract_type: str = Query("auto", description="auto | generic | uae_spa"),
 ):
-    api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+    """Delegate to full IFRS15ContractExtractor (ported from ifrsai)."""
+    from app.modules.ifrs15.router import extract_contract_text
 
-    ext = Path((file.filename or "upload").replace("\\", "_")).suffix.lower()
-    if ext not in {".pdf", ".docx", ".txt"}:
-        raise HTTPException(status_code=400, detail="Supported: PDF, DOCX, TXT")
-
-    upload_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            upload_path = Path(tmp.name)
-            shutil.copyfileobj(file.file, tmp)
-
-        if ext == ".txt":
-            contract_text = upload_path.read_text(encoding="utf-8", errors="ignore")
-        elif ext == ".pdf":
-            from PyPDF2 import PdfReader
-            contract_text = "\n".join(
-                (p.extract_text() or "") for p in PdfReader(str(upload_path)).pages
-            )
-        else:
-            from docx import Document
-            contract_text = "\n".join(p.text for p in Document(str(upload_path)).paragraphs)
-
-        prompt = f"""Extract IFRS 15 revenue contract fields from this document. Return JSON only:
-{{
-  "customer_name": "",
-  "contract_value_aed": 0,
-  "contract_date": "YYYY-MM-DD",
-  "performance_obligations": [{{"description": "", "standalone_selling_price_aed": 0, "satisfaction_method": "over_time|point_in_time", "start_date": "", "end_date": ""}}],
-  "payment_terms": "",
-  "contract_duration_months": 0
-}}
-
-CONTRACT:
-{contract_text[:12000] if isinstance(contract_text, str) else str(contract_text)[:12000]}"""
-
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(model="claude-sonnet-4-20250514", max_tokens=2000, temperature=0,
-            messages=[{"role": "user", "content": prompt}])
-        raw = msg.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-        extracted = json.loads(raw)
-        return {
-            "status": "success",
-            "extracted_data": extracted,
-            "workspace_id": _ws(request, workspace_id),
-            "company_id": company_id or _company_id(request),
-        }
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON from AI: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)[:200]) from exc
-    finally:
-        if upload_path and upload_path.exists():
-            upload_path.unlink(missing_ok=True)
+    return await extract_contract_text(
+        request=request,
+        file=file,
+        contract_type=contract_type,
+        workspace_id=workspace_id,
+        company_id=company_id,
+    )

@@ -315,6 +315,10 @@ export async function assessEInvoicingReadiness(params: Record<string, unknown>)
   return post('/api/gulftax/einvoicing/readiness', params);
 }
 
+export async function fetchCompanyEInvoicingReadiness() {
+  return get<Record<string, unknown>>('/api/gulftax/einvoicing/readiness/company');
+}
+
 export async function validateEInvoice(params: Record<string, unknown>) {
   return post('/api/gulftax/einvoicing/validate', params);
 }
@@ -480,6 +484,7 @@ export interface AspSubmission {
   id: string;
   invoice_id?: string | null;
   invoice_number: string;
+  record_type?: 'outbound_ar' | 'internal_vendor_record';
   submission_status: AspSubmissionStatus;
   status: AspSubmissionStatus;
   xml_payload?: string | null;
@@ -489,6 +494,58 @@ export interface AspSubmission {
   submitted_at?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+/** Vendor-received internal archives — never ASP-submittable as outbound e-invoices. */
+export function isInternalVendorSubmission(row: AspSubmission): boolean {
+  return (
+    row.record_type === 'internal_vendor_record' ||
+    (row.invoice_id?.startsWith('gulftax-flow-') ?? false)
+  );
+}
+
+/** AP invoices we received from vendors — not outbound e-invoices we issued. */
+export function isApVendorReceivedInvoice(invoice: {
+  vendor_name?: string | null;
+  vendor_trn?: string | null;
+}): boolean {
+  return Boolean(String(invoice.vendor_name ?? invoice.vendor_trn ?? '').trim());
+}
+
+export function parseAspXmlAmounts(xml: string | null | undefined): {
+  net: number;
+  vat: number;
+  gross: number;
+} {
+  if (!xml) return { net: 0, vat: 0, gross: 0 };
+  const pick = (tag: string) => {
+    const m =
+      xml.match(new RegExp(`<cbc:${tag}[^>]*>([\\d.]+)<`, 'i')) ||
+      xml.match(new RegExp(`${tag}[^>]*>([\\d.]+)<`, 'i'));
+    return m ? parseFloat(m[1]) : 0;
+  };
+  const net = pick('TaxExclusiveAmount');
+  const vat = pick('TaxAmount');
+  const gross = pick('PayableAmount') || (net > 0 ? net + vat : 0);
+  return { net, vat, gross };
+}
+
+/** One-click ASP submit for an existing pending submission row (reuses POST /asp/submit). */
+export async function submitAspSubmissionRow(row: AspSubmission) {
+  if (isInternalVendorSubmission(row)) {
+    throw new Error('Internal vendor records cannot be submitted to ASP');
+  }
+  const { net, vat, gross } = parseAspXmlAmounts(row.xml_payload);
+  const netAmount = net > 0 ? net : gross > vat ? gross - vat : gross;
+  return submitToAsp({
+    submission_id: row.id,
+    invoice_id: row.invoice_id ?? undefined,
+    invoice_number: row.invoice_number,
+    net_amount: netAmount > 0 ? netAmount : 1,
+    vat_amount: vat,
+    gross_amount: gross > 0 ? gross : netAmount + vat,
+    xml_content: row.xml_payload ?? '',
+  });
 }
 
 export async function validateEInvoiceXml(file: File, isB2b = true) {

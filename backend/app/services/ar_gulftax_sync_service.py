@@ -326,6 +326,19 @@ def sync_ap_invoice_to_rds_gulftax(
     if (invoice.get("status") or "").strip() != "Approved":
         return {"ok": False, "error": f"invoice_not_approved:{invoice.get('status')}"}
 
+    from app.services.gulftax_sync_service import _assert_invoice_company_match
+
+    company_err = _assert_invoice_company_match(invoice, company_id)
+    if company_err:
+        logger.warning(
+            "RDS GulfTax sync rejected for invoice %s: %s (invoice company=%s, requested=%s)",
+            invoice_id,
+            company_err,
+            invoice.get("company_id"),
+            company_id,
+        )
+        return {"ok": False, "error": company_err}
+
     row = build_transaction_row(invoice, company_id=company_id, workspace_id=workspace_id)
     row["tenant_id"] = workspace_id or row.get("workspace_id") or company_id
     row["transaction_date"] = date.fromisoformat(str(row["transaction_date"])[:10])

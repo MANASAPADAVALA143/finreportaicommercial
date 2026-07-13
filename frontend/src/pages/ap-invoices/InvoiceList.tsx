@@ -41,7 +41,7 @@ import * as XLSX from 'xlsx';
 import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
-import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
+import { runAutoMatch, markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
 import {
@@ -566,6 +566,8 @@ export function InvoiceList() {
         const next = invoiceList.find((i: Invoice) => i.id === prev.id);
         return next ?? prev;
       });
+
+      void markEscalationDueIfNeeded(invoiceList, companyId);
     } catch (error) {
       console.error('Error fetching invoices:', error);
     } finally {

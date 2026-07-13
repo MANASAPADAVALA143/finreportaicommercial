@@ -13,6 +13,12 @@ import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import * as arSvc from '../../services/arService';
 import type { ARInvoice, ARLineItem, ARCreditNote } from '../../services/arService';
+import {
+  fetchAspSubmissions,
+  isInternalVendorSubmission,
+  submitAspSubmissionRow,
+  type AspSubmission,
+} from '../../services/gulfTaxApi';
 import { listAccounts } from '../../services/uaeFullAccounting.service';
 import PeriodSelector from '../../components/PeriodSelector';
 
@@ -84,6 +90,8 @@ export default function ARInvoices() {
   const [reviewInvoiceIds, setReviewInvoiceIds] = useState<Set<string>>(new Set());
   const [matchSummary, setMatchSummary] = useState<string | null>(null);
   const [predictions, setPredictions] = useState<Record<string, arSvc.PaymentPrediction>>({});
+  const [aspByInvoiceId, setAspByInvoiceId] = useState<Record<string, AspSubmission>>({});
+  const [aspSubmittingId, setAspSubmittingId] = useState<string | null>(null);
 
   const loadCreditNotes = useCallback(async () => {
     if (!companyId) return;
@@ -99,13 +107,21 @@ export default function ARInvoices() {
     if (!companyId) return;
     setLoading(true);
     try {
-      const [invRes, agingRes] = await Promise.all([
+      const [invRes, agingRes, aspRes] = await Promise.all([
         arSvc.listARInvoices(),
         arSvc.getARAging(),
+        fetchAspSubmissions(200).catch(() => ({ items: [] as AspSubmission[] })),
       ]);
       setInvoices(invRes.invoices);
       setAging(agingRes.buckets);
       setTotalOutstanding(agingRes.total_outstanding);
+      const aspMap: Record<string, AspSubmission> = {};
+      for (const row of aspRes.items) {
+        if (row.invoice_id && !isInternalVendorSubmission(row)) {
+          aspMap[row.invoice_id] = row;
+        }
+      }
+      setAspByInvoiceId(aspMap);
       if (pageView === 'credit-notes') {
         await loadCreditNotes();
       }
@@ -232,6 +248,37 @@ export default function ARInvoices() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleAspSubmit = async (inv: ARInvoice) => {
+    const row = aspByInvoiceId[inv.id];
+    if (!row || isInternalVendorSubmission(row) || row.status !== 'pending') return;
+    setAspSubmittingId(inv.id);
+    try {
+      await submitAspSubmissionRow(row);
+      toast.success(`Submitted ${inv.invoice_number} to ASP`);
+      void load();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'ASP submission failed');
+    } finally {
+      setAspSubmittingId(null);
+    }
+  };
+
+  const einvoicingBadge = (inv: ARInvoice) => {
+    const st = inv.einvoicing_status ?? aspByInvoiceId[inv.id]?.status;
+    if (!st) return null;
+    const styles: Record<string, string> = {
+      pending: 'bg-amber-900/40 text-amber-300 border-amber-700',
+      accepted: 'bg-green-900/40 text-green-400 border-green-700',
+      rejected: 'bg-red-900/40 text-red-400 border-red-700',
+      error: 'bg-red-900/40 text-red-400 border-red-700',
+    };
+    return (
+      <span className={`ml-1 text-[10px] border px-1.5 py-0.5 rounded capitalize ${styles[st] ?? styles.pending}`}>
+        E-inv: {st}
+      </span>
+    );
   };
 
   const handlePay = async () => {
@@ -527,6 +574,7 @@ export default function ARInvoices() {
                     <span className={`text-xs border px-2 py-0.5 rounded-full capitalize ${STATUS_STYLE[inv.status] ?? STATUS_STYLE.draft}`}>
                       {inv.status}
                     </span>
+                    {einvoicingBadge(inv)}
                     {reviewInvoiceIds.has(inv.id) && (
                       <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded">
                         Review Match
@@ -561,6 +609,17 @@ export default function ARInvoices() {
                       >
                         <Download size={14} />
                       </button>
+                      {aspByInvoiceId[inv.id]?.status === 'pending' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleAspSubmit(inv)}
+                          disabled={aspSubmittingId === inv.id}
+                          className="text-xs bg-amber-700 hover:bg-amber-600 disabled:opacity-50 px-2 py-1 rounded whitespace-nowrap"
+                          title="Submit pending PINT AE XML to ASP"
+                        >
+                          {aspSubmittingId === inv.id ? 'Submitting…' : 'Submit to ASP'}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -340,6 +340,7 @@ DDL = [
         company_id VARCHAR(36) NOT NULL,
         invoice_id VARCHAR(36),
         invoice_number VARCHAR(128) NOT NULL,
+        record_type VARCHAR(32) NOT NULL DEFAULT 'outbound_ar',
         submission_status VARCHAR(20) NOT NULL DEFAULT 'pending',
         xml_payload TEXT,
         submitted_at TIMESTAMP,
@@ -353,6 +354,7 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_company_id ON einvoicing_submissions (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_invoice_id ON einvoicing_submissions (invoice_id)",
     "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_status ON einvoicing_submissions (submission_status)",
+    "CREATE INDEX IF NOT EXISTS ix_einvoicing_submissions_record_type ON einvoicing_submissions (record_type)",
     # workspace_audit_log — audit trail for audit export pack + UAE controls
     """
     CREATE TABLE IF NOT EXISTS workspace_audit_log (

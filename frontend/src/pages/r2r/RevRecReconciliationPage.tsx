@@ -21,6 +21,7 @@ import {
   type LeakageSummary,
   type ThreeWayMatchItem,
 } from '../../utils/revRecLeakage';
+import { fetchIFRS15Contracts } from '../../services/ifrs15.service';
 import {
   REV_REC_BLUE,
   REV_REC_NAVY,
@@ -642,11 +643,35 @@ export default function RevRecReconciliationPage() {
     }
     setPeriodCloseExcelLoading(true);
     try {
+      const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Workspace-ID': wsId ?? '',
+        'X-Tenant-ID': wsId ?? '',
+      };
+      if (activeCompanyId) headers['X-Company-ID'] = activeCompanyId;
+
+      let ifrs15ContractIds: string[] = [];
+      if (activeCompanyId) {
+        try {
+          const contracts = await fetchIFRS15Contracts(activeCompanyId);
+          ifrs15ContractIds = contracts
+            .filter((c) => c.has_calculation || (c.calculation_results && Object.keys(c.calculation_results).length > 0))
+            .map((c) => c.id);
+        } catch {
+          /* non-fatal — backend will auto-include calculated contracts */
+        }
+      }
+
       const response = await fetch(`${API_BASE}/api/rev-rec/download-excel`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           period,
+          company_id: activeCompanyId,
+          workspace_id: wsId,
+          include_ifrs15_calculated: true,
+          ifrs15_contract_ids: ifrs15ContractIds,
           roll_forward_result: rollForwardResult,
           three_way_match_result: threeWayResult,
           anomaly_result: anomalyResult,
@@ -657,8 +682,13 @@ export default function RevRecReconciliationPage() {
         }),
       });
       if (!response.ok) throw new Error(await response.text());
-      const data = (await response.json()) as { file_id: string; filename: string; sheets: number };
-      const dlResponse = await fetch(`${API_BASE}/api/rev-rec/download-file/${encodeURIComponent(data.file_id)}`);
+      const data = (await response.json()) as {
+        file_id: string;
+        filename: string;
+        sheets: number;
+        ifrs15_sheets?: number;
+      };
+      const dlResponse = await fetch(`${API_BASE}/api/rev-rec/download-file/${encodeURIComponent(data.file_id)}`, { headers });
       if (!dlResponse.ok) throw new Error(await dlResponse.text());
       const blob = await dlResponse.blob();
       const url = window.URL.createObjectURL(blob);
@@ -669,7 +699,8 @@ export default function RevRecReconciliationPage() {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      toast.success(`Period close pack downloaded (${data.sheets} sheets) ✓`);
+      const ifrs15Note = data.ifrs15_sheets ? ` incl. ${data.ifrs15_sheets} IFRS 15` : '';
+      toast.success(`Period close pack downloaded (${data.sheets} sheets${ifrs15Note}) ✓`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download failed — try again');
     } finally {
@@ -1828,7 +1859,7 @@ export default function RevRecReconciliationPage() {
                 </div>
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
                   <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-semibold px-3 py-1 border border-slate-200 w-fit">
-                    7 sheets
+                    7+ sheets (IFRS 15 engine sheets auto-included when calculated)
                   </span>
                   <button
                     type="button"

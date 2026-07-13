@@ -2114,6 +2114,10 @@ DO $$ BEGIN
     ALTER TABLE rbac_users ADD COLUMN product_role VARCHAR(32) NOT NULL DEFAULT 'full_access';
 EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 
+DO $$ BEGIN
+    ALTER TABLE ifrs15_contracts ADD COLUMN calculation_json TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
 -- =============================================================================
 -- SECTION 99 — Alembic version table (manual — DO NOT auto-stamp)
 -- After fixing revision 011 mismatch and running migrations, set:

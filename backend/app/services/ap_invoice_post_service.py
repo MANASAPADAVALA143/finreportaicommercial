@@ -158,6 +158,11 @@ def post_invoice_to_gl_and_tax(
                         workspace_id=ws_id,
                     )
                     if not sync_result.get("ok") and not sync_result.get("skipped"):
+                        logger.warning(
+                            "Supabase GulfTax sync failed for invoice %s: %s",
+                            body.invoice_id,
+                            sync_result.get("error", "unknown"),
+                        )
                         log_sync_failure(
                             invoice_id=body.invoice_id,
                             company_id=company_id,
@@ -167,12 +172,18 @@ def post_invoice_to_gl_and_tax(
                     try:
                         from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
 
-                        sync_ap_invoice_to_rds_gulftax(
+                        rds_result = sync_ap_invoice_to_rds_gulftax(
                             db,
                             body.invoice_id,
                             company_id,
                             workspace_id=ws_id,
                         )
+                        if not rds_result.get("ok") and not rds_result.get("skipped"):
+                            logger.warning(
+                                "RDS GulfTax sync failed for invoice %s: %s",
+                                body.invoice_id,
+                                rds_result.get("error", "unknown"),
+                            )
                     except Exception:
                         logger.exception("RDS GulfTax sync on idempotent skip failed for %s", body.invoice_id)
                 except Exception:
@@ -463,6 +474,11 @@ def post_invoice_to_gl_and_tax(
                 workspace_id=ws_id,
             )
             if not sync_result.get("ok") and not sync_result.get("skipped"):
+                logger.warning(
+                    "Supabase GulfTax sync failed for invoice %s: %s",
+                    body.invoice_id,
+                    sync_result.get("error", "unknown"),
+                )
                 log_sync_failure(
                     invoice_id=body.invoice_id,
                     company_id=company_id,
@@ -472,12 +488,18 @@ def post_invoice_to_gl_and_tax(
             try:
                 from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
 
-                sync_ap_invoice_to_rds_gulftax(
+                rds_result = sync_ap_invoice_to_rds_gulftax(
                     db,
                     body.invoice_id,
                     company_id,
                     workspace_id=ws_id,
                 )
+                if not rds_result.get("ok") and not rds_result.get("skipped"):
+                    logger.warning(
+                        "RDS GulfTax sync failed for invoice %s: %s",
+                        body.invoice_id,
+                        rds_result.get("error", "unknown"),
+                    )
             except Exception:
                 logger.exception("RDS GulfTax sync failed for %s", body.invoice_id)
         except Exception as sync_exc:

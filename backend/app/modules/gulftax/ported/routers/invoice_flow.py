@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.auth import get_current_company_id
-from models import Invoice, Transaction
+from models import Company, Invoice, Transaction
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
 
@@ -1244,6 +1244,52 @@ def review_invoice(
         "transactions_created": transactions_created,
         "zoho_ready": True,
     }
+
+
+@router.post("/{invoice_id}/generate-einvoice")
+def generate_einvoice(
+    invoice_id: int,
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Generate PINT AE-shaped internal archive for an approved vendor-received invoice (not outbound e-invoicing)."""
+    inv = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.company_id == company_id,
+    ).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.status not in ("approved", "auto_approved", "posted"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invoice must be approved or auto-approved before generating e-invoice",
+        )
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    tenant_id = (company.workspace_id if company and company.workspace_id else company_id)
+
+    from app.core.database import SessionLocal
+    from app.services.einvoicing_service_unified import (
+        build_invoice_data_from_gulftax_flow,
+        generate_and_store_gulftax_flow_einvoice,
+    )
+
+    invoice_data = build_invoice_data_from_gulftax_flow(inv, company)
+    main_db = SessionLocal()
+    try:
+        result = generate_and_store_gulftax_flow_einvoice(
+            main_db,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            flow_invoice_id=invoice_id,
+            invoice_data=invoice_data,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"E-invoice generation failed: {exc}") from exc
+    finally:
+        main_db.close()
+
+    return result
 
 
 @router.get("/vendors")

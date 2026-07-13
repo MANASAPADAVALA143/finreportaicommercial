@@ -12,6 +12,7 @@ import {
 } from '@/lib/ap-invoice/vendorMasterService';
 import { listBankGuarantees, daysUntilExpiry } from '@/lib/ap-invoice/bankGuaranteeService';
 import { listInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
 import { getInvoiceflowWorkEmail } from '@/lib/ap-invoice/auditService';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { useMarket } from '@/contexts/MarketContext';
@@ -131,6 +132,14 @@ function classifyInvoice(inv: Invoice, anomalies: InvoiceAnomaly[]): QueueItem |
   if (riskScore >= 70) {
     flags.push(`High risk score: ${riskScore}`);
     setPriority('high');
+  }
+  if (
+    Array.isArray(inv.risk_flags) &&
+    inv.risk_flags.some((f) => f && typeof f === 'object' && (f as { type?: string }).type === 'sla_escalation')
+  ) {
+    flags.push('SLA escalation due');
+    setPriority('high');
+    action = 'Pending over SLA — prioritize human review';
   }
 
   const isPending = inv.status === 'Processing' || inv.status === 'On Hold' || inv.status === 'Queried';
@@ -295,6 +304,9 @@ export function ActionQueue() {
     merged.sort((a, b) => priorityConfig[a.priority].order - priorityConfig[b.priority].order);
     setItems(merged);
     setLoading(false);
+
+    const allForSla = [...(invRes.data ?? []), ...(allInvRes.data ?? [])] as Invoice[];
+    void markEscalationDueIfNeeded(allForSla, activeCompanyId);
   }
 
   useEffect(() => {

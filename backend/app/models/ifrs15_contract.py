@@ -28,6 +28,7 @@ class IFRS15Contract(Base):
     total_remaining_aed = Column(Numeric(15, 2), default=0)
     contract_liability_aed = Column(Numeric(15, 2), default=0)
     contract_asset_aed = Column(Numeric(15, 2), default=0)
+    calculation_json = Column(Text, nullable=True)
     status = Column(String(20), default="active")
     je_posted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

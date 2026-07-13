@@ -7,11 +7,13 @@ import {
   calculateEInvoicingPhase,
   validateEInvoice,
   validateEInvoiceXml,
-  assessEInvoicingReadiness,
+  fetchCompanyEInvoicingReadiness,
   generateEInvoiceXml,
   fetchAspSubmissions,
   redriveAspSubmission,
   submitToAsp,
+  submitAspSubmissionRow,
+  isInternalVendorSubmission,
   type AspSubmission,
 } from '../../services/gulfTaxApi';
 
@@ -162,6 +164,7 @@ export default function EInvoicingPage() {
   const [aspSubmissions, setAspSubmissions] = useState<AspSubmission[]>([]);
   const [aspLoading, setAspLoading] = useState(false);
   const [aspSubmitting, setAspSubmitting] = useState(false);
+  const [aspRowSubmitting, setAspRowSubmitting] = useState<string | null>(null);
   const [aspRedriving, setAspRedriving] = useState<string | null>(null);
 
   const triggerCooldownSeconds = useMemo(() => {
@@ -323,18 +326,11 @@ export default function EInvoicingPage() {
   const fetchReadiness = useCallback(async () => {
     setReadinessLoading(true);
     try {
-      const revenue = parseFloat(String(revInput).replace(/,/g, "")) || phaseResult?.annual_revenue_aed || 0;
-      const res = await assessEInvoicingReadiness({
-        annual_revenue_aed: revenue,
-        asp_appointed: false,
-        invoice_format: "PDF",
-        integration_status: "not_started",
-        master_data_clean: "PARTIAL",
-        budget_confirmed: false,
-      });
+      const res = await fetchCompanyEInvoicingReadiness();
+      const revenue = Number(res.annual_revenue_aed ?? res.inputs?.annual_revenue_aed ?? 0);
       setReadinessResult({
         company_id: 0,
-        readiness_score: res.readiness_score,
+        readiness_score: Number(res.readiness_score ?? 0),
         checks: (res.gaps ?? []).map((g: { text: string; level: string }, i: number) => ({
           id: String(i),
           label: g.text,
@@ -359,7 +355,7 @@ export default function EInvoicingPage() {
     } finally {
       setReadinessLoading(false);
     }
-  }, [companyId, revInput, phaseResult]);
+  }, [companyId]);
 
   useEffect(() => {
     if (tab === 2) fetchReadiness();
@@ -423,6 +419,20 @@ export default function EInvoicingPage() {
       setToast({ kind: "error", message: "Redrive failed" });
     } finally {
       setAspRedriving(null);
+    }
+  };
+
+  const onSubmitPendingAspRow = async (row: AspSubmission) => {
+    if (isInternalVendorSubmission(row) || row.status !== "pending") return;
+    setAspRowSubmitting(row.id);
+    try {
+      await submitAspSubmissionRow(row);
+      setToast({ kind: "success", message: `Submitted ${row.invoice_number} to ASP — status Pending` });
+      await loadAspSubmissions();
+    } catch {
+      setToast({ kind: "error", message: "ASP submission failed — check N8N_ASP_WEBHOOK_URL" });
+    } finally {
+      setAspRowSubmitting(null);
     }
   };
 
@@ -1149,6 +1159,7 @@ export default function EInvoicingPage() {
                 <thead className="bg-[rgba(4,12,30,0.9)] text-muted2 uppercase text-[11px]">
                   <tr>
                     <th className="px-4 py-2">Invoice</th>
+                    <th className="px-4 py-2">Type</th>
                     <th className="px-4 py-2">Submitted</th>
                     <th className="px-4 py-2">Status</th>
                     <th className="px-4 py-2">Rejection reason</th>
@@ -1160,7 +1171,20 @@ export default function EInvoicingPage() {
                     <tr key={row.id} className="border-t border-border text-muted">
                       <td className="px-4 py-3 text-white font-mono">{row.invoice_number}</td>
                       <td className="px-4 py-3">
-                        {new Date(row.submitted_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai" })}
+                        {isInternalVendorSubmission(row) ? (
+                          <span className="text-[10px] font-mono uppercase px-2 py-1 rounded-full border border-border text-muted2">
+                            Internal vendor record
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono uppercase px-2 py-1 rounded-full border border-green/30 text-green">
+                            Outbound e-invoice
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.submitted_at
+                          ? new Date(row.submitted_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai" })
+                          : <span className="text-muted2 text-[11px]">Queued — not yet sent</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-mono uppercase px-2 py-1 rounded-full border ${aspStatusClass(row.status)}`}>
@@ -1171,16 +1195,31 @@ export default function EInvoicingPage() {
                         {row.rejection_reason ?? "—"}
                       </td>
                       <td className="px-4 py-3">
-                        {row.status === "rejected" && (
-                          <button
-                            type="button"
-                            onClick={() => void onRedriveAsp(row.id)}
-                            disabled={aspRedriving === row.id}
-                            className="px-3 py-1.5 text-xs rounded-lg border border-border-g text-gold-lt disabled:opacity-50"
-                          >
-                            {aspRedriving === row.id ? "Redriving…" : "Redrive"}
-                          </button>
-                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {row.status === "pending" && !isInternalVendorSubmission(row) && (
+                            <button
+                              type="button"
+                              onClick={() => void onSubmitPendingAspRow(row)}
+                              disabled={aspRowSubmitting === row.id}
+                              className="px-3 py-1.5 text-xs rounded-lg bg-gradient-to-br from-gold to-gold-lt text-deep font-semibold disabled:opacity-50"
+                            >
+                              {aspRowSubmitting === row.id ? "Submitting…" : "Submit to ASP"}
+                            </button>
+                          )}
+                          {row.status === "rejected" && !isInternalVendorSubmission(row) && (
+                            <button
+                              type="button"
+                              onClick={() => void onRedriveAsp(row.id)}
+                              disabled={aspRedriving === row.id}
+                              className="px-3 py-1.5 text-xs rounded-lg border border-border-g text-gold-lt disabled:opacity-50"
+                            >
+                              {aspRedriving === row.id ? "Redriving…" : "Redrive"}
+                            </button>
+                          )}
+                          {isInternalVendorSubmission(row) && (
+                            <span className="text-[10px] text-muted2">Internal record — not for ASP</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

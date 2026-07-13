@@ -786,6 +786,22 @@ def generate_period_close_pack(data: dict) -> dict:
         ws7.merge_cells(start_row=3, start_column=1, end_row=3, end_column=7)
         data_cell(ws7, 3, 1, "No three-way match / leakage data available.", fill=GREY, color="6B7280")
 
+    # ── IFRS 15 engine sheets (from stored calculations or request payload) ──
+    ifrs15_sheets = 0
+    engine_results = data.get("ifrs15_engine_results") or []
+    if engine_results:
+        from app.modules.ifrs15.ifrs15_excel_export import IFRS15ExcelExporter
+
+        exporter = IFRS15ExcelExporter()
+        for idx, payload in enumerate(engine_results):
+            calc = payload.get("calculation_results") or payload
+            meta = payload.get("contract_meta") or {}
+            suffix = ""
+            if len(engine_results) > 1:
+                label = meta.get("customer_name") or meta.get("contract_id") or str(idx + 1)
+                suffix = f" ({label})"[:40]
+            ifrs15_sheets += exporter.append_period_close_sheets(wb, calc, meta, sheet_suffix=suffix)
+
     # ── Save ──────────────────────────────────────────────────────────────
     file_id = str(uuid.uuid4())[:8]
     safe_period = str(period).replace(" ", "_").replace("/", "-")
@@ -794,4 +810,11 @@ def generate_period_close_pack(data: dict) -> dict:
     filepath = os.path.join(REV_REC_EXCEL_OUTPUT_DIR, filename)
     wb.save(filepath)
 
-    return {"file_id": file_id, "filename": filename, "sheets": 7, "path": filepath}
+    base_sheets = 7
+    return {
+        "file_id": file_id,
+        "filename": filename,
+        "sheets": base_sheets + ifrs15_sheets,
+        "ifrs15_sheets": ifrs15_sheets,
+        "path": filepath,
+    }
