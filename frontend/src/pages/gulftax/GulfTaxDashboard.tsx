@@ -1,10 +1,11 @@
 
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from "react";
-import { apiClient } from '../../services/gulfTaxClient';
+import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getPendingBadDebtTotal } from '../../services/vatAdvanced.service';
+import { setMemoryAccessToken } from '../../utils/authToken';
 
 interface DashboardSummary {
   current_period: {
@@ -88,6 +89,7 @@ function KpiSkeleton() {
 }
 
 export default function GulfTaxDashboard() {
+  const { accessToken, authFetch } = useAuth();
   const { activeCompanyId: companyId, activeCompany } = useCompany();
   const { activeWorkspace } = useWorkspace();
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -95,15 +97,41 @@ export default function GulfTaxDashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [pendingBadDebt, setPendingBadDebt] = useState(0);
 
+  // Keep gulftax clients in sync with the same AuthContext token companies/workspaces use
   useEffect(() => {
-    if (!companyId) return;
+    setMemoryAccessToken(accessToken);
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!companyId || !accessToken) {
+      if (!accessToken) {
+        setLoadState("loading");
+      }
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await apiClient.get<DashboardSummary>(
-          `/api/dashboard/summary`,
-          { timeout: 15000 } as Parameters<typeof apiClient.get>[1]
-        );
+        const headers: Record<string, string> = {};
+        if (activeWorkspace?.id) {
+          headers["X-Workspace-Id"] = activeWorkspace.id;
+          headers["X-Tenant-ID"] = activeWorkspace.id;
+        }
+        if (companyId) headers["X-Company-Id"] = companyId;
+
+        const res = await authFetch("/api/dashboard/summary", { headers });
+        if (!res.ok) {
+          const text = await res.text();
+          let detail = text || `API error ${res.status}`;
+          try {
+            const j = JSON.parse(text) as { detail?: unknown };
+            if (typeof j.detail === "string") detail = j.detail;
+          } catch {
+            /* keep text */
+          }
+          throw new Error(detail);
+        }
+        const data = (await res.json()) as DashboardSummary;
         if (!cancelled) {
           setSummary(data);
           setLoadError("");
@@ -120,13 +148,12 @@ export default function GulfTaxDashboard() {
     return () => {
       cancelled = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId]);
+  }, [companyId, accessToken, activeWorkspace?.id, authFetch]);
 
   useEffect(() => {
-    if (!activeWorkspace?.id) return;
+    if (!activeWorkspace?.id || !accessToken) return;
     void getPendingBadDebtTotal(activeWorkspace.id).then(setPendingBadDebt);
-  }, [activeWorkspace?.id]);
+  }, [activeWorkspace?.id, accessToken]);
 
   const s = loadState === "ok" ? summary : null;
 

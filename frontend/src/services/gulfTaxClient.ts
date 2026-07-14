@@ -30,7 +30,12 @@ async function resolveBearerToken(): Promise<string | null> {
   if (stored) return stored;
   try {
     const { data } = await supabase.auth.getSession();
-    return data.session?.access_token ?? null;
+    const token = data.session?.access_token ?? null;
+    if (token) {
+      // Mirror AuthContext persistence so later sync callers find it
+      localStorage.setItem('token', token);
+    }
+    return token;
   } catch {
     return null;
   }
@@ -81,6 +86,7 @@ async function request<T>(
       headers: await buildHeaders(config?.headers, isForm),
       body: isForm ? body : body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
+      credentials: 'include',
     });
     if (!res.ok) {
       const msg = await parseError(res);
