@@ -15,12 +15,74 @@ logger = logging.getLogger(__name__)
 
 PORTED_ROOT = Path(__file__).resolve().parent / "ported"
 _DB_INITIALIZED = False
+_PORTED_ORM_ALIASED = False
 
 
 def _ensure_ported_path() -> None:
     root = str(PORTED_ROOT)
     if root not in sys.path:
         sys.path.insert(0, root)
+
+
+def _alias_ported_orm_modules() -> None:
+    """Make sys.path and package imports resolve to the SAME module objects.
+
+    Root cause of InvalidRequestError (sqlalchemy f405) on ``companies``:
+    ``PORTED_ROOT`` is on ``sys.path``, so routers do ``from models import Company``.
+    The same files also live under ``app.modules.gulftax.ported``, so
+    ``from app.modules.gulftax.ported.models import Company`` re-executes
+    ``models.py`` against the same ``database.Base`` MetaData and crashes.
+
+    Canonical load is via sys.path (``models`` / ``database``). We then register
+    those modules under the package names so absolute imports are no-ops.
+    """
+    global _PORTED_ORM_ALIASED
+    if _PORTED_ORM_ALIASED:
+        return
+
+    import importlib
+    import types
+
+    _ensure_ported_path()
+
+    # Parent package must exist before we pin submodule aliases.
+    importlib.import_module("app.modules.gulftax")
+    ported_pkg_name = "app.modules.gulftax.ported"
+    if ported_pkg_name not in sys.modules:
+        pkg = types.ModuleType(ported_pkg_name)
+        pkg.__path__ = [str(PORTED_ROOT)]  # type: ignore[attr-defined]
+        pkg.__package__ = ported_pkg_name
+        sys.modules[ported_pkg_name] = pkg
+
+    pkg_database = f"{ported_pkg_name}.database"
+    pkg_models = f"{ported_pkg_name}.models"
+
+    # If either import path already loaded the ORM, unify — never re-execute models.py.
+    if pkg_models in sys.modules:
+        models_mod = sys.modules[pkg_models]
+        sys.modules["models"] = models_mod
+        if pkg_database in sys.modules:
+            sys.modules["database"] = sys.modules[pkg_database]
+        elif "database" in sys.modules:
+            sys.modules[pkg_database] = sys.modules["database"]
+        database_mod = sys.modules.get("database") or sys.modules.get(pkg_database)
+    elif "models" in sys.modules:
+        models_mod = sys.modules["models"]
+        sys.modules[pkg_models] = models_mod
+        database_mod = importlib.import_module("database")
+        sys.modules[pkg_database] = database_mod
+    else:
+        database_mod = importlib.import_module("database")
+        models_mod = importlib.import_module("models")
+        sys.modules[pkg_database] = database_mod
+        sys.modules[pkg_models] = models_mod
+
+    _PORTED_ORM_ALIASED = True
+    logger.info(
+        "GulfTax ORM modules aliased: models=%s database=%s",
+        getattr(models_mod, "__name__", models_mod),
+        getattr(database_mod, "__name__", database_mod),
+    )
 
 
 def _ensure_database_url() -> None:
@@ -39,7 +101,7 @@ def _ensure_database_url() -> None:
 
 
 def get_ported_db() -> Generator[Session, None, None]:
-    _ensure_ported_path()
+    _alias_ported_orm_modules()
     _ensure_database_url()
     from database import SessionLocal  # noqa: WPS433 — ported package
 
@@ -51,7 +113,7 @@ def get_ported_db() -> Generator[Session, None, None]:
 
 
 def _patch_auth() -> None:
-    _ensure_ported_path()
+    _alias_ported_orm_modules()
     import middleware.auth as auth_mod  # noqa: WPS433
     from app.modules.gulftax.auth_cfo import get_current_company_id as cfo_company_id
 
@@ -59,7 +121,7 @@ def _patch_auth() -> None:
 
 
 def _run_migrations() -> None:
-    _ensure_ported_path()
+    _alias_ported_orm_modules()
     _ensure_database_url()
     from database import engine, Base  # noqa: WPS433
 
@@ -107,7 +169,7 @@ def init_gulftax_ported_db() -> None:
     global _DB_INITIALIZED
     if _DB_INITIALIZED:
         return
-    _ensure_ported_path()
+    _alias_ported_orm_modules()
     _ensure_database_url()
     _patch_auth()
     _run_migrations()
@@ -117,6 +179,8 @@ def init_gulftax_ported_db() -> None:
 
 def register_gulftax_ported_routers(app: FastAPI) -> None:
     """Include uaetax API routers (GulfTax company auth lives under /api/gulftax/auth)."""
+    # Alias BEFORE any router import so package-path leftovers cannot re-register ORM.
+    _alias_ported_orm_modules()
     init_gulftax_ported_db()
     _patch_auth()
 
