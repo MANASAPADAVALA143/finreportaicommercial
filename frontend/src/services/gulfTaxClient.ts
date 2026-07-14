@@ -5,6 +5,7 @@
 import { getStoredWorkspaceId } from './workspaceService';
 import { getActiveCompanyId } from '../context/CompanyContext';
 import { getStoredAccessToken } from '../utils/authToken';
+import { supabase } from '../lib/supabase';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -24,14 +25,28 @@ function companyId(): string {
   return getActiveCompanyId() || localStorage.getItem('gulftax_company_id') || '';
 }
 
-function buildHeaders(extra?: Record<string, string>, isFormData = false): Record<string, string> {
+async function resolveBearerToken(): Promise<string | null> {
+  const stored = getStoredAccessToken();
+  if (stored) return stored;
+  try {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildHeaders(
+  extra?: Record<string, string>,
+  isFormData = false,
+): Promise<Record<string, string>> {
   const h: Record<string, string> = { ...extra };
   const ws = workspaceId();
   if (ws) h['X-Workspace-Id'] = ws;
   if (!isFormData) h['Content-Type'] = 'application/json';
   const cid = companyId();
   if (cid) h['X-Company-Id'] = cid;
-  const token = getStoredAccessToken();
+  const token = await resolveBearerToken();
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
@@ -63,7 +78,7 @@ async function request<T>(
   try {
     const res = await fetch(`${API}${path}`, {
       method,
-      headers: buildHeaders(config?.headers, isForm),
+      headers: await buildHeaders(config?.headers, isForm),
       body: isForm ? body : body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });

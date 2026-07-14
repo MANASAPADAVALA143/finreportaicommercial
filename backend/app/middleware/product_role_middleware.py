@@ -98,6 +98,17 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "full_access": None,
 }
 
+# Keep in sync with CORSMiddleware allow_origins in app.main
+_CORS_ORIGINS = frozenset(
+    {
+        "https://finreportai.com",
+        "https://www.finreportai.com",
+        "https://finreportaicommercial.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    }
+)
+
 
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(f"{p}/") for p in PUBLIC_PREFIXES)
@@ -120,6 +131,17 @@ def _path_allowed(product_role: str, internal_role: str, path: str) -> bool:
     return any(path == p or path.startswith(f"{p}/") for p in prefixes)
 
 
+def _json_error(request: Request, status_code: int, detail: str) -> JSONResponse:
+    """Return JSON error; attach CORS when Origin is allowed (belt if middleware order regresses)."""
+    headers: dict[str, str] = {}
+    origin = request.headers.get("origin") or ""
+    if origin in _CORS_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    return JSONResponse(status_code=status_code, content={"detail": detail}, headers=headers)
+
+
 class ProductRoleMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
@@ -131,7 +153,7 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         if not auth or not auth.startswith("Bearer "):
-            return JSONResponse(status_code=401, content={"detail": "Missing bearer token"})
+            return _json_error(request, 401, "Missing bearer token")
 
         token = auth.replace("Bearer ", "", 1).strip()
         internal_role = ""
@@ -153,10 +175,10 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
                 internal_role = internal_role_from_supabase(sb_user)
                 product_role = product_role_from_supabase(sb_user)
             except ValueError as exc:
-                return JSONResponse(status_code=401, content={"detail": str(exc)})
+                return _json_error(request, 401, str(exc))
 
         if not _path_allowed(product_role, internal_role, path):
-            return JSONResponse(status_code=403, content={"detail": "Insufficient product role for this API"})
+            return _json_error(request, 403, "Insufficient product role for this API")
 
         request.state.user_id = user_id
         request.state.user_role = internal_role

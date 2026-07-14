@@ -91,6 +91,7 @@ export default function GulfTaxDashboard() {
   const { activeCompanyId: companyId, activeCompany } = useCompany();
   const { activeWorkspace } = useWorkspace();
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadError, setLoadError] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [pendingBadDebt, setPendingBadDebt] = useState(0);
 
@@ -105,11 +106,13 @@ export default function GulfTaxDashboard() {
         );
         if (!cancelled) {
           setSummary(data);
+          setLoadError("");
           setLoadState("ok");
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
           setSummary(null);
+          setLoadError(e instanceof Error ? e.message : "Request failed");
           setLoadState("error");
         }
       }
@@ -266,7 +269,17 @@ export default function GulfTaxDashboard() {
           </div>
           {loadState === "error" && (
             <p className="text-[12px] text-amber mt-2">
-              Live metrics unavailable — check API or <span className="font-mono">VITE_API_URL</span>.
+              Live metrics unavailable
+              {loadError ? (
+                <>
+                  : <span className="font-mono text-[11px]">{loadError}</span>
+                </>
+              ) : (
+                <>
+                  {" "}
+                  — check API or <span className="font-mono">VITE_API_URL</span>.
+                </>
+              )}
             </p>
           )}
         </div>

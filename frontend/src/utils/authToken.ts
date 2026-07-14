@@ -14,8 +14,17 @@ function supabaseAccessToken(): string | null {
     if (!key) return null;
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { access_token?: string };
-    return parsed.access_token ?? null;
+    const parsed = JSON.parse(raw) as {
+      access_token?: string;
+      session?: { access_token?: string };
+      currentSession?: { access_token?: string };
+    };
+    return (
+      parsed.access_token
+      ?? parsed.session?.access_token
+      ?? parsed.currentSession?.access_token
+      ?? null
+    );
   } catch {
     return null;
   }

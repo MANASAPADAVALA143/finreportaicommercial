@@ -181,7 +181,10 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(RequestLoggingMiddleware)
-
+# ProductRole must be *inside* CORS: last add_middleware = outermost.
+# Otherwise 401/403 JSONResponses from ProductRole skip CORS headers and the
+# browser reports a misleading CORS failure instead of the real auth error.
+app.add_middleware(ProductRoleMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -195,7 +198,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(ProductRoleMiddleware)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 
