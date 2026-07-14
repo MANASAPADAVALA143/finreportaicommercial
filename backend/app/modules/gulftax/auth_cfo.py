@@ -46,10 +46,12 @@ async def get_current_company_id(
 
     # Auto-provision a company row for this workspace/company pair
     name = f"Workspace {workspace[:8]}" if workspace else "FinReportAI Company"
+    # Keep uniqueness stable per workspace so restarts do not collide on unique indexes
+    suffix = (workspace or external or "demo")[:8]
     row = Company(
         id=str(uuid.uuid4()),
         name=name,
-        trade_license_number=f"FR-{workspace[:8] or 'demo'}",
+        trade_license_number=f"FR-{suffix}-{uuid.uuid4().hex[:6]}",
         trn=f"100{abs(hash(external or workspace or 'demo')) % 10**12:012d}"[:15],
         entity_type="mainland",
         vat_registered=True,
@@ -57,7 +59,14 @@ async def get_current_company_id(
         external_id=external or None,
         workspace_id=workspace or None,
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    try:
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"GulfTax company provisioning failed: {exc}",
+        ) from exc
     return row.id

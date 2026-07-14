@@ -123,22 +123,26 @@ async def dashboard_summary(
     if not company.vat_registered:
         readiness = min(readiness, 50)
 
-    recent_rows = (
-        db.query(AuditLog)
-        .filter(AuditLog.company_id == company_id)
-        .order_by(AuditLog.timestamp.desc())
-        .limit(12)
-        .all()
-    )
-    recent_activity: List[Dict[str, Any]] = [
-        {
-            "timestamp": r.timestamp.isoformat() if r.timestamp else "",
-            "actor": r.actor,
-            "action": r.action,
-            "entity": r.entity or "",
-        }
-        for r in recent_rows
-    ]
+    recent_activity: List[Dict[str, Any]] = []
+    try:
+        recent_rows = (
+            db.query(AuditLog)
+            .filter(AuditLog.company_id == company_id)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(12)
+            .all()
+        )
+        recent_activity = [
+            {
+                "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                "actor": r.actor,
+                "action": r.action,
+                "entity": r.entity or "",
+            }
+            for r in recent_rows
+        ]
+    except Exception:
+        db.rollback()
 
     pending_approvals = len(
         [
@@ -150,24 +154,32 @@ async def dashboard_summary(
         ]
     )
 
-    open_mismatches = (
-        db.query(func.count(ReconciliationResult.id))
-        .filter(
-            and_(
-                ReconciliationResult.company_id == company_id,
-                ReconciliationResult.status == "mismatch_found",
+    open_mismatches = 0
+    try:
+        open_mismatches = (
+            db.query(func.count(ReconciliationResult.id))
+            .filter(
+                and_(
+                    ReconciliationResult.company_id == company_id,
+                    ReconciliationResult.status == "mismatch_found",
+                )
             )
+            .scalar()
+            or 0
         )
-        .scalar()
-        or 0
-    )
+    except Exception:
+        db.rollback()
 
     # ── Invoice Flow queue stats ───────────────────────────────────────────────
-    all_invoices = (
-        db.query(Invoice)
-        .filter(Invoice.company_id == company_id)
-        .all()
-    )
+    all_invoices: List[Any] = []
+    try:
+        all_invoices = (
+            db.query(Invoice)
+            .filter(Invoice.company_id == company_id)
+            .all()
+        )
+    except Exception:
+        db.rollback()
     inv_pending_review = sum(1 for i in all_invoices if i.status == "review")
     inv_escalated      = sum(1 for i in all_invoices if i.status == "escalated")
     inv_auto_approved_today = sum(
@@ -177,10 +189,10 @@ async def dashboard_summary(
         and i.created_at.date() == today
     )
     inv_total_vat_at_risk = sum(
-        flag.get("vat_at_risk_aed", 0)
+        float(flag.get("vat_at_risk_aed", 0) or 0)
         for i in all_invoices
         for flag in (i.risk_flags or [])
-        if (flag.get("severity") or "").upper() == "HIGH"
+        if isinstance(flag, dict) and (flag.get("severity") or "").upper() == "HIGH"
     )
 
     ct_status = "not_started"
@@ -236,13 +248,18 @@ async def dashboard_activity(
     db: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """Activity feed for dashboard timeline widgets."""
-    rows = (
-        db.query(AuditLog)
-        .filter(AuditLog.company_id == company_id)
-        .order_by(AuditLog.timestamp.desc())
-        .limit(limit)
-        .all()
-    )
+    rows: List[Any] = []
+    try:
+        rows = (
+            db.query(AuditLog)
+            .filter(AuditLog.company_id == company_id)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+    except Exception:
+        db.rollback()
+        return []
     return [
         {
             "id": r.id,

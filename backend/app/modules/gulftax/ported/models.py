@@ -84,7 +84,8 @@ class Transaction(Base):
     source_file_name = Column(String(255), nullable=True)
     source_metadata = Column(JSON, nullable=True)  # Original PDF extraction payload
     vendor_trn = Column(String(50), nullable=True)
-    source_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True, index=True)
+    # gulftax_invoices — NOT shared FinReportAI AP `invoices` table
+    source_invoice_id = Column(Integer, ForeignKey("gulftax_invoices.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     company = relationship("Company", back_populates="transactions")
@@ -200,8 +201,13 @@ class FTASubmissionLog(Base):
 
 
 class AuditLog(Base):
-    """Append-only activity log for dashboard and compliance trail."""
-    __tablename__ = "audit_logs"
+    """Append-only activity log for dashboard and compliance trail.
+
+    Table is `gulftax_audit_logs` — FinReportAI already owns `audit_logs`
+    (user_id / resource / details) on the shared RDS; colliding names caused
+    UndefinedColumn crashes on GET /api/dashboard/summary.
+    """
+    __tablename__ = "gulftax_audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=True, index=True)
@@ -219,8 +225,12 @@ class AuditLog(Base):
 
 
 class Invoice(Base):
-    """AI-extracted and classified invoice for AP review queue."""
-    __tablename__ = "invoices"
+    """AI-extracted and classified invoice for GulfTax invoice-flow queue.
+
+    Table is `gulftax_invoices` — FinReportAI AP already owns `invoices`
+    (UUID PK, tenant_id, total_amount, …) on the shared RDS.
+    """
+    __tablename__ = "gulftax_invoices"
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
