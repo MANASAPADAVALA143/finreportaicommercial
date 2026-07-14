@@ -187,7 +187,12 @@ def readiness_request_from_company(
 def resolve_gulftax_company(ported_db: Session, company_id: str | None, tenant_id: str):
     """Map FinReport company / workspace id to GulfTax companies row."""
     try:
-        from app.modules.gulftax.ported.models import Company
+        # Same import path as ported routers — avoid double-registering
+        # Company on MetaData (InvalidRequestError: Table 'companies'…).
+        from app.modules.gulftax.ported_mount import _ensure_ported_path
+
+        _ensure_ported_path()
+        from models import Company
     except Exception:
         return None
 

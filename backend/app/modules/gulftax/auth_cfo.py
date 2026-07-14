@@ -25,7 +25,14 @@ async def get_current_company_id(
     db: Session = Depends(_ported_db),
 ) -> str:
     """Resolve CFO company/workspace headers to uaetax company_id."""
-    from app.modules.gulftax.ported.models import Company
+    # Must use the same import path as ported routers (`from models import …`).
+    # Absolute `app.modules.gulftax.ported.models` re-registers Company on the
+    # same MetaData and raises InvalidRequestError: Table 'companies' is
+    # already defined.
+    from app.modules.gulftax.ported_mount import _ensure_ported_path
+
+    _ensure_ported_path()
+    from models import Company
 
     cid = (x_company_id or "").strip()
     if cid and db.query(Company).filter(Company.id == cid).first():
