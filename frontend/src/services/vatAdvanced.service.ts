@@ -3,12 +3,14 @@
  */
 import { supabase } from '../lib/supabase';
 import { backendOrigin } from '../utils/backendOrigin';
-import { workspaceHeaders } from '../utils/workspaceHeaders';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 import type { BadDebtResult, DesignatedZoneResult, PartialExemptionResult } from '../lib/gulftax/vatAdvanced';
 
 async function authHeaders(): Promise<Record<string, string>> {
+  // Prefer live Supabase session; fall back to AuthContext/RBAC stored token
+  // (getSession() alone often returns null while the user is still logged in).
   const { data } = await supabase.auth.getSession();
-  return workspaceHeaders(data.session?.access_token ?? null);
+  return workspaceHeaders(data.session?.access_token ?? getStoredAccessToken());
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

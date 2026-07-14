@@ -1,5 +1,6 @@
 import { getStoredWorkspaceId } from './workspaceService';
 import { getActiveCompanyId } from '../context/CompanyContext';
+import { getStoredAccessToken } from '../utils/authToken';
 
 /** Empty string = use Vite proxy (/api → localhost:8001) in dev */
 const API = import.meta.env.VITE_API_URL || '';
@@ -25,6 +26,8 @@ function headers(): Record<string, string> {
   if (ws) h['X-Workspace-Id'] = ws;
   const cid = companyId();
   if (cid) h['X-Company-Id'] = cid;
+  const token = getStoredAccessToken();
+  if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 

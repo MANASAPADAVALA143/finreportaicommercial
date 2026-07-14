@@ -4,6 +4,7 @@
  */
 import { getStoredWorkspaceId } from './workspaceService';
 import { getActiveCompanyId } from '../context/CompanyContext';
+import { getStoredAccessToken } from '../utils/authToken';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -30,6 +31,8 @@ function buildHeaders(extra?: Record<string, string>, isFormData = false): Recor
   if (!isFormData) h['Content-Type'] = 'application/json';
   const cid = companyId();
   if (cid) h['X-Company-Id'] = cid;
+  const token = getStoredAccessToken();
+  if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 

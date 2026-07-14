@@ -31,8 +31,11 @@ export function workspaceHeaders(
     headers['X-Workspace-ID'] = wsId;
     headers['X-Tenant-ID'] = wsId;
   }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  // Fall back to stored/memory token (RBAC login or AuthContext) when
+  // supabase.auth.getSession() has no session yet or returns null.
+  const bearer = token ?? getStoredAccessToken();
+  if (bearer) {
+    headers.Authorization = `Bearer ${bearer}`;
   }
   return headers;
 }

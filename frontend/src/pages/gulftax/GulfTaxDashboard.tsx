@@ -266,7 +266,7 @@ export default function GulfTaxDashboard() {
           </div>
           {loadState === "error" && (
             <p className="text-[12px] text-amber mt-2">
-              Live metrics unavailable — check API or <span className="font-mono">NEXT_PUBLIC_API_URL</span>.
+              Live metrics unavailable — check API or <span className="font-mono">VITE_API_URL</span>.
             </p>
           )}
         </div>
