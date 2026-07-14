@@ -152,7 +152,8 @@ def build_cfo_daily_summary(
     select_cols = (
         "id,invoice_number,vendor_name,total_amount,currency,due_date,status,"
         "payment_status,risk_score,risk_flags,created_at,company_id,"
-        "gst_amount,tds_amount,reverse_charge,hsn_sac_code,ifrs_category,description,gstin"
+        "tax_amount,gst_amount,cgst_amount,sgst_amount,igst_amount,tds_amount,"
+        "reverse_charge,hsn_sac_code,ifrs_category,description,gstin"
     )
     q = sb.table("invoices").select(select_cols)
     if company_id:
@@ -160,14 +161,24 @@ def build_cfo_daily_summary(
     try:
         rows = list((q.execute()).data or [])
     except Exception:
-        # Columns may be missing before India migration — fall back
-        q2 = sb.table("invoices").select(
-            "id,invoice_number,vendor_name,total_amount,currency,due_date,status,"
-            "payment_status,risk_score,risk_flags,created_at,company_id"
-        )
-        if company_id:
-            q2 = q2.eq("company_id", company_id)
-        rows = list((q2.execute()).data or [])
+        # Columns may be missing before India migration — fall back progressively
+        try:
+            q2 = sb.table("invoices").select(
+                "id,invoice_number,vendor_name,total_amount,currency,due_date,status,"
+                "payment_status,risk_score,risk_flags,created_at,company_id,"
+                "tax_amount,gst_amount,tds_amount"
+            )
+            if company_id:
+                q2 = q2.eq("company_id", company_id)
+            rows = list((q2.execute()).data or [])
+        except Exception:
+            q3 = sb.table("invoices").select(
+                "id,invoice_number,vendor_name,total_amount,currency,due_date,status,"
+                "payment_status,risk_score,risk_flags,created_at,company_id,tax_amount"
+            )
+            if company_id:
+                q3 = q3.eq("company_id", company_id)
+            rows = list((q3.execute()).data or [])
 
     outstanding = 0.0
     due_week_count = 0
@@ -176,7 +187,8 @@ def build_cfo_daily_summary(
     overdue_amount = 0.0
     high_risk_flags = 0
     pending_approvals = 0
-    vendor_map: dict[str, float] = defaultdict(float)
+    vendor_amount: dict[str, float] = defaultdict(float)
+    vendor_count: dict[str, int] = defaultdict(int)
     currencies: list[str] = []
     itc_eligible = 0.0
     itc_blocked = 0.0
@@ -201,6 +213,20 @@ def build_cfo_daily_summary(
         "sec 17",
     )
 
+    def _invoice_gst(inv: dict[str, Any]) -> float:
+        """Prefer gst_amount; else CGST+SGST+IGST; else tax_amount (UAE invoices)."""
+        gst = float(inv.get("gst_amount") or 0)
+        if gst > 0:
+            return gst
+        parts = (
+            float(inv.get("cgst_amount") or inv.get("cgst") or 0)
+            + float(inv.get("sgst_amount") or inv.get("sgst") or 0)
+            + float(inv.get("igst_amount") or inv.get("igst") or 0)
+        )
+        if parts > 0:
+            return parts
+        return float(inv.get("tax_amount") or 0)
+
     for inv in rows:
         amt = float(inv.get("total_amount") or 0)
         currency = (inv.get("currency") or "").strip()
@@ -222,7 +248,7 @@ def build_cfo_daily_summary(
                 pending_period += 1
 
         if is_india:
-            gst = float(inv.get("gst_amount") or 0)
+            gst = _invoice_gst(inv)
             tds_payable += float(inv.get("tds_amount") or 0)
             if gst > 0:
                 text = f"{inv.get('ifrs_category') or ''} {inv.get('description') or ''} {inv.get('hsn_sac_code') or ''}".lower()
@@ -262,11 +288,16 @@ def build_cfo_daily_summary(
                     high_risk_flags += 1
 
         vendor = (inv.get("vendor_name") or "Unknown").strip() or "Unknown"
-        vendor_map[vendor] += amt
+        vendor_amount[vendor] += amt
+        vendor_count[vendor] += 1
 
     top_vendors = [
-        {"vendor_name": name, "amount": round(amount, 2), "count": 0}
-        for name, amount in sorted(vendor_map.items(), key=lambda x: -x[1])[:3]
+        {
+            "vendor_name": name,
+            "amount": round(amount, 2),
+            "count": vendor_count[name],
+        }
+        for name, amount in sorted(vendor_amount.items(), key=lambda x: -x[1])[:3]
     ]
 
     if currencies:
