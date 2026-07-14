@@ -1,0 +1,71 @@
+{
+  "name": "Vendor WhatsApp — Approved/Paid",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vendor-whatsapp-status",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-vendor-status",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "vendor-whatsapp-status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.body?.type || $json.type}}",
+              "operation": "equals",
+              "value2": "vendor_status"
+            }
+          ]
+        }
+      },
+      "id": "if-vendor-status",
+      "name": "Is vendor_status?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "fromNumber": "={{$env.TWILIO_WHATSAPP_FROM}}",
+        "toNumber": "={{$json.body?.to || $json.to}}",
+        "message": "={{$json.body?.message || $json.message}}",
+        "options": {}
+      },
+      "id": "twilio-whatsapp",
+      "name": "Twilio WhatsApp",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [720, 220],
+      "credentials": {
+        "twilioApi": {
+          "id": "REPLACE_TWILIO_CREDENTIAL_ID",
+          "name": "Twilio account"
+        }
+      },
+      "notes": "Template: Dear {vendor}, invoice {number} for AED {amount} has been {status}. Payment due {due_date}. Ref: Gnanova Finance OS — pre-built in payload.message"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Is vendor_status?", "type": "main", "index": 0 }]]
+    },
+    "Is vendor_status?": {
+      "main": [
+        [{ "node": "Twilio WhatsApp", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "gnanova-vendor-whatsapp-status" },
+  "versionId": "1.0.0"
+}

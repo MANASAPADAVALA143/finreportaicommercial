@@ -24,6 +24,7 @@ import { CurrencyCombobox } from '@/components/ap-invoice/CurrencyCombobox';
 import { ApprovalRulesSection } from '@/components/approvals/ApprovalRulesSection';
 import { Checkbox } from '@/components/ui/checkbox';
 import { getMyCompany, requireCompanyId } from '@/lib/ap-invoice/companyService';
+import { insertGlAccount, listGlAccounts, deleteGlAccount } from '@/lib/ap-invoice/glAccountsStore';
 import {
   testTallyConnection,
   syncApprovedToTally,
@@ -49,8 +50,15 @@ export function Settings() {
   const { toast } = useToast();
   const { market, setMarket, isUAE } = useMarket();
   const [ftaRegistration, setFtaRegistration] = useState('');
-  const [vatFilingFrequency, setVatFilingFrequency] = useState<'monthly' | 'quarterly'>('quarterly');
+  const [vatFilingFrequency, setVatFilingFrequency] = useState<'monthly' | 'quarterly'>('monthly');
   const [emirate, setEmirate] = useState('');
+  const [indiaGstin, setIndiaGstin] = useState(() => {
+    try {
+      return localStorage.getItem('invoiceflow_company_tax_id') || '';
+    } catch {
+      return '';
+    }
+  });
   const [ifrsEnabled, setIfrsEnabled] = useState(false);
   const [apiEndpoint, setApiEndpoint] = useState('');
   const [apiEndpointClassifyJson, setApiEndpointClassifyJson] = useState('');
@@ -105,6 +113,7 @@ export function Settings() {
     company_type: 'private_limited',
     gst_registered: 'Yes',
     tds_applicable: 'Yes',
+    cfo_email: '',
     export_zoho_enabled: true,
     export_tally_enabled: true,
   });
@@ -116,6 +125,56 @@ export function Settings() {
     fetchCompanySettingsRow();
     void fetchCompanyMarketFields();
   }, []);
+
+  /** When UAE market toggle is on, keep Company Settings defaults on AE / AED / IFRS. */
+  useEffect(() => {
+    if (!isUAE) return;
+    setCompanyRow((prev) => {
+      if (prev.country === 'AE' && prev.base_currency === 'AED') return prev;
+      const ae = COUNTRIES.find((c) => c.code === 'AE');
+      if (!ae) return prev;
+      return {
+        ...prev,
+        country: 'AE',
+        base_currency: 'AED',
+        accounting_standard: ae.standard,
+        date_format: ae.dateFormat,
+        timezone: prev.timezone === 'Asia/Kolkata' || !prev.timezone ? 'Asia/Dubai' : prev.timezone,
+        fy_start: prev.fy_start === '04-01' ? '01-01' : prev.fy_start,
+      };
+    });
+  }, [isUAE]);
+
+  /** When India market is on, keep IN / INR / Ind AS / Apr–Mar FY. */
+  useEffect(() => {
+    if (isUAE) return;
+    setCompanyRow((prev) => {
+      const inCountry = COUNTRIES.find((c) => c.code === 'IN');
+      const std =
+        prev.accounting_standard === 'IFRS' || !prev.accounting_standard
+          ? 'IND_AS'
+          : prev.accounting_standard === 'Ind AS'
+            ? 'IND_AS'
+            : prev.accounting_standard;
+      if (
+        prev.country === 'IN' &&
+        prev.base_currency === 'INR' &&
+        (prev.accounting_standard === 'IND_AS' || prev.accounting_standard === 'IGAAP') &&
+        prev.fy_start === '04-01'
+      ) {
+        return prev.accounting_standard === std ? prev : { ...prev, accounting_standard: std };
+      }
+      return {
+        ...prev,
+        country: 'IN',
+        base_currency: 'INR',
+        accounting_standard: std === 'IFRS' ? 'IND_AS' : std,
+        date_format: inCountry?.dateFormat || 'DD-MM-YYYY',
+        timezone: prev.timezone === 'Asia/Dubai' || !prev.timezone ? 'Asia/Kolkata' : prev.timezone,
+        fy_start: '04-01',
+      };
+    });
+  }, [isUAE, market]);
 
   async function fetchCompanyMarketFields() {
     try {
@@ -156,6 +215,7 @@ export function Settings() {
         company_type: (data as { company_type?: string }).company_type ?? 'private_limited',
         gst_registered: (data as { gst_registered?: string }).gst_registered ?? 'Yes',
         tds_applicable: (data as { tds_applicable?: string }).tds_applicable ?? 'Yes',
+        cfo_email: (data as { cfo_email?: string }).cfo_email ?? '',
         export_zoho_enabled: (data as { export_zoho_enabled?: boolean }).export_zoho_enabled ?? true,
         export_tally_enabled: (data as { export_tally_enabled?: boolean }).export_tally_enabled ?? true,
       });
@@ -180,18 +240,45 @@ export function Settings() {
     setSavingCompany(true);
     try {
       const company_id = await requireCompanyId();
+      // Persist market toggle into company_settings so reload matches UAE/India
+      const countryCode = isUAE ? 'AE' : companyRow.country === 'AE' && market === 'india' ? 'IN' : companyRow.country;
+      const ae = COUNTRIES.find((c) => c.code === 'AE');
+      const effective = isUAE
+        ? {
+            country: 'AE',
+            base_currency: 'AED',
+            accounting_standard: companyRow.accounting_standard || ae?.standard || 'IFRS',
+            date_format: companyRow.date_format || ae?.dateFormat || 'DD-MM-YYYY',
+            timezone: companyRow.timezone === 'Asia/Kolkata' ? 'Asia/Dubai' : companyRow.timezone || 'Asia/Dubai',
+            fy_start: companyRow.fy_start === '04-01' ? '01-01' : companyRow.fy_start || '01-01',
+          }
+        : {
+            country: countryCode === 'AE' ? 'IN' : countryCode || 'IN',
+            base_currency: companyRow.base_currency === 'AED' ? 'INR' : companyRow.base_currency || 'INR',
+            accounting_standard:
+              companyRow.accounting_standard === 'IFRS' || !companyRow.accounting_standard
+                ? 'IND_AS'
+                : companyRow.accounting_standard === 'Ind AS'
+                  ? 'IND_AS'
+                  : companyRow.accounting_standard,
+            date_format: companyRow.date_format || 'DD-MM-YYYY',
+            timezone: companyRow.timezone === 'Asia/Dubai' ? 'Asia/Kolkata' : companyRow.timezone || 'Asia/Kolkata',
+            fy_start: '04-01',
+          };
+
       const payload = {
         company_id,
         company_name: companyRow.company_name || null,
-        country: companyRow.country,
-        base_currency: companyRow.base_currency,
-        accounting_standard: companyRow.accounting_standard,
-        date_format: companyRow.date_format,
-        timezone: companyRow.timezone,
-        fy_start: companyRow.fy_start,
+        country: effective.country,
+        base_currency: effective.base_currency,
+        accounting_standard: effective.accounting_standard,
+        date_format: effective.date_format,
+        timezone: effective.timezone,
+        fy_start: effective.fy_start,
         company_type: companyRow.company_type || null,
         gst_registered: companyRow.gst_registered || null,
         tds_applicable: companyRow.tds_applicable || null,
+        cfo_email: companyRow.cfo_email?.trim() || null,
         export_zoho_enabled: companyRow.export_zoho_enabled,
         export_tally_enabled: companyRow.export_tally_enabled,
         updated_at: new Date().toISOString(),
@@ -205,10 +292,21 @@ export function Settings() {
         if (data?.id) setCompanyRow((p) => ({ ...p, id: data.id }));
       }
 
+      setCompanyRow((p) => ({
+        ...p,
+        country: effective.country,
+        base_currency: effective.base_currency,
+        accounting_standard: effective.accounting_standard,
+        date_format: effective.date_format,
+        timezone: effective.timezone,
+        fy_start: effective.fy_start,
+      }));
+
       const { error: marketErr } = await supabase
         .from('companies')
         .update({
-          market,
+          market: isUAE ? 'uae' : market,
+          admin_email: companyRow.cfo_email?.trim() || null,
           fta_registration: ftaRegistration.trim() || null,
           vat_filing_frequency: vatFilingFrequency,
           emirate: emirate || null,
@@ -216,7 +314,14 @@ export function Settings() {
         .eq('id', company_id);
       if (marketErr) throw marketErr;
 
-      toast({ title: 'Saved', description: 'Company settings updated.' });
+      if (isUAE && !ftaRegistration.trim()) {
+        toast({
+          title: 'Saved — FTA Registration recommended',
+          description: 'Add your FTA Registration Number for UAE VAT compliance.',
+        });
+      } else {
+        toast({ title: 'Saved', description: 'Company settings updated.' });
+      }
     } catch (e: unknown) {
       console.error(e);
       toast({
@@ -453,14 +558,20 @@ export function Settings() {
   async function fetchCOA() {
     try {
       const cid = (await getMyCompany())?.id;
-      let q = supabase
-        .from('chart_of_accounts')
-        .select('gl_code, account_name, account_type, ifrs_mapping, department, cost_center')
-        .order('gl_code');
-      if (cid) q = q.eq('company_id', cid);
-      const { data, error } = await q;
-      if (error) throw error;
-      setCoaEntries(data || []);
+      let rows = await listGlAccounts(supabase, cid);
+      if (rows.length === 0 && cid) {
+        rows = await listGlAccounts(supabase, null);
+      }
+      setCoaEntries(
+        rows.map((r) => ({
+          gl_code: r.gl_code,
+          account_name: r.gl_name,
+          account_type: r.account_type,
+          ifrs_mapping: r.standard_reference ?? '',
+          department: r.department ?? '',
+          cost_center: r.cost_center ?? '',
+        })),
+      );
     } catch (e) {
       console.warn('COA fetch failed (table may not exist):', e);
       setCoaEntries([]);
@@ -469,21 +580,24 @@ export function Settings() {
 
   function downloadCOATemplate() {
     const rows = [
-      ['gl_code', 'account_name', 'account_type', 'ifrs_mapping', 'department', 'cost_center'],
-      ['4100', 'IT Hardware & Software', 'Expense', 'IT Infrastructure', 'IT', 'CC-IT-01'],
-      ['4200', 'Consulting & Advisory Fees', 'Expense', 'Professional Services', 'Operations', 'CC-OPS-01'],
-      ['4300', 'Office & Admin Supplies', 'Expense', 'Office Supplies', 'Admin', 'CC-ADM-01'],
-      ['4400', 'Utilities & Telecoms', 'Expense', 'Utilities', 'Facilities', 'CC-FAC-01'],
-      ['4500', 'Marketing & Brand Spend', 'Expense', 'Marketing & Advertising', 'Marketing', 'CC-MKT-01'],
-      ['4600', 'Rent & Premises', 'Expense', 'Rent & Lease', 'Facilities', 'CC-FAC-02'],
-      ['4700', 'Travel & Subsistence', 'Expense', 'Travel & Entertainment', 'Sales', 'CC-SLS-01'],
-      ['1200', 'Fixed Assets - IT Equipment', 'Asset', 'IT Infrastructure', 'IT', 'CC-IT-02'],
+      ['gl_code', 'gl_name', 'account_type', 'vat_treatment', 'department', 'cost_center', 'standard_reference'],
+      ['1000', 'Property Plant & Equipment', 'Asset', 'out_of_scope', 'Operations', 'OPS-001', 'IAS 16'],
+      ['1100', 'Cash & Bank', 'Asset', 'out_of_scope', 'Finance', 'FIN-001', 'IAS 7'],
+      ['1810', 'Input VAT Recoverable', 'Asset', 'standard', 'Finance', 'FIN-001', 'UAE VAT'],
+      ['2100', 'Accounts Payable', 'Liability', 'out_of_scope', 'Finance', 'FIN-001', 'IAS 1'],
+      ['2200', 'Output VAT Payable', 'Liability', 'standard', 'Finance', 'FIN-001', 'UAE VAT'],
+      ['4100', 'Revenue - Services', 'Revenue', 'standard', 'Sales', 'SAL-001', 'IFRS 15'],
+      ['5000', 'Cost of Sales', 'COGS', 'standard', 'Operations', 'OPS-001', 'IAS 2'],
+      ['6100', 'Professional Services', 'Expense', 'standard', 'Operations', 'OPS-001', 'IAS 1'],
+      ['6200', 'Lease Expense', 'Expense', 'standard', 'Facilities', 'FAC-001', 'IFRS 16'],
+      ['6300', 'Utilities', 'Expense', 'standard', 'Facilities', 'FAC-001', 'IAS 1'],
+      ['7100', 'Finance Costs', 'Expense', 'exempt', 'Finance', 'FIN-001', 'IAS 23'],
     ];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Chart of Accounts');
-    XLSX.writeFile(wb, 'chart_of_accounts_template.csv');
-    toast({ title: 'Downloaded', description: 'chart_of_accounts_template.csv' });
+    XLSX.writeFile(wb, 'gl_accounts_template.csv');
+    toast({ title: 'Downloaded', description: 'gl_accounts_template.csv (columns match GL Accounts)' });
   }
 
   async function handleCOAUpload(file: File) {
@@ -495,21 +609,52 @@ export function Settings() {
       const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
       const rows = json.map((r) => ({
         gl_code: String(r.gl_code ?? r['GL Code'] ?? r.GL_CODE ?? '').trim(),
-        account_name: String(r.account_name ?? r['Account Name'] ?? r.accountName ?? '').trim(),
+        gl_name: String(
+          r.gl_name ?? r.account_name ?? r['Account Name'] ?? r.accountName ?? r['GL Name'] ?? '',
+        ).trim(),
         account_type: String(r.account_type ?? r['Account Type'] ?? 'Expense').trim() || 'Expense',
-        ifrs_mapping: String(r.ifrs_mapping ?? r['IFRS Mapping'] ?? r.ifrsMapping ?? '').trim(),
+        vat_treatment: String(r.vat_treatment ?? r['VAT Treatment'] ?? '').trim() || null,
         department: String(r.department ?? r.Department ?? '').trim() || null,
         cost_center: String(r.cost_center ?? r['Cost Center'] ?? r.costCenter ?? '').trim() || null,
-      })).filter((r) => r.gl_code && r.account_name);
+        standard_reference: String(
+          r.standard_reference ?? r.ifrs_mapping ?? r['IFRS Mapping'] ?? '',
+        ).trim() || null,
+      })).filter((r) => r.gl_code && r.gl_name);
       if (rows.length === 0) {
-        toast({ title: 'No valid rows', description: 'Upload a CSV/Excel with gl_code and account_name columns.', variant: 'destructive' });
+        toast({
+          title: 'No valid rows',
+          description: 'Upload a CSV/Excel with gl_code and gl_name (or account_name) columns.',
+          variant: 'destructive',
+        });
         return;
       }
       const company_id = await requireCompanyId();
-      const { error } = await supabase.from('chart_of_accounts').insert(rows.map((r) => ({ ...r, company_id })));
-      if (error) throw error;
+      let inserted = 0;
+      const errors: string[] = [];
+      for (const r of rows) {
+        const { error } = await insertGlAccount(supabase, {
+          company_id,
+          gl_code: r.gl_code,
+          gl_name: r.gl_name,
+          account_type: r.account_type,
+          department: r.department,
+          cost_center: r.cost_center,
+          imported_from: 'csv',
+          standard_reference: r.standard_reference ?? r.vat_treatment,
+        });
+        if (error) errors.push(`${r.gl_code}: ${error}`);
+        else inserted++;
+      }
       await fetchCOA();
-      toast({ title: 'Success', description: `Uploaded ${rows.length} COA entries.` });
+      if (errors.length) {
+        toast({
+          title: `Imported ${inserted}, ${errors.length} failed`,
+          description: errors.slice(0, 3).join('; '),
+          variant: 'destructive',
+        });
+      } else {
+        toast({ title: 'Success', description: `Uploaded ${inserted} GL account(s).` });
+      }
     } catch (e: unknown) {
       toast({ title: 'Upload failed', description: String(e instanceof Error ? e.message : e), variant: 'destructive' });
     } finally {
@@ -521,8 +666,10 @@ export function Settings() {
     if (!confirm('Clear all Chart of Accounts entries? This cannot be undone.')) return;
     try {
       const company_id = await requireCompanyId();
-      const { error } = await supabase.from('chart_of_accounts').delete().eq('company_id', company_id);
-      if (error) throw error;
+      const rows = await listGlAccounts(supabase, company_id);
+      for (const r of rows) {
+        await deleteGlAccount(supabase, r.id);
+      }
       setCoaEntries([]);
       toast({ title: 'Cleared', description: 'Chart of Accounts cleared.' });
     } catch (e: unknown) {
@@ -629,6 +776,19 @@ export function Settings() {
                 onChange={(e) => setCompanyRow({ ...companyRow, company_name: e.target.value })}
                 placeholder="Your company legal name"
               />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="co-cfo-email">CFO email (daily briefing)</Label>
+              <Input
+                id="co-cfo-email"
+                type="email"
+                value={companyRow.cfo_email}
+                onChange={(e) => setCompanyRow({ ...companyRow, cfo_email: e.target.value })}
+                placeholder="cfo@yourcompany.com"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                EC2 cron sends the daily AP briefing here automatically — no per-client server setup.
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Country</Label>
@@ -863,12 +1023,14 @@ export function Settings() {
             {isUAE && (
               <div className="grid gap-4 md:grid-cols-2 rounded-lg border border-sky-200 bg-sky-50/40 p-4">
                 <div className="space-y-2">
-                  <Label>FTA Registration Number</Label>
+                  <Label>FTA Registration Number <span className="text-red-600">*</span></Label>
                   <Input
-                    placeholder="e.g. 100234567890123"
+                    placeholder="15-digit FTA TRN e.g. 100234567890123"
                     value={ftaRegistration}
                     onChange={(e) => setFtaRegistration(e.target.value)}
+                    required
                   />
+                  <p className="text-[11px] text-muted-foreground">Required for UAE VAT filing and GulfTax sync.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>VAT Filing Frequency</Label>
@@ -890,6 +1052,45 @@ export function Settings() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+            )}
+            {!isUAE && (
+              <div className="grid gap-4 md:grid-cols-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-4">
+                <div className="space-y-2">
+                  <Label>Company GSTIN</Label>
+                  <Input
+                    placeholder="15-digit GSTIN e.g. 29AAAAA0000A1Z5"
+                    value={indiaGstin}
+                    onChange={(e) => {
+                      const v = e.target.value.toUpperCase();
+                      setIndiaGstin(v);
+                      try {
+                        localStorage.setItem('invoiceflow_company_tax_id', v);
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    maxLength={15}
+                  />
+                  <p className="text-[11px] text-muted-foreground">Used on GSTR-2B recon — not FTA TRN.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>GST filing frequency</Label>
+                  <Select
+                    value={vatFilingFrequency}
+                    onValueChange={(v) => setVatFilingFrequency(v as 'monthly' | 'quarterly')}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly (default)</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">India GSTR-1 / GSTR-3B are typically monthly.</p>
+                </div>
+                <div className="space-y-2 md:col-span-2 text-xs text-muted-foreground">
+                  Country: India · Currency: INR · Tax: GST · Standard: Ind AS / IGAAP · FY: April–March
                 </div>
               </div>
             )}

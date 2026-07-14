@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Daily CFO Briefing</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#111827;">
+  <!--
+    Placeholders filled by n8n Code node from buildCfoSummary-extended payload:
+      {{period_label}} {{currency}}
+      {{total_outstanding}} {{due_this_week_count}} {{due_this_week_amount}}
+      {{overdue_count}} {{overdue_amount}}
+      {{high_risk_flags}} {{pending_approvals}}
+      {{top_vendors[0..2].vendor_name / amount}}
+  -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb;">
+          <tr>
+            <td style="background:#0f766e;padding:20px 28px;">
+              <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#ccfbf1;">Gnanova Finance OS</div>
+              <div style="font-size:22px;font-weight:700;color:#ffffff;margin-top:4px;">Daily CFO Briefing</div>
+              <div style="font-size:13px;color:#99f6e4;margin-top:6px;">{{period_label}} · Asia/Dubai 08:00</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 28px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td width="50%" style="padding:0 8px 12px 0;vertical-align:top;">
+                    <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:14px;">
+                      <div style="font-size:11px;color:#0f766e;text-transform:uppercase;letter-spacing:0.06em;">Total outstanding</div>
+                      <div style="font-size:22px;font-weight:700;margin-top:4px;">{{currency}} {{total_outstanding}}</div>
+                    </div>
+                  </td>
+                  <td width="50%" style="padding:0 0 12px 8px;vertical-align:top;">
+                    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:14px;">
+                      <div style="font-size:11px;color:#c2410c;text-transform:uppercase;letter-spacing:0.06em;">Due this week</div>
+                      <div style="font-size:22px;font-weight:700;margin-top:4px;">{{due_this_week_count}}</div>
+                      <div style="font-size:12px;color:#9a3412;margin-top:2px;">{{currency}} {{due_this_week_amount}} due</div>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td width="50%" style="padding:0 8px 12px 0;vertical-align:top;">
+                    <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;">
+                      <div style="font-size:11px;color:#b91c1c;text-transform:uppercase;letter-spacing:0.06em;">Overdue</div>
+                      <div style="font-size:22px;font-weight:700;margin-top:4px;">{{overdue_count}}</div>
+                      <div style="font-size:12px;color:#991b1b;margin-top:2px;">{{currency}} {{overdue_amount}}</div>
+                    </div>
+                  </td>
+                  <td width="50%" style="padding:0 0 12px 8px;vertical-align:top;">
+                    <div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:14px;">
+                      <div style="font-size:11px;color:#7e22ce;text-transform:uppercase;letter-spacing:0.06em;">High risk flags</div>
+                      <div style="font-size:22px;font-weight:700;margin-top:4px;">{{high_risk_flags}}</div>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top:8px;padding:14px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+                <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;">Pending approvals</div>
+                <div style="font-size:20px;font-weight:700;margin-top:4px;">{{pending_approvals}}</div>
+              </div>
+
+              <div style="margin-top:20px;">
+                <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Top 3 vendors by outstanding</div>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                  <thead>
+                    <tr style="background:#f9fafb;">
+                      <th align="left" style="padding:8px 12px;font-size:11px;color:#6b7280;text-transform:uppercase;">Vendor</th>
+                      <th align="right" style="padding:8px 12px;font-size:11px;color:#6b7280;text-transform:uppercase;">Outstanding</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">1. {{top_vendors.0.vendor_name}}</td>
+                      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;">{{currency}} {{top_vendors.0.amount}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">2. {{top_vendors.1.vendor_name}}</td>
+                      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;">{{currency}} {{top_vendors.1.amount}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:8px 12px;">3. {{top_vendors.2.vendor_name}}</td>
+                      <td style="padding:8px 12px;text-align:right;">{{currency}} {{top_vendors.2.amount}}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <p style="margin:20px 0 0;font-size:12px;color:#6b7280;line-height:1.5;">
+                Open AP InvoiceFlow → CFO Dashboard for drill-down.
+                Ref: Gnanova Finance OS · Automated daily briefing.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

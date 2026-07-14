@@ -27,6 +27,7 @@ def send_notification(
     subject: str,
     body: str,
     *,
+    html: str | None = None,
     attachment: bytes | None = None,
     attachment_filename: str = "attachment.pdf",
 ) -> bool:
@@ -43,8 +44,10 @@ def send_notification(
                 "from": from_addr,
                 "to": [to_email],
                 "subject": subject,
-                "text": body,
+                "text": body or "See HTML version.",
             }
+            if html:
+                payload["html"] = html
             if attachment:
                 payload["attachments"] = [{
                     "filename": attachment_filename,
@@ -72,12 +75,16 @@ def send_notification(
     if smtp_host and smtp_user and smtp_pass:
         try:
             msg: MIMEMultipart | MIMEText
-            if attachment:
-                msg = MIMEMultipart()
-                msg.attach(MIMEText(body))
-                part = MIMEApplication(attachment, Name=attachment_filename)
-                part.add_header("Content-Disposition", "attachment", filename=attachment_filename)
-                msg.attach(part)
+            if attachment or html:
+                msg = MIMEMultipart("alternative" if html and not attachment else "mixed")
+                if body:
+                    msg.attach(MIMEText(body, "plain", "utf-8"))
+                if html:
+                    msg.attach(MIMEText(html, "html", "utf-8"))
+                if attachment:
+                    part = MIMEApplication(attachment, Name=attachment_filename)
+                    part.add_header("Content-Disposition", "attachment", filename=attachment_filename)
+                    msg.attach(part)
             else:
                 msg = MIMEText(body)
             msg["Subject"] = subject

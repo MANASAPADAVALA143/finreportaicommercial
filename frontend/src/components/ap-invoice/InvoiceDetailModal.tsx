@@ -98,6 +98,7 @@ import { getTaxLabel } from '@/utils/taxConfig';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { notifyVendorStatusWhatsApp } from '@/lib/ap-invoice/whatsappService';
 import { triggerGlPostForApprovedInvoice } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
@@ -778,6 +779,8 @@ export function InvoiceDetailModal({
         new_value: 'Approved',
         user_name: approverName,
       });
+
+      void notifyVendorStatusWhatsApp(invoice, 'Approved');
 
       try {
         const cid = invoice.company_id || (await getMyCompany())?.id || null;

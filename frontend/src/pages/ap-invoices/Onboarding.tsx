@@ -41,6 +41,7 @@ export function Onboarding() {
   const [standard, setStandard] = useState('IFRS');
   const [loadStandardGl, setLoadStandardGl] = useState(true);
   const [approverEmails, setApproverEmails] = useState('');
+  const [cfoEmail, setCfoEmail] = useState('');
   const [autoUnder, setAutoUnder] = useState('25000');
   const [teamEmails, setTeamEmails] = useState('');
 
@@ -129,6 +130,25 @@ export function Onboarding() {
         },
       });
       if (cfgErr) console.warn('company_config:', cfgErr.message);
+
+      const cfo = cfoEmail.trim() || user.email || null;
+      const { error: settingsErr } = await supabase.from('company_settings').insert({
+        company_id: companyId,
+        company_name: companyName.trim() || 'My organisation',
+        country: market === 'uae' ? 'AE' : 'IN',
+        base_currency: market === 'uae' ? 'AED' : 'INR',
+        accounting_standard: standard === 'Ind AS' ? 'IND_AS' : standard === 'IFRS' ? 'IFRS' : standard,
+        date_format: 'DD-MM-YYYY',
+        timezone: market === 'uae' ? 'Asia/Dubai' : 'Asia/Kolkata',
+        fy_start: market === 'uae' ? '01-01' : '04-01',
+        cfo_email: cfo,
+        updated_at: new Date().toISOString(),
+      });
+      if (settingsErr) console.warn('company_settings:', settingsErr.message);
+
+      if (cfo) {
+        await supabase.from('companies').update({ admin_email: cfo }).eq('id', companyId);
+      }
 
       if (loadStandardGl) {
         /* Optional: chart seed can be run from Settings later */
@@ -296,20 +316,46 @@ export function Onboarding() {
       {step === 3 && (
         <Card>
           <CardHeader>
-            <CardTitle>Approvals</CardTitle>
-            <CardDescription>Comma-separated approver emails (optional).</CardDescription>
+            <CardTitle>Approvals &amp; CFO email</CardTitle>
+            <CardDescription>
+              Daily CFO briefing goes to this address automatically (AED or INR by market). Optional approver emails for the chain.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <TextareaLike value={approverEmails} onChange={setApproverEmails} placeholder="cfo@company.com, fm@company.com" />
             <div>
-              <Label>Auto-approve below (â‚¹)</Label>
+              <Label>CFO email (required for daily briefing)</Label>
+              <Input
+                className="mt-1"
+                type="email"
+                value={cfoEmail}
+                onChange={(e) => setCfoEmail(e.target.value)}
+                placeholder="cfo@yourcompany.com"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Stored on company settings — no server changes when you add clients.
+              </p>
+            </div>
+            <div>
+              <Label>Approver emails (optional)</Label>
+              <TextareaLike value={approverEmails} onChange={setApproverEmails} placeholder="cfo@company.com, fm@company.com" />
+            </div>
+            <div>
+              <Label>Auto-approve below (₹)</Label>
               <Input className="mt-1" value={autoUnder} onChange={(e) => setAutoUnder(e.target.value)} />
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setStep(2)}>
                 Back
               </Button>
-              <Button className="flex-1" onClick={() => setStep(4)}>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  if (!cfoEmail.trim() && !approverEmails.trim()) {
+                    /* allow continue — finish() falls back to signed-in user email */
+                  }
+                  setStep(4);
+                }}
+              >
                 Continue
               </Button>
             </div>

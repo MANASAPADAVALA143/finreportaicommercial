@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import type { Invoice, PaymentBatch } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 import { getMyCompany, requireCompanyId } from './companyService';
+import { notifyVendorStatusWhatsApp } from './whatsappService';
 
 /**
  * Normalize legacy / mixed-case payment_status for queue, calendar, and cash-flow logic.
@@ -70,6 +71,11 @@ export async function schedulePayments(invoiceIds: string[], paymentDate: string
 /** Mark invoices as paid (updates workflow status + payment fields) */
 export async function markAsPaid(invoiceIds: string[], paymentReference: string) {
   if (!invoiceIds.length) return;
+  const { data: beforeRows } = await supabase
+    .from('invoices')
+    .select('id, vendor_phone, vendor_name, invoice_number, total_amount, currency, due_date')
+    .in('id', invoiceIds);
+
   const { error } = await supabase
     .from('invoices')
     .update({
@@ -84,6 +90,10 @@ export async function markAsPaid(invoiceIds: string[], paymentReference: string)
     invoiceIds,
     paymentReference,
   });
+
+  for (const inv of beforeRows ?? []) {
+    void notifyVendorStatusWhatsApp(inv, 'Paid');
+  }
 }
 
 /** Invoices in the payment queue: unpaid / overdue / scheduled, not fully paid in workflow */
