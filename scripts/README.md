@@ -26,13 +26,25 @@ Logrotate sample: `logrotate-gnanova.conf`
 3. `CFO_EMAIL_BY_COMPANY` JSON env map
 4. `CFO_EMAIL` fallback (local / ops override)
 
-## One-time EC2 setup
+## Docker (finreportai-backend)
+
+Scripts ship inside the image at `/app/scripts/` (build context = repo root).
 
 ```bash
+# From repo root on EC2
 cd /home/ubuntu/finreportaicommercial
-git pull   # or rsync scripts/
-sudo bash scripts/setup_crons.sh
+git pull
+cd backend && docker compose build --no-cache backend && docker compose up -d
+
+# Smoke test inside container (uses image venv — has supabase/httpx)
+docker exec -e CFO_EMAIL=you@gmail.com finreportai-backend \
+  python3 /app/scripts/cfo_email_uae.py --test --send \
+  --company-id 0deaa402-f6a1-4c38-90e8-711f4fd0aa09
 ```
+
+Crons on the host should call `docker exec … python3 /app/scripts/…` **or** run
+`setup_crons.sh` after pointing `PYTHON` / paths at docker exec wrappers.
+
 
 ## Manual smoke tests
 

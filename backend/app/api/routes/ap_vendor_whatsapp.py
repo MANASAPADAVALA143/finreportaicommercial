@@ -13,9 +13,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ap", tags=["ap-vendor-whatsapp"])
 
-# Import scripts/vendor_whatsapp.py helpers (repo_root/scripts)
-_REPO = Path(__file__).resolve().parents[4]
-_SCRIPTS = _REPO / "scripts"
+# Import scripts/vendor_whatsapp.py (host: repo/scripts, Docker: /app/scripts)
+def _scripts_dir() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "scripts"
+        if (candidate / "vendor_whatsapp.py").is_file():
+            return candidate
+    return here.parents[4] / "scripts"
+
+
+_SCRIPTS = _scripts_dir()
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 

@@ -20,8 +20,12 @@ from typing import Any, Optional
 import httpx
 
 # Repo root = parent of scripts/  →  …/finreportaicommercial
+# Docker image layout: /app/scripts + /app/app (no nested backend/)
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BACKEND_ROOT = REPO_ROOT / "backend"
+if (REPO_ROOT / "backend" / "app").is_dir():
+    BACKEND_ROOT = REPO_ROOT / "backend"
+else:
+    BACKEND_ROOT = REPO_ROOT
 ENV_PATH = BACKEND_ROOT / ".env"
 
 # Prefer EC2 log dir; fall back to repo-local logs for --test on Windows/dev
