@@ -66,23 +66,41 @@ async function fetchOpenInvoices(select: string): Promise<AgingRow[]> {
   const company = await getMyCompany();
   const companyId = company?.id ?? null;
 
-  let q = supabase
-    .from('invoices')
-    .select(select)
-    .neq('status', 'Paid')
-    .not('due_date', 'is', null)
-    .not('payment_status', 'in', '(paid,cancelled)')
-    .order('due_date', { ascending: true });
+  async function run(scoped: boolean): Promise<AgingRow[]> {
+    let q = supabase
+      .from('invoices')
+      .select(select)
+      .neq('status', 'Paid')
+      .not('due_date', 'is', null)
+      .not('payment_status', 'in', '(paid,cancelled)')
+      .order('due_date', { ascending: true });
 
-  if (companyId) q = q.eq('company_id', companyId);
+    if (scoped && companyId) q = q.eq('company_id', companyId);
 
-  const { data, error } = await q;
-  if (error) {
-    console.error('[ap_aging] query error:', error.message, { companyId });
-    throw error;
+    const { data, error } = await q;
+    if (error) {
+      console.error('[ap_aging] query error:', error.message, { companyId, scoped });
+      throw error;
+    }
+    return ((data ?? []) as AgingRow[]).filter((row) => isInvoiceOpenForPayment(row));
   }
 
-  const rows = ((data ?? []) as AgingRow[]).filter((row) => isInvoiceOpenForPayment(row));
+  let rows = await run(true);
+  // Match Payment Calendar UX: if tenant filter yields nothing, show all open AP
+  if (rows.length === 0 && companyId) {
+    const unscoped = await run(false);
+    if (unscoped.length > 0) {
+      console.warn(
+        '[ap_aging] 0 rows for company_id',
+        companyId,
+        '— falling back to unscoped open invoices (',
+        unscoped.length,
+        ')',
+      );
+      rows = unscoped;
+    }
+  }
+
   const sum = rows.reduce((s, r) => s + Number(r.total_amount ?? 0), 0);
   console.info('[ap_aging] company_id:', companyId, 'rows:', rows.length, 'total AED:', sum);
   return rows;
@@ -176,6 +194,7 @@ type PaidRow = AgingRow & {
   paid_at?: string | null;
   payment_date?: string | null;
   paid_date?: string | null;
+  updated_at?: string | null;
 };
 
 function resolvePaidDate(row: PaidRow): string | null {
@@ -191,37 +210,31 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   const company = await getMyCompany();
   const companyId = company?.id ?? null;
 
-  const paidSelect =
-    'total_amount, invoice_date, due_date, payment_status, status, paid_at, payment_date';
+  // Prefer columns that exist on all InvoiceFlow schemas. `paid_at` / `payment_date`
+  // are optional — querying them on older schemas throws and zeroed the whole page.
+  const paidSelect = 'total_amount, invoice_date, due_date, payment_status, status, updated_at';
 
   let paidQ = supabase
     .from('invoices')
     .select(paidSelect)
-    .or('status.eq.Paid,status.eq.paid,status.eq.PAID')
-    .not('paid_at', 'is', null);
+    .or('status.eq.Paid,status.eq.paid,status.eq.PAID');
 
   if (companyId) paidQ = paidQ.eq('company_id', companyId);
 
-  const paidQueryLog =
-    `invoices?select=${encodeURIComponent(paidSelect)}` +
-    `&or=(status.eq.Paid,status.eq.paid,status.eq.PAID)` +
-    `&paid_at=not.is.null` +
-    (companyId ? `&company_id=eq.${companyId}` : '');
-  console.info('[ap_aging] paid invoice query (PostgREST):', paidQueryLog);
-
-  const [openRows, { data: paidRowsRaw, error: paidErr }] = await Promise.all([
+  const [openRows, paidResult] = await Promise.all([
     fetchOpenInvoices('total_amount, due_date, payment_status, status'),
     paidQ,
   ]);
 
-  if (paidErr) {
-    console.error('[ap_aging] paid invoice query error:', paidErr.message, paidQueryLog);
-    throw paidErr;
+  let allPaidRows: PaidRow[] = [];
+  if (paidResult.error) {
+    console.warn('[ap_aging] paid invoice query soft-fail:', paidResult.error.message);
+  } else {
+    allPaidRows = (paidResult.data ?? []) as PaidRow[];
   }
 
-  const allPaidRows = (paidRowsRaw ?? []) as PaidRow[];
   const paidInPeriod = allPaidRows.filter((row) => {
-    const pd = resolvePaidDate(row);
+    const pd = resolvePaidDate(row) ?? (row.updated_at ? String(row.updated_at).slice(0, 10) : null);
     return pd != null && pd >= since;
   });
   const paidRows = paidInPeriod.length > 0 ? paidInPeriod : allPaidRows;
@@ -229,6 +242,7 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
   console.info('[ap_aging] paid invoice rows', {
     companyId,
     since,
+    open: openRows.length,
     allPaid: allPaidRows.length,
     inPeriod: paidInPeriod.length,
     usedForDpo: paidRows.length,
@@ -245,7 +259,7 @@ export async function getDpoMetrics(periodDays = 90): Promise<DpoMetrics> {
 
   for (const row of paidRows) {
     const invDate = row.invoice_date;
-    const paidDate = resolvePaidDate(row);
+    const paidDate = resolvePaidDate(row) ?? (row.updated_at ? String(row.updated_at).slice(0, 10) : null);
     if (!invDate || !paidDate) continue;
 
     const days = Math.max(

@@ -386,6 +386,7 @@ export type InvoiceApprovalRow = {
 
 export type GLAccount = {
   id: string;
+  company_id?: string | null;
   gl_code: string;
   gl_name: string;
   account_type: 'Asset' | 'Liability' | 'Equity' | 'Revenue' | 'Expense' | 'COGS';

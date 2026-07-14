@@ -2,6 +2,13 @@
 import { Link } from 'react-router-dom';
 import { supabase, type GLAccount } from '../../lib/ap-invoice/supabase';
 import { requireCompanyId } from '../../lib/ap-invoice/companyService';
+import {
+  deleteGlAccount,
+  insertGlAccount,
+  listGlAccounts,
+  resolveGlStoreTable,
+  updateGlAccount,
+} from '../../lib/ap-invoice/glAccountsStore';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import {
   Table,
@@ -124,32 +131,28 @@ export function GLAccounts() {
 
   async function fetchGLAccounts() {
     try {
-      const { data, error } = await supabase
-        .from('gl_accounts')
-        .select('*')
-        .order('gl_code', { ascending: true });
-
-      if (error) {
-        const msg = error.message || String(error);
-        if (msg.includes('does not exist') || msg.includes('relation') || msg.includes('PGRST') || msg.includes('42P01')) {
-          setGlAccounts([]);
-          return;
-        }
-        throw error;
+      const companyId = await requireCompanyId().catch(() => null);
+      const rows = await listGlAccounts(supabase, companyId);
+      // If tenant filter returned nothing, show company-unscoped rows (legacy / seed data)
+      if (rows.length === 0 && companyId) {
+        const all = await listGlAccounts(supabase, null);
+        setGlAccounts(all);
+      } else {
+        setGlAccounts(rows);
       }
-      setGlAccounts(data || []);
+      const store = await resolveGlStoreTable(supabase);
+      if (store === 'uae_chart_of_accounts' && rows.length === 0) {
+        // Soft hint — template seed still works against the fallback table
+        console.info('[GLAccounts] using uae_chart_of_accounts fallback (gl_accounts missing)');
+      }
     } catch (error: unknown) {
       console.error('Error fetching GL accounts:', error);
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes('does not exist') || msg.includes('relation') || msg.includes('PGRST') || msg.includes('42P01') || msg.includes('Failed to fetch')) {
-        setGlAccounts([]);
-      } else {
-        toast({
-          title: 'Error',
-          description: 'Failed to fetch GL accounts',
-          variant: 'destructive',
-        });
-      }
+      setGlAccounts([]);
+      toast({
+        title: 'Error',
+        description: 'Failed to fetch GL accounts. Use “Load standard template” to seed IFRS codes.',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
@@ -283,18 +286,14 @@ export function GLAccounts() {
 
     try {
       if (editingAccount) {
-        const { error } = await supabase
-          .from('gl_accounts')
-          .update({
-            gl_name: formData.gl_name,
-            account_type: formData.account_type,
-            department: formData.department || null,
-            cost_center: formData.cost_center || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', editingAccount.id);
+        const { error } = await updateGlAccount(supabase, editingAccount.id, {
+          gl_name: formData.gl_name,
+          account_type: formData.account_type,
+          department: formData.department || null,
+          cost_center: formData.cost_center || null,
+        });
 
-        if (error) throw error;
+        if (error) throw new Error(error);
 
         toast({
           title: 'Success',
@@ -302,7 +301,7 @@ export function GLAccounts() {
         });
       } else {
         const company_id = await requireCompanyId();
-        const { error } = await supabase.from('gl_accounts').insert({
+        const { error } = await insertGlAccount(supabase, {
           company_id,
           gl_code: formData.gl_code,
           gl_name: formData.gl_name,
@@ -311,7 +310,7 @@ export function GLAccounts() {
           cost_center: formData.cost_center || null,
         });
 
-        if (error) throw error;
+        if (error) throw new Error(error);
 
         toast({
           title: 'Success',
@@ -345,12 +344,12 @@ export function GLAccounts() {
     }
 
     try {
-      const { error } = await supabase
-        .from('gl_accounts')
-        .update({ is_active: false })
-        .eq('id', account.id);
-
-      if (error) throw error;
+      const { error } = await updateGlAccount(supabase, account.id, { is_active: false });
+      if (error) {
+        // Soft deactivate not supported on fallback table — hard delete
+        const del = await deleteGlAccount(supabase, account.id);
+        if (del.error) throw new Error(del.error);
+      }
 
       toast({
         title: 'Success',

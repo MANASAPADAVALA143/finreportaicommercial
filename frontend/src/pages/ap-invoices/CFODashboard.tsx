@@ -255,7 +255,7 @@ function AIIntelligenceCard({
 
 export default function CFODashboard() {
   const { dateFormat } = useCompanySettings();
-  const { fmt: fmtMoneyFromMarket, fmtCompact, isUAE } = useDisplayCurrency();
+  const { fmt: fmtMoneyFromMarket, fmtCompact, isUAE, config } = useDisplayCurrency();
   const fmtL = fmtMoneyFromMarket;
   const { toast } = useToast();
   const { activeCompanyId } = useCompany();
