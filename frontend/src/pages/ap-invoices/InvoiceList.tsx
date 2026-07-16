@@ -529,6 +529,60 @@ export function InvoiceList() {
     }
   }
 
+  /**
+   * Force-recompute match_status for invoices whose cached result still looks
+   * unresolved. Unlike handleBulkClassifyAndMatch, this isn't gated by
+   * status === 'Processing' — it targets by match_status instead, so invoices
+   * that moved past "Processing" while carrying a stale mismatch (e.g. because
+   * the underlying PO/GRN data was fixed after the last match run) can be
+   * refreshed without waiting for a new upload.
+   */
+  async function handleBulkRerunStaleMatches() {
+    const staleStatuses = ['mismatch', 'no_po', 'partial'];
+    const targets = invoices.filter((inv) => staleStatuses.includes(String(inv.match_status || '').toLowerCase()));
+    if (targets.length === 0) {
+      toast({ title: 'Nothing to re-match', description: 'No invoices with a mismatch/partial/no-PO status.' });
+      return;
+    }
+
+    setBulkProcessing(true);
+    let resolved = 0;
+    let failed = 0;
+
+    try {
+      for (const inv of targets) {
+        try {
+          const matchResult = await runAutoMatch(inv.id, { respectUploadSetting: false });
+          if (
+            matchResult.invoice_match_status === 'matched' ||
+            matchResult.invoice_match_status === 'three_way_matched' ||
+            matchResult.invoice_match_status === 'partial'
+          ) {
+            resolved += 1;
+          }
+        } catch (e) {
+          failed += 1;
+          console.warn('[AP] Re-run match failed for', inv.invoice_number, e);
+        }
+      }
+
+      await fetchInvoices();
+      toast({
+        title: 'Re-run match complete',
+        description: `${targets.length} invoice(s) re-checked: ${resolved} now resolved${failed ? `, ${failed} failed` : ''}.`,
+      });
+    } catch (e) {
+      console.error('[AP] Bulk re-run match error:', e);
+      toast({
+        title: 'Re-run match failed',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBulkProcessing(false);
+    }
+  }
+
   async function fetchInvoices() {
     let invoiceList: Invoice[] = [];
     let companyId: string | null = null;
@@ -1057,6 +1111,24 @@ export function InvoiceList() {
             {bulkProcessing
               ? 'Processing…'
               : `Run 3-Way Match & Classify (${invoices.filter((i) => i.status === 'Processing').length})`}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={
+              bulkProcessing ||
+              invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
+                .length === 0
+            }
+            onClick={() => void handleBulkRerunStaleMatches()}
+            title="Recompute match_status for invoices whose cached result is mismatch/partial/no-PO, without waiting for a new upload"
+            className="border-amber-600 text-amber-800 hover:bg-amber-50"
+          >
+            {bulkProcessing
+              ? 'Processing…'
+              : `Re-run Stale Matches (${
+                  invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
+                    .length
+                })`}
           </Button>
           {selectedIds.length > 0 && (
             <Button

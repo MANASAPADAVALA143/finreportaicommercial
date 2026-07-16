@@ -829,7 +829,7 @@ export function GoodsReceipts() {
               {importPhase === 'done' && importResult && (
                 <span>
                   {importResult.success} imported Â· {importResult.skipped} skipped Â· {importResult.failed} failed Â·{' '}
-                  {importResult.matched} within tolerance
+                  {importResult.matched} within tolerance Â· {importResult.unlinkedPo} without PO link
                 </span>
               )}
             </DialogDescription>
@@ -995,7 +995,7 @@ export function GoodsReceipts() {
 
           {importPhase === 'done' && importResult && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
                 <div className="rounded-md border p-2 text-center">
                   <div className="text-lg font-semibold text-green-700">{importResult.success}</div>
                   <div className="text-muted-foreground text-xs">Imported</div>
@@ -1003,6 +1003,10 @@ export function GoodsReceipts() {
                 <div className="rounded-md border p-2 text-center">
                   <div className="text-lg font-semibold">{importResult.matched}</div>
                   <div className="text-muted-foreground text-xs">Within tolerance</div>
+                </div>
+                <div className={`rounded-md border p-2 text-center ${importResult.unlinkedPo > 0 ? 'border-red-200 bg-red-50' : ''}`}>
+                  <div className={`text-lg font-semibold ${importResult.unlinkedPo > 0 ? 'text-red-700' : ''}`}>{importResult.unlinkedPo}</div>
+                  <div className="text-muted-foreground text-xs">Without PO link</div>
                 </div>
                 <div className="rounded-md border p-2 text-center">
                   <div className="text-lg font-semibold text-amber-700">{importResult.skipped}</div>
