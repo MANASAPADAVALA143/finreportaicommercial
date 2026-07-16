@@ -185,23 +185,67 @@ export async function getGstReconSummary(period: string): Promise<{
   unmatched: number;
   ignored: number;
   total: number;
+  missing_gstin: number;
+  itc_eligible: number;
+  itc_blocked: number;
+  tds_payable: number;
 }> {
   const { start, end } = periodToDateRange(period);
   const { data, error } = await supabase
     .from('invoices')
-    .select('gst_recon_status, gst_amount')
+    .select(
+      'gst_recon_status, gst_amount, gstin, reverse_charge, hsn_sac_code, ifrs_category, description, tds_amount'
+    )
     .gte('invoice_date', start)
-    .lte('invoice_date', end)
-    .gt('gst_amount', 0);
+    .lte('invoice_date', end);
   if (error) throw error;
   const rows = data ?? [];
+  const withTax = rows.filter((r) => Number(r.gst_amount || 0) > 0);
+  let itcEligible = 0;
+  let itcBlocked = 0;
+  let tdsPayable = 0;
+  let missingGstin = 0;
+  for (const r of rows) {
+    const gst = Number(r.gst_amount || 0);
+    tdsPayable += Number(r.tds_amount || 0);
+    if (!String(r.gstin || '').trim() && gst > 0) missingGstin += 1;
+    if (gst <= 0) continue;
+    if (isItcBlocked(r)) itcBlocked += gst;
+    else itcEligible += gst;
+  }
   return {
-    matched: rows.filter((r) => r.gst_recon_status === 'matched').length,
-    mismatch: rows.filter((r) => r.gst_recon_status === 'mismatch').length,
-    unmatched: rows.filter((r) => r.gst_recon_status === 'unmatched' || r.gst_recon_status == null).length,
-    ignored: rows.filter((r) => r.gst_recon_status === 'ignored').length,
-    total: rows.length,
+    matched: withTax.filter((r) => r.gst_recon_status === 'matched').length,
+    mismatch: withTax.filter((r) => r.gst_recon_status === 'mismatch').length,
+    unmatched: withTax.filter((r) => r.gst_recon_status === 'unmatched' || r.gst_recon_status == null).length,
+    ignored: withTax.filter((r) => r.gst_recon_status === 'ignored').length,
+    total: withTax.length,
+    missing_gstin: missingGstin,
+    itc_eligible: Math.round(itcEligible * 100) / 100,
+    itc_blocked: Math.round(itcBlocked * 100) / 100,
+    tds_payable: Math.round(tdsPayable * 100) / 100,
   };
+}
+
+/** Sec 17(5) heuristic — motor vehicles, entertainment, food & beverages, personal. */
+function isItcBlocked(inv: {
+  reverse_charge?: boolean | null;
+  hsn_sac_code?: string | null;
+  ifrs_category?: string | null;
+  description?: string | null;
+}): boolean {
+  const text = `${inv.ifrs_category || ''} ${inv.description || ''} ${inv.hsn_sac_code || ''}`.toLowerCase();
+  const blockedHints = [
+    'motor vehicle',
+    'car ',
+    'entertainment',
+    'food',
+    'beverage',
+    'restaurant',
+    'club',
+    'personal',
+    'sec 17',
+  ];
+  return blockedHints.some((h) => text.includes(h));
 }
 
 export async function fetchGstr2bByMatchedInvoice(invoiceId: string): Promise<Gstr2bEntry | null> {

@@ -1,13 +1,4 @@
-﻿/**
- * TallyPrime Rel 7.0 Integration
- * Supports: Standard + Edit Log versions
- * XML format: TDL-based voucher import
- * Port: 9000 (enable in TallyPrime â†’ F12 â†’ Configure)
- */
-
-export type TallyVersion = 'standard' | 'edit_log';
-
-/** Escape XML special characters so Tally accepts any vendor/GL name containing & < > " ' */
+﻿/** Escape XML special characters so Tally accepts any vendor/GL name containing & < > " ' */
 function escapeTallyXml(value: unknown): string {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -18,24 +9,111 @@ function escapeTallyXml(value: unknown): string {
     .replace(/'/g, '&apos;');
 }
 
+export type TallyVersion = 'standard' | 'edit_log';
+
 export interface TallySettings {
   url: string; // http://localhost:9000
   company: string; // exact company name in Tally
   version: TallyVersion;
 }
 
-// â”€â”€ Build one Purchase Voucher per invoice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function num(v: unknown): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Build CGST/SGST/IGST (+ optional TDS) ledger lines for India invoices. */
+function buildIndiaTaxLedgers(inv: Record<string, unknown>): string {
+  const cgst = num(inv.cgst_amount ?? inv.cgst);
+  const sgst = num(inv.sgst_amount ?? inv.sgst);
+  const igst = num(inv.igst_amount ?? inv.igst);
+  const tds = num(inv.tds_amount);
+  const taxType = String(inv.tax_type || '').toUpperCase();
+  const taxRate = num(inv.tax_rate ?? 18);
+  const taxFallback = num(inv.tax_amount ?? inv.gst_amount);
+
+  const parts: string[] = [];
+
+  if (cgst > 0) {
+    parts.push(`
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>CGST Input @ ${(taxRate / 2 || 9)}%</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <AMOUNT>-${cgst.toFixed(2)}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>`);
+  }
+  if (sgst > 0) {
+    parts.push(`
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>SGST Input @ ${(taxRate / 2 || 9)}%</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <AMOUNT>-${sgst.toFixed(2)}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>`);
+  }
+  if (igst > 0) {
+    parts.push(`
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>IGST Input @ ${taxRate || 18}%</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <AMOUNT>-${igst.toFixed(2)}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>`);
+  }
+
+  // Fallback single GST ledger when split amounts missing
+  if (!parts.length && taxFallback > 0) {
+    const ledger =
+      taxType.includes('CGST') || taxType.includes('SGST')
+        ? `GST Input @ ${taxRate}%`
+        : `${taxType || 'IGST'} @ ${taxRate}%`;
+    parts.push(`
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>${escapeTallyXml(ledger)}</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <AMOUNT>-${taxFallback.toFixed(2)}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>`);
+  }
+
+  if (tds > 0) {
+    const section = String(inv.tds_section || '194C').trim() || '194C';
+    parts.push(`
+      <ALLLEDGERENTRIES.LIST>
+        <LEDGERNAME>TDS Payable u/s ${escapeTallyXml(section)}</LEDGERNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <AMOUNT>${tds.toFixed(2)}</AMOUNT>
+      </ALLLEDGERENTRIES.LIST>`);
+  }
+
+  return parts.join('');
+}
+
+function buildNarration(inv: Record<string, unknown>): string {
+  const base = String(inv.description || inv.ifrs_category || '').trim();
+  const gstin = String(inv.gstin || '').trim();
+  const hsn = String(inv.hsn_sac_code || '').trim();
+  const bits = [base];
+  if (gstin) bits.push(`GSTIN: ${gstin}`);
+  if (hsn) bits.push(`HSN/SAC: ${hsn}`);
+  if (inv.reverse_charge === true) bits.push('RCM');
+  return bits.filter(Boolean).join(' | ');
+}
+
+function vendorCreditAmount(inv: Record<string, unknown>): number {
+  const total = num(inv.total_amount);
+  const tds = num(inv.tds_amount);
+  // Net payable to vendor after TDS deduction
+  return Math.max(0, total - tds);
+}
+
+// ── Build one Purchase Voucher per invoice ──────────────────
 function buildVoucher(inv: Record<string, unknown>, settings: TallySettings): string {
   const date = String(inv.invoice_date || '').replace(/-/g, '');
-  const subtotal = Number(inv.subtotal_amount ?? inv.total_amount ?? 0);
-  const tax = Number(inv.tax_amount ?? 0);
-  const total = Number(inv.total_amount ?? 0);
-  const taxType = (inv.tax_type as string) || 'IGST';
-  const taxRate = Number(inv.tax_rate ?? 18);
-  const glName = (inv.gl_account_name as string) || 'Purchase Accounts';
-  const narration = (inv.description as string) || (inv.ifrs_category as string) || '';
+  const subtotal = num(inv.subtotal_amount ?? inv.total_amount);
+  const glName =
+    String(inv.gl_account_name || inv.gl_name || 'Purchase Accounts').trim() || 'Purchase Accounts';
+  const narration = buildNarration(inv);
+  const taxLedgers = buildIndiaTaxLedgers(inv);
+  const vendorAmt = vendorCreditAmount(inv);
 
-  // Edit Log version adds GUID for audit trail
   const guidAttr = settings.version === 'edit_log' ? `GUID="${crypto.randomUUID()}"` : '';
 
   return `
@@ -63,23 +141,17 @@ function buildVoucher(inv: Record<string, unknown>, settings: TallySettings): st
         <VATEXPAMOUNT>-${subtotal.toFixed(2)}</VATEXPAMOUNT>
       </ALLLEDGERENTRIES.LIST>
 
-      ${tax > 0 ? `
-      <ALLLEDGERENTRIES.LIST>
-        <LEDGERNAME>${escapeTallyXml(taxType)} @ ${taxRate}%</LEDGERNAME>
-        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-        <AMOUNT>-${tax.toFixed(2)}</AMOUNT>
-      </ALLLEDGERENTRIES.LIST>` : ''}
+      ${taxLedgers}
 
       <ALLLEDGERENTRIES.LIST>
         <LEDGERNAME>${escapeTallyXml(inv.vendor_name)}</LEDGERNAME>
         <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-        <AMOUNT>${total.toFixed(2)}</AMOUNT>
+        <AMOUNT>${vendorAmt.toFixed(2)}</AMOUNT>
       </ALLLEDGERENTRIES.LIST>
     </VOUCHER>
   </TALLYMESSAGE>`;
 }
 
-// â”€â”€ Generate full XML envelope â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function generateTallyXML(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -108,7 +180,6 @@ export function generateTallyXML(
   </ENVELOPE>`;
 }
 
-// â”€â”€ Download XML file (always works) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export function downloadTallyXML(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -123,8 +194,6 @@ export function downloadTallyXML(
   URL.revokeObjectURL(url);
 }
 
-// â”€â”€ Push directly to TallyPrime HTTP server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Requires: TallyPrime â†’ F12 â†’ Configure â†’ Enable HTTP â†’ Port 9000
 export async function pushToTallyPrime(
   invoices: Array<Record<string, unknown>>,
   settings: TallySettings
@@ -138,7 +207,6 @@ export async function pushToTallyPrime(
     });
     const text = await res.text();
 
-    // Parse TallyPrime 7.0 response
     const created = text.match(/CREATED[^>]*>(\d+)/)?.[1] || '0';
     const altered = text.match(/ALTERED[^>]*>(\d+)/)?.[1] || '0';
     const errors = text.match(/LASTSTATUS[^>]*>([^<]+)/)?.[1] || '';
@@ -158,15 +226,12 @@ export async function pushToTallyPrime(
       imported: count,
     };
   } catch {
-    // Network error â€” TallyPrime not running or wrong port
-    // Fall back to file download
     downloadTallyXML(invoices, settings);
     return {
       success: true,
       message:
-        'TallyPrime not reachable â€” XML file downloaded instead. Import via: TallyPrime â†’ Gateway â†’ Import Data â†’ Vouchers',
+        'TallyPrime not reachable — XML file downloaded instead. Import via: TallyPrime → Gateway → Import Data → Vouchers',
       imported: 0,
     };
   }
 }
-

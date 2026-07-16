@@ -2,7 +2,7 @@ export const COUNTRIES = [
   { code: 'IN', name: 'India', currency: 'INR', standard: 'IND_AS', dateFormat: 'DD-MM-YYYY' },
   { code: 'US', name: 'United States', currency: 'USD', standard: 'US_GAAP', dateFormat: 'MM-DD-YYYY' },
   { code: 'GB', name: 'United Kingdom', currency: 'GBP', standard: 'IFRS', dateFormat: 'DD-MM-YYYY' },
-  { code: 'AE', name: 'UAE', currency: 'AED', standard: 'IFRS', dateFormat: 'DD-MM-YYYY' },
+  { code: 'AE', name: 'United Arab Emirates', currency: 'AED', standard: 'IFRS', dateFormat: 'DD-MM-YYYY' },
   { code: 'SG', name: 'Singapore', currency: 'SGD', standard: 'IFRS', dateFormat: 'DD-MM-YYYY' },
   { code: 'AU', name: 'Australia', currency: 'AUD', standard: 'IFRS', dateFormat: 'DD-MM-YYYY' },
   { code: 'CA', name: 'Canada', currency: 'CAD', standard: 'IFRS', dateFormat: 'YYYY-MM-DD' },

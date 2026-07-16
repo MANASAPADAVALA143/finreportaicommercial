@@ -179,6 +179,23 @@ def init_db():
                     )
                 if "tenant_id" not in rbac_cols:
                     conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
+        # UAE fixed assets — dashboard/_apply_company filters company_id; column missing on some RDS DBs
+        if insp.has_table("uae_fixed_assets"):
+            fa_cols = {c["name"] for c in insp.get_columns("uae_fixed_assets")}
+            if "company_id" not in fa_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("ALTER TABLE uae_fixed_assets ADD COLUMN company_id VARCHAR(36)")
+                    )
+                    try:
+                        conn.execute(
+                            text(
+                                "CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_company_id "
+                                "ON uae_fixed_assets (company_id)"
+                            )
+                        )
+                    except Exception:
+                        pass
     except Exception:
         pass
 

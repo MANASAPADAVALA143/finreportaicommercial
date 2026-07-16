@@ -4,7 +4,7 @@ import { notifyApprovalEvent } from '@/lib/ap-invoice/approvalNotifications';
 import { logAction } from '@/lib/ap-invoice/auditService';
 import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
 import { requireCompanyId } from '@/lib/ap-invoice/companyService';
-import { notifyApproverViaWhatsApp, notifyVendorStatusWhatsApp } from '@/lib/ap-invoice/whatsappService';
+import { notifyApproverViaWhatsApp, notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
 import type { ApproveAndPostResult } from '@/lib/ap-invoice/glPostService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
@@ -337,13 +337,7 @@ export async function processApprovalAction(
     console.warn('[AP] GL/GulfTax post after full approval failed:', e);
   }
 
-  void notifyVendorStatusWhatsApp(
-    {
-      ...invoice,
-      status: 'Approved',
-    },
-    'Approved',
-  );
+  void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
 
   return { ok: true, fully_approved: true, gl_post };
 }

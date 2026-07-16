@@ -256,6 +256,7 @@ function AIIntelligenceCard({
 export default function CFODashboard() {
   const { dateFormat } = useCompanySettings();
   const { fmt: fmtMoneyFromMarket, fmtCompact, isUAE, config } = useDisplayCurrency();
+  const taxIdLabel = config?.taxIdLabel ?? (isUAE ? 'TRN' : 'GSTIN');
   const fmtL = fmtMoneyFromMarket;
   const { toast } = useToast();
   const { activeCompanyId } = useCompany();
@@ -550,7 +551,7 @@ export default function CFODashboard() {
             <KpiCard
               label={isUAE ? 'TRN compliance' : 'GSTIN compliance'}
               value={`${kpis.gstinCompliance}%`}
-              sub={`Vendors with ${config.taxIdLabel} on file`}
+              sub={`Vendors with ${taxIdLabel} on file`}
               variant={kpis.gstinCompliance < 80 ? 'danger' : 'success'}
             />
             <KpiCard
@@ -832,7 +833,7 @@ export default function CFODashboard() {
                     <YAxis tick={AXIS_TICK} />
                     <Tooltip {...chartTooltipProps()} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="compliant" stackId="g" fill={COL.teal} name={`With ${config.taxIdLabel}`} />
+                    <Bar dataKey="compliant" stackId="g" fill={COL.teal} name={`With ${taxIdLabel}`} />
                     <Bar dataKey="missing" stackId="g" fill={COL.amber} name="Missing" />
                   </BarChart>
                 </ResponsiveContainer>

@@ -289,6 +289,16 @@ def save_controls(
         return svc.save_controls(db, ctx.workspace_id, profile.id, body.model_dump())
     except ValueError as e:
         raise _handle_value_error(e)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception(
+            "company-setup/controls database error workspace=%s",
+            ctx.workspace_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to save accounting controls. Ensure RDS schema is up to date (accounting_controls, accounting_periods).",
+        )
 
 
 @router.get("/controls")
@@ -297,10 +307,17 @@ def get_controls(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     from app.models.company_setup import AccountingControls
-    controls = db.query(AccountingControls).filter_by(workspace_id=ctx.workspace_id).first()
-    if not controls:
+    try:
+        controls = db.query(AccountingControls).filter_by(workspace_id=ctx.workspace_id).first()
+        if not controls:
+            return {"controls": None}
+        return {"controls": svc._controls_dict(controls)}
+    except SQLAlchemyError:
+        logger.exception(
+            "company-setup/controls GET database error workspace=%s",
+            ctx.workspace_id,
+        )
         return {"controls": None}
-    return {"controls": svc._controls_dict(controls)}
 
 
 @router.get("/users")

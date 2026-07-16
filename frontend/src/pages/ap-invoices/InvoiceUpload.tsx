@@ -5,6 +5,7 @@ import { useMarket } from '../../contexts/MarketContext';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
 import { calculateAdvanceVat } from '../../lib/ap-invoice/uaeVatService';
 import { detectAnomalies } from '../../utils/anomalyDetection';
+import { persistUploadAnomalies } from '../../lib/ap-invoice/anomalyService';
 import { getRequiredApprovalLevel } from '../../utils/approvalWorkflow';
 import { formatCurrency } from '../../utils/currency';
 import { toStorageFormat } from '../../utils/dateUtils';
@@ -1130,6 +1131,13 @@ export function InvoiceUpload() {
                 updated_at: new Date().toISOString(),
               })
               .eq('id', invoice.id);
+
+            await persistUploadAnomalies(
+              invoice.id,
+              companyId,
+              anomalyResult,
+              null,
+            );
           }
         } catch (anomalyError) {
           console.error(`Anomaly detection failed for invoice ${i + 1}:`, anomalyError);
@@ -1828,6 +1836,13 @@ export function InvoiceUpload() {
                   riskUpdateError,
                   { id: invoice.id, company_id: companyId },
                 );
+              } else {
+                await persistUploadAnomalies(
+                  invoice.id,
+                  companyId,
+                  anomalyResult,
+                  null,
+                );
               }
             } catch (anomalyError) {
               console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
@@ -2242,6 +2257,13 @@ export function InvoiceUpload() {
                   updated_at: new Date().toISOString(),
                 })
                 .eq('id', invoice.id);
+
+              await persistUploadAnomalies(
+                invoice.id,
+                companyIdQ,
+                anomalyResult,
+                null,
+              );
             } catch (anomalyError) {
               console.error(`Anomaly detection failed for ${item.file.name}:`, anomalyError);
             }
@@ -2271,7 +2293,7 @@ export function InvoiceUpload() {
           }
 
           if (initialStatus === 'Approved') {
-            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyIdQ);
           }
 
           // Create audit log

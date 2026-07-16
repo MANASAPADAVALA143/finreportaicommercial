@@ -10,6 +10,8 @@
  * The /approve page calls processApprovalAction and shows a confirmation screen.
  */
 
+import { getStoredAccessToken } from '../../utils/authToken';
+
 export interface WhatsAppApprovalPayload {
   /** Approver's WhatsApp-enabled phone number in E.164 format: +91XXXXXXXXXX */
   to: string;
@@ -129,12 +131,84 @@ export function buildVendorStatusMessage(params: {
   );
 }
 
+function apiBaseUrl(): string | undefined {
+  return (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/$/, '') || undefined;
+}
+
+function vendorWhatsAppHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = getStoredAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 /**
- * Notify vendor on WhatsApp when invoice becomes Approved or Paid.
- * Fire-and-forget — requires vendor_phone (E.164) on the invoice.
+ * Prefer this path: backend re-fetches vendor_phone + invoice fields from DB.
+ * Fire-and-forget — never throws; WhatsApp failures must not affect status updates.
+ *
+ * Set VITE_WHATSAPP_DRY_RUN=1 (or pass dryRun: true) to hit ?test=1 without Twilio send.
+ */
+export async function notifyVendorStatusByInvoiceId(
+  invoiceId: string,
+  status: 'Approved' | 'Paid',
+  options?: { dryRun?: boolean },
+): Promise<void> {
+  const id = invoiceId?.trim();
+  if (!id) {
+    console.info('[whatsapp] vendor notify skipped — no invoice_id');
+    return;
+  }
+  const api = apiBaseUrl();
+  if (!api) {
+    console.info('[whatsapp] vendor notify skipped — set VITE_API_URL', id);
+    return;
+  }
+  const envDry =
+    String(import.meta.env.VITE_WHATSAPP_DRY_RUN ?? '').trim() === '1' ||
+    String(import.meta.env.VITE_WHATSAPP_DRY_RUN ?? '').toLowerCase() === 'true';
+  const dryRun = options?.dryRun === true || envDry;
+  const url = `${api}/api/ap/vendor-whatsapp${dryRun ? '?test=1' : ''}`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: vendorWhatsAppHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        invoice_id: id,
+        status,
+        dry_run: dryRun,
+      }),
+    });
+    if (!res.ok) {
+      console.warn('[whatsapp] vendor status API HTTP', res.status, id);
+      return;
+    }
+    const body = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      skipped?: boolean;
+      reason?: string;
+      dry_run?: boolean;
+      error?: string;
+    } | null;
+    if (body?.skipped) {
+      console.info('[whatsapp] vendor notify skipped —', body.reason ?? 'skipped', id);
+    } else if (body && body.ok === false) {
+      console.warn('[whatsapp] vendor notify failed —', body.error ?? body, id);
+    } else if (dryRun) {
+      console.info('[whatsapp] vendor notify dry-run ok', id, status);
+    }
+  } catch (e) {
+    console.warn('[whatsapp] vendor status API failed:', e);
+  }
+}
+
+/**
+ * @deprecated Prefer notifyVendorStatusByInvoiceId — client-side vendor_phone can be stale/missing.
+ * Kept for callers that only have phone fields (falls back to invoice_id when present).
  */
 export async function notifyVendorStatusWhatsApp(
   invoice: {
+    id?: string | null;
     vendor_phone?: string | null;
     vendor_name?: string | null;
     invoice_number?: string | null;
@@ -144,14 +218,18 @@ export async function notifyVendorStatusWhatsApp(
   },
   status: 'Approved' | 'Paid',
 ): Promise<void> {
+  if (invoice.id?.trim()) {
+    await notifyVendorStatusByInvoiceId(invoice.id, status);
+    return;
+  }
   const to = invoice.vendor_phone?.trim();
   if (!to) {
-    console.info('[whatsapp] vendor notify skipped — no vendor_phone', invoice.invoice_number);
+    console.info('[whatsapp] vendor notify skipped — no invoice_id or vendor_phone', invoice.invoice_number);
     return;
   }
   const webhookUrl = vendorWebhookUrl();
   if (!webhookUrl) {
-    console.info('[whatsapp] vendor notify skipped — set VITE_WHATSAPP_WEBHOOK_URL', invoice.invoice_number);
+    console.info('[whatsapp] vendor notify skipped — set VITE_API_URL', invoice.invoice_number);
     return;
   }
   const vendorName = invoice.vendor_name || 'Vendor';

@@ -80,7 +80,17 @@ export function GstRecon() {
     }
   });
   const [period, setPeriod] = useState(() => (isUAE ? defaultUaeQuarter() : defaultIndiaPeriod()));
-  const [summary, setSummary] = useState({ matched: 0, mismatch: 0, unmatched: 0, ignored: 0, total: 0 });
+  const [summary, setSummary] = useState({
+    matched: 0,
+    mismatch: 0,
+    unmatched: 0,
+    ignored: 0,
+    total: 0,
+    missing_gstin: 0,
+    itc_eligible: 0,
+    itc_blocked: 0,
+    tds_payable: 0,
+  });
   const [rows, setRows] = useState<Invoice[]>([]);
   const [boxSummary, setBoxSummary] = useState<BoxReconSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,7 +117,18 @@ export function GstRecon() {
       try {
         if (isUAE) {
           const [s, inv] = await Promise.all([getUaeVatReconSummary(p), getUaeVatReconInvoices(p)]);
-          setSummary(s);
+          setSummary({
+            matched: 0,
+            mismatch: 0,
+            unmatched: 0,
+            ignored: 0,
+            total: 0,
+            missing_gstin: 0,
+            itc_eligible: 0,
+            itc_blocked: 0,
+            tds_payable: 0,
+            ...s,
+          });
           setRows(inv);
           setBoxSummary(computeBoxSummaries(p, companyGstin.trim(), inv));
         } else {
@@ -401,6 +422,50 @@ export function GstRecon() {
           </Card>
         ))}
       </div>
+
+      {!isUAE && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card className="bg-red-50 border-red-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">Missing GSTIN</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-red-700">{summary.missing_gstin}</div>
+              <p className="text-xs text-muted-foreground mt-1">Invoices with GST but no vendor GSTIN</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-emerald-50 border-emerald-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">ITC Eligible</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-emerald-800">
+                {formatCurrency(summary.itc_eligible, currency)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-orange-50 border-orange-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">ITC Blocked (Sec 17(5))</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-orange-800">
+                {formatCurrency(summary.itc_blocked, currency)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-yellow-50 border-yellow-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">TDS Payable</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-yellow-900">
+                {formatCurrency(summary.tds_payable, currency)}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {isUAE && boxSummary.some((b) => b.books_vat > 0 || b.fta_vat > 0) && (
         <Card>

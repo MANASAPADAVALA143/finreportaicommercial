@@ -234,7 +234,9 @@ export function MyApprovals() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Work email</CardTitle>
-          <CardDescription>Must match the approver email on the rule. Stored in this browser.</CardDescription>
+          <CardDescription>
+            Auto-filled from your login when available. Must match the approver email on the rule.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3 items-end">
           <div className="space-y-2 flex-1 min-w-[220px]">

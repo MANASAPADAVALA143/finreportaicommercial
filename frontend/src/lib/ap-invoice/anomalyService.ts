@@ -159,6 +159,64 @@ export async function persistAnomalies(
   return (data ?? []) as InvoiceAnomaly[];
 }
 
+/**
+ * Map client-side detectAnomalies() output (CSV/PDF upload path) into
+ * AnomalyEngineResult so we can insert rows into invoice_anomalies.
+ */
+export function riskCheckToEngineResult(result: {
+  risk_score: string;
+  risk_flags: Array<{
+    type?: string;
+    severity?: string;
+    message?: string;
+    explanation?: string;
+  }>;
+}): AnomalyEngineResult {
+  const scoreMap: Record<string, number> = { low: 25, medium: 50, high: 75, critical: 90 };
+  const flags: AnomalyEngineFlag[] = (result.risk_flags || []).map((f) => {
+    const sevRaw = String(f.severity || 'medium').toLowerCase();
+    const severity = (
+      sevRaw === 'critical' || sevRaw === 'high' || sevRaw === 'low' ? sevRaw : 'medium'
+    ) as AnomalyEngineFlag['severity'];
+    return {
+      anomaly_type: 'rule_based',
+      detection_method: 'upload_detectAnomalies',
+      severity,
+      risk_score: scoreMap[severity] ?? 50,
+      flag_code: String(f.type || 'UNKNOWN').slice(0, 64),
+      flag_reason: String(f.message || 'Anomaly detected'),
+      flag_details: f.explanation ? { explanation: f.explanation } : {},
+    };
+  });
+  return {
+    overall_risk_score: scoreMap[String(result.risk_score || '').toLowerCase()] ?? (flags.length ? 50 : 0),
+    flags,
+  };
+}
+
+/** Persist detectAnomalies() flags to invoice_anomalies (no-op if table missing). */
+export async function persistUploadAnomalies(
+  invoiceId: string,
+  companyId: string,
+  result: {
+    risk_score: string;
+    risk_flags: Array<{
+      type?: string;
+      severity?: string;
+      message?: string;
+      explanation?: string;
+    }>;
+  },
+  actor: string | null,
+): Promise<void> {
+  if (!result.risk_flags?.length) return;
+  try {
+    await persistAnomalies(invoiceId, companyId, riskCheckToEngineResult(result), actor);
+  } catch (e) {
+    console.warn('[anomaly] persist to invoice_anomalies skipped:', e);
+  }
+}
+
 /** Async hook — call after invoice save without blocking upload. */
 export function detectAndPersistAnomaliesAsync(
   invoice: Record<string, unknown> & { id: string; company_id?: string },
@@ -276,16 +334,61 @@ export async function getAnomalyDashboardStats(): Promise<{
   byVendor: { name: string; count: number }[];
 }> {
   const month = new Date().toISOString().slice(0, 7);
-  const anomalies = await listInvoiceAnomalies({ month });
+  try {
+    const anomalies = await listInvoiceAnomalies({ month });
+    if (anomalies.length > 0) {
+      const byCode: Record<string, number> = {};
+      for (const a of anomalies) {
+        byCode[a.flag_code ?? 'OTHER'] = (byCode[a.flag_code ?? 'OTHER'] ?? 0) + 1;
+      }
+      return {
+        totalThisMonth: anomalies.length,
+        critical: anomalies.filter((a) => a.severity === 'critical').length,
+        high: anomalies.filter((a) => a.severity === 'high').length,
+        medium: anomalies.filter((a) => a.severity === 'medium').length,
+        byType: Object.entries(byCode).map(([name, value]) => ({ name, value })),
+        byVendor: [],
+      };
+    }
+  } catch {
+    /* table missing or RLS — fall through to invoices.risk_flags */
+  }
+
+  // Fallback: count flags stored on invoices this month (CSV path historically only wrote risk_flags)
+  const companyId = await requireCompanyId().catch(() => null);
+  let q = supabase
+    .from('invoices')
+    .select('risk_score, risk_flags')
+    .gte('created_at', `${month}-01`)
+    .lt('created_at', `${month}-32`);
+  if (companyId) q = q.eq('company_id', companyId);
+  const { data } = await q;
+  let total = 0;
+  let critical = 0;
+  let high = 0;
+  let medium = 0;
   const byCode: Record<string, number> = {};
-  for (const a of anomalies) {
-    byCode[a.flag_code ?? 'OTHER'] = (byCode[a.flag_code ?? 'OTHER'] ?? 0) + 1;
+  for (const inv of data ?? []) {
+    const flags = Array.isArray(inv.risk_flags) ? inv.risk_flags : [];
+    if (!flags.length) continue;
+    total += flags.length;
+    const score = String(inv.risk_score || '').toLowerCase();
+    if (score === 'critical') critical += flags.length;
+    else if (score === 'high') high += flags.length;
+    else medium += flags.length;
+    for (const f of flags) {
+      const code =
+        f && typeof f === 'object' && 'type' in f
+          ? String((f as { type?: string }).type || 'FLAG')
+          : 'FLAG';
+      byCode[code] = (byCode[code] ?? 0) + 1;
+    }
   }
   return {
-    totalThisMonth: anomalies.length,
-    critical: anomalies.filter((a) => a.severity === 'critical').length,
-    high: anomalies.filter((a) => a.severity === 'high').length,
-    medium: anomalies.filter((a) => a.severity === 'medium').length,
+    totalThisMonth: total,
+    critical,
+    high,
+    medium,
     byType: Object.entries(byCode).map(([name, value]) => ({ name, value })),
     byVendor: [],
   };

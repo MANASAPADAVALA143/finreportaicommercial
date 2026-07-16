@@ -76,22 +76,32 @@ $MARKER_END
 EOF
 )
 
+# Must run as root: logrotate + /var/log + crontab -u all need privileges.
+# Do NOT use `sudo -u $CRON_USER crontab $TMP` — mktemp creates a 0600 file
+# owned by root, so ubuntu cannot read it (Permission denied).
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "ERROR: run as root: sudo bash $0"
+  exit 1
+fi
+
 echo "==> Installing crontab for user $CRON_USER"
 TMP="$(mktemp)"
-if sudo -u "$CRON_USER" crontab -l 2>/dev/null | grep -q "$MARKER_BEGIN"; then
-  sudo -u "$CRON_USER" crontab -l 2>/dev/null \
+trap 'rm -f "$TMP"' EXIT
+if crontab -u "$CRON_USER" -l 2>/dev/null | grep -q "$MARKER_BEGIN"; then
+  crontab -u "$CRON_USER" -l 2>/dev/null \
     | sed "/$MARKER_BEGIN/,/$MARKER_END/d" > "$TMP" || true
 else
-  sudo -u "$CRON_USER" crontab -l 2>/dev/null > "$TMP" || true
+  crontab -u "$CRON_USER" -l 2>/dev/null > "$TMP" || true
 fi
 [[ -s "$TMP" ]] && echo >> "$TMP" || true
 printf '%s\n' "$CRON_BLOCK" >> "$TMP"
-sudo -u "$CRON_USER" crontab "$TMP"
+crontab -u "$CRON_USER" "$TMP"
 rm -f "$TMP"
+trap - EXIT
 
 echo ""
 echo "Installed crontab for $CRON_USER:"
-sudo -u "$CRON_USER" crontab -l | sed -n "/$MARKER_BEGIN/,/$MARKER_END/p"
+crontab -u "$CRON_USER" -l | sed -n "/$MARKER_BEGIN/,/$MARKER_END/p"
 echo ""
 echo "IMPORTANT: rebuild the backend image so /app/scripts exists:"
 echo "  cd $REPO && git pull"

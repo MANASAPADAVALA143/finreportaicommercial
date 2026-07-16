@@ -397,6 +397,10 @@ DDL = [
     "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_workspace_id ON rev_rec_leakage_snapshots (workspace_id)",
     "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_company_id ON rev_rec_leakage_snapshots (company_id)",
     "CREATE INDEX IF NOT EXISTS ix_rev_rec_leakage_period ON rev_rec_leakage_snapshots (period)",
+    # UAE fixed assets — ORM + dashboard filter by company_id; column was missing on RDS.
+    # No blind tenant→company backfill: multi-company workspaces are not 1:1.
+    "ALTER TABLE uae_fixed_assets ADD COLUMN IF NOT EXISTS company_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_company_id ON uae_fixed_assets (company_id)",
 ]
 
 
