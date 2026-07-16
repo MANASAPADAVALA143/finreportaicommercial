@@ -186,7 +186,7 @@ function classifyBg(bg: BankGuarantee): QueueItem | null {
 }
 
 function isUnpaidInvoice(inv: Invoice): boolean {
-  const ps = (inv.payment_status ?? '').trim().toLowerCase();
+  const ps = String(inv.payment_status ?? '').trim().toLowerCase();
   if (ps === 'paid' || ps === 'cancelled') return false;
   if (inv.status === 'Paid' || inv.status === 'Rejected') return false;
   return true;
@@ -216,7 +216,7 @@ function classifyFallbackInvoice(inv: Invoice): QueueItem | null {
     setPriority('high');
     action = 'Confirm duplicate or clear flag before paying';
   }
-  const rl = (inv.risk_level ?? '').toLowerCase();
+  const rl = String(inv.risk_level ?? '').toLowerCase();
   if (rl === 'critical') {
     flags.push('CRITICAL risk vendor');
     setPriority('critical');

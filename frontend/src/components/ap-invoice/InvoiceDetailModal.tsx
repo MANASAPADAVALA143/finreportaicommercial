@@ -98,7 +98,7 @@ import { getTaxLabel } from '@/utils/taxConfig';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
-import { notifyVendorStatusWhatsApp } from '@/lib/ap-invoice/whatsappService';
+import { notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
 import { triggerGlPostForApprovedInvoice } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
@@ -780,7 +780,7 @@ export function InvoiceDetailModal({
         user_name: approverName,
       });
 
-      void notifyVendorStatusWhatsApp(invoice, 'Approved');
+      void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
 
       try {
         const cid = invoice.company_id || (await getMyCompany())?.id || null;
@@ -1059,6 +1059,8 @@ export function InvoiceDetailModal({
         user_name: email || 'System User',
       });
 
+      void notifyVendorStatusByInvoiceId(invoice.id, 'Paid');
+
       toast({
         title: 'Payment recorded',
         description: utrTrim ? `UTR / reference: ${utrTrim}` : 'Invoice marked as paid.',
@@ -1095,7 +1097,7 @@ export function InvoiceDetailModal({
   async function handleStatusChange(newStatus: 'Approved' | 'Rejected') {
     if (
       newStatus === 'Approved' &&
-      ['no_po', 'partial', 'mismatch'].includes((invoice.match_status || '').toLowerCase())
+      ['no_po', 'partial', 'mismatch'].includes(String(invoice.match_status || '').toLowerCase())
     ) {
       toast({
         title: 'Approval blocked',
@@ -1133,6 +1135,7 @@ export function InvoiceDetailModal({
       });
 
       if (newStatus === 'Approved') {
+        void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
         try {
           const cid = invoice.company_id || (await getMyCompany())?.id || null;
           if (cid) triggerGlPostForApprovedInvoice(invoice, cid);
@@ -1193,17 +1196,24 @@ export function InvoiceDetailModal({
     }
   }
 
+  const childDialogOpen = duplicateAlertOpen || markPaidOpen;
+
   return (
     <>
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-7xl max-h-[90vh] p-0">
+    <Dialog
+      open={open && !childDialogOpen}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="max-w-7xl max-h-[90vh] p-0 overflow-hidden flex flex-col bg-white">
         <DuplicateWarningBanner
           invoice={invoice}
           performedByEmail={workEmail}
           onRefresh={onUpdate}
           onNavigateInvoice={onNavigateInvoice}
         />
-        <DialogHeader className="p-6 pb-4 border-b">
+        <DialogHeader className="p-6 pb-4 border-b shrink-0">
           <div className="flex items-start justify-between">
             <div>
               <DialogTitle className="text-2xl">
@@ -1263,11 +1273,11 @@ export function InvoiceDetailModal({
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 max-h-[calc(90vh-8rem)] overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 min-h-0 flex-1 max-h-[calc(90vh-8rem)] overflow-hidden bg-white">
           {/* Left Side - PDF Preview */}
-          <div className="space-y-4">
-            <Card className="h-full">
-              <CardHeader>
+          <div className="space-y-4 min-w-0 min-h-0 overflow-hidden relative z-0 isolate bg-white">
+            <Card className="h-full max-h-full overflow-hidden flex flex-col bg-white">
+              <CardHeader className="shrink-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Document Preview</CardTitle>
                   <div className="flex items-center gap-2">
@@ -1306,9 +1316,9 @@ export function InvoiceDetailModal({
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent className="p-0 min-h-0 flex-1 overflow-hidden">
                 <ScrollArea className="h-[calc(90vh-20rem)]">
-                  <div className="flex items-center justify-center bg-gray-100 min-h-[500px] p-6">
+                  <div className="flex items-center justify-center bg-gray-100 min-h-[500px] p-6 overflow-hidden">
                     {invoice.file_url ? (
                       <div
                         className="bg-white shadow-lg rounded-lg overflow-hidden border border-gray-200"
@@ -1355,8 +1365,8 @@ export function InvoiceDetailModal({
           </div>
 
           {/* Right Side - Invoice Details */}
-          <ScrollArea className="h-[calc(90vh-12rem)]">
-            <div className="pr-2">
+          <ScrollArea className="h-[calc(90vh-12rem)] min-w-0 relative z-10 bg-white">
+            <div className="pr-2 space-y-0 bg-white">
               <Tabs defaultValue="details" className="w-full">
                 <TabsList className="mb-3 flex w-full flex-wrap justify-start gap-1">
                   <TabsTrigger value="details">Details</TabsTrigger>
@@ -2462,31 +2472,31 @@ export function InvoiceDetailModal({
             <Card
               className={
                 invoice.match_status === 'three_way_matched'
-                  ? 'border-2 border-green-500 bg-green-50/30'
+                  ? 'border-2 border-green-500 bg-green-50'
                   : invoice.match_status === 'matched'
-                    ? 'border-2 border-teal-500 bg-teal-50/20'
+                    ? 'border-2 border-teal-500 bg-teal-50'
                     : invoice.match_status === 'mismatch'
-                      ? 'border-2 border-amber-500 bg-amber-50/20'
+                      ? 'border-2 border-amber-500 bg-amber-50'
                       : invoice.match_status === 'partial'
-                        ? 'border-2 border-amber-400 bg-amber-50/15'
+                        ? 'border-2 border-amber-400 bg-amber-50'
                         : invoice.match_status === 'no_po' || !invoice.match_status
-                          ? 'border-2 border-red-300 bg-red-50/10'
-                          : 'border border-gray-200'
+                          ? 'border-2 border-red-300 bg-white'
+                          : 'border border-gray-200 bg-white'
               }
             >
               <CardHeader
                 className={
                   invoice.match_status === 'three_way_matched'
-                    ? 'bg-green-100/80 border-b border-green-200'
+                    ? 'bg-green-100 border-b border-green-200'
                     : invoice.match_status === 'matched'
-                      ? 'bg-teal-100/60 border-b border-teal-200'
+                      ? 'bg-teal-100 border-b border-teal-200'
                       : invoice.match_status === 'mismatch'
-                        ? 'bg-amber-100/60 border-b border-amber-200'
+                        ? 'bg-amber-100 border-b border-amber-200'
                         : invoice.match_status === 'partial'
                           ? 'bg-amber-50 border-b border-amber-200'
                           : invoice.match_status === 'no_po' || !invoice.match_status
                             ? 'bg-red-50 border-b border-red-200'
-                            : ''
+                            : 'bg-white'
                 }
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2662,7 +2672,7 @@ export function InvoiceDetailModal({
                 )}
 
                 {invoice.match_status === 'partial' && (
-                  <div className="rounded-md border border-amber-100 bg-amber-50/40 p-3 text-sm text-amber-950 space-y-2">
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 space-y-2">
                     <p>PO linked — waiting for a confirmed goods receipt or further review.</p>
                     {invoice.po_id && (
                       <Button type="button" size="sm" variant="secondary" asChild>
@@ -2673,7 +2683,7 @@ export function InvoiceDetailModal({
                 )}
 
                 {(invoice.match_status === 'no_po' || !invoice.match_status) && (
-                  <div className="rounded-md border border-red-100 bg-red-50/30 p-3 text-sm text-gray-900">
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-gray-900">
                     <p className="mb-2">No purchase order linked to this invoice.</p>
                     <div className="space-y-2">
                       <Label>Link a Purchase Order</Label>
@@ -2902,7 +2912,7 @@ export function InvoiceDetailModal({
                 <Button
                   className="flex-1 bg-green-600 hover:bg-green-700"
                   onClick={() => handleStatusChange('Approved')}
-                  disabled={loading || ['no_po', 'partial', 'mismatch'].includes((invoice.match_status || '').toLowerCase())}
+                  disabled={loading || ['no_po', 'partial', 'mismatch'].includes(String(invoice.match_status || '').toLowerCase())}
                 >
                   <CheckCircle className="mr-2 h-4 w-4" />
                   Approve Invoice
@@ -3179,9 +3189,9 @@ export function InvoiceDetailModal({
       </DialogContent>
     </Dialog>
 
-    {/* Duplicate alert before payment */}
+    {/* Duplicate alert before payment — exclusive of main detail modal */}
     <Dialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md z-[10020]" overlayClassName="z-[10010]">
         <DialogHeader>
           <DialogTitle>⚠️ Possible Duplicate Invoice</DialogTitle>
         </DialogHeader>
@@ -3218,7 +3228,7 @@ export function InvoiceDetailModal({
     </Dialog>
 
     <Dialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto z-[10020]" overlayClassName="z-[10010]">
         <DialogHeader>
           <DialogTitle>Mark invoice as paid</DialogTitle>
         </DialogHeader>

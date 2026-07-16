@@ -1608,7 +1608,7 @@ export function InvoiceList() {
                             ⚠ Not Classified
                           </span>
                           <br />
-                          <span style={{ color: '#9ca3af', fontSize: '11px' }}>Fix required</span>
+                          <span style={{ color: '#4b5563', fontSize: '12px', fontWeight: 500 }}>Fix required</span>
                         </div>
                       )}
                     </TableCell>
@@ -1738,7 +1738,7 @@ export function InvoiceList() {
                         {((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 0 ||
                         (typeof invoice.risk_score === 'number' && invoice.risk_score > 0) ||
                         deriveInvoiceRiskDisplayScore(invoice) != null ? (
-                          <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                          <span style={{ fontSize: '12px', color: '#374151', fontWeight: 600 }}>
                             {(invoice as { risk_flag_count?: number }).risk_flag_count
                               ? `${(invoice as { risk_flag_count?: number }).risk_flag_count} flag${((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 1 ? 's' : ''} · `
                               : ''}

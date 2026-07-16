@@ -271,8 +271,10 @@ async function canAgentAutoApprove(
   if (numericRisk != null && numericRisk > agent.auto_approve_max_risk_score) {
     return { ok: false, reason: 'risk_score_exceeds_threshold' };
   }
-  const risk = (invoice.risk_score || '').toLowerCase();
-  if (risk === 'high') {
+  // risk_score may be numeric (DB) or legacy tier string ('high'|'medium'|'low')
+  const risk = String(invoice.risk_score ?? '').toLowerCase();
+  const riskLevel = String(invoice.risk_level ?? '').toLowerCase();
+  if (risk === 'high' || riskLevel === 'high') {
     return { ok: false, reason: 'risk_score_high' };
   }
 
@@ -707,6 +709,13 @@ export async function runAutoMatch(
 
   if (upErr) {
     console.warn('[threeWayMatchService] invoice update:', upErr.message);
+  }
+
+  // invoiceId is always in scope here — no need for invRow fields for WhatsApp.
+  if (autoApproved && !upErr) {
+    void import('./whatsappService').then(({ notifyVendorStatusByInvoiceId }) => {
+      void notifyVendorStatusByInvoiceId(invoiceId, 'Approved');
+    });
   }
 
   if (autoApproved && companyId) {
