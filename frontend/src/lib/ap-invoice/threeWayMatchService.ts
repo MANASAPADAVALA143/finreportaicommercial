@@ -116,7 +116,7 @@ function invoiceAmountInInr(
   return null;
 }
 
-/** Net amount for PO match — invoice total_amount is gross; PO po_amount is ex-VAT. */
+/** Net amount for PO match — invoice total_amount is often gross; PO/GRN may be ex-VAT. */
 function netInvoiceAmountForMatch(inv: Invoice): number {
   const gross = Number(inv.total_amount ?? 0);
   const vat = Number((inv as Record<string, unknown>).vat_amount ?? inv.tax_amount ?? 0);
@@ -126,6 +126,27 @@ function netInvoiceAmountForMatch(inv: Invoice): number {
   const sub = Number(inv.subtotal_amount ?? 0);
   if (sub > 0 && sub < gross * 0.99) return sub;
   return gross;
+}
+
+/** True when the larger amount is the smaller × 1.05 (UAE 5% VAT gross vs net). */
+function isUaeVatGrossNetPair(a: number, b: number): boolean {
+  const hi = Math.max(a, b);
+  const lo = Math.min(a, b);
+  if (lo <= 0 || !Number.isFinite(hi) || !Number.isFinite(lo)) return false;
+  return Math.abs(hi / lo - 1.05) < 0.01;
+}
+
+/**
+ * Percent difference after aligning a UAE 5% VAT gross/net pair to the same basis.
+ * e.g. Invoice/PO 33,600 vs GRN 32,000 → 0% (VAT-only), not 4.8%.
+ */
+function pctDiffVatAware(a: number, b: number): number {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 100;
+  if (a === b) return 0;
+  if (isUaeVatGrossNetPair(a, b)) return 0;
+  const base = Math.max(Math.abs(a), Math.abs(b));
+  if (base <= 0) return 100;
+  return (Math.abs(a - b) / base) * 100;
 }
 
 function vendorTokensMatch(a: string, b: string): boolean {
@@ -455,11 +476,6 @@ export async function runAutoMatch(
     checks.po_exists = true;
     poAmount = Number(po.po_amount ?? 0);
 
-    // UAE: when vat/tax not stored, gross is often exactly PO net + 5% VAT (e.g. 8190 vs 7800).
-    if (poAmount > 0 && invoiceAmount > poAmount && Math.abs(invoiceAmount / poAmount - 1.05) < 0.01) {
-      invoiceAmount = Math.round((invoiceAmount / 1.05) * 100) / 100;
-    }
-
     const invoiceVendor = String(inv.vendor_name ?? '');
     const poVendor = String(po.vendor_name ?? '');
     checks.vendor_match = vendorTokensMatch(invoiceVendor, poVendor);
@@ -542,12 +558,17 @@ export async function runAutoMatch(
       checks.grn_exists = grnAmount > 0;
     }
 
+    // Compare Inv / PO / GRN with UAE 5% VAT awareness (gross vs net must not fail the match).
     if (grn && poAmount > 0 && grnAmount > 0) {
-      const grnVsPoPct = Math.abs((grnAmount - poAmount) / poAmount) * 100;
+      const grnVsPoPct = pctDiffVatAware(grnAmount, poAmount);
       checks.grn_matches_po = grnVsPoPct <= tolerance.price_variance_pct;
       if (!checks.grn_matches_po) {
         exceptions.push(
           `GRN total differs from PO by ${grnVsPoPct.toFixed(1)}% (limit ${tolerance.price_variance_pct}%)`
+        );
+      } else if (isUaeVatGrossNetPair(grnAmount, poAmount)) {
+        exceptions.push(
+          `GRN ${grnAmount} vs PO ${poAmount}: treated as match (UAE 5% VAT gross/net).`
         );
       }
     } else {
@@ -558,21 +579,21 @@ export async function runAutoMatch(
       exceptions.push('No confirmed GRN with value — goods receipt required before payment');
     }
 
-    const priceDiffPct =
-      poAmount > 0 ? (Math.abs((invoiceAmount - poAmount) / poAmount) * 100) : 100;
+    const priceDiffPct = poAmount > 0 ? pctDiffVatAware(invoiceAmount, poAmount) : 100;
     checks.within_price_tolerance = priceDiffPct <= tolerance.price_variance_pct;
     checks.amount_match = priceDiffPct === 0;
     if (!checks.within_price_tolerance) {
       exceptions.push(
         `Price variance ${priceDiffPct.toFixed(1)}% exceeds ${tolerance.price_variance_pct}% (Invoice vs PO)`
       );
+    } else if (isUaeVatGrossNetPair(invoiceAmount, poAmount)) {
+      exceptions.push(
+        `Invoice ${invoiceAmount} vs PO ${poAmount}: treated as match (UAE 5% VAT gross/net).`
+      );
     }
 
     if (grn && grnAmount > 0) {
-      const invGrnPct =
-        Math.max(invoiceAmount, grnAmount) > 0
-          ? (Math.abs(invoiceAmount - grnAmount) / Math.max(invoiceAmount, grnAmount)) * 100
-          : 0;
+      const invGrnPct = pctDiffVatAware(invoiceAmount, grnAmount);
       checks.within_qty_tolerance = invGrnPct <= tolerance.qty_variance_pct;
       if (!checks.within_qty_tolerance) {
         exceptions.push(
@@ -592,8 +613,7 @@ export async function runAutoMatch(
   const totalChecks = Object.keys(checks).length;
   const score = Math.round((passedChecks / totalChecks) * 100);
 
-  const amount_variance_pct =
-    poAmount > 0 ? Math.abs((invoiceAmount - poAmount) / poAmount) * 100 : 0;
+  const amount_variance_pct = poAmount > 0 ? pctDiffVatAware(invoiceAmount, poAmount) : 0;
 
   const withinTolerance =
     !!checks.po_exists &&
@@ -648,9 +668,10 @@ export async function runAutoMatch(
     }
   }
 
-  const diff = Math.abs(invoiceAmount - poAmount);
-  const qty_variance_pct =
-    grnAmount > 0 ? (Math.abs(invoiceAmount - grnAmount) / Math.max(invoiceAmount, grnAmount)) * 100 : 0;
+  const diff = isUaeVatGrossNetPair(invoiceAmount, poAmount)
+    ? 0
+    : Math.abs(invoiceAmount - poAmount);
+  const qty_variance_pct = grnAmount > 0 ? pctDiffVatAware(invoiceAmount, grnAmount) : 0;
 
   const checksJson = { ...checks } as Record<string, unknown>;
 
