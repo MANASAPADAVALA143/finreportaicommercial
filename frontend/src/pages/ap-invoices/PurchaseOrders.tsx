@@ -60,20 +60,66 @@ const statusColors = {
 /** numeric(15,2) max — values above this (e.g. TRN in wrong column) cause Postgres 22003 overflow */
 const MAX_PO_AMOUNT = 9999999999999.99;
 
-const PO_AMOUNT_ALIASES = ['po_amount', 'po amount', 'amount', 'total_amount', 'total amount', 'po_value', 'value', 'total'];
+const PO_AMOUNT_ALIASES = [
+  'po_amount',
+  'po amount',
+  'total_amount',
+  'total amount',
+  'po_value',
+  'amount',
+  'value',
+  'total',
+  // Fallback only when no gross/total column exists (exact match; not via substring)
+  'net_amount',
+  'net amount',
+];
 const PO_NUMBER_ALIASES = ['po_number', 'po number', 'po #', 'po_no', 'po no', 'purchase_order', 'purchase order'];
-const PO_VENDOR_ALIASES = ['vendor_name', 'vendor name', 'vendor', 'supplier', 'supplier_name', 'supplier name'];
-const PO_DATE_ALIASES = ['po_date', 'po date', 'date', 'order_date', 'order date'];
+const PO_VENDOR_ALIASES = ['vendor_name', 'vendor name', 'supplier_name', 'supplier name', 'supplier', 'vendor'];
+const PO_DATE_ALIASES = ['po_date', 'po date', 'order_date', 'order date', 'date'];
+
+/** Headers that must never win via substring match (e.g. vendor_code contains "vendor"). */
+const PO_HEADER_BLOCK_SUFFIXES = ['_code', '_id', '_trn', '_tax', '_vat', '_rate', '_pct', '_percent'];
+const PO_HEADER_BLOCK_PREFIXES = ['net_', 'unit_', 'line_', 'tax_', 'vat_'];
 
 function normHeaderKey(k: string): string {
   return k.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_#]/g, '');
 }
 
+/**
+ * Map a spreadsheet column to a field. Exact header matches always win.
+ * Substring matches are only allowed for longer aliases (≥5 chars) and skip
+ * blocked headers so vendor_code / net_amount are not treated as vendor_name / amount.
+ */
 function pickRowValue(row: Record<string, unknown>, aliases: string[]): unknown {
-  for (const key of Object.keys(row)) {
+  const normalized = aliases.map((a) => normHeaderKey(a)).filter(Boolean);
+  const keys = Object.keys(row);
+
+  let bestExact: { key: string; score: number } | null = null;
+  for (const key of keys) {
     const n = normHeaderKey(key);
-    if (aliases.some((a) => normHeaderKey(a) === n || n.includes(normHeaderKey(a)))) return row[key];
+    for (const a of normalized) {
+      if (n === a && (!bestExact || a.length > bestExact.score)) {
+        bestExact = { key, score: a.length };
+      }
+    }
   }
+  if (bestExact) return row[bestExact.key];
+
+  let bestFuzzy: { key: string; score: number } | null = null;
+  for (const key of keys) {
+    const n = normHeaderKey(key);
+    if (PO_HEADER_BLOCK_SUFFIXES.some((s) => n.endsWith(s))) continue;
+    if (PO_HEADER_BLOCK_PREFIXES.some((p) => n.startsWith(p))) continue;
+    for (const a of normalized) {
+      // Short aliases ("vendor", "amount", "total", "date") must be exact only —
+      // otherwise vendor_code / net_amount / total_tax falsely match.
+      if (a.length < 5) continue;
+      if (n.includes(a) && (!bestFuzzy || a.length > bestFuzzy.score)) {
+        bestFuzzy = { key, score: a.length };
+      }
+    }
+  }
+  if (bestFuzzy) return row[bestFuzzy.key];
   return undefined;
 }
 

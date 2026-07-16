@@ -2554,16 +2554,32 @@ export function InvoiceDetailModal({
                   </li>
                   <li className="flex gap-2">
                     <span className="w-5 shrink-0">
-                      {invoice.match_status === 'mismatch' ? '✗' : invoice.po_amount != null ? '✓' : '—'}
+                      {invoice.match_status === 'mismatch' &&
+                      Number(invoice.match_percentage ?? 0) > 0
+                        ? '✗'
+                        : invoice.po_amount != null
+                          ? '✓'
+                          : '—'}
                     </span>
                     <span>
-                      {invoice.match_status === 'mismatch' ? 'Amount variance' : 'Amount vs PO'}{' '}
+                      {invoice.match_status === 'mismatch' && Number(invoice.match_percentage ?? 0) > 0
+                        ? 'Amount variance'
+                        : 'Amount vs PO'}{' '}
                       <span className="text-gray-700">
                         Invoice {formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')}
                         {invoice.po_amount != null &&
                           ` vs PO ${formatCurrency(invoice.po_amount, invoice.currency || 'USD')}`}
-                        {invoice.match_percentage != null && ` (${invoice.match_percentage.toFixed(1)}%)`}
+                        {invoice.match_percentage != null &&
+                          Number(invoice.match_percentage) > 0 &&
+                          ` (${invoice.match_percentage.toFixed(1)}%)`}
                       </span>
+                      {invoice.po_amount != null &&
+                        Number(invoice.total_amount) > 0 &&
+                        Math.abs(Number(invoice.total_amount) / Number(invoice.po_amount) - 1.05) < 0.01 && (
+                          <span className="block text-xs text-gray-500 mt-0.5">
+                            Invoice looks VAT-inclusive (gross); PO stored ex-VAT — match engine normalizes 5% UAE VAT.
+                          </span>
+                        )}
                     </span>
                   </li>
                   <li className="flex gap-2">
@@ -2573,7 +2589,7 @@ export function InvoiceDetailModal({
                 </ul>
 
                 {invoice.match_notes && (
-                  <p className="rounded-md bg-white/80 p-3 text-sm text-gray-700 border border-gray-100">
+                  <p className="rounded-md bg-white/80 p-3 text-sm text-gray-700 border border-gray-100 whitespace-pre-wrap">
                     {invoice.match_notes}
                   </p>
                 )}

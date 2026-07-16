@@ -679,12 +679,15 @@ export async function runAutoMatch(
     console.warn('[threeWayMatchService] match_results insert:', saveErr.message);
   }
 
+  const notesParts = [summary, ...exceptions.filter((e) => e && e !== summary)];
+  const matchNotes = notesParts.filter(Boolean).join('\n');
+
   const updatePayload: Record<string, unknown> = {
     po_id: (po?.id as string) ?? inv.po_id ?? null,
     grn_id: (grn?.id as string) ?? null,
     match_status: invoiceMatchStatus,
     match_score: score,
-    match_notes: summary,
+    match_notes: matchNotes,
     match_result_id: savedResult?.id ?? null,
     auto_matched: true,
     match_attempted_at: new Date().toISOString(),
