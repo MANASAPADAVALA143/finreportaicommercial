@@ -312,7 +312,15 @@ export function InvoiceDetailModal({
   useEffect(() => {
     if (!open) return;
     const po = invoice.po_number?.trim();
-    if (!po || invoice.po_id) return;
+    if (!po) return;
+
+    // Once po_id is set, match_status is a cached value written by the last
+    // runAutoMatch — trust it when it looks resolved. Only auto re-run when the
+    // cached status still looks unresolved (mismatch/no_po/partial), since the
+    // underlying PO/GRN data (e.g. a vendor_name fix) may have changed since
+    // that value was last computed.
+    const staleStatuses = ['mismatch', 'no_po', 'partial'];
+    if (invoice.po_id && !staleStatuses.includes(String(invoice.match_status || '').toLowerCase())) return;
 
     const attemptKey = `${invoice.id}|${po}`;
     if (autoPoMatchAttemptedKeyRef.current === attemptKey) return;
@@ -333,7 +341,7 @@ export function InvoiceDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [open, invoice.id, invoice.po_number, invoice.po_id, invoice.vendor_name, invoice.total_amount]);
+  }, [open, invoice.id, invoice.po_number, invoice.po_id, invoice.match_status, invoice.vendor_name, invoice.total_amount]);
 
   useEffect(() => {
     if (!open || invoice.gst_recon_status !== 'mismatch') {
@@ -451,6 +459,21 @@ export function InvoiceDetailModal({
         description: err?.message || 'PO link or 3-way match failed. Check console. If using Supabase, you may need to disable RLS on invoices.',
         variant: 'destructive',
       });
+    } finally {
+      setMatchLoading(false);
+    }
+  }
+
+  async function handleRerunMatch() {
+    setMatchLoading(true);
+    try {
+      await runAutoMatch(invoice.id, { respectUploadSetting: false });
+      toast({ title: 'Match re-run', description: 'Recomputed the 3-way match against current PO/GRN data.' });
+      onUpdate();
+    } catch (error) {
+      console.error('Manual match re-run failed:', error);
+      const err = error as { message?: string };
+      toast({ title: 'Match re-run failed', description: err?.message || 'Check console.', variant: 'destructive' });
     } finally {
       setMatchLoading(false);
     }
@@ -2520,6 +2543,16 @@ export function InvoiceDetailModal({
                         No PO
                       </Badge>
                     )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={matchLoading}
+                      onClick={() => void handleRerunMatch()}
+                      title="Recompute this invoice's 3-way match against current PO/GRN data"
+                    >
+                      {matchLoading ? 'Matching…' : 'Re-run match'}
+                    </Button>
                   </div>
                 </div>
               </CardHeader>

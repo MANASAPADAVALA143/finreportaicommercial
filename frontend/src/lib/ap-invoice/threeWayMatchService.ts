@@ -986,6 +986,8 @@ export interface BulkImportGRNResult {
   failed: number;
   skipped: number;
   matched: number;
+  /** GRNs saved without a resolved `po_id` (missing po_number or no matching PO) — surfaced separately so orphaned links aren't buried inside "success". */
+  unlinkedPo: number;
   errors: Array<{ grn_number: string; error: string }>;
   results: Array<{
     grn_number: string;
@@ -1437,6 +1439,7 @@ export async function bulkImportGRNs(
     failed: 0,
     skipped: 0,
     matched: 0,
+    unlinkedPo: 0,
     errors: [],
     results: [],
   };
@@ -1498,9 +1501,12 @@ export async function bulkImportGRNs(
           resolvedPoNumber = String(poRows[0].po_number ?? resolvedPoNumber);
         } else {
           warning = `PO "${resolvedPoNumber}" not found — GRN saved without PO link`;
+          result.unlinkedPo++;
+          result.errors.push({ grn_number: grnNum, error: warning });
         }
       } else {
         warning = warning || 'No PO number — GRN saved without PO link';
+        result.unlinkedPo++;
       }
 
       let lines = lineItemRows
