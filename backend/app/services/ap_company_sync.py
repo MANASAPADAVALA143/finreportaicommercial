@@ -20,6 +20,76 @@ def _slugify(name: str) -> str:
     return base or "company"
 
 
+def _apply_uae_market(sb: Any, ws: Workspace, company: dict[str, Any]) -> dict[str, Any]:
+    country = (ws.country or "").lower()
+    if country in ("uae", "ae") and company.get("market") != "uae":
+        try:
+            sb.table("companies").update({"market": "uae"}).eq("id", company["id"]).execute()
+            return {**company, "market": "uae"}
+        except Exception as exc:
+            logger.warning("companies market→uae update failed: %s", exc)
+    return company
+
+
+def _link_orphan_company(sb: Any, ws: Workspace, ws_id: str) -> dict[str, Any] | None:
+    """
+    Pre-migration / bulk-import tenants often have a single companies row with
+    workspace_id NULL (e.g. slug my-company holding all invoices). Link it
+    instead of inserting a second empty company for the same workspace.
+    """
+    try:
+        orphans = (
+            sb.table("companies")
+            .select("*")
+            .is_("workspace_id", "null")
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("orphan companies lookup failed: %s", exc)
+        return None
+
+    rows = list(orphans.data or [])
+    if not rows:
+        return None
+
+    chosen: dict[str, Any] | None = None
+    if len(rows) == 1:
+        chosen = rows[0]
+    else:
+        # Prefer default slug / matching workspace name when several orphans exist
+        by_slug = next((r for r in rows if (r.get("slug") or "") == "my-company"), None)
+        by_name = next(
+            (r for r in rows if (r.get("name") or "").strip().lower() == (ws.name or "").strip().lower()),
+            None,
+        )
+        chosen = by_slug or by_name
+
+    if not chosen or not chosen.get("id"):
+        return None
+
+    try:
+        updated = (
+            sb.table("companies")
+            .update({"workspace_id": ws_id})
+            .eq("id", chosen["id"])
+            .select("*")
+            .maybe_single()
+            .execute()
+        )
+        company = updated.data or {**chosen, "workspace_id": ws_id}
+        logger.info(
+            "Linked orphan AP company %s (%s) → workspace %s",
+            company.get("id"),
+            company.get("name"),
+            ws_id,
+        )
+        _ensure_company_config(sb, company["id"])
+        return _apply_uae_market(sb, ws, company)
+    except Exception as exc:
+        logger.warning("orphan company link failed (%s → %s): %s", chosen.get("id"), ws_id, exc)
+        return None
+
+
 def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
     """Upsert a Supabase companies row linked to this workspace. Uses service role (bypasses RLS)."""
     try:
@@ -38,17 +108,13 @@ def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
             .execute()
         )
         if existing.data:
-            company = existing.data
-            country = (ws.country or "").lower()
-            if country in ("uae", "ae") and company.get("market") != "uae":
-                try:
-                    sb.table("companies").update({"market": "uae"}).eq("id", company["id"]).execute()
-                    company = {**company, "market": "uae"}
-                except Exception as exc:
-                    logger.warning("companies market→uae update failed: %s", exc)
-            return company
+            return _apply_uae_market(sb, ws, existing.data)
     except Exception as exc:
         logger.warning("companies lookup by workspace_id failed (%s): %s", ws_id, exc)
+
+    linked = _link_orphan_company(sb, ws, ws_id)
+    if linked:
+        return linked
 
     slug = f"{_slugify(ws.name)}-{ws_id[:8]}"
     country = (ws.country or "").lower()

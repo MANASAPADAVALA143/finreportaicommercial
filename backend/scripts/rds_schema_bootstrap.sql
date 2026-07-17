@@ -1522,7 +1522,7 @@ CREATE TABLE IF NOT EXISTS ap_companies (
 DO $$ BEGIN ALTER TABLE ap_companies ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 CREATE INDEX IF NOT EXISTS ix_ap_companies_tenant_id ON ap_companies (tenant_id);
 
-CREATE TABLE IF NOT EXISTS invoices (
+CREATE TABLE IF NOT EXISTS ap_invoices (
     id               VARCHAR(36) PRIMARY KEY,
     tenant_id        VARCHAR(36) NOT NULL,
     company_id       VARCHAR(36) NOT NULL,
@@ -1551,22 +1551,22 @@ CREATE TABLE IF NOT EXISTS invoices (
     created_by       VARCHAR(36),
     UNIQUE (tenant_id, company_id, invoice_number)
 );
-DO $$ BEGIN ALTER TABLE invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-CREATE INDEX IF NOT EXISTS ix_invoices_tenant_id ON invoices (tenant_id);
-CREATE INDEX IF NOT EXISTS ix_invoices_company_id ON invoices (company_id);
+DO $$ BEGIN ALTER TABLE ap_invoices ADD COLUMN tenant_id VARCHAR(36); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS ix_ap_invoices_tenant_id ON ap_invoices (tenant_id);
+CREATE INDEX IF NOT EXISTS ix_ap_invoices_company_id ON ap_invoices (company_id);
 
-CREATE TABLE IF NOT EXISTS invoice_line_items (
+CREATE TABLE IF NOT EXISTS ap_invoice_line_items (
     id          VARCHAR(36) PRIMARY KEY,
     tenant_id   VARCHAR(36) NOT NULL,
     company_id  VARCHAR(36) NOT NULL,
-    invoice_id  VARCHAR(36) NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    invoice_id  VARCHAR(36) NOT NULL REFERENCES ap_invoices(id) ON DELETE CASCADE,
     description TEXT NOT NULL,
     quantity    NUMERIC(10, 2) NOT NULL DEFAULT 1,
     unit_price  NUMERIC(15, 2) NOT NULL,
     total       NUMERIC(15, 2) NOT NULL,
     created_at  TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
 );
-CREATE INDEX IF NOT EXISTS ix_invoice_line_items_invoice_id ON invoice_line_items (invoice_id);
+CREATE INDEX IF NOT EXISTS ix_ap_invoice_line_items_invoice_id ON ap_invoice_line_items (invoice_id);
 
 CREATE TABLE IF NOT EXISTS vendors (
     id         VARCHAR(36) PRIMARY KEY,

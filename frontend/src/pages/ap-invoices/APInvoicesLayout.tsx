@@ -4,13 +4,17 @@
  * Full sidebar matching standalone InvoiceFlow app.
  */
 import type React from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useMarket } from '../../contexts/MarketContext';
 import { MarketToggle } from '../../components/MarketToggle';
 import { useAuth } from '../../context/AuthContext';
-import { ensureApCompanySynced, setApSyncAccessToken } from '../../lib/ap-invoice/workspaceCompanySync';
-import { clearCompanyCache } from '../../lib/ap-invoice/companyService';
+import {
+  ensureApCompanySynced,
+  getApCompanySyncStatus,
+  setApSyncAccessToken,
+  type ApCompanySyncStatus,
+} from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import {
   LayoutDashboard, FileText, Upload, CheckCircle, Users,
@@ -102,20 +106,44 @@ function MarketToggleSidebar() {
 
 function ApWorkspaceSync() {
   const { accessToken } = useAuth();
+  const [syncStatus, setSyncStatus] = useState<ApCompanySyncStatus>(() => getApCompanySyncStatus().status);
+  const [syncDetail, setSyncDetail] = useState(() => getApCompanySyncStatus().detail);
+
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const detail = (e as CustomEvent<{ status: ApCompanySyncStatus; detail: string }>).detail;
+      if (!detail) return;
+      setSyncStatus(detail.status);
+      setSyncDetail(detail.detail || '');
+    };
+    window.addEventListener('ap-company-sync-status', onStatus);
+    return () => window.removeEventListener('ap-company-sync-status', onStatus);
+  }, []);
+
   useEffect(() => {
     setApSyncAccessToken(accessToken);
-    if (!getStoredWorkspaceId()) return;
-    clearCompanyCache();
+    if (!getStoredWorkspaceId() || !accessToken) return;
+    // Do not clearCompanyCache here — that forces re-resolution and re-sync on every token tick.
     void ensureApCompanySynced(accessToken);
   }, [accessToken]);
-  return null;
+
+  if (syncStatus !== 'pending' && syncStatus !== 'error') return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute top-2 right-2 z-20 max-w-xs rounded-md border border-amber-700/60 bg-amber-950/90 px-2.5 py-1.5 text-[11px] text-amber-100 shadow"
+      role="status"
+    >
+      {syncDetail || (syncStatus === 'pending' ? 'Company sync pending' : 'Company sync error')}
+    </div>
+  );
 }
 
 function APInvoicesLayoutInner() {
   const { isUAE } = useMarket();
   return (
     /* 36px = GnanovaBanner height; min-h-0 lets flex children scroll */
-    <div className="flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
+    <div className="relative flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
       <ApWorkspaceSync />
       {/* Left sub-nav — header/footer fixed, nav scrolls */}
       <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col h-full min-h-0 overflow-hidden">

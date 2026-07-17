@@ -38,6 +38,31 @@ import { downloadTallyXML } from '@/utils/tallyExport';
 import { downloadQBIIF } from '@/utils/quickbooksExport';
 import { downloadXeroCSV } from '@/utils/xeroExport';
 import * as XLSX from 'xlsx';
+
+/** Keep the same object reference when refresh data is unchanged — prevents InvoiceDetailModal shake. */
+function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | null {
+  if (!prev) return null;
+  const next = list.find((i) => i.id === prev.id);
+  if (!next) return prev;
+  const keys: (keyof Invoice)[] = [
+    'status',
+    'match_status',
+    'po_id',
+    'po_number',
+    'gl_code',
+    'gl_account_code',
+    'risk_score',
+    'payment_status',
+    'ifrs_category',
+    'total_amount',
+    'vendor_name',
+    'updated_at',
+  ];
+  if (keys.every((k) => String(prev[k] ?? '') === String(next[k] ?? ''))) {
+    return prev;
+  }
+  return next;
+}
 import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
@@ -59,7 +84,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { getMyCompany, clearCompanyCache } from '@/lib/ap-invoice/companyService';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -386,7 +411,7 @@ export function InvoiceList() {
   }, [workspaceId]);
 
   useEffect(() => {
-    const onSynced = () => { void fetchInvoices(); };
+    const onSynced = () => { void fetchInvoices({ quiet: true }); };
     window.addEventListener('ap-company-synced', onSynced);
     return () => window.removeEventListener('ap-company-synced', onSynced);
   }, [accessToken, workspaceId]);
@@ -566,7 +591,7 @@ export function InvoiceList() {
         }
       }
 
-      await fetchInvoices();
+      await fetchInvoices({ quiet: true });
       toast({
         title: 'Re-run match complete',
         description: `${targets.length} invoice(s) re-checked: ${resolved} now resolved${failed ? `, ${failed} failed` : ''}.`,
@@ -583,12 +608,11 @@ export function InvoiceList() {
     }
   }
 
-  async function fetchInvoices() {
+  async function fetchInvoices(opts?: { quiet?: boolean }) {
     let invoiceList: Invoice[] = [];
     let companyId: string | null = null;
     try {
-      setLoading(true);
-      clearCompanyCache();
+      if (!opts?.quiet) setLoading(true);
       try {
         companyId = await resolveApSupabaseCompanyId(accessToken);
       } catch {
@@ -615,17 +639,13 @@ export function InvoiceList() {
       }
 
       setInvoices(invoiceList);
-      setSelectedInvoice((prev) => {
-        if (!prev) return null;
-        const next = invoiceList.find((i: Invoice) => i.id === prev.id);
-        return next ?? prev;
-      });
+      setSelectedInvoice((prev) => pickUpdatedInvoice(prev, invoiceList));
 
       void markEscalationDueIfNeeded(invoiceList, companyId);
     } catch (error) {
       console.error('Error fetching invoices:', error);
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
 
     if (invoiceList.length === 0) return;
@@ -731,11 +751,7 @@ export function InvoiceList() {
           const { data: refreshed } = await rq;
           if (refreshed) {
             setInvoices(refreshed);
-            setSelectedInvoice((prev) => {
-              if (!prev) return null;
-              const next = refreshed.find((i: Invoice) => i.id === prev.id);
-              return next ?? prev;
-            });
+            setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
           }
         }
       }
@@ -1910,7 +1926,7 @@ export function InvoiceList() {
           invoice={selectedInvoice}
           open={!!selectedInvoice}
           onClose={() => setSelectedInvoice(null)}
-          onUpdate={fetchInvoices}
+          onUpdate={() => void fetchInvoices({ quiet: true })}
           onNavigateInvoice={async (id) => {
             const inv = await fetchInvoiceById(id);
             if (inv) setSelectedInvoice(inv);

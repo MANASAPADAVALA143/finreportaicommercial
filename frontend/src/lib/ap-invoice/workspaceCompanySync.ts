@@ -11,17 +11,44 @@ import { clearCompanyCache } from './companyService';
 let _accessToken: string | null = null;
 let _syncInFlight: Promise<Company | null> | null = null;
 const _syncedByWorkspace: Record<string, Company> = {};
+/** Cooldown after failed sync so 503s don't tight-loop from fetchInvoices / modal onUpdate. */
+const _failedUntilByWorkspace: Record<string, number> = {};
+const FAIL_COOLDOWN_MS = 60_000;
+const FAIL_COOLDOWN_503_MS = 120_000;
+
+export type ApCompanySyncStatus = 'idle' | 'syncing' | 'synced' | 'pending' | 'error';
+
+let _syncStatus: ApCompanySyncStatus = 'idle';
+let _syncStatusDetail = '';
 
 export function setApSyncAccessToken(token: string | null) {
   _accessToken = token;
+}
+
+export function getApCompanySyncStatus(): { status: ApCompanySyncStatus; detail: string } {
+  return { status: _syncStatus, detail: _syncStatusDetail };
 }
 
 export function getCachedSyncedCompany(workspaceId: string): Company | null {
   return _syncedByWorkspace[workspaceId] ?? null;
 }
 
+function setSyncStatus(status: ApCompanySyncStatus, detail = '') {
+  _syncStatus = status;
+  _syncStatusDetail = detail;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('ap-company-sync-status', { detail: { status, detail } }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 function cacheCompany(workspaceId: string, company: Company) {
   _syncedByWorkspace[workspaceId] = company;
+  delete _failedUntilByWorkspace[workspaceId];
+  setSyncStatus('synced');
   try {
     localStorage.setItem(`ap_company_${workspaceId}`, company.id);
   } catch {
@@ -32,6 +59,18 @@ function cacheCompany(workspaceId: string, company: Company) {
   } catch {
     /* ignore */
   }
+}
+
+function markSyncFailed(workspaceId: string, status: number, text: string) {
+  const cooldown = status === 503 ? FAIL_COOLDOWN_503_MS : FAIL_COOLDOWN_MS;
+  _failedUntilByWorkspace[workspaceId] = Date.now() + cooldown;
+  setSyncStatus(
+    status === 503 ? 'pending' : 'error',
+    status === 503
+      ? 'Company sync pending — will retry shortly'
+      : `Company sync failed (${status})`,
+  );
+  console.warn('[AP] sync-ap-company failed:', status, text);
 }
 
 async function findCompanyByWorkspaceId(workspaceId: string): Promise<Company | null> {
@@ -58,6 +97,7 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
   const base = backendOrigin();
   if (!base) {
     console.warn('[AP] VITE_API_URL not set — cannot sync company via backend');
+    markSyncFailed(workspaceId, 0, 'VITE_API_URL not set');
     return null;
   }
   const res = await fetch(`${base}/api/workspaces/${workspaceId}/sync-ap-company`, {
@@ -67,7 +107,7 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
   });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    console.warn('[AP] sync-ap-company failed:', res.status, text);
+    markSyncFailed(workspaceId, res.status, text);
     return null;
   }
   const body = (await res.json()) as { company?: Company };
@@ -76,6 +116,7 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
     clearCompanyCache();
     return body.company;
   }
+  markSyncFailed(workspaceId, 502, 'empty company payload');
   return null;
 }
 
@@ -137,6 +178,7 @@ export async function syncApCompanyFromWorkspace(ws: Workspace): Promise<Company
 
 /**
  * Read active workspace from localStorage, ensure Supabase company exists via backend.
+ * Failed syncs enter a cooldown so callers (list refresh, detail modal) do not hammer 503.
  */
 export async function ensureApCompanySynced(accessToken?: string | null): Promise<Company | null> {
   const token = accessToken ?? _accessToken;
@@ -146,6 +188,11 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
   const existing = await findCompanyByWorkspaceId(workspaceId);
   if (existing) return existing;
 
+  const failedUntil = _failedUntilByWorkspace[workspaceId] ?? 0;
+  if (failedUntil > Date.now()) {
+    return getCachedSyncedCompany(workspaceId);
+  }
+
   if (!token) {
     console.warn('[AP] workspace selected but not logged in — cannot sync AP company');
     return null;
@@ -153,12 +200,14 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
 
   if (_syncInFlight) return _syncInFlight;
 
+  setSyncStatus('syncing');
   _syncInFlight = (async () => {
     try {
       const viaBackend = await syncViaBackend(workspaceId, token);
       return viaBackend;
     } catch (e) {
       console.warn('[AP] ensureApCompanySynced:', e instanceof Error ? e.message : e);
+      markSyncFailed(workspaceId, 0, e instanceof Error ? e.message : String(e));
       return null;
     } finally {
       _syncInFlight = null;

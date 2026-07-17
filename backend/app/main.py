@@ -344,8 +344,11 @@ async def root():
 async def health():
     import os as _os
     from pathlib import Path as _Path
+    from app.core.config import settings as _settings
     _k = _os.environ.get("ANTHROPIC_API_KEY", "")
     _env = _Path(__file__).resolve().parent.parent / ".env"
+    _sb_url = bool((_settings.SUPABASE_URL or "").strip())
+    _sb_key = bool((_settings.SUPABASE_KEY or "").strip())
     return {
         "status": "healthy",
         "ai_key_set": bool(_k),
@@ -353,6 +356,7 @@ async def health():
         "cwd": _os.getcwd(),
         "env_file_path": str(_env),
         "env_file_exists": _env.exists(),
+        "supabase_configured": _sb_url and _sb_key,
         "file": __file__,
     }
 

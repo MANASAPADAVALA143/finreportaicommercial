@@ -60,7 +60,13 @@ class ApCompany(Base):
 
 
 class ApInvoice(Base):
-    __tablename__ = "invoices"
+    """AP InvoiceFlow mirror on RDS.
+
+    Table is ``ap_invoices`` — not ``invoices``. Legacy / GulfTax rows may still
+    occupy ``invoices`` with an integer PK on shared RDS; UUID FK create_all would fail.
+    """
+
+    __tablename__ = "ap_invoices"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), nullable=False, index=True)
@@ -90,17 +96,17 @@ class ApInvoice(Base):
     created_by = Column(String(36), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "company_id", "invoice_number", name="uq_invoice_tenant_co_num"),
+        UniqueConstraint("tenant_id", "company_id", "invoice_number", name="uq_ap_invoice_tenant_co_num"),
     )
 
 
 class ApInvoiceLineItem(Base):
-    __tablename__ = "invoice_line_items"
+    __tablename__ = "ap_invoice_line_items"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
-    invoice_id = Column(String(36), ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id = Column(String(36), ForeignKey("ap_invoices.id", ondelete="CASCADE"), nullable=False, index=True)
     description = Column(Text, nullable=False)
     quantity = Column(Numeric(10, 2), nullable=False, default=1)
     unit_price = Column(Numeric(15, 2), nullable=False)
