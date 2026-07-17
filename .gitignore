@@ -69,6 +69,7 @@ backend/outputs/
 *.temp
 temp/
 tmp/
+.sync-tmp/
 
 # Test files
 *.test.js

@@ -81,11 +81,12 @@ def main() -> int:
         print("Dry run — no update.")
         return 0
 
+    # supabase-py 2.x: .select() is not valid after .eq() on SyncFilterRequestBuilder
+    sb.table("companies").update({"workspace_id": args.workspace_id}).eq("id", target["id"]).execute()
     updated = (
         sb.table("companies")
-        .update({"workspace_id": args.workspace_id})
-        .eq("id", target["id"])
         .select("id,name,workspace_id")
+        .eq("id", target["id"])
         .maybe_single()
         .execute()
     )

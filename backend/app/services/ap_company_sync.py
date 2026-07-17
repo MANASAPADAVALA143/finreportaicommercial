@@ -68,15 +68,16 @@ def _link_orphan_company(sb: Any, ws: Workspace, ws_id: str) -> dict[str, Any] |
         return None
 
     try:
-        updated = (
+        # supabase-py 2.x: .select() is not valid after .eq() on update filters
+        sb.table("companies").update({"workspace_id": ws_id}).eq("id", chosen["id"]).execute()
+        refreshed = (
             sb.table("companies")
-            .update({"workspace_id": ws_id})
-            .eq("id", chosen["id"])
             .select("*")
+            .eq("id", chosen["id"])
             .maybe_single()
             .execute()
         )
-        company = updated.data or {**chosen, "workspace_id": ws_id}
+        company = refreshed.data or {**chosen, "workspace_id": ws_id}
         logger.info(
             "Linked orphan AP company %s (%s) → workspace %s",
             company.get("id"),
