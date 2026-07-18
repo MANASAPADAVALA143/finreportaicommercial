@@ -636,13 +636,22 @@ export async function listInvoiceAnomalies(filters?: {
   status?: string;
   severity?: string;
   month?: string;
+  /** When set, use this company instead of requireCompanyId() (avoids drift vs invoice list). */
+  companyId?: string | null;
 }): Promise<InvoiceAnomaly[]> {
-  const companyId = await requireCompanyId();
+  let companyId = filters?.companyId ?? null;
+  if (!companyId) {
+    try {
+      companyId = await requireCompanyId();
+    } catch {
+      companyId = null;
+    }
+  }
   let q = supabase
     .from('invoice_anomalies')
     .select('*')
-    .eq('company_id', companyId)
     .order('created_at', { ascending: false });
+  if (companyId) q = q.eq('company_id', companyId);
   if (filters?.status) q = q.eq('status', filters.status);
   if (filters?.severity) q = q.eq('severity', filters.severity);
   if (filters?.month) {
@@ -745,11 +754,11 @@ export async function getAnomalyDashboardStats(): Promise<{
     /* table missing or RLS — fall through to invoices.risk_flags */
   }
 
-  // Fallback: count flags stored on invoices this month (CSV path historically only wrote risk_flags)
+  // Fallback: count flags / numeric risk on invoices this month
   const companyId = await requireCompanyId().catch(() => null);
   let q = supabase
     .from('invoices')
-    .select('risk_score, risk_flags')
+    .select('risk_score, risk_level, risk_flags')
     .gte('created_at', `${month}-01`)
     .lt('created_at', `${month}-32`);
   if (companyId) q = q.eq('company_id', companyId);
@@ -761,12 +770,14 @@ export async function getAnomalyDashboardStats(): Promise<{
   const byCode: Record<string, number> = {};
   for (const inv of data ?? []) {
     const flags = Array.isArray(inv.risk_flags) ? inv.risk_flags : [];
-    if (!flags.length) continue;
-    total += flags.length;
-    const score = String(inv.risk_score || '').toLowerCase();
-    if (score === 'critical') critical += flags.length;
-    else if (score === 'high') high += flags.length;
-    else medium += flags.length;
+    const scoreNum = typeof inv.risk_score === 'number' ? inv.risk_score : Number(inv.risk_score);
+    const tier = String(inv.risk_level || '').toLowerCase();
+    const flagN = flags.length || (Number.isFinite(scoreNum) && scoreNum >= 30 ? 1 : 0);
+    if (!flagN) continue;
+    total += flags.length || 1;
+    if (tier === 'critical' || scoreNum >= 85) critical += flags.length || 1;
+    else if (tier === 'high' || scoreNum >= 60) high += flags.length || 1;
+    else medium += flags.length || 1;
     for (const f of flags) {
       const code =
         f && typeof f === 'object' && 'type' in f
@@ -774,6 +785,7 @@ export async function getAnomalyDashboardStats(): Promise<{
           : 'FLAG';
       byCode[code] = (byCode[code] ?? 0) + 1;
     }
+    if (!flags.length) byCode['RISK_SCORE'] = (byCode['RISK_SCORE'] ?? 0) + 1;
   }
   return {
     totalThisMonth: total,

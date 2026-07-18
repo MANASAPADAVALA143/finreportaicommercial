@@ -71,6 +71,7 @@ import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
 import {
   deriveInvoiceRiskDisplayScore,
   invoiceHasRiskSignal,
+  invoiceMatchesAnomalyTab,
   invoiceRiskTierForFilter,
 } from '@/lib/ap-invoice/invoiceRiskDisplay';
 import {
@@ -375,9 +376,6 @@ export function InvoiceList() {
   useEffect(() => {
     fetchInvoices();
     void deleteDebugInvoicesOnce();
-    void listInvoiceAnomalies({ status: 'open' })
-      .then((rows) => setAnomalyInvoiceIds(new Set(rows.map((r) => r.invoice_id).filter(Boolean) as string[])))
-      .catch(() => setAnomalyInvoiceIds(new Set()));
     // Check for vendor filter in URL
     const urlParams = new URLSearchParams(window.location.search);
     const vendorFilter = urlParams.get('vendor');
@@ -408,6 +406,24 @@ export function InvoiceList() {
       setSourceFilter('email');
     }
   }, [workspaceId]);
+
+  /** Reload open anomaly invoice ids using the same company scope as the list. */
+  async function refreshAnomalyInvoiceIds(companyId: string | null, invoiceList: Invoice[]) {
+    try {
+      let rows = await listInvoiceAnomalies({ status: 'open', companyId });
+      // Company drift: if scoped query is empty but invoices exist, load all open flags and
+      // keep only those that belong to invoices currently on screen.
+      if (rows.length === 0 && invoiceList.length > 0) {
+        rows = await listInvoiceAnomalies({ status: 'open', companyId: null });
+        const visible = new Set(invoiceList.map((i) => i.id));
+        rows = rows.filter((r) => r.invoice_id && visible.has(r.invoice_id));
+      }
+      setAnomalyInvoiceIds(new Set(rows.map((r) => r.invoice_id).filter(Boolean) as string[]));
+    } catch {
+      // Fall back to invoice-row signals (risk_score / risk_flags) in the Anomaly tab filter
+      setAnomalyInvoiceIds(new Set());
+    }
+  }
 
   useEffect(() => {
     const onSynced = () => { void fetchInvoices({ quiet: true }); };
@@ -640,6 +656,7 @@ export function InvoiceList() {
       setInvoices(invoiceList);
       setSelectedInvoice((prev) => pickUpdatedInvoice(prev, invoiceList));
 
+      void refreshAnomalyInvoiceIds(companyId, invoiceList);
       void markEscalationDueIfNeeded(invoiceList, companyId);
     } catch (error) {
       console.error('Error fetching invoices:', error);
@@ -766,7 +783,9 @@ export function InvoiceList() {
     } else if (viewMode === 'needs_review') {
       filtered = filtered.filter((inv) => invoiceNeedsExtractionReview(inv));
     } else if (viewMode === 'anomalies') {
-      filtered = filtered.filter((inv) => anomalyInvoiceIds.has(inv.id) || invoiceHasRiskSignal(inv));
+      filtered = filtered.filter(
+        (inv) => anomalyInvoiceIds.has(inv.id) || invoiceMatchesAnomalyTab(inv),
+      );
     }
 
     if (searchTerm) {
@@ -1295,6 +1314,17 @@ export function InvoiceList() {
                 }}
               >
                 Anomaly
+                {(anomalyInvoiceIds.size > 0 ||
+                  invoices.some((i) => invoiceMatchesAnomalyTab(i))) && (
+                  <span className="ml-1.5 rounded-full bg-white/20 px-1.5 text-[10px] font-semibold tabular-nums">
+                    {viewMode === 'anomalies'
+                      ? filteredInvoices.length
+                      : new Set([
+                          ...anomalyInvoiceIds,
+                          ...invoices.filter((i) => invoiceMatchesAnomalyTab(i)).map((i) => i.id),
+                        ]).size}
+                  </span>
+                )}
               </Button>
               <span className="mx-1 hidden sm:inline text-gray-300">|</span>
               <Button
