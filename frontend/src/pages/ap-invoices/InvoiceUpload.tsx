@@ -1743,7 +1743,7 @@ export function InvoiceUpload() {
             // India GST fields
             ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
-            ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number) } : {}),
+            ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number).trim() } : {}),
           };
 
           console.log('Inserting row:', JSON.stringify(upsertPayload, null, 2));

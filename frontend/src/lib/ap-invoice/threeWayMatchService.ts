@@ -430,7 +430,11 @@ export async function runAutoMatch(
 
   const companyId = company?.id ?? inv.company_id ?? null;
 
+  // Explicit invoice.po_number is authoritative — never replace it via vendor/amount fallback.
+  // Same principle as resolvePoIdForGrn: exact → case-insensitive → needs_review (no silent substitute).
   const trimmedPo = String(inv.po_number || '').trim();
+  let poResolvedViaVendorFallback = false;
+
   if (trimmedPo && companyId) {
     const exact = await supabase
       .from('purchase_orders')
@@ -448,9 +452,9 @@ export async function runAutoMatch(
         .limit(1);
       if (ci.data?.[0]) po = ci.data[0] as Record<string, unknown>;
     }
-  }
-
-  if (!po && inv.vendor_name && companyId) {
+    // Literal po_number provided but not found → leave po null (needs_review / no_po).
+    // Do NOT fall through to vendor+amount matching (that previously overwrote 7/100 UAE rows).
+  } else if (!trimmedPo && inv.vendor_name && companyId) {
     const v = escapeIlike(String(inv.vendor_name).trim());
     const { data: vendorPOs } = await supabase
       .from('purchase_orders')
@@ -469,6 +473,12 @@ export async function runAutoMatch(
         const bestDiff = best != null && !Number.isNaN(bAmt) ? Math.abs(bAmt - invoiceAmount) : Infinity;
         return currDiff < bestDiff ? curr : best;
       }, null) as Record<string, unknown> | null;
+      if (po) {
+        poResolvedViaVendorFallback = true;
+        exceptions.push(
+          `Matched by vendor/amount to ${String(po.po_number ?? '')} — no PO number on invoice, verify manually`
+        );
+      }
     }
   }
 
@@ -617,9 +627,15 @@ export async function runAutoMatch(
       checks.within_qty_tolerance = true;
     }
   } else {
-    exceptions.push(
-      `No PO found for invoice ${inv.invoice_number ?? invoiceId} (${inv.vendor_name ?? 'unknown vendor'})`
-    );
+    if (trimmedPo) {
+      exceptions.push(
+        `Purchase Order "${trimmedPo}" not found — left as-is for review (no vendor substitute)`
+      );
+    } else {
+      exceptions.push(
+        `No PO found for invoice ${inv.invoice_number ?? invoiceId} (${inv.vendor_name ?? 'unknown vendor'})`
+      );
+    }
   }
 
   const passedChecks = Object.values(checks).filter(Boolean).length;
@@ -716,8 +732,17 @@ export async function runAutoMatch(
   const notesParts = [summary, ...exceptions.filter((e) => e && e !== summary)];
   const matchNotes = notesParts.filter(Boolean).join('\n');
 
+  // Never overwrite an explicit source po_number with a different PO (vendor fallback bug).
+  // - Explicit value present: keep it (canonical DB casing only when the same PO was found).
+  // - Blank + vendor fallback: may fill from matched PO (already flagged in match_notes).
+  const resolvedPoNumber = trimmedPo
+    ? po && !poResolvedViaVendorFallback
+      ? String(po.po_number ?? trimmedPo)
+      : trimmedPo
+    : ((po?.po_number as string) ?? inv.po_number ?? null);
+
   const updatePayload: Record<string, unknown> = {
-    po_id: (po?.id as string) ?? inv.po_id ?? null,
+    po_id: (po?.id as string) ?? (trimmedPo ? null : inv.po_id ?? null),
     grn_id: (grn?.id as string) ?? null,
     match_status: invoiceMatchStatus,
     match_score: score,
@@ -730,7 +755,7 @@ export async function runAutoMatch(
     match_percentage: Number(amount_variance_pct.toFixed(2)),
     po_amount: poAmount,
     grn_amount: grnAmount > 0 ? grnAmount : null,
-    po_number: (po?.po_number as string) ?? inv.po_number,
+    po_number: resolvedPoNumber,
     updated_at: new Date().toISOString(),
   };
 
