@@ -25,8 +25,7 @@ import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap } from 'l
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
-import { detectAnomalies } from '@/utils/anomalyDetection';
-import { listInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { listInvoiceAnomalies, scanInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
 import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
@@ -660,59 +659,49 @@ export function InvoiceList() {
       // Stop after first 400 so missing/wrong schema doesn't cause hundreds of errors
       const needsRiskCheck = invoiceList.filter((inv: Invoice) => inv.risk_score == null);
       if (needsRiskCheck.length > 0) {
-        const otherInvoices = invoiceList.map((inv: Invoice) => ({
-          invoice_number: inv.invoice_number,
-          vendor_name: inv.vendor_name,
-          total_amount: Number(inv.total_amount),
-          invoice_date: inv.invoice_date,
-          due_date: inv.due_date,
-          vendor_email: inv.vendor_email ?? null,
-        }));
-
         let backfillAborted = false;
         for (const inv of needsRiskCheck) {
           if (backfillAborted) break;
           try {
-            const existing = otherInvoices.filter((o: { invoice_number: string }) => o.invoice_number !== inv.invoice_number);
-            const result = await detectAnomalies(
+            if (!inv.company_id) continue;
+            const result = await scanInvoiceAnomalies(
               {
+                id: inv.id,
+                company_id: inv.company_id,
                 invoice_number: inv.invoice_number,
                 invoice_date: inv.invoice_date,
                 due_date: inv.due_date,
                 vendor_name: inv.vendor_name,
                 vendor_email: inv.vendor_email ?? null,
+                vendor_trn: inv.vendor_trn ?? null,
+                gstin: inv.gstin ?? null,
                 total_amount: Number(inv.total_amount),
+                po_number: inv.po_number ?? null,
+                po_id: inv.po_id ?? null,
+                description: (inv as { description?: string | null }).description ?? null,
+                created_at: inv.created_at ?? null,
               },
-              existing
+              'list-backfill',
             );
-            const riskDb = normalizeRiskForDb(result.risk_score);
-            const { error } = await supabase
-              .from('invoices')
-              .update({
-                risk_score: riskDb.risk_score,
-                risk_level: riskDb.risk_level,
-                risk_flags: Array.isArray(result.risk_flags) ? result.risk_flags : [],
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', inv.id);
-            if (error) {
-              if (error.code === 'PGRST301' || error.message?.includes('400') || (error as { status?: number }).status === 400) {
-                console.warn('Risk backfill stopped: schema may be missing risk_score/risk_flags. Run FIX-IFRS-AND-RISK-SCHEMA.sql in Supabase SQL Editor.', error);
-                backfillAborted = true;
-              } else {
-                console.warn('Failed to backfill risk for invoice', inv.invoice_number, error);
-              }
-              continue;
-            }
             setInvoices((prev) =>
               prev.map((i) =>
                 i.id === inv.id
                   ? ({
                       ...i,
-                      risk_score: riskDb.risk_score,
-                      risk_level: riskDb.risk_level,
-                      risk_flags: result.risk_flags,
-                    } as Invoice)
+                      risk_score: result.overall_risk_score,
+                      risk_level:
+                        result.overall_risk_score >= 60
+                          ? 'High'
+                          : result.overall_risk_score >= 30
+                            ? 'Medium'
+                            : 'Low',
+                      risk_flags: result.flags.map((f) => ({
+                        type: f.flag_code,
+                        severity: f.severity,
+                        message: f.flag_reason,
+                        explanation: JSON.stringify(f.flag_details ?? {}),
+                      })),
+                    } as unknown as Invoice)
                   : i
               )
             );

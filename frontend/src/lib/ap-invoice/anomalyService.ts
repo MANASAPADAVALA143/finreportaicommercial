@@ -1,10 +1,9 @@
-/**
- * Module 3 — Anomaly detection service (calls Python engine + persists to invoice_anomalies).
- */
 import { supabase } from './supabase';
 import type { InvoiceAnomaly } from './supabase';
 import { requireCompanyId } from './companyService';
 import { logApAudit } from './apAuditService';
+import { joinApiUrl } from '@/utils/backendOrigin';
+import { detectAnomalies } from '@/utils/anomalyDetection';
 
 export type AnomalyEngineFlag = {
   anomaly_type: string;
@@ -23,7 +22,7 @@ export type AnomalyEngineResult = {
   statistical_context?: string | null;
 };
 
-const ANOMALY_API = '/api/ap/detect-anomalies';
+const ANOMALY_API = joinApiUrl('/api/ap/detect-anomalies');
 
 export async function runAnomalyEngine(payload: {
   invoice: Record<string, unknown>;
@@ -97,6 +96,47 @@ function runClientAnomalyFallback(payload: {
       flag_details: { vendor_age_days: vendorAge, amount },
     });
   }
+  if (payload.vendor?.flag_ghost_vendor || payload.vendor?.placeholder_trn) {
+    flags.push({
+      anomaly_type: 'rule_based',
+      detection_method: 'ghost_vendor',
+      severity: 'critical',
+      risk_score: 90,
+      flag_code: 'GHOST_VENDOR',
+      flag_reason: 'Vendor not found in Vendor Master (or placeholder TRN) — treat as ghost vendor',
+      flag_details: {
+        in_vendor_master: payload.vendor?.in_vendor_master,
+        placeholder_trn: payload.vendor?.placeholder_trn,
+      },
+    });
+  }
+  if (payload.vendor?.trn_mismatch) {
+    flags.push({
+      anomaly_type: 'rule_based',
+      detection_method: 'vendor_identity_mismatch',
+      severity: 'critical',
+      risk_score: 88,
+      flag_code: 'VENDOR_IDENTITY_MISMATCH',
+      flag_reason: 'Invoice TRN does not match Vendor Master TRN for this vendor',
+      flag_details: {
+        invoice_trn: payload.invoice.vendor_trn || payload.invoice.gstin,
+        master_trn: payload.vendor?.master_trn,
+      },
+    });
+  }
+  const invDate = String(payload.invoice.invoice_date || '');
+  const poDate = String(payload.invoice.po_date || payload.vendor?.po_date || '');
+  if (invDate && poDate && invDate < poDate) {
+    flags.push({
+      anomaly_type: 'rule_based',
+      detection_method: 'invoice_before_po',
+      severity: 'high',
+      risk_score: 80,
+      flag_code: 'INVOICE_BEFORE_PO',
+      flag_reason: `Invoice date ${invDate} is before PO date ${poDate} — possible backdating`,
+      flag_details: { invoice_date: invDate, po_date: poDate },
+    });
+  }
 
   const overall = flags.length ? Math.max(...flags.map((f) => f.risk_score)) : 0;
   return {
@@ -109,13 +149,53 @@ function runClientAnomalyFallback(payload: {
   };
 }
 
+function normalizeTrn(raw: string | null | undefined): string {
+  return String(raw || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function isPlaceholderTrn(raw: string | null | undefined): boolean {
+  const t = normalizeTrn(raw);
+  if (!t || t.length < 5) return true;
+  if (/^0+$/.test(t.replace(/^\d/, ''))) return true; // mostly zeros
+  if (/1000{5,}0/.test(t) || /1111111/.test(t) || /0000000/.test(t)) return true;
+  if (t === '10000000000' || t.includes('0000000')) return true;
+  return false;
+}
+
+function riskLevelFromScore(score: number): string {
+  if (score >= 60) return 'High';
+  if (score >= 30) return 'Medium';
+  return 'Low';
+}
+
 export async function persistAnomalies(
   invoiceId: string,
   companyId: string,
   result: AnomalyEngineResult,
   actor: string | null,
 ): Promise<InvoiceAnomaly[]> {
-  if (!result.flags.length) return [];
+  if (!result.flags.length) {
+    // Still write a computed low score so risk_score is not a stale default
+    await supabase
+      .from('invoices')
+      .update({
+        risk_score: Number(result.overall_risk_score) || 0,
+        risk_level: riskLevelFromScore(Number(result.overall_risk_score) || 0),
+        risk_flags: [],
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', invoiceId);
+    return [];
+  }
+
+  // Replace prior open flags from this pipeline so re-scans don't duplicate
+  await supabase
+    .from('invoice_anomalies')
+    .delete()
+    .eq('invoice_id', invoiceId)
+    .eq('status', 'open');
 
   const rows = result.flags.map((f) => ({
     invoice_id: invoiceId,
@@ -143,16 +223,19 @@ export async function persistAnomalies(
     });
   }
 
+  const overall = Number(result.overall_risk_score) || Math.max(...result.flags.map((f) => f.risk_score));
   await supabase
     .from('invoices')
     .update({
-      risk_score: result.overall_risk_score >= 60 ? 'high' : result.overall_risk_score >= 30 ? 'medium' : 'low',
+      risk_score: overall,
+      risk_level: riskLevelFromScore(overall),
       risk_flags: result.flags.map((f) => ({
         type: f.flag_code,
         severity: f.severity,
         message: f.flag_reason,
         explanation: JSON.stringify(f.flag_details ?? {}),
       })),
+      updated_at: new Date().toISOString(),
     })
     .eq('id', invoiceId);
 
@@ -209,7 +292,6 @@ export async function persistUploadAnomalies(
   },
   actor: string | null,
 ): Promise<void> {
-  if (!result.risk_flags?.length) return;
   try {
     await persistAnomalies(invoiceId, companyId, riskCheckToEngineResult(result), actor);
   } catch (e) {
@@ -217,24 +299,333 @@ export async function persistUploadAnomalies(
   }
 }
 
+/**
+ * Full AP anomaly pipeline for one invoice:
+ * client rules + vendor-master identity + PO/GRN sequence + Python engine (or fallback).
+ * Always writes numeric risk_score and invoice_anomalies rows when flags exist.
+ */
+export async function scanInvoiceAnomalies(
+  invoice: {
+    id: string;
+    company_id: string;
+    invoice_number: string;
+    invoice_date: string;
+    due_date?: string | null;
+    vendor_name: string;
+    vendor_email?: string | null;
+    vendor_trn?: string | null;
+    gstin?: string | null;
+    total_amount: number;
+    po_number?: string | null;
+    po_id?: string | null;
+    notes?: string | null;
+    description?: string | null;
+    created_at?: string | null;
+  },
+  actor: string | null = 'system-anomaly-scan',
+): Promise<AnomalyEngineResult> {
+  const companyId = invoice.company_id;
+  const vendorName = String(invoice.vendor_name || '').trim();
+  const invoiceTrn = String(invoice.vendor_trn || invoice.gstin || '').trim();
+
+  const { data: historyRows } = await supabase
+    .from('invoices')
+    .select('id,invoice_number,vendor_name,total_amount,invoice_date,due_date,vendor_email,vendor_trn,gstin,status')
+    .eq('company_id', companyId)
+    .neq('id', invoice.id)
+    .limit(500);
+
+  const history = historyRows ?? [];
+
+  // --- Vendor master lookup ---
+  let master: Record<string, unknown> | null = null;
+  let companyVendorCount = 0;
+  {
+    const { count } = await supabase
+      .from('vendors')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId);
+    companyVendorCount = count ?? 0;
+
+    if (vendorName) {
+      const { data: exact } = await supabase
+        .from('vendors')
+        .select('*')
+        .eq('company_id', companyId)
+        .ilike('name', vendorName)
+        .limit(1);
+      master = (exact?.[0] as Record<string, unknown>) ?? null;
+      if (!master) {
+        const { data: fuzzy } = await supabase
+          .from('vendors')
+          .select('*')
+          .eq('company_id', companyId)
+          .ilike('name', `%${vendorName.split(/\s+/)[0] || vendorName}%`)
+          .limit(5);
+        const hit = (fuzzy ?? []).find(
+          (v) =>
+            String(v.name || '')
+              .toLowerCase()
+              .includes(vendorName.toLowerCase()) ||
+            vendorName.toLowerCase().includes(String(v.name || '').toLowerCase()),
+        );
+        master = (hit as Record<string, unknown>) ?? null;
+      }
+    }
+  }
+
+  // Consensus TRN from prior invoices for this vendor (when master empty / incomplete)
+  const priorSameVendor = history.filter(
+    (h) => String(h.vendor_name || '').toLowerCase() === vendorName.toLowerCase(),
+  );
+  const trnCounts = new Map<string, number>();
+  for (const h of priorSameVendor) {
+    const t = normalizeTrn(h.vendor_trn || h.gstin);
+    if (t && !isPlaceholderTrn(t)) trnCounts.set(t, (trnCounts.get(t) || 0) + 1);
+  }
+  let consensusTrn = '';
+  let bestN = 0;
+  for (const [t, n] of trnCounts) {
+    if (n > bestN) {
+      bestN = n;
+      consensusTrn = t;
+    }
+  }
+
+  const masterTrn = normalizeTrn(
+    (master?.gstin as string) || (master?.tax_id as string) || (master?.trn as string) || consensusTrn,
+  );
+  const invTrnNorm = normalizeTrn(invoiceTrn);
+  const placeholder = isPlaceholderTrn(invoiceTrn);
+  const inMaster = !!master;
+  // Ghost when: not in master (and company has a vendor list), OR placeholder TRN
+  const ghost =
+    (companyVendorCount > 0 && !inMaster) ||
+    placeholder;
+
+  const trnMismatch =
+    !!invTrnNorm &&
+    !!masterTrn &&
+    invTrnNorm !== masterTrn &&
+    !placeholder;
+
+  // --- PO / GRN dates for backdating ---
+  let poDate: string | null = null;
+  let grnDate: string | null = null;
+  const poNum = String(invoice.po_number || '').trim();
+  let poId = invoice.po_id || null;
+  if (poNum || poId) {
+    let poQ = supabase.from('purchase_orders').select('id,po_date,po_number').eq('company_id', companyId);
+    if (poId) poQ = poQ.eq('id', poId);
+    else poQ = poQ.ilike('po_number', poNum);
+    const { data: pos } = await poQ.limit(1);
+    if (pos?.[0]) {
+      poId = pos[0].id;
+      poDate = pos[0].po_date ?? null;
+    }
+  }
+  if (poId) {
+    const { data: grns } = await supabase
+      .from('goods_receipts')
+      .select('received_date')
+      .eq('po_id', poId)
+      .order('received_date', { ascending: true })
+      .limit(1);
+    grnDate = grns?.[0]?.received_date ?? null;
+  }
+
+  const vendorAgeDays = master?.vendor_since
+    ? Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(String(master.vendor_since)).getTime()) / 86_400_000,
+        ),
+      )
+    : priorSameVendor.length
+      ? 120
+      : 0;
+
+  const vendorCtx: Record<string, unknown> = {
+    vendor_age_days: vendorAgeDays,
+    in_vendor_master: inMaster,
+    flag_ghost_vendor: ghost,
+    placeholder_trn: placeholder,
+    trn_mismatch: trnMismatch,
+    master_trn: masterTrn || null,
+    po_date: poDate,
+    grn_date: grnDate,
+  };
+
+  const engineInvoice: Record<string, unknown> = {
+    id: invoice.id,
+    invoice_number: invoice.invoice_number,
+    invoice_date: invoice.invoice_date,
+    due_date: invoice.due_date,
+    vendor_name: vendorName,
+    vendor_trn: invoiceTrn,
+    gstin: invoice.gstin,
+    total_amount: invoice.total_amount,
+    notes: invoice.notes,
+    description: invoice.description,
+    created_at: invoice.created_at,
+    po_date: poDate,
+    grn_date: grnDate,
+  };
+
+  // Client lightweight rules (duplicate / overdue / etc.)
+  const client = await detectAnomalies(
+    {
+      invoice_number: invoice.invoice_number,
+      invoice_date: invoice.invoice_date,
+      due_date: invoice.due_date || invoice.invoice_date,
+      vendor_name: vendorName,
+      vendor_email: invoice.vendor_email ?? null,
+      total_amount: Number(invoice.total_amount),
+      company_id: companyId,
+    },
+    history.map((h) => ({
+      invoice_number: String(h.invoice_number),
+      vendor_name: String(h.vendor_name),
+      total_amount: Number(h.total_amount),
+      invoice_date: String(h.invoice_date),
+      due_date: String(h.due_date || h.invoice_date),
+      vendor_email: (h.vendor_email as string | null) ?? null,
+    })),
+  );
+
+  const engine = await runAnomalyEngine({
+    invoice: engineInvoice,
+    vendor_history: history as Record<string, unknown>[],
+    vendor: vendorCtx,
+    approval_threshold: 10_000,
+  });
+
+  // Merge client + engine flags (dedupe by flag_code)
+  const merged = new Map<string, AnomalyEngineFlag>();
+  for (const f of riskCheckToEngineResult(client).flags) merged.set(f.flag_code, f);
+  for (const f of engine.flags) merged.set(f.flag_code, f);
+
+  // Ensure identity flags even if Python API was unreachable (client fallback may omit them)
+  if (ghost && !merged.has('GHOST_VENDOR')) {
+    merged.set('GHOST_VENDOR', {
+      anomaly_type: 'rule_based',
+      detection_method: 'ghost_vendor',
+      severity: 'critical',
+      risk_score: 90,
+      flag_code: 'GHOST_VENDOR',
+      flag_reason: 'Vendor not found in Vendor Master (or placeholder TRN) — treat as ghost vendor',
+      flag_details: { vendor_name: vendorName, placeholder_trn: placeholder, in_vendor_master: inMaster },
+    });
+  }
+  if (trnMismatch && !merged.has('VENDOR_IDENTITY_MISMATCH')) {
+    merged.set('VENDOR_IDENTITY_MISMATCH', {
+      anomaly_type: 'rule_based',
+      detection_method: 'vendor_identity_mismatch',
+      severity: 'critical',
+      risk_score: 88,
+      flag_code: 'VENDOR_IDENTITY_MISMATCH',
+      flag_reason: 'Invoice TRN does not match Vendor Master / historical TRN for this vendor',
+      flag_details: { invoice_trn: invoiceTrn, master_trn: masterTrn },
+    });
+  }
+  if (poDate && invoice.invoice_date && invoice.invoice_date < poDate && !merged.has('INVOICE_BEFORE_PO')) {
+    merged.set('INVOICE_BEFORE_PO', {
+      anomaly_type: 'rule_based',
+      detection_method: 'invoice_before_po',
+      severity: 'high',
+      risk_score: 80,
+      flag_code: 'INVOICE_BEFORE_PO',
+      flag_reason: `Invoice date ${invoice.invoice_date} is before PO date ${poDate} — possible backdating`,
+      flag_details: { invoice_date: invoice.invoice_date, po_date: poDate },
+    });
+  }
+
+  const flags = [...merged.values()];
+  const overall = flags.length ? Math.max(...flags.map((f) => f.risk_score)) : 0;
+  const result: AnomalyEngineResult = {
+    overall_risk_score: overall,
+    flags,
+    statistical_context: engine.statistical_context,
+  };
+
+  await persistAnomalies(invoice.id, companyId, result, actor);
+  return result;
+}
+
+/** Batch rescan — used after bulk import and for remediating existing invoices. */
+export async function scanInvoicesAnomaliesBatch(
+  invoiceIds: string[],
+  actor: string | null = 'system-anomaly-scan',
+  onProgress?: (done: number, total: number, detail: string) => void,
+): Promise<{ scanned: number; flagged: number }> {
+  let scanned = 0;
+  let flagged = 0;
+  for (let i = 0; i < invoiceIds.length; i++) {
+    const id = invoiceIds[i];
+    const { data: inv, error } = await supabase.from('invoices').select('*').eq('id', id).maybeSingle();
+    if (error || !inv) continue;
+    onProgress?.(i + 1, invoiceIds.length, `Scanning ${inv.invoice_number}…`);
+    try {
+      const r = await scanInvoiceAnomalies(
+        {
+          id: inv.id,
+          company_id: inv.company_id,
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          due_date: inv.due_date,
+          vendor_name: inv.vendor_name,
+          vendor_email: inv.vendor_email,
+          vendor_trn: inv.vendor_trn,
+          gstin: inv.gstin,
+          total_amount: Number(inv.total_amount),
+          po_number: inv.po_number,
+          po_id: inv.po_id,
+          notes: inv.notes,
+          description: inv.description,
+          created_at: inv.created_at,
+        },
+        actor,
+      );
+      scanned++;
+      if (r.flags.length) flagged++;
+    } catch (e) {
+      console.warn('[anomaly] scan failed', inv.invoice_number, e);
+    }
+  }
+  return { scanned, flagged };
+}
+
 /** Async hook — call after invoice save without blocking upload. */
 export function detectAndPersistAnomaliesAsync(
   invoice: Record<string, unknown> & { id: string; company_id?: string },
-  vendorHistory: Record<string, unknown>[],
-  vendor: Record<string, unknown>,
+  _vendorHistory: Record<string, unknown>[],
+  _vendor: Record<string, unknown>,
   actor: string | null,
-  approvalThreshold?: number,
+  _approvalThreshold?: number,
 ): void {
   void (async () => {
     try {
-      const companyId = invoice.company_id ?? (await requireCompanyId());
-      const result = await runAnomalyEngine({
-        invoice,
-        vendor_history: vendorHistory,
-        vendor,
-        approval_threshold: approvalThreshold,
-      });
-      await persistAnomalies(invoice.id, companyId, result, actor);
+      const companyId = (invoice.company_id as string) ?? (await requireCompanyId());
+      await scanInvoiceAnomalies(
+        {
+          id: invoice.id,
+          company_id: companyId,
+          invoice_number: String(invoice.invoice_number || ''),
+          invoice_date: String(invoice.invoice_date || ''),
+          due_date: (invoice.due_date as string) || null,
+          vendor_name: String(invoice.vendor_name || ''),
+          vendor_email: (invoice.vendor_email as string) || null,
+          vendor_trn: (invoice.vendor_trn as string) || null,
+          gstin: (invoice.gstin as string) || null,
+          total_amount: Number(invoice.total_amount || 0),
+          po_number: (invoice.po_number as string) || null,
+          po_id: (invoice.po_id as string) || null,
+          notes: (invoice.notes as string) || null,
+          description: (invoice.description as string) || null,
+          created_at: (invoice.created_at as string) || null,
+        },
+        actor,
+      );
     } catch (e) {
       console.warn('[anomaly] async detection failed:', e);
     }

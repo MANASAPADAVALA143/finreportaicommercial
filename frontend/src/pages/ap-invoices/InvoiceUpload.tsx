@@ -4,8 +4,7 @@ import { supabase } from '../../lib/ap-invoice/supabase';
 import { useMarket } from '../../contexts/MarketContext';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
 import { calculateAdvanceVat } from '../../lib/ap-invoice/uaeVatService';
-import { detectAnomalies } from '../../utils/anomalyDetection';
-import { persistUploadAnomalies } from '../../lib/ap-invoice/anomalyService';
+import { scanInvoiceAnomalies } from '../../lib/ap-invoice/anomalyService';
 import { getRequiredApprovalLevel } from '../../utils/approvalWorkflow';
 import { formatCurrency } from '../../utils/currency';
 import { toStorageFormat } from '../../utils/dateUtils';
@@ -1103,42 +1102,26 @@ export function InvoiceUpload() {
           }
         }
 
-        // Run anomaly detection
+        // Full anomaly pipeline
         try {
-          const { data: existingInvoices } = await supabase
-            .from('invoices')
-            .select('invoice_number, vendor_name, total_amount, invoice_date, due_date, vendor_email')
-            .neq('id', invoice.id);
-
-          if (existingInvoices) {
-            const anomalyResult = await detectAnomalies(
-              {
-                invoice_number: invoiceData.invoice_number,
-                invoice_date: invoiceDate ?? '',
-                due_date: dueDate ?? '',
-                vendor_name: invoiceData.vendor_name,
-                vendor_email: invoiceData.vendor_email || null,
-                total_amount: totalAmount,
-              },
-              existingInvoices
-            );
-
-            await supabase
-              .from('invoices')
-              .update({
-                risk_score: anomalyResult.risk_score,
-                risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', invoice.id);
-
-            await persistUploadAnomalies(
-              invoice.id,
-              companyId,
-              anomalyResult,
-              null,
-            );
-          }
+          await scanInvoiceAnomalies(
+            {
+              id: invoice.id,
+              company_id: companyId,
+              invoice_number: String(invoiceData.invoice_number),
+              invoice_date: invoiceDate ?? '',
+              due_date: dueDate ?? '',
+              vendor_name: String(invoiceData.vendor_name),
+              vendor_email: invoiceData.vendor_email || null,
+              vendor_trn: invoiceData.vendor_trn || null,
+              gstin: invoiceData.gstin || null,
+              total_amount: totalAmount,
+              po_number: invoiceData.po_number || null,
+              description: descriptionFromBatchRow(invoiceData as Record<string, unknown>),
+              created_at: invoice.created_at ?? null,
+            },
+            'invoice-upload',
+          );
         } catch (anomalyError) {
           console.error(`Anomaly detection failed for invoice ${i + 1}:`, anomalyError);
         }
@@ -1684,11 +1667,6 @@ export function InvoiceUpload() {
         return;
       }
 
-      // Fetch existing invoices for anomaly detection
-      const { data: existingInvoices } = await supabase
-        .from('invoices')
-        .select('invoice_number, vendor_name, total_amount, invoice_date, due_date, vendor_email');
-
       for (let i = 0; i < bulkData.length; i++) {
         const invoiceData = bulkData[i];
         const rowNum = i + 2; // Excel row number
@@ -1794,59 +1772,51 @@ export function InvoiceUpload() {
             });
             continue;
           }
+          if (!invoice?.id) {
+            results.failed++;
+            results.errors.push({
+              row: rowNum,
+              invoice_number: invoiceData.invoice_number,
+              error: 'Upsert returned no invoice row',
+            });
+            continue;
+          }
 
           savedInvoices.push({
             id: invoice.id,
             invoice_number: invoice.invoice_number,
             vendor_name: invoice.vendor_name,
             total_amount: Number(invoice.total_amount),
-            description: invoiceData.description ?? invoice.description ?? null,
+            description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
             invoice_date: invoice.invoice_date,
             due_date: invoice.due_date,
             po_number: invoiceData.po_number ?? invoice.po_number ?? null,
             currency: invoice.currency ?? invoiceData.currency ?? null,
           });
 
-          // Run anomaly detection
-          if (existingInvoices) {
-            try {
-              const anomalyResult = await detectAnomalies(
-                {
-                  invoice_number: invoiceData.invoice_number,
-                  invoice_date: invoiceData.invoice_date,
-                  due_date: invoiceData.due_date,
-                  vendor_name: invoiceData.vendor_name,
-                  vendor_email: invoiceData.vendor_email || null,
-                  total_amount: invoiceData.total_amount,
-                },
-                existingInvoices
-              );
-
-              const { error: riskUpdateError } = await supabase
-                .from('invoices')
-                .update({
-                  risk_score: anomalyResult.risk_score,
-                  risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', invoice.id);
-              if (riskUpdateError) {
-                logSupabaseInvoiceError(
-                  `Anomaly PATCH failed: ${invoiceData.invoice_number}`,
-                  riskUpdateError,
-                  { id: invoice.id, company_id: companyId },
-                );
-              } else {
-                await persistUploadAnomalies(
-                  invoice.id,
-                  companyId,
-                  anomalyResult,
-                  null,
-                );
-              }
-            } catch (anomalyError) {
-              console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
-            }
+          // Full anomaly pipeline (client rules + vendor identity + PO sequence + engine)
+          try {
+            await scanInvoiceAnomalies(
+              {
+                id: invoice.id,
+                company_id: companyId,
+                invoice_number: String(invoice.invoice_number),
+                invoice_date: String(invoice.invoice_date),
+                due_date: invoice.due_date ?? invoiceData.due_date,
+                vendor_name: String(invoice.vendor_name),
+                vendor_email: invoice.vendor_email ?? invoiceData.vendor_email ?? null,
+                vendor_trn: (invoice as { vendor_trn?: string }).vendor_trn ?? invoiceData.vendor_trn ?? null,
+                gstin: (invoice as { gstin?: string }).gstin ?? invoiceData.gstin ?? null,
+                total_amount: Number(invoice.total_amount),
+                po_number: invoiceData.po_number ?? invoice.po_number ?? null,
+                po_id: (invoice as { po_id?: string }).po_id ?? null,
+                description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
+                created_at: invoice.created_at ?? null,
+              },
+              'bulk-import',
+            );
+          } catch (anomalyError) {
+            console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
           }
 
           if (initialStatus === 'Approved') {
@@ -2234,39 +2204,28 @@ export function InvoiceUpload() {
             await supabase.from('invoice_line_items').insert(lineItemsData);
           }
 
-          // Run anomaly detection
-          if (existingInvoices) {
-            try {
-              const anomalyResult = await detectAnomalies(
-                {
-                  invoice_number: invoiceData.invoice_number || `AUTO-${Date.now()}`,
-                  invoice_date: invoiceDate ?? '',
-                  due_date: dueDate ?? '',
-                  vendor_name: invoiceData.vendor_name || 'Unknown',
-                  vendor_email: invoiceData.vendor_email || null,
-                  total_amount: totalAmount,
-                },
-                existingInvoices
-              );
-
-              await supabase
-                .from('invoices')
-                .update({
-                  risk_score: anomalyResult.risk_score,
-                  risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', invoice.id);
-
-              await persistUploadAnomalies(
-                invoice.id,
-                companyIdQ,
-                anomalyResult,
-                null,
-              );
-            } catch (anomalyError) {
-              console.error(`Anomaly detection failed for ${item.file.name}:`, anomalyError);
-            }
+          // Full anomaly pipeline
+          try {
+            await scanInvoiceAnomalies(
+              {
+                id: invoice.id,
+                company_id: companyIdQ,
+                invoice_number: invoiceData.invoice_number || `AUTO-${Date.now()}`,
+                invoice_date: invoiceDate ?? '',
+                due_date: dueDate ?? '',
+                vendor_name: invoiceData.vendor_name || 'Unknown',
+                vendor_email: invoiceData.vendor_email || null,
+                vendor_trn: invoiceData.vendor_trn || null,
+                gstin: invoiceData.gstin || null,
+                total_amount: totalAmount,
+                po_number: invoiceData.po_number || null,
+                description: descriptionFromBatchRow(invoiceData as Record<string, unknown>),
+                created_at: invoice.created_at ?? null,
+              },
+              'invoice-upload-queue',
+            );
+          } catch (anomalyError) {
+            console.error(`Anomaly detection failed for ${item.file.name}:`, anomalyError);
           }
 
           const ifrsCat = invoiceData.ifrs_category ?? invoiceData.category;

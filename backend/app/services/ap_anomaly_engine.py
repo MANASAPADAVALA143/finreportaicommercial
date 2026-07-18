@@ -367,6 +367,64 @@ def _rule_flags(
                 )
             )
 
+    # PATTERN 9: Ghost / unknown vendor (not in Vendor Master)
+    # Only when caller marks flag_ghost_vendor, or placeholder TRN — never solely because
+    # in_vendor_master is False while the master table is empty (would flag everyone).
+    placeholder_trn = bool(vendor.get("placeholder_trn"))
+    flag_ghost = bool(vendor.get("flag_ghost_vendor"))
+    if flag_ghost or placeholder_trn:
+        flags.append(
+            AnomalyFlag(
+                "rule_based", "ghost_vendor", "critical", 90,
+                "GHOST_VENDOR",
+                "Vendor not found in Vendor Master (or placeholder TRN) — treat as ghost vendor",
+                {
+                    "vendor_name": vendor_name,
+                    "in_vendor_master": vendor.get("in_vendor_master"),
+                    "placeholder_trn": placeholder_trn,
+                    "vendor_trn": invoice.get("vendor_trn") or invoice.get("gstin"),
+                },
+            )
+        )
+
+    # PATTERN 10: Vendor TRN / tax ID mismatch vs master
+    if vendor.get("trn_mismatch"):
+        flags.append(
+            AnomalyFlag(
+                "rule_based", "vendor_identity_mismatch", "critical", 88,
+                "VENDOR_IDENTITY_MISMATCH",
+                "Invoice TRN does not match Vendor Master TRN for this vendor",
+                {
+                    "invoice_trn": invoice.get("vendor_trn") or invoice.get("gstin"),
+                    "master_trn": vendor.get("master_trn"),
+                    "vendor_name": vendor_name,
+                },
+            )
+        )
+
+    # PATTERN 11: Invoice dated before its own PO (and optionally GRN)
+    po_date = _parse_date(invoice.get("po_date") or vendor.get("po_date"))
+    if inv_date and po_date and inv_date < po_date:
+        flags.append(
+            AnomalyFlag(
+                "rule_based", "invoice_before_po", "high", 80,
+                "INVOICE_BEFORE_PO",
+                f"Invoice date {inv_date.isoformat()} is before PO date {po_date.isoformat()} — possible backdating",
+                {"invoice_date": inv_date.isoformat(), "po_date": po_date.isoformat()},
+            )
+        )
+    grn_date = _parse_date(invoice.get("grn_date") or vendor.get("grn_date"))
+    if inv_date and grn_date and inv_date < grn_date and not (po_date and inv_date < po_date):
+        # Only add if we didn't already flag invoice-before-PO for the same sequence issue
+        flags.append(
+            AnomalyFlag(
+                "rule_based", "invoice_before_grn", "medium", 55,
+                "INVOICE_BEFORE_GRN",
+                f"Invoice date {inv_date.isoformat()} is before GRN date {grn_date.isoformat()}",
+                {"invoice_date": inv_date.isoformat(), "grn_date": grn_date.isoformat()},
+            )
+        )
+
     return flags
 
 

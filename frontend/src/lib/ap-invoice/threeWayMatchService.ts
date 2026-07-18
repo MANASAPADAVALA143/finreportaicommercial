@@ -505,8 +505,9 @@ export async function runAutoMatch(
       grnRows = r2.data;
     }
 
-    // Fallback: if no GRN found by po_id, try by vendor name
-    // (handles case where GRN was imported before PO existed, so po_id is null)
+    // Fallback: if no GRN found by po_id, try by vendor name + closest amount.
+    // Do NOT backfill every orphan GRN onto this PO — that previously attached
+    // all of a vendor's receipts to whichever PO was matched first.
     if ((!grnRows || grnRows.length === 0) && inv.vendor_name && companyId) {
       const vv = escapeIlike(String(inv.vendor_name).trim());
       let qVendor = supabase
@@ -514,18 +515,30 @@ export async function runAutoMatch(
         .select('*, grn_line_items(*)')
         .ilike('vendor_name', `%${vv}%`)
         .order('received_date', { ascending: false })
-        .limit(4);
+        .limit(8);
       qVendor = qVendor.eq('company_id', companyId);
       const { data: vendorGrns } = await qVendor;
       if (vendorGrns?.length) {
-        grnRows = vendorGrns;
-        // Backfill po_id on orphaned GRNs so future lookups work instantly
-        for (const g of vendorGrns) {
-          if (!(g as Record<string, unknown>).po_id && poId) {
+        const targetAmt = poAmount > 0 ? poAmount : invoiceAmount;
+        const scored = [...vendorGrns].sort((a, b) => {
+          const aAmt = Number((a as { received_amount?: number }).received_amount ?? 0);
+          const bAmt = Number((b as { received_amount?: number }).received_amount ?? 0);
+          return Math.abs(aAmt - targetAmt) - Math.abs(bAmt - targetAmt);
+        });
+        const best = scored[0];
+        const bestAmt = Number((best as { received_amount?: number }).received_amount ?? 0);
+        const withinAmt =
+          targetAmt > 0 && pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct;
+        // Only use vendor fallback when amount is plausibly the same receipt
+        if (withinAmt || targetAmt <= 0) {
+          grnRows = [best];
+          const orphan = !(best as Record<string, unknown>).po_id;
+          if (orphan && poId && withinAmt) {
             void supabase
               .from('goods_receipts')
               .update({ po_id: poId })
-              .eq('id', (g as Record<string, unknown>).id as string)
+              .eq('id', (best as Record<string, unknown>).id as string)
+              .is('po_id', null)
               .then(() => null, () => null);
           }
         }
@@ -988,14 +1001,119 @@ export interface BulkImportGRNResult {
   matched: number;
   /** GRNs saved without a resolved `po_id` (missing po_number or no matching PO) — surfaced separately so orphaned links aren't buried inside "success". */
   unlinkedPo: number;
+  /** GRNs that linked via vendor/amount only, or had a PO number that did not resolve — must be verified manually. */
+  needsReview: number;
   errors: Array<{ grn_number: string; error: string }>;
+  reviewFlags: Array<{ grn_number: string; reason: string }>;
   results: Array<{
     grn_number: string;
     invoice_number: string;
     match_status: string;
     auto_approved: boolean;
+    needs_review?: boolean;
     warning?: string;
   }>;
+}
+
+export type ResolvePoIdForGrnResult = {
+  po_id: string | null;
+  po_number: string | null;
+  needs_review: boolean;
+  reason?: string;
+};
+
+/**
+ * Resolve purchase_orders.id for a GRN import row.
+ * Priority: exact po_number → case-insensitive po_number → (only if blank) vendor + closest amount (flagged).
+ * Never silently vendor-match when a po_number was provided but not found.
+ */
+export async function resolvePoIdForGrn(
+  grnRow: Pick<GRNImportRow, 'po_number' | 'vendor_name' | 'received_total'>,
+  companyId: string
+): Promise<ResolvePoIdForGrnResult> {
+  const trimmedPoNumber = grnRow.po_number?.trim() ?? '';
+
+  if (trimmedPoNumber) {
+    const exact = await supabase
+      .from('purchase_orders')
+      .select('id, po_number')
+      .eq('company_id', companyId)
+      .eq('po_number', trimmedPoNumber)
+      .maybeSingle();
+
+    if (exact.data) {
+      return {
+        po_id: exact.data.id as string,
+        po_number: String(exact.data.po_number ?? trimmedPoNumber),
+        needs_review: false,
+      };
+    }
+
+    const ci = await supabase
+      .from('purchase_orders')
+      .select('id, po_number')
+      .eq('company_id', companyId)
+      .ilike('po_number', trimmedPoNumber)
+      .limit(1);
+
+    if (ci.data?.length) {
+      return {
+        po_id: ci.data[0].id as string,
+        po_number: String(ci.data[0].po_number ?? trimmedPoNumber),
+        needs_review: false,
+      };
+    }
+
+    return {
+      po_id: null,
+      po_number: trimmedPoNumber,
+      needs_review: true,
+      reason: `PO number "${trimmedPoNumber}" not found`,
+    };
+  }
+
+  const vendor = grnRow.vendor_name?.trim() ?? '';
+  if (!vendor) {
+    return {
+      po_id: null,
+      po_number: null,
+      needs_review: true,
+      reason: 'No PO number and no vendor name — cannot link PO',
+    };
+  }
+
+  const vv = escapeIlike(vendor);
+  const { data: vendorPos } = await supabase
+    .from('purchase_orders')
+    .select('id, po_number, po_amount')
+    .eq('company_id', companyId)
+    .ilike('vendor_name', `%${vv}%`)
+    .in('status', MATCHABLE_PO_STATUSES)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (!vendorPos?.length) {
+    return {
+      po_id: null,
+      po_number: null,
+      needs_review: true,
+      reason: 'No PO number and no vendor match found',
+    };
+  }
+
+  const grnAmt = Number(grnRow.received_total) || 0;
+  const closest = vendorPos.reduce((best, po) => {
+    const diff = Math.abs(Number(po.po_amount ?? 0) - grnAmt);
+    const bestDiff = Math.abs(Number(best.po_amount ?? 0) - grnAmt);
+    return diff < bestDiff ? po : best;
+  });
+
+  return {
+    po_id: closest.id as string,
+    po_number: String(closest.po_number ?? ''),
+    needs_review: true,
+    reason: `Matched by vendor only to ${closest.po_number} — no PO number provided, verify manually`,
+  };
 }
 
 function cellStr(v: unknown): string {
@@ -1440,7 +1558,9 @@ export async function bulkImportGRNs(
     skipped: 0,
     matched: 0,
     unlinkedPo: 0,
+    needsReview: 0,
     errors: [],
+    reviewFlags: [],
     results: [],
   };
 
@@ -1487,26 +1607,22 @@ export async function bulkImportGRNs(
         continue;
       }
 
-      let poId: string | null = null;
-      let resolvedPoNumber = grn.po_number.trim();
-      if (resolvedPoNumber) {
-        const { data: poRows } = await supabase
-          .from('purchase_orders')
-          .select('id, po_number')
-          .eq('company_id', companyId)
-          .ilike('po_number', resolvedPoNumber)
-          .limit(1);
-        if (poRows?.[0]) {
-          poId = poRows[0].id as string;
-          resolvedPoNumber = String(poRows[0].po_number ?? resolvedPoNumber);
-        } else {
-          warning = `PO "${resolvedPoNumber}" not found — GRN saved without PO link`;
-          result.unlinkedPo++;
-          result.errors.push({ grn_number: grnNum, error: warning });
-        }
-      } else {
-        warning = warning || 'No PO number — GRN saved without PO link';
+      const resolved = await resolvePoIdForGrn(grn, companyId);
+      const poId = resolved.po_id;
+      let resolvedPoNumber = resolved.po_number?.trim() || grn.po_number.trim();
+
+      if (resolved.needs_review) {
+        result.needsReview++;
+        const reason = resolved.reason || 'PO link needs manual review';
+        warning = reason;
+        result.reviewFlags.push({ grn_number: grnNum, reason });
+        result.errors.push({ grn_number: grnNum, error: reason });
+      }
+      if (!poId) {
         result.unlinkedPo++;
+        if (!warning) {
+          warning = resolved.reason || 'GRN saved without PO link';
+        }
       }
 
       let lines = lineItemRows
@@ -1631,6 +1747,7 @@ export async function bulkImportGRNs(
         invoice_number: grn.invoice_number,
         match_status: matchStatus,
         auto_approved: autoApproved,
+        needs_review: resolved.needs_review,
         warning,
       });
     } catch (e: unknown) {
