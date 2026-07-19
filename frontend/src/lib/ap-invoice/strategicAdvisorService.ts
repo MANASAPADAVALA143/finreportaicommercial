@@ -40,6 +40,16 @@ export interface CFOKPIs {
   dueSoonCount: number;
   highRiskCount: number;
   highRiskAmount: number;
+  /** Category breakdown of open high/critical invoice_anomalies (max ~5 + Other). */
+  highRiskFlagBreakdown: Array<{ label: string; count: number }>;
+  /** Top invoices by anomaly risk_score for the briefing-style risk card. */
+  highestRiskInvoices: Array<{
+    invoice_number: string;
+    vendor_name: string;
+    flag_label: string;
+    amount: number;
+    risk_score: number;
+  }>;
   autoApproveRate: number;
   avgProcessDays: number;
   momChange: number;
@@ -181,6 +191,103 @@ async function loadPOs(companyId: string | undefined): Promise<PurchaseOrder[]> 
     return [];
   }
   return (data || []) as PurchaseOrder[];
+}
+
+const FLAG_LABELS: Record<string, string> = {
+  GHOST_VENDOR: 'Ghost Vendor',
+  VENDOR_IDENTITY_MISMATCH: 'Vendor Identity Mismatch',
+  INVOICE_BEFORE_PO: 'Invoice Before PO/GRN',
+  INVOICE_BEFORE_GRN: 'Invoice Before PO/GRN',
+  AMOUNT_HIGH_ZSCORE: 'Statistical Outlier (unusual amount)',
+  AMOUNT_LOW_ZSCORE: 'Statistical Outlier (unusual amount)',
+  AMOUNT_HIGH_VS_AVG: 'Statistical Outlier (unusual amount)',
+  AMOUNT_LOW_VS_AVG: 'Statistical Outlier (unusual amount)',
+  FREQUENCY_ANOMALY: 'Frequency Anomaly',
+  SPLIT_INVOICE: 'Split Invoice',
+  NEAR_DUPLICATE: 'Near Duplicate',
+  DUPLICATE_INVOICE: 'Duplicate Invoice',
+  JUST_BELOW_THRESHOLD: 'Just Below Approval Threshold',
+  NEW_VENDOR_HIGH_AMOUNT: 'New Vendor High Amount',
+  ML_HIGH_RISK: 'ML High Risk',
+};
+
+function flagLabel(code: string | null | undefined, anomalyType?: string | null): string {
+  const c = (code || '').trim().toUpperCase();
+  if (c && FLAG_LABELS[c]) return FLAG_LABELS[c];
+  if (c) return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+  if ((anomalyType || '').toLowerCase() === 'statistical') return 'Statistical Outlier (unusual amount)';
+  return 'Other';
+}
+
+async function loadHighRiskAnomalyStats(
+  companyId: string | undefined,
+  invoices: Invoice[],
+): Promise<{
+  breakdown: Array<{ label: string; count: number }>;
+  topInvoices: CFOKPIs['highestRiskInvoices'];
+  flagCount: number;
+}> {
+  let q = supabase
+    .from('invoice_anomalies')
+    .select('invoice_id,severity,risk_score,flag_code,flag_reason,anomaly_type,status')
+    .eq('status', 'open');
+  if (companyId) q = q.eq('company_id', companyId);
+  const { data, error } = await q;
+  if (error) {
+    console.warn('strategicAdvisorService anomalies:', error.message);
+    return { breakdown: [], topInvoices: [], flagCount: 0 };
+  }
+  const high = (data || []).filter((a) => {
+    const sev = String(a.severity || '').toLowerCase();
+    if (sev === 'high' || sev === 'critical') return true;
+    return Number(a.risk_score || 0) >= 60;
+  });
+  const counts = new Map<string, number>();
+  for (const a of high) {
+    const label = flagLabel(a.flag_code as string, a.anomaly_type as string);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  let breakdown: Array<{ label: string; count: number }>;
+  if (ranked.length <= 5) {
+    breakdown = ranked.map(([label, count]) => ({ label, count }));
+  } else {
+    const head = ranked.slice(0, 4);
+    const other = ranked.slice(4).reduce((s, [, n]) => s + n, 0);
+    breakdown = head.map(([label, count]) => ({ label, count }));
+    if (other) breakdown.push({ label: 'Other', count: other });
+  }
+
+  const byId = new Map(invoices.map((i) => [i.id, i]));
+  const best = new Map<string, { score: number; label: string; reason: string }>();
+  for (const a of high) {
+    const id = String(a.invoice_id || '');
+    if (!id) continue;
+    const score = Number(a.risk_score || 0);
+    const prev = best.get(id);
+    if (!prev || score > prev.score) {
+      best.set(id, {
+        score,
+        label: flagLabel(a.flag_code as string, a.anomaly_type as string),
+        reason: String(a.flag_reason || ''),
+      });
+    }
+  }
+  const topInvoices = [...best.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
+    .slice(0, 5)
+    .map(([id, meta]) => {
+      const inv = byId.get(id);
+      return {
+        invoice_number: inv?.invoice_number || '—',
+        vendor_name: inv?.vendor_name || 'Unknown',
+        flag_label: meta.label,
+        amount: Number(inv?.total_amount ?? 0),
+        risk_score: meta.score,
+      };
+    });
+
+  return { breakdown, topInvoices, flagCount: high.length };
 }
 
 async function loadPaymentLog(
@@ -464,6 +571,7 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     loadPOs(cid),
     loadPaymentLog(cid, new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10)),
   ]);
+  const anomalyStats = await loadHighRiskAnomalyStats(cid, invData);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -840,8 +948,10 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     overdueCount: overdueOpen.length,
     dueSoonAmount: dueSoon.reduce((s, i) => s + Number(i.total_amount ?? 0), 0),
     dueSoonCount: dueSoon.length,
-    highRiskCount: highRisk.length,
+    highRiskCount: anomalyStats.flagCount || highRisk.length,
     highRiskAmount: highRisk.reduce((s, i) => s + Number(i.total_amount ?? 0), 0),
+    highRiskFlagBreakdown: anomalyStats.breakdown,
+    highestRiskInvoices: anomalyStats.topInvoices,
     autoApproveRate,
     avgProcessDays,
     momChange,

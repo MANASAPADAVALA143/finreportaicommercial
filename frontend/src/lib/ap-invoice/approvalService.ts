@@ -18,6 +18,83 @@ export function emailsMatch(a: string, b: string) {
   return normEmail(a) === normEmail(b);
 }
 
+/** Live DBs may lack approval_status / approval_chain_emails until migration is applied. */
+async function updateInvoiceSafe(
+  invoiceId: string,
+  fields: Record<string, unknown>,
+): Promise<{ error: { message: string } | null }> {
+  const optionalKeys = ['approval_status', 'approval_chain_emails', 'approval_total_steps'] as const;
+  const { error } = await supabase.from('invoices').update(fields).eq('id', invoiceId);
+  if (!error) return { error: null };
+
+  const msg = (error.message || '').toLowerCase();
+  const looksLikeMissingCol = optionalKeys.some(
+    (k) => msg.includes(k) || msg.includes('schema cache') || msg.includes('42703'),
+  );
+  if (!looksLikeMissingCol) return { error };
+
+  const fallback = { ...fields };
+  for (const k of optionalKeys) delete fallback[k];
+  const retry = await supabase.from('invoices').update(fallback).eq('id', invoiceId);
+  return { error: retry.error };
+}
+
+/** Finalize a single-step (or last-step) approval onto the invoice + optional GL post. */
+async function finalizeInvoiceApproval(
+  invoice: Invoice,
+  actorEmail: string,
+  now: string,
+): Promise<
+  | { ok: true; fully_approved: true; gl_post?: ApproveAndPostResult }
+  | { ok: false; message: string }
+> {
+  const { data: authData } = await supabase.auth.getUser();
+  const approverUserId = authData.user?.id ?? null;
+
+  const { error: fin } = await updateInvoiceSafe(invoice.id, {
+    approval_status: 'approved',
+    status: 'Approved',
+    approved_by: approverUserId,
+    approved_at: now,
+    updated_at: now,
+  });
+  if (fin) return { ok: false, message: fin.message };
+
+  await supabase.from('audit_logs').insert({
+    invoice_id: invoice.id,
+    action: 'Fully approved',
+    field_changed: 'status',
+    old_value: invoice.status,
+    new_value: 'Approved',
+    user_name: actorEmail.trim(),
+  });
+
+  logAction('approval.approved', 'invoice', invoice.id, actorEmail.trim(), { finalized: true });
+  recalcVendorRiskAsync(invoice.vendor_name);
+
+  if (invoice.approval_submitted_by) {
+    void notifyApprovalEvent({
+      type: 'submitter_notified',
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      submitter_email: invoice.approval_submitted_by,
+      outcome: 'approved',
+    });
+  }
+
+  let gl_post: ApproveAndPostResult | undefined;
+  try {
+    const cid = invoice.company_id || (await requireCompanyId());
+    const { postApprovedInvoiceToGL } = await import('./glPostService');
+    gl_post = await postApprovedInvoiceToGL(invoice, cid);
+  } catch (e) {
+    console.warn('[AP] GL/GulfTax post after full approval failed:', e);
+  }
+
+  void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
+  return { ok: true, fully_approved: true, gl_post };
+}
+
 /** Pick the most specific rule: highest min_amount that still matches amount & department. */
 export function pickApprovalRule(
   rules: ApprovalRule[],
@@ -91,19 +168,16 @@ export async function submitInvoiceForApproval(
   if (insErr) return { ok: false, message: insErr.message };
   const approvalRowId: string = (insData as { id: string }).id;
 
-  const { error: upErr } = await supabase
-    .from('invoices')
-    .update({
-      approval_status: 'pending',
-      current_approver_index: 0,
-      approval_rule_id: rule.id,
-      approval_chain_emails: chain,
-      approval_total_steps: chain.length,
-      submitted_for_approval_at: new Date().toISOString(),
-      approval_submitted_by: submitterEmail.trim(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', invoice.id);
+  const { error: upErr } = await updateInvoiceSafe(invoice.id, {
+    approval_status: 'pending',
+    current_approver_index: 0,
+    approval_rule_id: rule.id,
+    approval_chain_emails: chain,
+    approval_total_steps: chain.length,
+    submitted_for_approval_at: new Date().toISOString(),
+    approval_submitted_by: submitterEmail.trim(),
+    updated_at: new Date().toISOString(),
+  });
   if (upErr) return { ok: false, message: upErr.message };
 
   await supabase.from('audit_logs').insert({
@@ -161,6 +235,22 @@ export async function processApprovalAction(
 
   const ar = row as InvoiceApprovalRow;
   if (ar.status !== 'pending') {
+    // Recovery: approval row already approved but invoice update previously failed
+    // (e.g. missing approval_status column) — finish the invoice + GL post.
+    if (ar.status === 'approved' && action === 'approved') {
+      const { data: invStuck, error: invStuckErr } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', ar.invoice_id)
+        .single();
+      if (!invStuckErr && invStuck) {
+        const stuck = invStuck as Invoice;
+        if ((stuck.status || '') !== 'Approved') {
+          return finalizeInvoiceApproval(stuck, actorEmail, new Date().toISOString());
+        }
+        return { ok: true, fully_approved: true };
+      }
+    }
     return { ok: false, message: 'This approval step is no longer pending.' };
   }
   if (!emailsMatch(ar.approver_email, actorEmail)) {
@@ -177,10 +267,14 @@ export async function processApprovalAction(
     const rule = ruleRow as ApprovalRule | null;
     if (rule) resolvedChain = approverList(rule);
   }
+  // Single-approver rules with missing approval_total_steps/chain columns: treat as 1-step.
+  if (resolvedChain.length === 0) {
+    resolvedChain = [ar.approver_email];
+  }
   const totalSteps =
     typeof invoice.approval_total_steps === 'number' && invoice.approval_total_steps > 0
       ? invoice.approval_total_steps
-      : resolvedChain.length;
+      : resolvedChain.length || 1;
 
   const now = new Date().toISOString();
 
@@ -195,15 +289,12 @@ export async function processApprovalAction(
       .eq('id', approvalRowId);
     if (u1) return { ok: false, message: u1.message };
 
-    const { error: u2 } = await supabase
-      .from('invoices')
-      .update({
-        approval_status: 'rejected',
-        status: 'Rejected',
-        rejection_reason: comment?.trim() || 'Rejected in approval chain',
-        updated_at: now,
-      })
-      .eq('id', invoice.id);
+    const { error: u2 } = await updateInvoiceSafe(invoice.id, {
+      approval_status: 'rejected',
+      status: 'Rejected',
+      rejection_reason: comment?.trim() || 'Rejected in approval chain',
+      updated_at: now,
+    });
     if (u2) return { ok: false, message: u2.message };
 
     await supabase.from('audit_logs').insert({
@@ -255,13 +346,10 @@ export async function processApprovalAction(
     });
     if (ins) return { ok: false, message: ins.message };
 
-    const { error: u2 } = await supabase
-      .from('invoices')
-      .update({
-        current_approver_index: nextIndex,
-        updated_at: now,
-      })
-      .eq('id', invoice.id);
+    const { error: u2 } = await updateInvoiceSafe(invoice.id, {
+      current_approver_index: nextIndex,
+      updated_at: now,
+    });
     if (u2) return { ok: false, message: u2.message };
 
     await supabase.from('audit_logs').insert({
@@ -290,56 +378,7 @@ export async function processApprovalAction(
     return { ok: true };
   }
 
-  const { data: authData } = await supabase.auth.getUser();
-  const approverUserId = authData.user?.id ?? null;
-
-  const { error: fin } = await supabase
-    .from('invoices')
-    .update({
-      approval_status: 'approved',
-      status: 'Approved',
-      approved_by: approverUserId,
-      approved_at: now,
-      updated_at: now,
-    })
-    .eq('id', invoice.id);
-  if (fin) return { ok: false, message: fin.message };
-
-  await supabase.from('audit_logs').insert({
-    invoice_id: invoice.id,
-    action: 'Fully approved',
-    field_changed: 'status',
-    old_value: invoice.status,
-    new_value: 'Approved',
-    user_name: actorEmail.trim(),
-  });
-
-  logAction('approval.approved', 'invoice', invoice.id, actorEmail.trim(), { step: ar.step_index });
-  recalcVendorRiskAsync(invoice.vendor_name);
-
-  if (invoice.approval_submitted_by) {
-    void notifyApprovalEvent({
-      type: 'submitter_notified',
-      invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      submitter_email: invoice.approval_submitted_by,
-      outcome: 'approved',
-    });
-  }
-
-  // Post to UAE GL + GulfTax (idempotent — shared with all approval paths)
-  let gl_post: ApproveAndPostResult | undefined;
-  try {
-    const cid = invoice.company_id || (await requireCompanyId());
-    const { postApprovedInvoiceToGL } = await import('./glPostService');
-    gl_post = await postApprovedInvoiceToGL(invoice, cid);
-  } catch (e) {
-    console.warn('[AP] GL/GulfTax post after full approval failed:', e);
-  }
-
-  void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
-
-  return { ok: true, fully_approved: true, gl_post };
+  return finalizeInvoiceApproval(invoice, actorEmail, now);
 }
 
 async function loadInvoicesByIds(ids: string[]): Promise<Map<string, Invoice>> {

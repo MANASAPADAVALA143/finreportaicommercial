@@ -36,6 +36,15 @@ UAE_PUBLIC_HOLIDAYS_2026 = {
 DEFAULT_APPROVAL_THRESHOLD = 10_000.0
 NEW_VENDOR_HIGH_AMOUNT = 100_000.0
 
+# Z-score needs a stable vendor amount distribution. With n=1, std is undefined
+# and the previous absolute floor of 1.0 produced absurd z values (e.g. 29885
+# for Al Futtaim / UAE-INV-2025-035). Require enough history, floor std as a
+# fraction of the mean, and fall back to a capped multiple-of-average rule.
+MIN_ZSCORE_HISTORY = 5
+STD_FLOOR_FRAC = 0.05  # at least 5% of mean — avoids near-identical-amount blowups
+AMOUNT_AVG_MULTIPLE_FALLBACK = 3.0  # used when history < MIN_ZSCORE_HISTORY
+MAX_ZSCORE_FOR_RISK = 6.0  # cap z contribution so risk_score stays interpretable
+
 
 @dataclass
 class AnomalyFlag:
@@ -69,6 +78,17 @@ def _parse_dt(s: str | None) -> datetime | None:
         return None
 
 
+def _same_vendor(a: str | None, b: str | None) -> bool:
+    """Case-insensitive vendor identity — required for recurring-vendor rules."""
+    return (a or "").strip().lower() == (b or "").strip().lower() and bool((a or "").strip())
+
+
+def _floored_std(std_amt: float, avg_amt: float) -> float:
+    """Prevent near-zero std from exploding z-scores on AED-scale amounts."""
+    floor = max(abs(avg_amt) * STD_FLOOR_FRAC, 1.0)
+    return max(float(std_amt or 0.0), floor)
+
+
 def _vendor_stats(history: list[dict[str, Any]]) -> dict[str, float]:
     amounts = [float(h.get("total_amount") or 0) for h in history if h.get("total_amount")]
     dates = sorted(
@@ -97,7 +117,8 @@ def _vendor_stats(history: list[dict[str, Any]]) -> dict[str, float]:
 
     return {
         "avg_invoice_amount": avg_amt,
-        "std_invoice_amount": std_amt or 1.0,
+        "std_invoice_amount": _floored_std(std_amt, avg_amt),
+        "sample_count": float(len(amounts)),
         "avg_days_between_invoices": avg_gap or 30.0,
         "typical_invoice_day_of_week": float(typical_dow),
         "typical_invoice_day_of_month": float(typical_dom),
@@ -112,57 +133,130 @@ def _statistical_flags(
     flags: list[AnomalyFlag] = []
     amount = float(invoice.get("total_amount") or 0)
     avg = stats_dict["avg_invoice_amount"]
-    std = max(stats_dict["std_invoice_amount"], 1.0)
-    z = (amount - avg) / std
+    sample_n = int(stats_dict.get("sample_count") or 0)
+    std = _floored_std(stats_dict["std_invoice_amount"], avg)
 
-    if z > 2.5:
-        flags.append(
-            AnomalyFlag(
-                "statistical", "zscore", "high", min(100, 40 + z * 10),
-                "AMOUNT_HIGH_ZSCORE",
-                f"Unusually high amount for this vendor (z={z:.2f})",
-                {"z_score": round(z, 3), "vendor_avg": avg, "invoice_amount": amount},
+    if sample_n >= MIN_ZSCORE_HISTORY and avg > 0:
+        z = (amount - avg) / std
+        z_for_risk = min(abs(z), MAX_ZSCORE_FOR_RISK)
+        if z > 2.5:
+            flags.append(
+                AnomalyFlag(
+                    "statistical", "zscore", "high",
+                    min(100, 40 + z_for_risk * 10),
+                    "AMOUNT_HIGH_ZSCORE",
+                    f"Unusually high amount for this vendor (z={z:.2f})",
+                    {
+                        "z_score": round(z, 3),
+                        "vendor_avg": avg,
+                        "vendor_std": std,
+                        "sample_count": sample_n,
+                        "invoice_amount": amount,
+                    },
+                )
             )
-        )
-    elif z < -2.5:
-        flags.append(
-            AnomalyFlag(
-                "statistical", "zscore", "medium", 35,
-                "AMOUNT_LOW_ZSCORE",
-                "Unusually low amount (possible split invoice)",
-                {"z_score": round(z, 3), "vendor_avg": avg, "invoice_amount": amount},
+        elif z < -2.5:
+            flags.append(
+                AnomalyFlag(
+                    "statistical", "zscore", "medium", 35,
+                    "AMOUNT_LOW_ZSCORE",
+                    "Unusually low amount (possible split invoice)",
+                    {
+                        "z_score": round(z, 3),
+                        "vendor_avg": avg,
+                        "vendor_std": std,
+                        "sample_count": sample_n,
+                        "invoice_amount": amount,
+                    },
+                )
             )
-        )
+    elif sample_n >= 1 and avg > 0:
+        # Insufficient history for a reliable z-score — use a capped multiple rule.
+        ratio = amount / avg
+        if ratio >= AMOUNT_AVG_MULTIPLE_FALLBACK:
+            flags.append(
+                AnomalyFlag(
+                    "statistical", "amount_multiple", "medium", 40,
+                    "AMOUNT_HIGH_VS_AVG",
+                    (
+                        f"Amount is {ratio:.1f}× vendor average "
+                        f"(only {sample_n} prior invoice{'s' if sample_n != 1 else ''} — z-score skipped)"
+                    ),
+                    {
+                        "amount_vs_avg_ratio": round(ratio, 3),
+                        "vendor_avg": avg,
+                        "sample_count": sample_n,
+                        "invoice_amount": amount,
+                        "threshold_multiple": AMOUNT_AVG_MULTIPLE_FALLBACK,
+                    },
+                )
+            )
+        elif ratio > 0 and ratio <= 1.0 / AMOUNT_AVG_MULTIPLE_FALLBACK:
+            flags.append(
+                AnomalyFlag(
+                    "statistical", "amount_multiple", "low", 25,
+                    "AMOUNT_LOW_VS_AVG",
+                    (
+                        f"Amount is {ratio:.1f}× vendor average "
+                        f"(only {sample_n} prior invoice{'s' if sample_n != 1 else ''} — z-score skipped)"
+                    ),
+                    {
+                        "amount_vs_avg_ratio": round(ratio, 3),
+                        "vendor_avg": avg,
+                        "sample_count": sample_n,
+                        "invoice_amount": amount,
+                        "threshold_multiple": AMOUNT_AVG_MULTIPLE_FALLBACK,
+                    },
+                )
+            )
 
     inv_date = _parse_date(invoice.get("invoice_date"))
     if history and inv_date:
-        last_dates = sorted(
-            d for d in (_parse_date(h.get("invoice_date")) for h in history) if d
+        # Only prior invoices for this vendor — comparing against future-dated
+        # history produced negative days_since and ~99% false positives on bulk imports.
+        prior_dates = sorted(
+            d
+            for d in (_parse_date(h.get("invoice_date")) for h in history)
+            if d and d < inv_date
         )
-        if last_dates:
-            days_since = (inv_date - last_dates[-1]).days
-            avg_gap = stats_dict["avg_days_between_invoices"]
-            if avg_gap > 0 and days_since < avg_gap * 0.3:
+        # Need a stable vendor cadence (≥3 priors) and a true short burst —
+        # irregular spacing in normal recurring-vendor data is not fraud.
+        avg_gap = stats_dict["avg_days_between_invoices"]
+        if len(prior_dates) >= 3 and avg_gap > 0:
+            days_since = (inv_date - prior_dates[-1]).days
+            burst_abs = 5  # days
+            burst_rel = avg_gap * 0.25
+            if days_since >= 0 and days_since <= burst_abs and days_since < burst_rel:
                 flags.append(
                     AnomalyFlag(
                         "statistical", "frequency", "high", 45,
                         "FREQUENCY_ANOMALY",
                         "Invoice frequency too high — possible duplicate or splitting",
-                        {"days_since_last": days_since, "avg_days_between": avg_gap},
+                        {
+                            "days_since_last": days_since,
+                            "avg_days_between": avg_gap,
+                            "prior_count": len(prior_dates),
+                        },
                     )
                 )
 
-    submitted = _parse_dt(invoice.get("created_at") or invoice.get("submitted_at"))
-    if submitted:
-        if submitted.weekday() >= 5 or submitted.date() in UAE_PUBLIC_HOLIDAYS_2026:
+    # NON_BUSINESS_DAY must use invoice_date — created_at is the upload/import
+    # timestamp and flags 100% of weekend bulk imports as anomalous.
+    # UAE weekend is Friday–Saturday (not Sat–Sun).
+    if inv_date:
+        uae_weekend = inv_date.weekday() in (4, 5)  # Fri, Sat
+        if uae_weekend or inv_date in UAE_PUBLIC_HOLIDAYS_2026:
             flags.append(
                 AnomalyFlag(
                     "statistical", "timing", "medium", 25,
                     "NON_BUSINESS_DAY",
-                    "Submitted on non-business day — verify authenticity",
-                    {"submitted_at": submitted.isoformat()},
+                    "Invoice dated on non-business day — verify authenticity",
+                    {"invoice_date": inv_date.isoformat()},
                 )
             )
+
+    submitted = _parse_dt(invoice.get("created_at") or invoice.get("submitted_at"))
+    if submitted:
         hour = submitted.hour
         if hour >= 18 or hour < 7:
             flags.append(
@@ -249,11 +343,12 @@ def _rule_flags(
     inv_date = _parse_date(invoice.get("invoice_date"))
     notes = (invoice.get("notes") or invoice.get("description") or "").upper()
 
-    # PATTERN 1: Split invoice
+    # PATTERN 1: Split invoice (same vendor only)
     if inv_date:
         window = [
             h for h in history
-            if _parse_date(h.get("invoice_date"))
+            if _same_vendor(h.get("vendor_name"), vendor_name)
+            and _parse_date(h.get("invoice_date"))
             and abs((_parse_date(h.get("invoice_date")) - inv_date).days) <= 7
         ]
         combined = amount + sum(float(h.get("total_amount") or 0) for h in window)
@@ -292,13 +387,22 @@ def _rule_flags(
             )
         )
 
-    # PATTERN 4: Near duplicate
+    # PATTERN 4: Near duplicate — MUST be same vendor (du Telecom recurrence:
+    # company-wide similar-amount matching flags normal recurring bills).
     for h in history:
+        if not _same_vendor(h.get("vendor_name"), vendor_name):
+            continue
         h_amt = float(h.get("total_amount") or 0)
         if h_amt <= 0:
             continue
         variance = abs(amount - h_amt) / h_amt
-        same_period = inv_date and _parse_date(h.get("invoice_date")) and inv_date.month == _parse_date(h.get("invoice_date")).month
+        h_date = _parse_date(h.get("invoice_date"))
+        same_period = bool(
+            inv_date
+            and h_date
+            and inv_date.year == h_date.year
+            and inv_date.month == h_date.month
+        )
         if (
             variance <= 0.05
             and (h.get("invoice_number") or "").strip().lower() != inv_num.lower()
@@ -309,7 +413,11 @@ def _rule_flags(
                     "rule_based", "near_duplicate", "high", 60,
                     "NEAR_DUPLICATE",
                     f"Near-duplicate invoice — {variance * 100:.1f}% amount variance detected",
-                    {"other_invoice": h.get("invoice_number"), "variance_pct": round(variance * 100, 2)},
+                    {
+                        "other_invoice": h.get("invoice_number"),
+                        "variance_pct": round(variance * 100, 2),
+                        "vendor_name": vendor_name,
+                    },
                 )
             )
             break
@@ -437,11 +545,17 @@ def detect_invoice_anomalies(
     """Run full anomaly pipeline on a single invoice."""
     vendor = vendor or {}
     history = [h for h in vendor_history if h.get("id") != invoice.get("id")]
-    stats_dict = _vendor_stats(history)
+    # Callers sometimes pass company-wide history; vendor-scoped stats/frequency
+    # prevent the same false-positive pattern as unscoped NEAR_DUPLICATE.
+    vendor_name = (invoice.get("vendor_name") or "").strip()
+    same_vendor_history = [
+        h for h in history if _same_vendor(h.get("vendor_name"), vendor_name)
+    ]
+    stats_dict = _vendor_stats(same_vendor_history)
 
     all_flags: list[AnomalyFlag] = []
-    all_flags.extend(_statistical_flags(invoice, history, stats_dict))
-    all_flags.extend(_ml_flags(invoice, history, stats_dict))
+    all_flags.extend(_statistical_flags(invoice, same_vendor_history, stats_dict))
+    all_flags.extend(_ml_flags(invoice, same_vendor_history, stats_dict))
     all_flags.extend(_rule_flags(invoice, history, vendor, approval_threshold))
 
     if not all_flags:
@@ -455,15 +569,25 @@ def detect_invoice_anomalies(
     overall = min(100, max(all_flags, key=lambda f: f.risk_score).risk_score)
     amount = float(invoice.get("total_amount") or 0)
     avg = stats_dict["avg_invoice_amount"]
-    std = stats_dict["std_invoice_amount"]
-    mult = (amount - avg) / std if std else 0
+    std = _floored_std(stats_dict["std_invoice_amount"], avg)
+    sample_n = int(stats_dict.get("sample_count") or 0)
 
     context = None
     if avg > 0:
-        context = (
-            f"This vendor's avg invoice is AED {avg:,.0f}. "
-            f"This invoice is AED {amount:,.0f} ({mult:.1f}x standard deviation)."
-        )
+        ratio = amount / avg
+        if sample_n >= MIN_ZSCORE_HISTORY:
+            z = (amount - avg) / std if std else 0
+            context = (
+                f"This vendor's avg invoice is AED {avg:,.0f} "
+                f"(n={sample_n}, σ=AED {std:,.0f}). "
+                f"This invoice is AED {amount:,.0f} ({z:.1f}σ, {ratio:.1f}× avg)."
+            )
+        else:
+            context = (
+                f"This vendor's avg invoice is AED {avg:,.0f} "
+                f"(only {sample_n} prior invoice{'s' if sample_n != 1 else ''}). "
+                f"This invoice is AED {amount:,.0f} ({ratio:.1f}× avg) — z-score not applied."
+            )
 
     return {
         "overall_risk_score": round(overall, 1),

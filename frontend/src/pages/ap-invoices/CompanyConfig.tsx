@@ -19,21 +19,23 @@ import {
   parseApprovalFlow,
   type VendorRuleAction,
 } from '../../lib/ap-invoice/companyService';
-import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
+import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { Plus, Trash2 } from 'lucide-react';
 
 type VendorRuleRow = { name: string; rule: VendorRuleAction };
 type GlRow = { category: string; code: string };
 
 export function CompanyConfig() {
   const { toast } = useToast();
+  const { baseCurrency } = useCompanySettings();
+  const currencyLabel = (baseCurrency || 'AED').toUpperCase() === 'INR' ? '₹' : (baseCurrency || 'AED');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [companyName, setCompanyName] = useState('');
 
   const [approvalChain, setApprovalChain] = useState<string[]>([]);
-  const [newApprover, setNewApprover] = useState('');
-  const [autoUnder, setAutoUnder] = useState('10000');
-  const [fmBand, setFmBand] = useState('100000');
+  const [autoUnder] = useState('10000');
+  const [fmBand] = useState('100000');
 
   const [vendorRules, setVendorRules] = useState<VendorRuleRow[]>([]);
   const [newVendorName, setNewVendorName] = useState('');
@@ -123,7 +125,8 @@ export function CompanyConfig() {
         if (r.category.trim() && r.code.trim()) gl_mapping[r.category.trim()] = r.code.trim();
       }
       await updateCompanyConfigJson({
-        approval_flow: approvalChain,
+        // approval_flow is legacy display-only — do not present this page as the routing source of truth.
+        // Real routing: Settings → Approval Rules (approval_rules table).
         vendor_rules,
         gl_mapping,
         compliance_rules: {
@@ -160,14 +163,6 @@ export function CompanyConfig() {
     }
   }
 
-  function moveApprover(i: number, dir: -1 | 1) {
-    const j = i + dir;
-    if (j < 0 || j >= approvalChain.length) return;
-    const next = [...approvalChain];
-    [next[i], next[j]] = [next[j], next[i]];
-    setApprovalChain(next);
-  }
-
   if (loading) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-gray-500">Loading company configâ€¦</div>
@@ -188,74 +183,56 @@ export function CompanyConfig() {
         </Button>
       </div>
 
-      <Card>
+      <Card className="border-amber-200 bg-amber-50/40">
         <CardHeader>
-          <CardTitle>Approval flow</CardTitle>
-          <CardDescription>Order matches the sequence approvers see. Use arrows to reorder.</CardDescription>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            Approval flow
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+              Not active
+            </span>
+          </CardTitle>
+          <CardDescription>
+            These controls are not connected to My Approvals. Real routing uses amount bands and approver emails.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <ul className="space-y-2">
-            {approvalChain.map((label, i) => (
-              <li
-                key={`${label}-${i}`}
-                className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2"
-              >
-                <span className="font-medium">{label}</span>
-                <div className="flex gap-1">
-                  <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={() => moveApprover(i, -1)}>
-                    <ChevronUp className="h-4 w-4" />
-                  </Button>
-                  <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={() => moveApprover(i, 1)}>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-8 w-8 text-red-600"
-                    onClick={() => setApprovalChain((c) => c.filter((_, idx) => idx !== i))}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              placeholder="New approver level name"
-              value={newApprover}
-              onChange={(e) => setNewApprover(e.target.value)}
-              className="max-w-xs"
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                const t = newApprover.trim();
-                if (!t) return;
-                setApprovalChain((c) => [...c, t]);
-                setNewApprover('');
-              }}
-            >
-              <Plus className="mr-1 h-4 w-4" />
-              Add level
-            </Button>
-          </div>
-          <div className="grid gap-3 rounded-lg bg-gray-50 p-4 text-sm md:grid-cols-3">
-            <div>
-              <Label>Auto-approve under (â‚¹)</Label>
-              <Input value={autoUnder} onChange={(e) => setAutoUnder(e.target.value)} className="mt-1" />
-            </div>
-            <div>
-              <Label>Mid band ceiling (â‚¹)</Label>
-              <Input value={fmBand} onChange={(e) => setFmBand(e.target.value)} className="mt-1" />
-            </div>
-            <p className="flex items-end text-gray-600">
-              Under â‚¹{autoUnder || 'â€¦'} â†’ auto Â· â‚¹{autoUnder}â€“â‚¹{fmBand} â†’ first approvers Â· above â‚¹{fmBand} â†’ full chain
-              (amount rules are also driven by Approval Rules in Settings).
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            <p className="font-medium">These settings are not yet active</p>
+            <p className="mt-1 text-amber-900/90">
+              Role names (e.g. Finance Manager, CFO) and the auto-approve / mid-band fields on this page are{' '}
+              <strong>not read</strong> when invoices are submitted for approval. Configure real approval routing in{' '}
+              <a href="/ap-invoices/settings" className="font-semibold underline underline-offset-2">
+                Settings → Approval Rules
+              </a>{' '}
+              (emails + amount bands). Wiring this page into <code className="text-xs">approval_rules</code> is on the
+              backlog so there is one source of truth later.
             </p>
+          </div>
+
+          {approvalChain.length > 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-300 bg-white/70 p-3 opacity-70">
+              <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                Legacy labels (display only — not used for routing)
+              </p>
+              <ul className="space-y-1 text-sm text-gray-700">
+                {approvalChain.map((label, i) => (
+                  <li key={`${label}-${i}`}>
+                    {i + 1}. {label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 rounded-lg border border-dashed border-gray-300 bg-white/70 p-4 text-sm opacity-70 md:grid-cols-2">
+            <div>
+              <Label className="text-gray-500">Auto-approve under ({currencyLabel}) — inactive</Label>
+              <Input value={autoUnder} disabled readOnly className="mt-1 bg-gray-50" />
+            </div>
+            <div>
+              <Label className="text-gray-500">Mid band ceiling ({currencyLabel}) — inactive</Label>
+              <Input value={fmBand} disabled readOnly className="mt-1 bg-gray-50" />
+            </div>
           </div>
         </CardContent>
       </Card>

@@ -816,9 +816,41 @@ export default function CFODashboard() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard label={isUAE ? 'TRN compliance' : 'GSTIN compliance'} value={`${kpis.gstinCompliance}%`} sub="Vendor master" />
             <KpiCard label="Match coverage" value={`${kpis.matchRate}%`} sub="Matched / partial / 3-way" />
-            <KpiCard label="High-risk open" value={`${kpis.highRiskCount}`} sub={fmtL(kpis.highRiskAmount)} variant="danger" />
+            <KpiCard
+              label="High risk flags"
+              value={`${kpis.highRiskCount}`}
+              sub={
+                kpis.highRiskFlagBreakdown?.length
+                  ? kpis.highRiskFlagBreakdown.map((b) => `${b.label}: ${b.count}`).join(' · ')
+                  : fmtL(kpis.highRiskAmount)
+              }
+              variant="danger"
+            />
             <KpiCard label="Avg approval cycle" value={`${kpis.avgProcessDays}d`} sub="Intake → approved" />
           </div>
+
+          {kpis.highestRiskInvoices?.length ? (
+            <Card className="border border-violet-200 bg-violet-50/40 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Highest risk invoices this period</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {kpis.highestRiskInvoices.map((r) => (
+                  <div
+                    key={`${r.invoice_number}-${r.flag_label}`}
+                    className="flex items-start justify-between gap-3 text-sm"
+                  >
+                    <div>
+                      <span className="font-medium text-gray-900">{r.invoice_number}</span>
+                      <span className="text-muted-foreground"> ({r.vendor_name})</span>
+                      <div className="text-[11px] text-violet-800">{r.flag_label}</div>
+                    </div>
+                    <div className="shrink-0 tabular-nums text-gray-800">{fmtL(r.amount)}</div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="border border-gray-200 shadow-sm">

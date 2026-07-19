@@ -54,24 +54,53 @@ function runClientAnomalyFallback(payload: {
   const amount = Number(payload.invoice.total_amount ?? 0);
   const flags: AnomalyEngineFlag[] = [];
   const history = payload.vendor_history ?? [];
-  const amounts = history.map((h) => Number(h.total_amount ?? 0)).filter((a) => a > 0);
+  const vendorName = String(payload.invoice.vendor_name ?? '').trim().toLowerCase();
+  const sameVendor = history.filter(
+    (h) => String(h.vendor_name ?? '').trim().toLowerCase() === vendorName && vendorName,
+  );
+  const amounts = sameVendor.map((h) => Number(h.total_amount ?? 0)).filter((a) => a > 0);
   const avg = amounts.length ? amounts.reduce((s, a) => s + a, 0) / amounts.length : 0;
-  const std =
+  const rawStd =
     amounts.length > 1
       ? Math.sqrt(amounts.reduce((s, a) => s + (a - avg) ** 2, 0) / (amounts.length - 1))
-      : 1;
-  const z = std > 0 ? (amount - avg) / std : 0;
+      : 0;
+  const stdFloor = Math.max(Math.abs(avg) * 0.05, 1);
+  const std = Math.max(rawStd, stdFloor);
+  const sampleN = amounts.length;
+  const MIN_ZSCORE_HISTORY = 5;
+  const AMOUNT_AVG_MULTIPLE = 3;
 
-  if (z > 2.5) {
-    flags.push({
-      anomaly_type: 'statistical',
-      detection_method: 'zscore',
-      severity: 'high',
-      risk_score: 55,
-      flag_code: 'AMOUNT_HIGH_ZSCORE',
-      flag_reason: `Unusually high amount for this vendor (z=${z.toFixed(2)})`,
-      flag_details: { z_score: z, vendor_avg: avg },
-    });
+  if (sampleN >= MIN_ZSCORE_HISTORY && avg > 0) {
+    const z = (amount - avg) / std;
+    if (z > 2.5) {
+      flags.push({
+        anomaly_type: 'statistical',
+        detection_method: 'zscore',
+        severity: 'high',
+        risk_score: Math.min(100, 40 + Math.min(Math.abs(z), 6) * 10),
+        flag_code: 'AMOUNT_HIGH_ZSCORE',
+        flag_reason: `Unusually high amount for this vendor (z=${z.toFixed(2)})`,
+        flag_details: { z_score: z, vendor_avg: avg, vendor_std: std, sample_count: sampleN },
+      });
+    }
+  } else if (sampleN >= 1 && avg > 0) {
+    const ratio = amount / avg;
+    if (ratio >= AMOUNT_AVG_MULTIPLE) {
+      flags.push({
+        anomaly_type: 'statistical',
+        detection_method: 'amount_multiple',
+        severity: 'medium',
+        risk_score: 40,
+        flag_code: 'AMOUNT_HIGH_VS_AVG',
+        flag_reason: `Amount is ${ratio.toFixed(1)}× vendor average (only ${sampleN} prior invoice${sampleN !== 1 ? 's' : ''} — z-score skipped)`,
+        flag_details: {
+          amount_vs_avg_ratio: ratio,
+          vendor_avg: avg,
+          sample_count: sampleN,
+          threshold_multiple: AMOUNT_AVG_MULTIPLE,
+        },
+      });
+    }
   }
   if (amount >= threshold * 0.95 && amount < threshold) {
     flags.push({
@@ -139,13 +168,20 @@ function runClientAnomalyFallback(payload: {
   }
 
   const overall = flags.length ? Math.max(...flags.map((f) => f.risk_score)) : 0;
+  let statistical_context: string | null = null;
+  if (avg > 0) {
+    const ratio = amount / avg;
+    if (sampleN >= MIN_ZSCORE_HISTORY) {
+      const z = (amount - avg) / std;
+      statistical_context = `This vendor's avg invoice is AED ${avg.toLocaleString()} (n=${sampleN}). This invoice is AED ${amount.toLocaleString()} (${z.toFixed(1)}σ, ${ratio.toFixed(1)}× avg).`;
+    } else {
+      statistical_context = `This vendor's avg invoice is AED ${avg.toLocaleString()} (only ${sampleN} prior invoice${sampleN !== 1 ? 's' : ''}). This invoice is AED ${amount.toLocaleString()} (${ratio.toFixed(1)}× avg) — z-score not applied.`;
+    }
+  }
   return {
     overall_risk_score: overall,
     flags,
-    statistical_context:
-      avg > 0
-        ? `This vendor's avg invoice is AED ${avg.toLocaleString()}. This invoice is AED ${amount.toLocaleString()} (${z.toFixed(1)}σ).`
-        : null,
+    statistical_context,
   };
 }
 

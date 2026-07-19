@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -18,6 +18,38 @@ logger = logging.getLogger(__name__)
 
 _CLOSED_STATUSES = {"paid", "rejected"}
 _CLOSED_PAYMENT = {"paid", "cancelled"}
+
+# High-risk briefing threshold (matches risk_level_from_score / rescan script).
+_HIGH_RISK_SCORE = 60.0
+_MAX_BREAKDOWN_CATEGORIES = 5
+_MAX_HIGHEST_RISK_INVOICES = 5
+
+# Map flag_code → scannable briefing label. Related codes share a label so the
+# briefing stays short (e.g. PO/GRN dating, amount z-score / multiple).
+_FLAG_LABELS: dict[str, str] = {
+    "GHOST_VENDOR": "Ghost Vendor",
+    "VENDOR_IDENTITY_MISMATCH": "Vendor Identity Mismatch",
+    "INVOICE_BEFORE_PO": "Invoice Before PO/GRN",
+    "INVOICE_BEFORE_GRN": "Invoice Before PO/GRN",
+    "AMOUNT_HIGH_ZSCORE": "Statistical Outlier (unusual amount)",
+    "AMOUNT_LOW_ZSCORE": "Statistical Outlier (unusual amount)",
+    "AMOUNT_HIGH_VS_AVG": "Statistical Outlier (unusual amount)",
+    "AMOUNT_LOW_VS_AVG": "Statistical Outlier (unusual amount)",
+    "FREQUENCY_ANOMALY": "Frequency Anomaly",
+    "SPLIT_INVOICE": "Split Invoice",
+    "NEAR_DUPLICATE": "Near Duplicate",
+    "DUPLICATE_INVOICE": "Duplicate Invoice",
+    "JUST_BELOW_THRESHOLD": "Just Below Approval Threshold",
+    "NEW_VENDOR_HIGH_AMOUNT": "New Vendor High Amount",
+    "ROUND_NUMBER": "Round Number",
+    "NON_BUSINESS_DAY": "Non-Business Day",
+    "OUTSIDE_BUSINESS_HOURS": "Outside Business Hours",
+    "ML_HIGH_RISK": "ML High Risk",
+    "ML_REVIEW": "ML Review",
+    "URGENT_PAYMENT_FRIDAY": "Urgent Payment Manipulation",
+    "REVISED_INVOICE": "Revised Invoice",
+    "APPROVER_CONCENTRATION": "Approver Concentration",
+}
 
 
 def _parse_date(value: Any) -> Optional[date]:
@@ -43,6 +75,156 @@ def _fmt_money(currency: str, amount: float) -> str:
     return f"{currency} {amount:,.2f}"
 
 
+def _flag_label(flag_code: str | None, anomaly_type: str | None = None) -> str:
+    code = (flag_code or "").strip().upper()
+    if code in _FLAG_LABELS:
+        return _FLAG_LABELS[code]
+    if code:
+        return code.replace("_", " ").title()
+    at = (anomaly_type or "").strip().lower()
+    if at == "statistical":
+        return "Statistical Outlier (unusual amount)"
+    if at == "ml":
+        return "ML High Risk"
+    if at == "rule_based":
+        return "Rule-Based Flag"
+    return "Other"
+
+
+def _is_high_severity_anomaly(row: dict[str, Any]) -> bool:
+    sev = str(row.get("severity") or "").strip().lower()
+    if sev in ("high", "critical"):
+        return True
+    try:
+        return float(row.get("risk_score") or 0) >= _HIGH_RISK_SCORE
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_high_risk_breakdown(
+    anomalies: list[dict[str, Any]],
+    *,
+    max_categories: int = _MAX_BREAKDOWN_CATEGORIES,
+) -> list[dict[str, Any]]:
+    """Group high-risk anomalies into scannable labels; fold tail into Other."""
+    counts: Counter[str] = Counter()
+    for a in anomalies:
+        counts[_flag_label(a.get("flag_code"), a.get("anomaly_type"))] += 1
+    ranked = counts.most_common()
+    if len(ranked) <= max_categories:
+        return [{"label": label, "count": n} for label, n in ranked]
+    head = ranked[: max_categories - 1]
+    other = sum(n for _, n in ranked[max_categories - 1 :])
+    out = [{"label": label, "count": n} for label, n in head]
+    if other:
+        out.append({"label": "Other", "count": other})
+    return out
+
+
+def _build_highest_risk_invoices(
+    anomalies: list[dict[str, Any]],
+    invoices_by_id: dict[str, dict[str, Any]],
+    *,
+    limit: int = _MAX_HIGHEST_RISK_INVOICES,
+) -> list[dict[str, Any]]:
+    """Top invoices by anomaly risk_score with a primary flag reason."""
+    best: dict[str, dict[str, Any]] = {}
+    for a in anomalies:
+        inv_id = a.get("invoice_id")
+        if not inv_id:
+            continue
+        try:
+            score = float(a.get("risk_score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        prev = best.get(inv_id)
+        if prev is None or score > float(prev.get("risk_score") or 0):
+            best[inv_id] = a
+
+    ranked = sorted(
+        best.items(),
+        key=lambda kv: float(kv[1].get("risk_score") or 0),
+        reverse=True,
+    )[:limit]
+
+    out: list[dict[str, Any]] = []
+    for inv_id, a in ranked:
+        inv = invoices_by_id.get(inv_id) or {}
+        label = _flag_label(a.get("flag_code"), a.get("anomaly_type"))
+        reason = (a.get("flag_reason") or "").strip() or label
+        out.append(
+            {
+                "invoice_id": inv_id,
+                "invoice_number": inv.get("invoice_number") or "—",
+                "vendor_name": inv.get("vendor_name") or "Unknown",
+                "flag_code": a.get("flag_code"),
+                "flag_label": label,
+                "flag_reason": reason,
+                "amount": round(float(inv.get("total_amount") or 0), 2),
+                "risk_score": round(float(a.get("risk_score") or 0), 1),
+            }
+        )
+    return out
+
+
+def _fetch_high_risk_anomalies(
+    sb: Any,
+    company_id: Optional[str],
+) -> list[dict[str, Any]]:
+    """Open high/critical anomalies (plus score ≥ threshold) for the briefing."""
+    try:
+        q = sb.table("invoice_anomalies").select(
+            "id,invoice_id,company_id,anomaly_type,detection_method,severity,"
+            "risk_score,flag_code,flag_reason,status"
+        ).eq("status", "open")
+        if company_id:
+            q = q.eq("company_id", company_id)
+        rows = list((q.execute()).data or [])
+    except Exception:
+        logger.exception("Failed to load invoice_anomalies for CFO briefing")
+        return []
+    return [r for r in rows if _is_high_severity_anomaly(r)]
+
+
+def _render_flag_breakdown_html(summary: dict[str, Any]) -> str:
+    breakdown = summary.get("high_risk_flag_breakdown") or []
+    if not breakdown:
+        return ""
+    items = "".join(
+        f'<div style="font-size:12px;color:#6b21a8;margin-top:3px;">• '
+        f'{b.get("label")}: {int(b.get("count") or 0)}</div>'
+        for b in breakdown
+    )
+    return f'<div style="margin-top:8px;">{items}</div>'
+
+
+def _render_highest_risk_html(summary: dict[str, Any]) -> str:
+    currency = summary.get("currency") or "AED"
+    rows = summary.get("highest_risk_invoices") or []
+    if not rows:
+        return ""
+    body = "".join(
+        f"""
+        <tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;">
+            <div style="font-weight:600;">{r.get('invoice_number')}</div>
+            <div style="font-size:12px;color:#6b7280;">{r.get('vendor_name')} — {r.get('flag_label')}</div>
+          </td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:13px;white-space:nowrap;">
+            {_fmt_money(currency, float(r.get('amount') or 0))}
+          </td>
+        </tr>"""
+        for r in rows
+    )
+    return f"""
+          <div style="margin-top:20px;">
+            <div style="font-size:14px;font-weight:600;margin-bottom:8px;">Highest risk invoices this period</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+              <tbody>{body}</tbody>
+            </table>
+          </div>"""
+
+
 def _render_html(summary: dict[str, Any]) -> str:
     currency = summary.get("currency") or "AED"
     vendors = (summary.get("top_vendors") or [])[:3]
@@ -54,6 +236,8 @@ def _render_html(summary: dict[str, Any]) -> str:
         </tr>"""
         for i, v in enumerate(vendors)
     ) or '<tr><td colspan="2" style="padding:12px;color:#6b7280;">No open vendor balances</td></tr>'
+    flag_breakdown_html = _render_flag_breakdown_html(summary)
+    highest_risk_html = _render_highest_risk_html(summary)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -98,6 +282,7 @@ def _render_html(summary: dict[str, Any]) -> str:
                 <div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:14px;">
                   <div style="font-size:11px;color:#7e22ce;text-transform:uppercase;">High risk flags</div>
                   <div style="font-size:22px;font-weight:700;margin-top:4px;">{int(summary.get('high_risk_flags') or 0)}</div>
+                  {flag_breakdown_html}
                 </div>
               </td>
             </tr>
@@ -118,6 +303,7 @@ def _render_html(summary: dict[str, Any]) -> str:
               <tbody>{vendor_rows}</tbody>
             </table>
           </div>
+          {highest_risk_html}
           <p style="margin:20px 0 0;font-size:12px;color:#6b7280;line-height:1.5;">
             Open AP InvoiceFlow → CFO Dashboard for drill-down.
             Ref: Gnanova Finance OS · Automated daily briefing.
@@ -185,7 +371,6 @@ def build_cfo_daily_summary(
     due_week_amount = 0.0
     overdue_count = 0
     overdue_amount = 0.0
-    high_risk_flags = 0
     pending_approvals = 0
     vendor_amount: dict[str, float] = defaultdict(float)
     vendor_count: dict[str, int] = defaultdict(int)
@@ -193,6 +378,7 @@ def build_cfo_daily_summary(
     itc_eligible = 0.0
     itc_blocked = 0.0
     tds_payable = 0.0
+    invoices_by_id: dict[str, dict[str, Any]] = {}
 
     period_invoices = 0
     period_amount = 0.0
@@ -228,6 +414,9 @@ def build_cfo_daily_summary(
         return float(inv.get("tax_amount") or 0)
 
     for inv in rows:
+        inv_id = inv.get("id")
+        if inv_id:
+            invoices_by_id[str(inv_id)] = inv
         amt = float(inv.get("total_amount") or 0)
         currency = (inv.get("currency") or "").strip()
         if currency:
@@ -274,22 +463,18 @@ def build_cfo_daily_summary(
         if st in ("Processing", "On Hold", "Queried"):
             pending_approvals += 1
 
-        risk = str(inv.get("risk_score") or "").lower()
-        flags = inv.get("risk_flags")
-        flag_list = flags if isinstance(flags, list) else []
-        if risk in ("high", "critical"):
-            high_risk_flags += max(1, len(flag_list) or 1)
-        else:
-            for f in flag_list:
-                sev = ""
-                if isinstance(f, dict):
-                    sev = str(f.get("severity") or "").lower()
-                if sev in ("high", "critical"):
-                    high_risk_flags += 1
-
         vendor = (inv.get("vendor_name") or "Unknown").strip() or "Unknown"
         vendor_amount[vendor] += amt
         vendor_count[vendor] += 1
+
+    # High-risk flags: prefer invoice_anomalies (severity high/critical or score ≥ 60)
+    # so the total and category breakdown stay consistent.
+    high_risk_anomalies = _fetch_high_risk_anomalies(sb, company_id)
+    high_risk_flag_breakdown = _build_high_risk_breakdown(high_risk_anomalies)
+    high_risk_flags = sum(int(b["count"]) for b in high_risk_flag_breakdown)
+    highest_risk_invoices = _build_highest_risk_invoices(
+        high_risk_anomalies, invoices_by_id
+    )
 
     top_vendors = [
         {
@@ -327,6 +512,8 @@ def build_cfo_daily_summary(
         "overdue_count": overdue_count,
         "overdue_amount": round(overdue_amount, 2),
         "high_risk_flags": high_risk_flags,
+        "high_risk_flag_breakdown": high_risk_flag_breakdown,
+        "highest_risk_invoices": highest_risk_invoices,
         "pending_approvals": pending_approvals,
         "top_vendors": top_vendors,
         "total_invoices": period_invoices,
@@ -364,13 +551,25 @@ def send_cfo_daily_email(
     if not recipient:
         return {"sent": False, "reason": "CFO_EMAIL not set", "to": None}
 
+    breakdown_lines = "\n".join(
+        f"  • {b.get('label')}: {int(b.get('count') or 0)}"
+        for b in (summary.get("high_risk_flag_breakdown") or [])
+    )
+    risk_inv_lines = "\n".join(
+        f"  - {r.get('invoice_number')} ({r.get('vendor_name')}) — "
+        f"{r.get('flag_label')} — {_fmt_money(str(summary.get('currency') or 'AED'), float(r.get('amount') or 0))}"
+        for r in (summary.get("highest_risk_invoices") or [])
+    )
     plain = (
         f"Total outstanding: {summary.get('currency')} {summary.get('total_outstanding')}\n"
         f"Due this week: {summary.get('due_this_week_count')}\n"
         f"Overdue: {summary.get('overdue_count')}\n"
         f"High risk flags: {summary.get('high_risk_flags')}\n"
+        f"{breakdown_lines}\n"
         f"Pending approvals: {summary.get('pending_approvals')}\n"
     )
+    if risk_inv_lines:
+        plain += f"\nHighest risk invoices this period:\n{risk_inv_lines}\n"
     ok = send_notification(
         recipient,
         str(summary.get("subject") or "Daily CFO Briefing"),

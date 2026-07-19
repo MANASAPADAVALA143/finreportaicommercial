@@ -93,7 +93,10 @@ export function MyApprovals() {
       return;
     }
     if (!email.trim()) return;
-    if (action === 'approved') setApprovingId(approvalId);
+    if (action === 'approved') {
+      if (approvingId) return; // prevent double-click race
+      setApprovingId(approvalId);
+    }
     try {
     const res = await processApprovalAction(approvalId, email.trim(), action, c || null);
     if (!res.ok) {
@@ -199,11 +202,14 @@ export function MyApprovals() {
                     <div className="flex gap-2">
                       <Button
                         size="sm"
-                        className="bg-green-600"
+                        className="bg-green-600 text-white hover:bg-green-700"
                         disabled={approvingId === approval.id}
-                        onClick={() => void act(approval.id, invoice.id, 'approved')}
+                        onClick={() => {
+                          if (approvingId) return;
+                          void act(approval.id, invoice.id, 'approved');
+                        }}
                       >
-                        {approvingId === approval.id ? 'Approving...' : 'Approve'}
+                        {approvingId === approval.id ? 'Approving…' : 'Approve'}
                       </Button>
                       <Button size="sm" variant="destructive" onClick={() => void act(approval.id, invoice.id, 'rejected')}>
                         Reject

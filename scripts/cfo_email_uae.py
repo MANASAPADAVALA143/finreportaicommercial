@@ -109,6 +109,20 @@ def build_summary_for_company(company_id: str, days: int = 7) -> dict[str, Any]:
     return build_cfo_daily_summary(company_id=company_id, days=days)
 
 
+def _flag_breakdown_html(summary: dict[str, Any]) -> str:
+    ensure_backend_on_path()
+    from app.services.ap_cfo_daily_summary_service import _render_flag_breakdown_html
+
+    return _render_flag_breakdown_html(summary)
+
+
+def _highest_risk_html(summary: dict[str, Any]) -> str:
+    ensure_backend_on_path()
+    from app.services.ap_cfo_daily_summary_service import _render_highest_risk_html
+
+    return _render_highest_risk_html(summary)
+
+
 def estimate_vat_summary(company_id: str) -> dict[str, float]:
     """
     Lightweight VAT briefing for UAE email:
@@ -168,6 +182,8 @@ def render_uae_html(
     due_week = int(summary.get("due_this_week_count") or 0)
     high_risk = int(summary.get("high_risk_flags") or 0)
     pending = int(summary.get("pending_approvals") or 0)
+    flag_breakdown_html = _flag_breakdown_html(summary)
+    highest_risk_html = _highest_risk_html(summary)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -213,6 +229,7 @@ def render_uae_html(
                 <div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:14px;">
                   <div style="font-size:11px;color:#7e22ce;text-transform:uppercase;">High risk flags</div>
                   <div style="font-size:22px;font-weight:700;margin-top:4px;">{high_risk}</div>
+                  {flag_breakdown_html}
                 </div>
               </td>
             </tr>
@@ -251,6 +268,8 @@ def render_uae_html(
             </table>
           </div>
 
+          {highest_risk_html}
+
           <p style="margin:20px 0 0;font-size:12px;color:#6b7280;line-height:1.5;">
             Open AP InvoiceFlow → CFO Dashboard for drill-down.
             Ref: Gnanova Finance OS UAE · Automated daily briefing (EC2 cron).
@@ -286,15 +305,25 @@ def process_company(
         f"Daily CFO Briefing - {_fmt_aed(float(summary.get('total_outstanding') or 0))} outstanding - "
         f"{int(summary.get('overdue_count') or 0)} overdue - {name}"
     )
-    plain = (
-        f"{name}\n"
-        f"Outstanding: {_fmt_aed(float(summary.get('total_outstanding') or 0))}\n"
-        f"Due this week: {summary.get('due_this_week_count')}\n"
-        f"Overdue: {summary.get('overdue_count')} ({_fmt_aed(float(summary.get('overdue_amount') or 0))})\n"
-        f"High risk: {summary.get('high_risk_flags')}\n"
-        f"Pending approvals: {summary.get('pending_approvals')}\n"
-        f"VAT on open AP: {_fmt_aed(vat.get('open_ap_tax', 0))}\n"
-    )
+    plain_parts = [
+        f"{name}",
+        f"Outstanding: {_fmt_aed(float(summary.get('total_outstanding') or 0))}",
+        f"Due this week: {summary.get('due_this_week_count')}",
+        f"Overdue: {summary.get('overdue_count')} ({_fmt_aed(float(summary.get('overdue_amount') or 0))})",
+        f"High risk: {summary.get('high_risk_flags')}",
+    ]
+    for b in summary.get("high_risk_flag_breakdown") or []:
+        plain_parts.append(f"  • {b.get('label')}: {int(b.get('count') or 0)}")
+    plain_parts.append(f"Pending approvals: {summary.get('pending_approvals')}")
+    plain_parts.append(f"VAT on open AP: {_fmt_aed(vat.get('open_ap_tax', 0))}")
+    if summary.get("highest_risk_invoices"):
+        plain_parts.append("Highest risk invoices this period:")
+        for r in summary["highest_risk_invoices"]:
+            plain_parts.append(
+                f"  - {r.get('invoice_number')} ({r.get('vendor_name')}) — "
+                f"{r.get('flag_label')} — {_fmt_aed(float(r.get('amount') or 0))}"
+            )
+    plain = "\n".join(plain_parts) + "\n"
 
     to_email = resolve_cfo_email(company)
     result: dict[str, Any] = {

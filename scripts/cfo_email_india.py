@@ -101,6 +101,20 @@ def build_summary_for_company(company_id: str, days: int = 7) -> dict[str, Any]:
     return build_cfo_daily_summary(company_id=company_id, days=days, market="IN")
 
 
+def _flag_breakdown_html(summary: dict[str, Any]) -> str:
+    ensure_backend_on_path()
+    from app.services.ap_cfo_daily_summary_service import _render_flag_breakdown_html
+
+    return _render_flag_breakdown_html(summary)
+
+
+def _highest_risk_html(summary: dict[str, Any]) -> str:
+    ensure_backend_on_path()
+    from app.services.ap_cfo_daily_summary_service import _render_highest_risk_html
+
+    return _render_highest_risk_html(summary)
+
+
 def render_india_html(summary: dict[str, Any], *, company_name: str) -> str:
     vendors = (summary.get("top_vendors") or [])[:3]
     vendor_rows = "".join(
@@ -118,6 +132,8 @@ def render_india_html(summary: dict[str, Any], *, company_name: str) -> str:
     pending = int(summary.get("pending_approvals") or 0)
     gstr1 = summary.get("gstr1_due") or ""
     gstr3b = summary.get("gstr3b_due") or ""
+    flag_breakdown_html = _flag_breakdown_html(summary)
+    highest_risk_html = _highest_risk_html(summary)
 
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Segoe UI,Arial,sans-serif;color:#111827;">
@@ -157,6 +173,7 @@ def render_india_html(summary: dict[str, Any], *, company_name: str) -> str:
     <div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:14px;">
       <div style="font-size:11px;color:#7e22ce;text-transform:uppercase;">High risk flags</div>
       <div style="font-size:22px;font-weight:700;margin-top:4px;">{high_risk}</div>
+      {flag_breakdown_html}
     </div>
   </td>
 </tr>
@@ -194,6 +211,7 @@ def render_india_html(summary: dict[str, Any], *, company_name: str) -> str:
     <tbody>{vendor_rows}</tbody>
   </table>
 </div>
+{highest_risk_html}
 <p style="margin:20px 0 0;font-size:12px;color:#6b7280;">Ref: Gnanova Finance OS India | Automated daily briefing (EC2 cron)</p>
 </td></tr></table></td></tr></table>
 </body></html>"""
@@ -216,15 +234,30 @@ def process_company(company: dict[str, Any], *, days: int, send: bool, logger) -
         f"Daily CFO Briefing - {_fmt_inr_ascii(float(summary.get('total_outstanding') or 0))} AP - "
         f"{overdue} overdue - {name}"
     )
-    plain = (
-        f"{name}\n"
-        f"Outstanding: {_fmt_inr(float(summary.get('total_outstanding') or 0))}\n"
-        f"Overdue: {overdue}\n"
-        f"ITC eligible: {_fmt_inr(float(summary.get('itc_eligible') or 0))}\n"
-        f"ITC blocked: {_fmt_inr(float(summary.get('itc_blocked') or 0))}\n"
-        f"TDS: {_fmt_inr(float(summary.get('tds_payable') or 0))}\n"
-        f"GSTR-3B: {summary.get('gstr3b_due')}\n"
+    plain_parts = [
+        f"{name}",
+        f"Outstanding: {_fmt_inr(float(summary.get('total_outstanding') or 0))}",
+        f"Overdue: {overdue}",
+        f"High risk: {summary.get('high_risk_flags')}",
+    ]
+    for b in summary.get("high_risk_flag_breakdown") or []:
+        plain_parts.append(f"  • {b.get('label')}: {int(b.get('count') or 0)}")
+    plain_parts.extend(
+        [
+            f"ITC eligible: {_fmt_inr(float(summary.get('itc_eligible') or 0))}",
+            f"ITC blocked: {_fmt_inr(float(summary.get('itc_blocked') or 0))}",
+            f"TDS: {_fmt_inr(float(summary.get('tds_payable') or 0))}",
+            f"GSTR-3B: {summary.get('gstr3b_due')}",
+        ]
     )
+    if summary.get("highest_risk_invoices"):
+        plain_parts.append("Highest risk invoices this period:")
+        for r in summary["highest_risk_invoices"]:
+            plain_parts.append(
+                f"  - {r.get('invoice_number')} ({r.get('vendor_name')}) — "
+                f"{r.get('flag_label')} — {_fmt_inr(float(r.get('amount') or 0))}"
+            )
+    plain = "\n".join(plain_parts) + "\n"
     to_email = resolve_cfo_email(company)
     result: dict[str, Any] = {
         "company_id": company_id,
