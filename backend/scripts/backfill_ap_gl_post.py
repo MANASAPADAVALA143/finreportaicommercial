@@ -89,9 +89,31 @@ def _needs_backfill(inv: dict, gl_refs: set[str]) -> bool:
     iid = str(inv.get("id") or "")
     if not iid:
         return False
-    je_posted = bool(inv.get("je_posted"))
     has_je = iid in gl_refs
-    return (not je_posted) or (not has_je)
+    # Always backfill when GL DB has no row — even if je_posted flag is true
+    # (orphan / wrong-database flag).
+    return not has_je
+
+
+def _clear_orphan_flags(approved: list[dict], gl_refs: set[str]) -> int:
+    """Clear invoices.je_posted when no matching uae_journal_entries row exists."""
+    from app.services.gulftax_supabase import clear_invoice_je_posted
+
+    cleared = 0
+    for inv in approved:
+        iid = str(inv.get("id") or "")
+        if not iid or not inv.get("je_posted"):
+            continue
+        if iid in gl_refs:
+            continue
+        if clear_invoice_je_posted(
+            iid,
+            reason=f"backfill orphan; je_reference={inv.get('je_reference')!r}",
+        ):
+            cleared += 1
+            inv["je_posted"] = False
+            inv["je_reference"] = None
+    return cleared
 
 
 def run_backfill(
@@ -112,6 +134,7 @@ def run_backfill(
 
     stats = {
         "approved_total": len(approved),
+        "orphan_flags_cleared": 0,
         "pending_backfill": 0,
         "succeeded": 0,
         "skipped_already_posted": 0,
@@ -121,13 +144,31 @@ def run_backfill(
 
     try:
         gl_refs = _fetch_gl_posted_invoice_ids(db)
+        orphans = [
+            inv for inv in approved
+            if inv.get("je_posted") and str(inv.get("id") or "") not in gl_refs
+        ]
+        stats["orphan_flags_cleared"] = len(orphans) if dry_run else 0
+
+        if dry_run:
+            for inv in orphans:
+                log.info(
+                    "  [DRY RUN CLEAR FLAG] %s | je_reference=%s (no GL row)",
+                    inv.get("invoice_number"),
+                    inv.get("je_reference"),
+                )
+        else:
+            stats["orphan_flags_cleared"] = _clear_orphan_flags(approved, gl_refs)
+            log.info("Cleared %d orphan je_posted flag(s)", stats["orphan_flags_cleared"])
+
         pending = [inv for inv in approved if _needs_backfill(inv, gl_refs)]
         if limit is not None:
             pending = pending[:limit]
         stats["pending_backfill"] = len(pending)
 
         log.info(
-            "Found %d Approved invoice(s); %d need GL/GulfTax backfill",
+            "Found %d Approved invoice(s); %d need GL/GulfTax backfill "
+            "(DATABASE writes to SQLAlchemy uae_journal_entries — not Supabase)",
             stats["approved_total"],
             stats["pending_backfill"],
         )
@@ -178,19 +219,16 @@ def run_backfill(
                 elif result.get("je_posted"):
                     stats["succeeded"] += 1
                     log.info(
-                        "OK %s — JE %s",
+                        "OK %s — JE %s (id=%s)",
                         inv_no,
                         result.get("je_reference", "—"),
+                        result.get("je_id", "—"),
                     )
-                elif result.get("ok") is False:
-                    stats["failed"] += 1
-                    err = str(result.get("error", "post returned ok=false"))
-                    failures.append((iid, inv_no, err))
-                    log.error("FAIL %s — %s", inv_no, err)
                 else:
                     stats["failed"] += 1
-                    failures.append((iid, inv_no, "je_posted=false"))
-                    log.error("FAIL %s — journal entry was not created", inv_no)
+                    err = str(result.get("error") or result.get("message") or "je_posted=false")
+                    failures.append((iid, inv_no, err))
+                    log.error("FAIL %s — %s", inv_no, err)
             except Exception as exc:
                 stats["failed"] += 1
                 failures.append((iid, inv_no, str(exc)))
@@ -202,6 +240,7 @@ def run_backfill(
 
     log.info("——— Backfill summary ———")
     log.info("Approved invoices (total):     %d", stats["approved_total"])
+    log.info("Orphan je_posted flags:        %d", stats["orphan_flags_cleared"])
     log.info("Pending backfill:              %d", stats["pending_backfill"])
     log.info("Posted to GL (new):            %d", stats["succeeded"])
     log.info("Skipped (already posted):      %d", stats["skipped_already_posted"])

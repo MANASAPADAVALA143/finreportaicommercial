@@ -107,7 +107,7 @@ export function MyApprovals() {
     if (action === 'approved') {
       if (res.fully_approved) {
         const gl = res.gl_post;
-        if (gl?.je_posted || gl?.skipped) {
+        if (gl?.ok && gl?.je_posted && gl?.je_id) || (gl?.skipped && gl?.je_posted) {
           toast({
             title: gl.skipped ? 'Approved — already in GL' : 'Approved — journal entry posted to GL',
             description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
@@ -117,8 +117,11 @@ export function MyApprovals() {
           }
         } else {
           toast({
-            title: 'Approved — GL post incomplete',
-            description: 'Approval saved but journal entry was not posted. Retry from invoice list.',
+            title: 'Approved — GL post failed',
+            description:
+              gl?.message ||
+              gl?.error ||
+              'Approval saved but no journal entry was written to uae_journal_entries. Do not treat je_reference on the invoice as proof of posting.',
             variant: 'destructive',
           });
         }

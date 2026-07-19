@@ -140,13 +140,20 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
       }
       if (action === 'approved' && res.fully_approved) {
         const gl = res.gl_post;
-        if (gl?.je_posted || gl?.skipped) {
+        if ((gl?.ok && gl?.je_posted && gl?.je_id) || (gl?.skipped && gl?.je_posted)) {
           toast({
             title: gl.skipped ? 'Approved — already in GL' : 'Approved — posted to GL',
             description: gl.je_reference ? `JE ${gl.je_reference}` : 'Recorded.',
           });
         } else {
-          toast({ title: 'Approved', description: 'GL post pending — check invoice list.' });
+          toast({
+            title: 'Approved — GL post failed',
+            description:
+              gl?.message ||
+              gl?.error ||
+              'No journal row was written. Invoice may show a stale je_reference — do not trust it.',
+            variant: 'destructive',
+          });
         }
       } else {
         toast({ title: action === 'approved' ? 'Approved' : 'Rejected', description: 'Recorded.' });

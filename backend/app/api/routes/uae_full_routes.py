@@ -355,9 +355,15 @@ def _tenant_dep(
 
 
 def _apply_company(q, model, company_id: Optional[str]):
-    """Filter by company_id when provided (multi-company support)."""
+    """Filter by company_id when provided (multi-company support).
+
+    Include NULL company_id rows — older AP posts stamped company_id=None when
+    ap_companies resolution failed, and hiding them made the journals UI look empty.
+    """
     if company_id and hasattr(model, "company_id"):
-        return q.filter(model.company_id == company_id)
+        from sqlalchemy import or_
+
+        return q.filter(or_(model.company_id == company_id, model.company_id.is_(None)))
     return q
 
 

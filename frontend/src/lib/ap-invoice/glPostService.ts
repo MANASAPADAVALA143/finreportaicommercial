@@ -3,6 +3,7 @@
  */
 import type { Invoice } from './supabase';
 import { getStoredWorkspaceId, workspaceHeaders } from '../../services/workspaceService';
+import { getStoredAccessToken } from '../../utils/authToken';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
 
@@ -13,6 +14,7 @@ export type ApproveAndPostResult = {
   je_reference?: string;
   je_id?: string;
   message?: string;
+  error?: string;
 };
 
 function workspaceId(): string {
@@ -25,16 +27,13 @@ function workspaceId(): string {
   );
 }
 
-function authToken(): string | null {
-  return localStorage.getItem('token');
-}
-
 /** Shared entry — call after any path sets invoice status to Approved. */
 export async function postApprovedInvoiceToGL(
   invoice: Invoice | { id: string },
   companyId: string | null,
 ): Promise<ApproveAndPostResult> {
-  const token = authToken();
+  // Must use the same token source as other UAE API calls — localStorage 'token' is often empty.
+  const token = getStoredAccessToken();
   const res = await fetch(`${API_BASE}/api/uae/ap/post-approved-invoice`, {
     method: 'POST',
     headers: {

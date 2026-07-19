@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import date
 from typing import Any
 
@@ -74,38 +73,41 @@ def _fetch_supabase_invoice(invoice_id: str) -> dict[str, Any] | None:
         return None
 
 
+def _find_ap_journal(
+    invoice_id: str,
+    tenant_id: str,
+    db: Session,
+):
+    """Return the AP expense JE for this invoice if it exists in the live GL DB."""
+    from app.models.uae_accounting_full import UAEJournalEntry
+
+    return (
+        db.query(UAEJournalEntry)
+        .filter(
+            UAEJournalEntry.tenant_id == tenant_id,
+            UAEJournalEntry.reference == invoice_id,
+            UAEJournalEntry.source == "AP_INVOICE",
+        )
+        .order_by(UAEJournalEntry.created_at.desc())
+        .first()
+    )
+
+
 def _existing_gl_post(
     invoice_id: str,
     tenant_id: str,
     db: Session,
 ) -> dict[str, Any] | None:
-    """Return prior JE info if this invoice was already posted to GL."""
+    """Return prior JE info only when a real uae_journal_entries row exists.
+
+    Never trust invoices.je_posted alone — that flag has been set without a
+    matching journal row (wrong DB / swallowed failure / orphan backfill).
+    """
     if not invoice_id:
         return None
 
-    inv = _fetch_supabase_invoice(invoice_id)
-    if inv and inv.get("je_posted"):
-        return {
-            "skipped": True,
-            "je_posted": True,
-            "je_reference": inv.get("je_reference") or "",
-            "je_id": None,
-            "message": "Invoice already posted to GL (je_posted flag).",
-        }
-
     try:
-        from app.models.uae_accounting_full import UAEJournalEntry
-
-        existing = (
-            db.query(UAEJournalEntry)
-            .filter(
-                UAEJournalEntry.tenant_id == tenant_id,
-                UAEJournalEntry.reference == invoice_id,
-                UAEJournalEntry.source.in_(("AP_INVOICE", "AP_INVOICE_VAT")),
-            )
-            .order_by(UAEJournalEntry.created_at.desc())
-            .first()
-        )
+        existing = _find_ap_journal(invoice_id, tenant_id, db)
         if existing:
             je_ref = existing.entry_number or existing.id
             try:
@@ -121,6 +123,19 @@ def _existing_gl_post(
                 "je_id": existing.id,
                 "message": "Invoice already posted to GL (existing journal entry).",
             }
+
+        # Orphan flag: Supabase says posted, but this GL database has no row.
+        inv = _fetch_supabase_invoice(invoice_id)
+        if inv and inv.get("je_posted"):
+            from app.services.gulftax_supabase import clear_invoice_je_posted
+
+            clear_invoice_je_posted(
+                invoice_id,
+                reason=(
+                    f"orphan flag je_reference={inv.get('je_reference')!r} "
+                    f"with no uae_journal_entries row for tenant={tenant_id}"
+                ),
+            )
     except Exception:
         logger.exception("GL idempotency check failed for invoice %s", invoice_id)
 
@@ -144,7 +159,10 @@ def post_invoice_to_gl_and_tax(
         prior = _existing_gl_post(body.invoice_id, tenant_id, db)
         if prior:
             ws_id = body.workspace_id or tenant_id
-            company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
+            try:
+                company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
+            except Exception:
+                company_id = (body.company_id or "").strip() or None
             if company_id:
                 try:
                     from app.services.gulftax_sync_service import (
@@ -190,14 +208,25 @@ def post_invoice_to_gl_and_tax(
                     logger.exception("GulfTax sync on idempotent skip failed for %s", body.invoice_id)
             return {"ok": True, **prior}
 
-    je_ref = f"JE-AP-{uuid.uuid4().hex[:8].upper()}"
+    je_ref = ""
     post_date = body.invoice_date or date.today().isoformat()
 
     net_amount = round(body.total_amount - body.vat_amount_aed, 2)
     vat_amount = round(body.vat_amount_aed, 2)
 
     ws_id = body.workspace_id or tenant_id
-    company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
+    # Prefer validated ap_companies row; fall back to Supabase company_id so JE
+    # rows are never company-orphaned (NULL) when the UI filters by company.
+    try:
+        resolved = resolve_ap_company_id(db, tenant_id, body.company_id or None)
+    except Exception:
+        logger.warning(
+            "ap_companies resolve failed for company_id=%s tenant=%s — using invoice company_id",
+            body.company_id,
+            tenant_id,
+        )
+        resolved = None
+    company_id = resolved or ((body.company_id or "").strip() or None)
 
     je_lines = [
         {
@@ -232,7 +261,18 @@ def post_invoice_to_gl_and_tax(
         import uuid as _uuid
         from datetime import date as _date
 
+        from sqlalchemy import text
+
         from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine, UAEVendor
+
+        # Local SQLite schemas may pre-date company_id — add it so ORM inserts work.
+        try:
+            db.execute(text(
+                "ALTER TABLE uae_purchase_invoices ADD COLUMN company_id VARCHAR(36)"
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
 
         existing_pi = (
             db.query(UAEPurchaseInvoice)
@@ -327,6 +367,7 @@ def post_invoice_to_gl_and_tax(
     je_id_vat: str | None = None
     je_posted = False
     period_row = None
+    gl_error: str | None = None
 
     try:
         from datetime import date as _date
@@ -375,9 +416,22 @@ def post_invoice_to_gl_and_tax(
             db=db,
             auto_post=True,
         )
-        je_id = je_expense.id
-        je_ref = je_expense.entry_number or je_ref
-        je_posted = True
+        # create_journal_entry commits — re-read to prove the row exists before
+        # flipping invoices.je_posted. Never trust the in-memory object alone.
+        db.expire_all()
+        verified = _find_ap_journal(body.invoice_id, tenant_id, db) if body.invoice_id else je_expense
+        if body.invoice_id and not verified:
+            raise RuntimeError(
+                f"JE create returned {je_expense.entry_number} but no uae_journal_entries "
+                f"row found for invoice {body.invoice_id} / tenant {tenant_id}"
+            )
+
+        je_id = (verified.id if verified and hasattr(verified, "id") else None) or je_expense.id
+        je_ref = (
+            (verified.entry_number if verified and getattr(verified, "entry_number", None) else None)
+            or je_expense.entry_number
+            or je_expense.id
+        )
 
         if (
             body.vat_treatment == "standard_rated"
@@ -412,12 +466,27 @@ def post_invoice_to_gl_and_tax(
             )
             je_id_vat = je_vat.id
 
+        # Only after verified GL row — never set the flag earlier.
+        je_posted = True
         if body.invoice_id:
             from app.services.gulftax_supabase import mark_invoice_je_posted
 
-            mark_invoice_je_posted(body.invoice_id, je_ref)
-    except Exception:
+            if not mark_invoice_je_posted(body.invoice_id, je_ref):
+                logger.error(
+                    "GL row exists (%s) but failed to set je_posted on invoice %s",
+                    je_ref,
+                    body.invoice_id,
+                )
+    except Exception as exc:
+        gl_error = str(exc)
         logger.exception("Failed to post AP invoice to UAE GL for %s", body.invoice_number)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        je_posted = False
+        je_id = None
+        je_ref = ""
 
     try:
         from app.services.audit_log_service import log_audit
@@ -434,7 +503,9 @@ def post_invoice_to_gl_and_tax(
                 "invoice_number": body.invoice_number,
                 "vendor_name": body.vendor_name,
                 "total": body.total_amount,
-                "je_reference": je_ref,
+                "je_reference": je_ref or None,
+                "je_posted": je_posted,
+                "gl_error": gl_error,
             },
         )
         if je_posted:
@@ -448,15 +519,26 @@ def post_invoice_to_gl_and_tax(
                 details={"source": "AP_INVOICE", "reference": je_ref},
             )
         if body.uploaded_by_email:
-            send_notification(
-                body.uploaded_by_email,
-                f"Invoice {body.invoice_number} approved",
-                (
-                    f"Your invoice from {body.vendor_name} AED {body.total_amount:,.2f} was approved.\n"
-                    f"JE Reference: {je_ref}\n"
-                    f"Payment due: {body.due_date or post_date}"
-                ),
-            )
+            if je_posted:
+                send_notification(
+                    body.uploaded_by_email,
+                    f"Invoice {body.invoice_number} approved",
+                    (
+                        f"Your invoice from {body.vendor_name} AED {body.total_amount:,.2f} was approved.\n"
+                        f"JE Reference: {je_ref}\n"
+                        f"Payment due: {body.due_date or post_date}"
+                    ),
+                )
+            else:
+                send_notification(
+                    body.uploaded_by_email,
+                    f"Invoice {body.invoice_number} approved — GL post failed",
+                    (
+                        f"Invoice from {body.vendor_name} was approved but was NOT posted to the GL.\n"
+                        f"Error: {gl_error or 'unknown'}\n"
+                        f"Retry posting from My Approvals / GL post."
+                    ),
+                )
         db.commit()
     except Exception:
         logger.exception("Audit/notification after AP approve failed")
@@ -517,13 +599,40 @@ def post_invoice_to_gl_and_tax(
                 pass
 
     logger.info(
-        "AP post_invoice_to_gl_and_tax: invoice=%s vendor=%s JE=%s workspace=%s je_posted=%s",
+        "AP post_invoice_to_gl_and_tax: invoice=%s vendor=%s JE=%s workspace=%s je_posted=%s err=%s",
         body.invoice_number,
         body.vendor_name,
-        je_ref,
+        je_ref or "—",
         ws_id,
         je_posted,
+        gl_error,
     )
+
+    if not je_posted:
+        return {
+            "ok": False,
+            "skipped": False,
+            "je_reference": None,
+            "je_id": None,
+            "je_id_vat": None,
+            "je_posted": False,
+            "post_date": post_date,
+            "invoice_number": body.invoice_number,
+            "vendor_name": body.vendor_name,
+            "decision": body.decision,
+            "risk_score": body.risk_score,
+            "vat_treatment": body.vat_treatment,
+            "je_lines": je_lines,
+            "workspace_id": ws_id,
+            "purchase_invoice_id": purchase_invoice_id,
+            "vat_return_entry_id": vat_entry_id,
+            "period_id": period_row.id if period_row else None,
+            "error": gl_error or "journal_entry_not_created",
+            "message": (
+                f"Invoice {body.invoice_number} was NOT posted to UAE GL. "
+                f"{gl_error or 'Journal entry create failed.'}"
+            ),
+        }
 
     return {
         "ok": True,
@@ -531,7 +640,7 @@ def post_invoice_to_gl_and_tax(
         "je_reference": je_ref,
         "je_id": je_id,
         "je_id_vat": je_id_vat,
-        "je_posted": je_posted,
+        "je_posted": True,
         "post_date": post_date,
         "invoice_number": body.invoice_number,
         "vendor_name": body.vendor_name,
