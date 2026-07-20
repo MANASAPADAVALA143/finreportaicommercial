@@ -5,14 +5,22 @@ _client: Client | None = None
 
 
 def get_supabase() -> Client:
-    """Lazy Supabase client so the API can boot locally without Supabase configured."""
+    """Lazy Supabase client so the API can boot locally without Supabase configured.
+
+    Prefers SUPABASE_SERVICE_ROLE_KEY so backend inserts (e.g. gulftax_transactions)
+    are not blocked by RLS when SUPABASE_KEY is the anon key.
+    """
     global _client
     if _client is None:
         url = (settings.SUPABASE_URL or "").strip()
-        key = (settings.SUPABASE_KEY or "").strip()
+        key = (
+            (settings.SUPABASE_SERVICE_ROLE_KEY or "").strip()
+            or (settings.SUPABASE_KEY or "").strip()
+        )
         if not url or not key:
             raise RuntimeError(
-                "Supabase is not configured. Set SUPABASE_URL and SUPABASE_KEY in backend/.env "
+                "Supabase is not configured. Set SUPABASE_URL and "
+                "SUPABASE_SERVICE_ROLE_KEY (preferred) or SUPABASE_KEY in backend/.env "
                 "(auth routes only; R2R/IFRS/TB work without it)."
             )
         _client = create_client(url, key)

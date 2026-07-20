@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # Supabase (optional for local; auth routes need real values)
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
+    # Prefer service role for backend writes (bypasses RLS). Falls back to SUPABASE_KEY.
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     # Security — change in production
     SECRET_KEY: str = "dev-local-secret-key-replace-in-production-min-32-chars"
