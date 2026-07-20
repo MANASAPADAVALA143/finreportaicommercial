@@ -12,7 +12,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -253,14 +253,17 @@ def vat_return_boxes(
 def vat_return_all_boxes(
     company_id: str = Query(..., description="Company ID (tenant on invoices)"),
     period: str = Query(...),
+    workspace_id: Optional[str] = Query(None, description="FinReportAI workspace ID"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     """FTA VAT return — boxes 1–12 (sales + purchases)."""
     from app.modules.gulftax.vat_return_service import fetch_all_vat_return_boxes
 
+    ws = (workspace_id or x_workspace_id or "").strip() or company_id
     return fetch_all_vat_return_boxes(
         db,
-        workspace_id=company_id,
+        workspace_id=ws,
         company_id=company_id,
         period=period,
     )

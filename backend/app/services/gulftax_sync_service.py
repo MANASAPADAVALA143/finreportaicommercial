@@ -243,7 +243,10 @@ def sync_approved_invoice_to_gulftax(
         from app.core.supabase import get_supabase
 
         sb = get_supabase()
-        res = sb.table("gulftax_transactions").insert(row).execute()
+        # Supabase schema (024) uses workspace_id TEXT — not tenant_id.
+        # Drop RDS-only keys; keep optional DZ columns (039 migration adds them).
+        supabase_row = {k: v for k, v in row.items() if k != "tenant_id"}
+        res = sb.table("gulftax_transactions").insert(supabase_row).execute()
         inserted = (res.data or [None])[0]
         return {
             "ok": True,
@@ -253,8 +256,49 @@ def sync_approved_invoice_to_gulftax(
             "company_id": company_id,
         }
     except Exception as exc:
+        err = str(exc)
+        # Retry without advanced-VAT columns if schema is pre-039.
+        if "designated_zone" in err or "PGRST204" in err or "Could not find" in err:
+            try:
+                from app.core.supabase import get_supabase
+
+                sb = get_supabase()
+                core = {
+                    k: row[k]
+                    for k in (
+                        "source",
+                        "ap_invoice_id",
+                        "company_id",
+                        "workspace_id",
+                        "tax_period",
+                        "transaction_date",
+                        "vendor_name",
+                        "vendor_trn",
+                        "invoice_number",
+                        "gross_amount",
+                        "vat_amount",
+                        "vat_category",
+                        "fta_box",
+                        "direction",
+                        "status",
+                    )
+                    if k in row
+                }
+                res = sb.table("gulftax_transactions").insert(core).execute()
+                inserted = (res.data or [None])[0]
+                return {
+                    "ok": True,
+                    "transaction_id": inserted.get("id") if inserted else None,
+                    "tax_period": row["tax_period"],
+                    "fta_box": row["fta_box"],
+                    "company_id": company_id,
+                    "note": "inserted_without_dz_columns",
+                }
+            except Exception as exc2:
+                logger.exception("gulftax sync failed for invoice %s (retry)", invoice_id)
+                return {"ok": False, "error": str(exc2)}
         logger.exception("gulftax sync failed for invoice %s", invoice_id)
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": err}
 
 
 def list_transactions(

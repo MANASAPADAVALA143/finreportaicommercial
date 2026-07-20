@@ -378,17 +378,37 @@ def _aggregate_rds_gulftax_transactions(
     company_id: str,
     tax_period: str,
 ) -> dict[str, Any]:
-    rows = (
-        db.query(GulftaxTransaction)
-        .filter(
-            GulftaxTransaction.tenant_id == tenant_id,
-            GulftaxTransaction.company_id == company_id,
-            GulftaxTransaction.tax_period == tax_period,
-            GulftaxTransaction.status == "posted",
-        )
-        .order_by(GulftaxTransaction.transaction_date.desc())
-        .all()
+    # Prefer company_id + tax_period. tenant_id is best-effort: historical rows may
+    # stamp workspace_id (sometimes 37 chars) while the VAT Return route used to
+    # pass company_id as tenant — requiring both exact-match missed all AP rows.
+    from sqlalchemy import or_
+
+    q = db.query(GulftaxTransaction).filter(
+        GulftaxTransaction.company_id == company_id,
+        GulftaxTransaction.tax_period == tax_period,
+        GulftaxTransaction.status == "posted",
     )
+    if tenant_id:
+        q = q.filter(
+            or_(
+                GulftaxTransaction.tenant_id == tenant_id,
+                GulftaxTransaction.tenant_id == company_id,
+                GulftaxTransaction.tenant_id.is_(None),
+            )
+        )
+    rows = q.order_by(GulftaxTransaction.transaction_date.desc()).all()
+    # If tenant filter wiped rows that exist for this company+period, fall back.
+    if not rows and tenant_id:
+        rows = (
+            db.query(GulftaxTransaction)
+            .filter(
+                GulftaxTransaction.company_id == company_id,
+                GulftaxTransaction.tax_period == tax_period,
+                GulftaxTransaction.status == "posted",
+            )
+            .order_by(GulftaxTransaction.transaction_date.desc())
+            .all()
+        )
 
     boxes: dict[str, float] = {
         "box1_standard_rated_sales_net": 0.0,

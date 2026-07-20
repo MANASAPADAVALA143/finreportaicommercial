@@ -302,6 +302,12 @@ DDL = [
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(16) DEFAULT 'goods'",
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_supplier_location VARCHAR(64)",
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_customer_location VARCHAR(64)",
+    # Legacy workspace_ids can be 37 chars — UUID(36) blocked AP→GulfTax sync.
+    "ALTER TABLE gulftax_transactions ALTER COLUMN tenant_id TYPE VARCHAR(64)",
+    "ALTER TABLE vat_return_entries ALTER COLUMN tenant_id TYPE VARCHAR(64)",
+    "ALTER TABLE partial_exemption_calculations ALTER COLUMN tenant_id TYPE VARCHAR(64)",
+    "ALTER TABLE bad_debt_relief_claims ALTER COLUMN tenant_id TYPE VARCHAR(64)",
+    "ALTER TABLE company_config ALTER COLUMN tenant_id TYPE VARCHAR(64)",
     "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
     "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
   # gulftax_ct_returns — UAE CT return workflow on RDS (separate from ported ct_returns)

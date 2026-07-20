@@ -158,7 +158,7 @@ class ApCompanyConfig(Base):
     __tablename__ = "company_config"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     config = Column(_json, nullable=False, default=dict)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -170,7 +170,8 @@ class GulftaxTransaction(Base):
     __tablename__ = "gulftax_transactions"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    # VARCHAR(64): some workspace_ids exceed UUID-36 (legacy 37-char ids).
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     source = Column(String(32), default="ap_invoiceflow")
     ap_invoice_id = Column(String(36), nullable=True, index=True)
@@ -196,7 +197,7 @@ class VatReturnEntry(Base):
     __tablename__ = "vat_return_entries"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     period = Column(String(16), nullable=False)
     source = Column(String(32), nullable=True)
@@ -213,7 +214,7 @@ class PartialExemptionCalculation(Base):
     __tablename__ = "partial_exemption_calculations"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     period = Column(String(16), nullable=False)
     period_type = Column(String(16), default="quarterly")
@@ -233,7 +234,7 @@ class BadDebtReliefClaim(Base):
     __tablename__ = "bad_debt_relief_claims"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     invoice_number = Column(String(128), nullable=False)
     invoice_date = Column(Date, nullable=False)
