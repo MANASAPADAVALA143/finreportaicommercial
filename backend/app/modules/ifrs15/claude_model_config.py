@@ -1,5 +1,5 @@
 """Shared Anthropic Claude model ID — override via ANTHROPIC_MODEL in .env."""
 
-import os
+from app.core.claude_model import DEFAULT_CLAUDE_MODEL
 
-CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
+CLAUDE_MODEL = DEFAULT_CLAUDE_MODEL

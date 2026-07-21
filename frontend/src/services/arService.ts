@@ -174,6 +174,45 @@ export const createARInvoice = (body: CreateInvoicePayload) =>
     body,
   );
 
+export interface ARBulkImportResult {
+  total_rows: number;
+  imported: number;
+  posted: number;
+  flagged_review: number;
+  skipped_hard_block: Array<{ row: number; customer: string; reason: string }>;
+  skipped_errors: Array<{ row: number; error: string }>;
+  column_map?: Record<string, string | null>;
+}
+
+export async function bulkImportARInvoices(
+  file: File,
+  company_id: string,
+  workspace_id?: string,
+): Promise<ARBulkImportResult> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('company_id', company_id);
+  if (workspace_id) form.append('workspace_id', workspace_id);
+
+  const res = await fetch(`${BASE}/bulk-import`, {
+    method: 'POST',
+    headers: workspaceHeaders(getStoredAccessToken()),
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export const approveAndPostARInvoice = (invoice_id: string, company_id?: string) =>
   post<{
     ok: boolean;

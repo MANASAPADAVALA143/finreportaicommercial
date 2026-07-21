@@ -1,13 +1,13 @@
 /**
  * Sales Invoices (AR) — create, send, record payment, aging
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { format, addDays, parseISO, startOfWeek, endOfWeek, isWithinInterval, startOfMonth } from 'date-fns';
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus,
+  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus, Upload,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
@@ -106,6 +106,9 @@ export default function ARInvoices() {
   const [predictions, setPredictions] = useState<Record<string, arSvc.PaymentPrediction>>({});
   const [aspByInvoiceId, setAspByInvoiceId] = useState<Record<string, AspSubmission>>({});
   const [aspSubmittingId, setAspSubmittingId] = useState<string | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResults, setBulkResults] = useState<arSvc.ARBulkImportResult | null>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement>(null);
 
   const loadCreditNotes = useCallback(async () => {
     if (!companyId) return;
@@ -259,6 +262,43 @@ export default function ARInvoices() {
       toast.error(e instanceof Error ? e.message : 'Create failed');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleBulkFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!companyId) {
+      toast.error('Select a company first');
+      return;
+    }
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith('.xlsx') && !lower.endsWith('.xls') && !lower.endsWith('.csv')) {
+      toast.error('Please upload an Excel (.xlsx, .xls) or CSV file');
+      return;
+    }
+    setBulkUploading(true);
+    try {
+      const res = await arSvc.bulkImportARInvoices(file, companyId, workspaceId ?? undefined);
+      setBulkResults(res);
+      const skipped = res.skipped_hard_block.length + res.skipped_errors.length;
+      if (res.imported === 0) {
+        toast.error(
+          skipped > 0
+            ? `No invoices imported — ${skipped} row(s) skipped. See details below.`
+            : 'No invoices were imported.',
+        );
+      } else {
+        toast.success(
+          `Imported ${res.imported} invoice(s)${skipped > 0 ? ` — ${skipped} row(s) skipped` : ''}`,
+        );
+      }
+      void load();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Bulk import failed');
+    } finally {
+      setBulkUploading(false);
+      if (bulkFileInputRef.current) bulkFileInputRef.current.value = '';
     }
   };
 
@@ -464,12 +504,88 @@ export default function ARInvoices() {
           >
             <Plus size={14} /> New Invoice
           </button>
+          <input
+            ref={bulkFileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={e => void handleBulkFileSelect(e)}
+          />
+          <button
+            type="button"
+            disabled={bulkUploading || !companyId}
+            onClick={() => bulkFileInputRef.current?.click()}
+            className="flex items-center gap-2 bg-teal-800 hover:bg-teal-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            <Upload size={14} /> {bulkUploading ? 'Importing…' : 'Import Excel'}
+          </button>
         </div>
       </div>
 
       {matchSummary && (
         <div className="mb-4 text-sm bg-blue-950/40 border border-blue-800 rounded-lg px-4 py-2 text-blue-200">
           {matchSummary}
+        </div>
+      )}
+
+      {bulkResults && (
+        <div className="mb-4 bg-gray-800/80 border border-gray-700 rounded-xl p-4 text-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-white">Bulk Import Results</h3>
+            <button
+              type="button"
+              onClick={() => setBulkResults(null)}
+              className="text-gray-400 hover:text-white text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div className="bg-gray-900/60 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-400">Total rows</p>
+              <p className="text-lg font-semibold text-white">{bulkResults.total_rows}</p>
+            </div>
+            <div className="bg-green-950/40 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-400">Imported</p>
+              <p className="text-lg font-semibold text-green-400">{bulkResults.imported}</p>
+            </div>
+            <div className="bg-blue-950/40 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-400">Posted</p>
+              <p className="text-lg font-semibold text-blue-400">{bulkResults.posted}</p>
+            </div>
+            <div className="bg-amber-950/40 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-400">Flagged for review</p>
+              <p className="text-lg font-semibold text-amber-400">{bulkResults.flagged_review}</p>
+            </div>
+          </div>
+          {bulkResults.skipped_hard_block.length > 0 && (
+            <details className="mb-3" open>
+              <summary className="cursor-pointer text-red-400 font-medium mb-2">
+                Skipped — VAT HARD_BLOCK ({bulkResults.skipped_hard_block.length}) — not created
+              </summary>
+              <ul className="space-y-1 text-gray-300 text-xs max-h-40 overflow-y-auto">
+                {bulkResults.skipped_hard_block.map((s, i) => (
+                  <li key={i} className="border-l-2 border-red-700 pl-2">
+                    Row {s.row}: <span className="text-white">{s.customer}</span> — {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {bulkResults.skipped_errors.length > 0 && (
+            <details open>
+              <summary className="cursor-pointer text-amber-400 font-medium mb-2">
+                Skipped — validation errors ({bulkResults.skipped_errors.length})
+              </summary>
+              <ul className="space-y-1 text-gray-300 text-xs max-h-40 overflow-y-auto">
+                {bulkResults.skipped_errors.map((s, i) => (
+                  <li key={i} className="border-l-2 border-amber-700 pl-2">
+                    Row {s.row}: {s.error}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 

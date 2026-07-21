@@ -11,7 +11,7 @@ from app.models.client_data import ApCompany
 
 logger = logging.getLogger(__name__)
 
-_INVALID_COMPANY_IDS = frozenset({"", "default", "null", "none"}
+_INVALID_COMPANY_IDS = frozenset({"", "default", "null", "none"})
 
 
 def _resolve_uae_profile_to_ap_company(

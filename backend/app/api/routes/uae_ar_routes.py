@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -32,6 +32,13 @@ from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_ta
 from app.services.ar_classify_service import (
     apply_classification_to_invoice,
     classify_ar_invoice_sync,
+)
+from app.services.ar_bulk_import_service import run_ar_bulk_import
+from app.services.ar_sales_invoice_service import (
+    ARLineItemInput,
+    create_ar_invoice_with_classify,
+    get_or_create_customer,
+    next_invoice_number,
 )
 from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
@@ -80,34 +87,58 @@ def _recalc_credit(db: Session, ws: str, company_id: str | None, customer_name: 
 def _get_or_create_customer(
     db: Session, tenant_id: str, name: str, trn: str | None = None,
 ) -> UAECustomer:
-    cust = (
-        db.query(UAECustomer)
-        .filter(UAECustomer.tenant_id == tenant_id, UAECustomer.name == name)
-        .first()
-    )
-    if cust:
-        if trn and not cust.trn:
-            cust.trn = trn
-            db.add(cust)
-        return cust
-    cust = UAECustomer(
-        id=str(uuid.uuid4()),
-        tenant_id=tenant_id,
-        name=name,
-        trn=trn,
-    )
-    db.add(cust)
-    db.flush()
-    return cust
+    return get_or_create_customer(db, tenant_id, name, trn)
 
 
 def _next_invoice_number(db: Session, tenant_id: str, company_id: str | None) -> str:
-    year = datetime.utcnow().year
-    q = db.query(UAESalesInvoice).filter(UAESalesInvoice.tenant_id == tenant_id)
-    if company_id:
-        q = q.filter(UAESalesInvoice.company_id == company_id)
-    count = q.count()
-    return f"INV-{year}-{count + 1:04d}"
+    return next_invoice_number(db, tenant_id, company_id)
+
+
+def _result_to_create_response(result) -> dict[str, Any]:
+    """Map CreateARInvoiceResult to create-invoice API response."""
+    if result.skipped_hard_block:
+        return {
+            "invoice_id": None,
+            "invoice_number": result.invoice_number,
+            "subtotal": result.subtotal,
+            "vat_amount": result.vat_amount,
+            "total": result.total,
+            "status": "skipped",
+            "posted": False,
+            "needs_manual_review": True,
+            "je_id": None,
+            "je_reference": None,
+            "gulftax": None,
+            "gulftax_decision": result.gulftax_decision,
+            "gulftax_reasoning": result.gulftax_reasoning,
+            "flag_for_review": True,
+            "vat_treatment": result.vat_treatment,
+            "gulftax_risk_score": result.gulftax_risk_score,
+            "gulftax_confidence": result.gulftax_confidence,
+            "trn_valid": result.trn_valid,
+            "message": result.message,
+        }
+    return {
+        "invoice_id": result.invoice_id,
+        "invoice_number": result.invoice_number,
+        "subtotal": result.subtotal,
+        "vat_amount": result.vat_amount,
+        "total": result.total,
+        "status": result.status,
+        "posted": result.posted,
+        "needs_manual_review": result.needs_manual_review,
+        "je_id": result.je_id,
+        "je_reference": result.je_reference,
+        "gulftax": result.gulftax,
+        "gulftax_decision": result.gulftax_decision,
+        "gulftax_reasoning": result.gulftax_reasoning,
+        "flag_for_review": result.flag_for_review,
+        "vat_treatment": result.vat_treatment,
+        "gulftax_risk_score": result.gulftax_risk_score,
+        "gulftax_confidence": result.gulftax_confidence,
+        "trn_valid": result.trn_valid,
+        "message": result.message,
+    }
 
 
 def _flag_overdue(inv: UAESalesInvoice, today: date, db: Session) -> bool:
@@ -451,140 +482,75 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
     if not body.line_items:
         raise HTTPException(status_code=400, detail="At least one line item required")
 
-    customer = _get_or_create_customer(db, ws, body.customer_name.strip(), body.customer_trn)
-    inv_date = date.fromisoformat(body.invoice_date)
-    due_date = date.fromisoformat(body.due_date)
-
-    subtotal = sum(li.qty * li.unit_price for li in body.line_items)
-    vat_amount = sum(li.qty * li.unit_price * li.vat_rate / 100 for li in body.line_items)
-    total = subtotal + vat_amount
-    invoice_number = _next_invoice_number(db, ws, cid)
-
-    inv = UAESalesInvoice(
-        id=str(uuid.uuid4()),
-        tenant_id=ws,
-        company_id=cid,
-        invoice_number=invoice_number,
-        customer_id=customer.id,
-        invoice_date=inv_date,
-        due_date=due_date,
-        period=inv_date.strftime("%Y-%m"),
-        subtotal=subtotal,
-        vat_amount=vat_amount,
-        total_amount=total,
-        paid_amount=0,
-        outstanding=total,
-        status="draft",
-        buyer_trn=body.customer_trn,
-    )
-    db.add(inv)
-    db.flush()
-
-    for li in body.line_items:
-        line_sub = li.qty * li.unit_price
-        line_vat = line_sub * li.vat_rate / 100
-        db.add(UAESalesInvoiceLine(
-            id=str(uuid.uuid4()),
-            invoice_id=inv.id,
+    line_items = [
+        ARLineItemInput(
             description=li.description,
-            quantity=li.qty,
+            qty=li.qty,
             unit_price=li.unit_price,
             vat_rate=li.vat_rate,
-            vat_amount=line_vat,
-            line_total=line_sub + line_vat,
-        ))
-    db.flush()
-
-    # GulfTax classify (sale) BEFORE GL post
-    primary_desc = next(
-        (li.description for li in body.line_items if li.description),
-        f"AR Sales Invoice to {body.customer_name.strip()}",
-    )
-    clf = classify_ar_invoice_sync(
-        invoice_number=invoice_number,
-        customer_name=body.customer_name.strip(),
-        total_amount=float(total),
-        invoice_date=body.invoice_date,
-        description=primary_desc,
-        buyer_trn=body.customer_trn,
-        company_id=cid or "default",
-    )
-    apply_classification_to_invoice(inv, clf)
-    db.add(inv)
-    db.flush()
-
-    decision = str(clf.get("decision") or "AUTO_APPROVE")
-
-    if decision == "HARD_BLOCK":
-        inv.status = "draft"
-        inv.flag_for_review = True
-        db.add(inv)
-        _recalc_credit(db, ws, cid, body.customer_name.strip())
-        db.commit()
-        db.refresh(inv)
-        return {
-            "invoice_id": inv.id,
-            "invoice_number": invoice_number,
-            "subtotal": round(subtotal, 2),
-            "vat_amount": round(vat_amount, 2),
-            "total": round(total, 2),
-            "status": inv.status,
-            "posted": False,
-            "needs_manual_review": True,
-            "je_id": None,
-            "je_reference": None,
-            "gulftax": None,
-            "gulftax_decision": decision,
-            "gulftax_reasoning": clf.get("reasoning"),
-            "flag_for_review": True,
-            "vat_treatment": clf.get("vat_treatment"),
-            "gulftax_risk_score": clf.get("risk_score"),
-            "gulftax_confidence": clf.get("confidence_score"),
-            "trn_valid": clf.get("trn_valid"),
-            "message": (
-                "Invoice saved as draft and NOT posted — GulfTax HARD_BLOCK. "
-                "Resolve VAT/TRN issues, then use Approve & Post."
-            ),
-        }
-
-    post_result = post_sales_invoice_to_gl_and_tax(
-        inv.id,
+        )
+        for li in body.line_items
+    ]
+    result = create_ar_invoice_with_classify(
+        db,
         tenant_id=ws,
         company_id=cid,
-        db=db,
+        customer_name=body.customer_name.strip(),
+        customer_trn=body.customer_trn,
+        invoice_date=date.fromisoformat(body.invoice_date),
+        due_date=date.fromisoformat(body.due_date),
+        line_items=line_items,
+        skip_on_hard_block=False,
+        commit=True,
     )
-    if not post_result.get("ok"):
-        db.rollback()
-        err = post_result.get("error", "post_failed")
+    if not result.success and not result.skipped_hard_block:
+        err = result.error or "create_failed"
         if "period" in str(err).lower():
             raise HTTPException(status_code=422, detail=err) from None
         raise HTTPException(status_code=400, detail=err)
+    return _result_to_create_response(result)
 
-    _recalc_credit(db, ws, cid, body.customer_name.strip())
-    db.commit()
-    db.refresh(inv)
 
-    return {
-        "invoice_id": inv.id,
-        "invoice_number": invoice_number,
-        "subtotal": round(subtotal, 2),
-        "vat_amount": round(vat_amount, 2),
-        "total": round(total, 2),
-        "status": inv.status,
-        "posted": True,
-        "needs_manual_review": bool(inv.flag_for_review),
-        "je_id": post_result.get("je_id"),
-        "je_reference": post_result.get("je_reference"),
-        "gulftax": post_result.get("gulftax"),
-        "gulftax_decision": inv.gulftax_decision,
-        "gulftax_reasoning": inv.gulftax_reasoning,
-        "flag_for_review": bool(inv.flag_for_review),
-        "vat_treatment": inv.vat_treatment,
-        "gulftax_risk_score": _f(inv.gulftax_risk_score) if inv.gulftax_risk_score is not None else None,
-        "gulftax_confidence": _f(inv.gulftax_confidence) if inv.gulftax_confidence is not None else None,
-        "trn_valid": inv.trn_valid,
-        "message": None,
-    }
+@router.post("/bulk-import", summary="Bulk import AR sales invoices from Excel/CSV")
+async def bulk_import_ar_invoices(
+    request: Request,
+    file: UploadFile = File(...),
+    company_id: Optional[str] = Form(None),
+    workspace_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id is required")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    lower = file.filename.lower()
+    if not lower.endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Upload .xlsx, .xls, or .csv",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        return run_ar_bulk_import(
+            db,
+            content=content,
+            filename=file.filename,
+            tenant_id=ws,
+            company_id=cid,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AR bulk import failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Bulk import failed: {exc}") from exc
 
 
 @router.post("/send-invoice")
