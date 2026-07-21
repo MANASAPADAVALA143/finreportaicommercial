@@ -107,7 +107,7 @@ export function MyApprovals() {
     if (action === 'approved') {
       if (res.fully_approved) {
         const gl = res.gl_post;
-        if (gl?.ok && gl?.je_posted && gl?.je_id) || (gl?.skipped && gl?.je_posted) {
+        if ((gl?.ok && gl?.je_posted && gl?.je_id) || (gl?.skipped && gl?.je_posted)) {
           toast({
             title: gl.skipped ? 'Approved — already in GL' : 'Approved — journal entry posted to GL',
             description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
