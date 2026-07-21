@@ -77,6 +77,13 @@ export interface ARInvoice {
   paid_date?: string | null;
   payment_reference?: string | null;
   line_items: ARLineItem[];
+  vat_treatment?: string | null;
+  gulftax_decision?: 'AUTO_APPROVE' | 'REVIEW_QUEUE' | 'HARD_BLOCK' | string | null;
+  gulftax_risk_score?: number | null;
+  gulftax_confidence?: number | null;
+  trn_valid?: boolean | null;
+  flag_for_review?: boolean;
+  gulftax_reasoning?: string | null;
 }
 
 export interface ARCustomerRiskRow {
@@ -142,7 +149,27 @@ export const getARCustomerRisk = (risk_tier?: string) =>
   }>('/customer-risk', risk_tier ? { risk_tier } : undefined);
 
 export const createARInvoice = (body: CreateInvoicePayload) =>
-  post<{ invoice_id: string; invoice_number: string; subtotal: number; vat_amount: number; total: number; status: string; je_id: string; je_reference?: string }>(
+  post<{
+    invoice_id: string;
+    invoice_number: string;
+    subtotal: number;
+    vat_amount: number;
+    total: number;
+    status: string;
+    posted?: boolean;
+    needs_manual_review?: boolean;
+    je_id?: string | null;
+    je_reference?: string | null;
+    gulftax?: Record<string, unknown> | null;
+    gulftax_decision?: string | null;
+    gulftax_reasoning?: string | null;
+    flag_for_review?: boolean;
+    vat_treatment?: string | null;
+    gulftax_risk_score?: number | null;
+    gulftax_confidence?: number | null;
+    trn_valid?: boolean | null;
+    message?: string | null;
+  }>(
     '/create-invoice',
     body,
   );

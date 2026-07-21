@@ -8,7 +8,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.uae_accounting_full import UAESalesInvoice, UAESalesInvoiceLine
+from app.models.uae_accounting_full import UAECustomer, UAESalesInvoice, UAESalesInvoiceLine
+from app.services.ar_classify_service import classify_and_store_sales_invoice
 
 
 def _f(v: Any) -> float:
@@ -41,7 +42,11 @@ def create_draft_sales_invoice(
     buyer_trn: str | None = None,
     recurring_template_id: str | None = None,
 ) -> UAESalesInvoice:
-    """Create a draft sales invoice with one line item — mirrors create-invoice without GL post."""
+    """Create a draft sales invoice with one line item — mirrors create-invoice without GL post.
+
+    Runs GulfTax sale-direction classify after the draft is written and stores
+    the result on the invoice. Does not post to GL (caller decides).
+    """
     subtotal = round(amount, 2)
     vat_amount = round(subtotal * vat_rate / 100, 2)
     total = round(subtotal + vat_amount, 2)
@@ -81,4 +86,20 @@ def create_draft_sales_invoice(
         )
     )
     db.flush()
+
+    cust = db.query(UAECustomer).filter_by(id=customer_id).first()
+    customer_name = cust.name if cust else "Customer"
+    clf = classify_and_store_sales_invoice(
+        db,
+        inv,
+        customer_name=customer_name,
+        description=description,
+    )
+    # HARD_BLOCK drafts stay draft for manual review (recurring never auto-posts here)
+    if clf.get("decision") == "HARD_BLOCK":
+        inv.flag_for_review = True
+        inv.status = "draft"
+        db.add(inv)
+        db.flush()
+
     return inv

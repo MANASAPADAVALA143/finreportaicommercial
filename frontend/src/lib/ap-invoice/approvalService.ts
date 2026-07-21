@@ -88,7 +88,10 @@ async function finalizeInvoiceApproval(
     const { postApprovedInvoiceToGL } = await import('./glPostService');
     gl_post = await postApprovedInvoiceToGL(invoice, cid);
   } catch (e) {
-    console.warn('[AP] GL/GulfTax post after full approval failed:', e);
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[AP] GL/GulfTax post after full approval failed:', message);
+    // Do not swallow — UI must show approval succeeded but JE did not post.
+    gl_post = { ok: false, je_posted: false, message };
   }
 
   void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');

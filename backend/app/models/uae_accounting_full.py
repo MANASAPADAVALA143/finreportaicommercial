@@ -140,6 +140,14 @@ class UAESalesInvoice(Base):
     seller_trn      = Column(String(20))
     buyer_trn       = Column(String(20))
     supply_type     = Column(String(30), default="standard")  # standard/zero-rated/exempt
+    # GulfTax classify-on-create (additive — supply_type kept for AR→GulfTax sync)
+    vat_treatment       = Column(String(64), nullable=True)
+    gulftax_decision    = Column(String(32), nullable=True)  # AUTO_APPROVE | REVIEW_QUEUE | HARD_BLOCK
+    gulftax_risk_score  = Column(Numeric(8, 2), nullable=True)
+    gulftax_confidence  = Column(Numeric(8, 4), nullable=True)
+    trn_valid           = Column(Boolean, nullable=True)
+    flag_for_review     = Column(Boolean, default=False)
+    gulftax_reasoning   = Column(Text, nullable=True)
     journal_entry_id = Column(String(36), ForeignKey("uae_journal_entries.id"), nullable=True)
     notes           = Column(Text)
     sent_at         = Column(DateTime, nullable=True)

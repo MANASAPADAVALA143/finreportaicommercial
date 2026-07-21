@@ -30,6 +30,20 @@ const STATUS_STYLE: Record<string, string> = {
   overdue: 'bg-red-900/40 text-red-400 border-red-700',
 };
 
+const GULFTAX_DECISION_STYLE: Record<string, string> = {
+  AUTO_APPROVE: 'bg-green-900/50 text-green-300 border-green-700',
+  REVIEW_QUEUE: 'bg-amber-900/50 text-amber-300 border-amber-700',
+  HARD_BLOCK: 'bg-red-900/50 text-red-300 border-red-700',
+};
+
+function gulfTaxDecisionLabel(d: string | null | undefined): string | null {
+  if (!d) return null;
+  if (d === 'AUTO_APPROVE') return 'VAT OK';
+  if (d === 'REVIEW_QUEUE') return 'VAT Review';
+  if (d === 'HARD_BLOCK') return 'VAT Blocked';
+  return d;
+}
+
 const TABS = ['all', 'draft', 'sent', 'overdue', 'paid'] as const;
 type Tab = (typeof TABS)[number];
 type PageView = 'invoices' | 'credit-notes';
@@ -222,7 +236,22 @@ export default function ARInvoices() {
         company_id: companyId,
         workspace_id: workspaceId,
       });
-      toast.success(`Invoice ${res.invoice_number} created`);
+      const decision = res.gulftax_decision;
+      const reasoning = res.gulftax_reasoning || res.message || '';
+
+      if (decision === 'HARD_BLOCK' || res.posted === false) {
+        toast.error(
+          `Invoice ${res.invoice_number} saved as draft — NOT posted (HARD_BLOCK). ${reasoning}`,
+          { duration: 8000 },
+        );
+      } else if (decision === 'REVIEW_QUEUE' || res.flag_for_review || res.needs_manual_review) {
+        toast(
+          `Invoice ${res.invoice_number} posted — flagged for VAT review. ${reasoning}`,
+          { icon: '⚠️', duration: 6000 },
+        );
+      } else {
+        toast.success(`Invoice ${res.invoice_number} created`);
+      }
       setShowNew(false);
       setCustName(''); setCustTrn(''); setLines([emptyLine()]);
       void load();
@@ -571,15 +600,30 @@ export default function ARInvoices() {
                     })()}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`text-xs border px-2 py-0.5 rounded-full capitalize ${STATUS_STYLE[inv.status] ?? STATUS_STYLE.draft}`}>
-                      {inv.status}
-                    </span>
-                    {einvoicingBadge(inv)}
-                    {reviewInvoiceIds.has(inv.id) && (
-                      <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded">
-                        Review Match
+                    <div className="flex flex-wrap items-center justify-center gap-1">
+                      <span className={`text-xs border px-2 py-0.5 rounded-full capitalize ${STATUS_STYLE[inv.status] ?? STATUS_STYLE.draft}`}>
+                        {inv.status}
                       </span>
-                    )}
+                      {inv.gulftax_decision && gulfTaxDecisionLabel(inv.gulftax_decision) && (
+                        <span
+                          className={`text-[10px] border px-1.5 py-0.5 rounded ${GULFTAX_DECISION_STYLE[inv.gulftax_decision] ?? 'bg-gray-800 text-gray-300 border-gray-600'}`}
+                          title={inv.gulftax_reasoning ?? inv.vat_treatment ?? undefined}
+                        >
+                          {gulfTaxDecisionLabel(inv.gulftax_decision)}
+                        </span>
+                      )}
+                      {inv.flag_for_review && inv.gulftax_decision !== 'HARD_BLOCK' && inv.gulftax_decision !== 'REVIEW_QUEUE' && (
+                        <span className="text-[10px] bg-amber-900/60 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded">
+                          Review
+                        </span>
+                      )}
+                      {einvoicingBadge(inv)}
+                      {reviewInvoiceIds.has(inv.id) && (
+                        <span className="ml-1 text-[10px] bg-amber-900/60 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded">
+                          Review Match
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
@@ -784,6 +828,15 @@ export default function ARInvoices() {
             <Row label="Invoice Date" value={fmtDate(showDetail.invoice_date)} />
             <Row label="Due Date" value={fmtDate(showDetail.due_date)} />
             <Row label="Status" value={showDetail.status} />
+            {showDetail.gulftax_decision && (
+              <Row
+                label="VAT Decision"
+                value={`${gulfTaxDecisionLabel(showDetail.gulftax_decision) ?? showDetail.gulftax_decision}${showDetail.vat_treatment ? ` · ${showDetail.vat_treatment}` : ''}`}
+              />
+            )}
+            {showDetail.gulftax_reasoning && (
+              <Row label="VAT Notes" value={showDetail.gulftax_reasoning} />
+            )}
             <Row label="Total" value={fmtAED(showDetail.total)} />
             <Row label="Outstanding" value={fmtAED(showDetail.amount_due || showDetail.total)} />
             {showDetail.status !== 'draft' && (showDetail.amount_due || showDetail.total) > 0 && (

@@ -29,6 +29,10 @@ from app.services.notification_service import get_workspace_role_email, send_not
 from app.services.payment_prediction_service import predict_payments
 from app.services.credit_note_service import issue_credit_note, list_credit_notes, void_credit_note
 from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+from app.services.ar_classify_service import (
+    apply_classification_to_invoice,
+    classify_ar_invoice_sync,
+)
 from app.services.uae_journal_service import create_journal_entry
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
@@ -149,6 +153,13 @@ def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session, einvoicing_sta
         "sent_at": inv.sent_at.isoformat() if inv.sent_at else None,
         "paid_date": inv.paid_date.isoformat() if inv.paid_date else None,
         "payment_reference": inv.payment_reference,
+        "vat_treatment": inv.vat_treatment,
+        "gulftax_decision": inv.gulftax_decision,
+        "gulftax_risk_score": _f(inv.gulftax_risk_score) if inv.gulftax_risk_score is not None else None,
+        "gulftax_confidence": _f(inv.gulftax_confidence) if inv.gulftax_confidence is not None else None,
+        "trn_valid": inv.trn_valid,
+        "flag_for_review": bool(inv.flag_for_review),
+        "gulftax_reasoning": inv.gulftax_reasoning,
         "line_items": [
             {
                 "description": ln.description,
@@ -242,6 +253,18 @@ class CreateInvoiceIn(BaseModel):
     line_items: list[LineItemIn]
     company_id: str
     workspace_id: Optional[str] = None
+
+
+class ARClassifyRequest(BaseModel):
+    """Classify an AR sales invoice (sale direction) via embedded GulfTax."""
+    invoice_number: str = Field(..., description="Sales invoice number")
+    customer_name: str = Field(..., description="Buyer / customer name")
+    total_amount: float = Field(..., gt=0, description="Invoice total in AED")
+    invoice_date: str = Field(..., description="YYYY-MM-DD")
+    description: str = Field(default="", description="Line item description or notes")
+    entity_type: str = Field(default="mainland", description="mainland | free_zone | designated_zone")
+    buyer_trn: str = Field(default="", description="Customer TRN — empty allowed for B2C")
+    company_id: str = Field(default="default", description="Internal company identifier")
 
 
 class ApproveAndPostIn(BaseModel):
@@ -388,6 +411,25 @@ def ar_customer_risk(
     return filter_by_risk_tier(report, risk_tier)
 
 
+@router.post("/classify-invoice", summary="Classify AR sales invoice with GulfTax AI (sale direction)")
+def ar_classify_invoice(body: ARClassifyRequest) -> dict[str, Any]:
+    """
+    Pass an AR sales invoice through GulfTax AI (transaction_type=sale).
+    Returns VAT treatment, confidence, risk decision, and TRN validity.
+    Does not persist — callers store results on uae_sales_invoices.
+    """
+    return classify_ar_invoice_sync(
+        invoice_number=body.invoice_number,
+        customer_name=body.customer_name,
+        total_amount=body.total_amount,
+        invoice_date=body.invoice_date,
+        description=body.description,
+        buyer_trn=body.buyer_trn,
+        company_id=body.company_id,
+        entity_type=body.entity_type,
+    )
+
+
 @router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
 def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id)
@@ -453,6 +495,58 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
         ))
     db.flush()
 
+    # GulfTax classify (sale) BEFORE GL post
+    primary_desc = next(
+        (li.description for li in body.line_items if li.description),
+        f"AR Sales Invoice to {body.customer_name.strip()}",
+    )
+    clf = classify_ar_invoice_sync(
+        invoice_number=invoice_number,
+        customer_name=body.customer_name.strip(),
+        total_amount=float(total),
+        invoice_date=body.invoice_date,
+        description=primary_desc,
+        buyer_trn=body.customer_trn,
+        company_id=cid or "default",
+    )
+    apply_classification_to_invoice(inv, clf)
+    db.add(inv)
+    db.flush()
+
+    decision = str(clf.get("decision") or "AUTO_APPROVE")
+
+    if decision == "HARD_BLOCK":
+        inv.status = "draft"
+        inv.flag_for_review = True
+        db.add(inv)
+        _recalc_credit(db, ws, cid, body.customer_name.strip())
+        db.commit()
+        db.refresh(inv)
+        return {
+            "invoice_id": inv.id,
+            "invoice_number": invoice_number,
+            "subtotal": round(subtotal, 2),
+            "vat_amount": round(vat_amount, 2),
+            "total": round(total, 2),
+            "status": inv.status,
+            "posted": False,
+            "needs_manual_review": True,
+            "je_id": None,
+            "je_reference": None,
+            "gulftax": None,
+            "gulftax_decision": decision,
+            "gulftax_reasoning": clf.get("reasoning"),
+            "flag_for_review": True,
+            "vat_treatment": clf.get("vat_treatment"),
+            "gulftax_risk_score": clf.get("risk_score"),
+            "gulftax_confidence": clf.get("confidence_score"),
+            "trn_valid": clf.get("trn_valid"),
+            "message": (
+                "Invoice saved as draft and NOT posted — GulfTax HARD_BLOCK. "
+                "Resolve VAT/TRN issues, then use Approve & Post."
+            ),
+        }
+
     post_result = post_sales_invoice_to_gl_and_tax(
         inv.id,
         tenant_id=ws,
@@ -477,9 +571,19 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
         "vat_amount": round(vat_amount, 2),
         "total": round(total, 2),
         "status": inv.status,
+        "posted": True,
+        "needs_manual_review": bool(inv.flag_for_review),
         "je_id": post_result.get("je_id"),
         "je_reference": post_result.get("je_reference"),
         "gulftax": post_result.get("gulftax"),
+        "gulftax_decision": inv.gulftax_decision,
+        "gulftax_reasoning": inv.gulftax_reasoning,
+        "flag_for_review": bool(inv.flag_for_review),
+        "vat_treatment": inv.vat_treatment,
+        "gulftax_risk_score": _f(inv.gulftax_risk_score) if inv.gulftax_risk_score is not None else None,
+        "gulftax_confidence": _f(inv.gulftax_confidence) if inv.gulftax_confidence is not None else None,
+        "trn_valid": inv.trn_valid,
+        "message": None,
     }
 
 
@@ -491,6 +595,15 @@ def send_invoice(body: SendInvoiceIn, request: Request, db: Session = Depends(ge
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     if not inv.journal_entry_id and inv.status == "draft":
+        # Do not auto-post HARD_BLOCK drafts on send
+        if (inv.gulftax_decision or "") == "HARD_BLOCK":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invoice is HARD_BLOCKED by GulfTax and cannot be posted. "
+                    f"{inv.gulftax_reasoning or 'Resolve VAT/TRN issues first.'}"
+                ),
+            )
         post_result = post_sales_invoice_to_gl_and_tax(
             inv.id,
             tenant_id=ws,

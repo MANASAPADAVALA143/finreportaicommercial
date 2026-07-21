@@ -189,7 +189,7 @@ export function VendorRisk() {
                               : 'border-amber-700 text-amber-400'
                           }
                         >
-                          {v.bank_verification_status ?? 'unknown'}
+                          {v.bank_verification_status?.trim() || 'unknown'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-slate-300">
@@ -205,7 +205,7 @@ export function VendorRisk() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="border-slate-600 text-slate-200"
+                          className="border-slate-500 bg-slate-800 text-white hover:bg-slate-700 hover:text-white"
                           onClick={() => {
                             setDetailVendor(v);
                             setDetailOpen(true);
