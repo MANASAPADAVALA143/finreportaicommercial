@@ -2,12 +2,62 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.client_data import ApCompany
 
-_INVALID_COMPANY_IDS = frozenset({"", "default", "null", "none"})
+logger = logging.getLogger(__name__)
+
+_INVALID_COMPANY_IDS = frozenset({"", "default", "null", "none"}
+
+
+def _resolve_uae_profile_to_ap_company(
+    db: Session,
+    tenant_id: str,
+    profile_id: str,
+) -> str | None:
+    """Map uae_company_profiles.id (Company Setup UI) → ap_companies.id (GL/AP)."""
+    from app.models.company_setup import UaeCompanyProfile
+    from app.models.workspace import Workspace
+
+    profile = (
+        db.query(UaeCompanyProfile)
+        .filter(
+            UaeCompanyProfile.id == profile_id,
+            UaeCompanyProfile.workspace_id == tenant_id,
+        )
+        .first()
+    )
+    if not profile:
+        return None
+
+    rows = list_ap_companies(db, tenant_id)
+    if len(rows) == 1:
+        return rows[0].id
+
+    target = (profile.company_name or "").strip().lower()
+    for row in rows:
+        if (row.name or "").strip().lower() == target:
+            return row.id
+
+    ws = db.get(Workspace, tenant_id)
+    if ws:
+        try:
+            from app.services.ap_company_sync import sync_ap_company_for_workspace, upsert_ap_company_rds
+
+            supabase_co = sync_ap_company_for_workspace(ws)
+            if supabase_co:
+                ap_row = upsert_ap_company_rds(db, ws, supabase_co)
+                return ap_row.id
+        except Exception as exc:
+            logger.warning("AP company sync for profile %s failed: %s", profile_id, exc)
+
+    if rows:
+        return rows[0].id
+    return None
 
 
 def resolve_ap_company_id(
@@ -33,9 +83,15 @@ def resolve_ap_company_id(
             .first()
         )
         if not row:
+            mapped = _resolve_uae_profile_to_ap_company(db, tenant_id, cid)
+            if mapped:
+                return mapped
             raise HTTPException(
                 status_code=422,
-                detail=f"Unknown company_id '{cid}' — select a company from AP Company Setup.",
+                detail=(
+                    f"Unknown company_id '{cid}' — complete Company Setup and sync AP companies "
+                    f"(POST /api/workspaces/{{id}}/sync-ap-company), or pick a company from AP Company Setup."
+                ),
             )
         return row.id
 
