@@ -290,10 +290,8 @@ def compute_company_readiness(
     period_subs = _einvoicing_submissions_this_quarter(db, tenant_id, None)
     sub_count, accepted = _einvoicing_submission_counts(db, tenant_id, None)
 
-    trn_recorded = bool(
-        (getattr(profile, "trn", None) or "").strip()
-        or (getattr(company, "trn", None) or "").strip()
-    )
+    trn_recorded = bool((getattr(profile, "trn", None) or "").strip())
+    # Do not trust ported companies.trn — auto-provision often stamps a synthetic TRN.
     vat_registered = True
     if company is not None and hasattr(company, "vat_registered"):
         vat_registered = bool(company.vat_registered)
