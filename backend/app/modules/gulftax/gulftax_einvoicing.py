@@ -196,7 +196,8 @@ def readiness_request_from_company(
         ),
         master_data_clean=master,
         budget_confirmed=bool(settings.get("budget_confirmed")),
-        trn_recorded=trn_recorded or bool(trn),
+        # Caller-supplied trn_recorded wins (profile TRN only — ignore synthetic ported TRN)
+        trn_recorded=bool(trn_recorded),
         vat_registered=vat_reg,
         has_company_profile=has_company_profile,
         has_einvoice_submissions_period=has_einvoice_submissions_period
