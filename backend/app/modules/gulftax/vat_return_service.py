@@ -424,6 +424,8 @@ def _aggregate_rds_gulftax_transactions(
     }
     entries: list[dict[str, Any]] = []
     ap_count = 0
+    input_count = 0
+    output_count = 0
 
     for tx in rows:
         gross = float(tx.gross_amount or 0)
@@ -446,6 +448,10 @@ def _aggregate_rds_gulftax_transactions(
 
         if tx.source == "ap_invoiceflow":
             ap_count += 1
+        if direction == "input":
+            input_count += 1
+        else:
+            output_count += 1
 
         if tx.designated_zone and kind == "goods":
             supplier = tx.dz_supplier_location or "mainland"
@@ -476,6 +482,8 @@ def _aggregate_rds_gulftax_transactions(
 
     return {
         "entry_count": len(rows),
+        "input_count": input_count,
+        "output_count": output_count,
         "ap_invoiceflow_count": ap_count,
         "transaction_count": len(rows),
         "boxes": boxes,
@@ -580,29 +588,37 @@ def fetch_all_vat_return_boxes(
             }
             purchases = {
                 **purchases,
-                "entry_count": rds_agg["entry_count"],
+                # Purchase entry count = input-side gulftax rows (not AR output)
+                "entry_count": rds_agg.get("input_count", rds_agg["entry_count"]),
                 "box9_standard_rated_expenses": rb["box9_standard_rated_expenses"],
                 "box10_reverse_charge_imports": rb["box10_reverse_charge_expenses"],
                 "box11_recoverable_input_vat": rb["box11_recoverable_input_vat"],
             }
-            sales["box1_standard_rated_sales_net"] = round(
-                sales["box1_standard_rated_sales_net"] + rb["box1_standard_rated_sales_net"], 2
-            )
-            sales["box1_standard_rated_sales_vat"] = round(
-                sales["box1_standard_rated_sales_vat"] + rb["box1_standard_rated_sales_vat"], 2
-            )
-            sales["box3_reverse_charge_supplies_net"] = round(
-                sales["box3_reverse_charge_supplies_net"] + rb["box3_reverse_charge_supplies_net"], 2
-            )
-            sales["box3_reverse_charge_supplies_vat"] = round(
-                sales["box3_reverse_charge_supplies_vat"] + rb["box3_reverse_charge_supplies_vat"], 2
-            )
-            sales["box4_zero_rated_supplies"] = round(
-                sales["box4_zero_rated_supplies"] + rb["box4_zero_rated_supplies"], 2
-            )
-            sales["box6_imports_vat"] = round(
-                sales["box6_imports_vat"] + rb["box6_imports_vat"], 2
-            )
+            # Avoid double-counting AR: uae_sales_invoices is primary for sales boxes.
+            # Only fold gulftax OUTPUT onto sales when AR sales table contributed nothing.
+            if int(sales.get("sales_invoice_count") or 0) == 0:
+                sales["box1_standard_rated_sales_net"] = round(
+                    sales["box1_standard_rated_sales_net"] + rb["box1_standard_rated_sales_net"], 2
+                )
+                sales["box1_standard_rated_sales_vat"] = round(
+                    sales["box1_standard_rated_sales_vat"] + rb["box1_standard_rated_sales_vat"], 2
+                )
+                sales["box3_reverse_charge_supplies_net"] = round(
+                    sales["box3_reverse_charge_supplies_net"] + rb["box3_reverse_charge_supplies_net"], 2
+                )
+                sales["box3_reverse_charge_supplies_vat"] = round(
+                    sales["box3_reverse_charge_supplies_vat"] + rb["box3_reverse_charge_supplies_vat"], 2
+                )
+                sales["box4_zero_rated_supplies"] = round(
+                    sales["box4_zero_rated_supplies"] + rb["box4_zero_rated_supplies"], 2
+                )
+                sales["box6_imports_vat"] = round(
+                    sales["box6_imports_vat"] + rb["box6_imports_vat"], 2
+                )
+            else:
+                # Still pick up import VAT from gulftax DZ if sales path left it at 0
+                if not sales.get("box6_imports_vat") and rb.get("box6_imports_vat"):
+                    sales["box6_imports_vat"] = round(float(rb["box6_imports_vat"]), 2)
         else:
             try:
                 from app.services.gulftax_sync_service import aggregate_vat_return_summary, list_transactions
