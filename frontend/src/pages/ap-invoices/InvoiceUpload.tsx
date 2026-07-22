@@ -13,7 +13,7 @@ import { CurrencyCombobox } from '../../components/ap-invoice/CurrencyCombobox';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
 import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeWayMatchService';
-import { triggerGlPostForApprovedInvoice } from '../../lib/ap-invoice/glPostService';
+import { awaitGlPostAfterApproval, retryPendingGlPosts } from '../../lib/ap-invoice/glPostService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
 import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
@@ -255,6 +255,10 @@ export function InvoiceUpload() {
   };
 
   // Load the n8n (or other) API endpoint configured in Settings
+  useEffect(() => {
+    void retryPendingGlPosts();
+  }, []);
+
   useEffect(() => {
     const applyWebhookSettings = (apiEndpointVal: string, classifyVal: string) => {
       const envWebhook = import.meta.env.VITE_N8N_WEBHOOK_URL?.trim();
@@ -1150,7 +1154,9 @@ export function InvoiceUpload() {
         }
 
         if (initialStatus === 'Approved') {
-          triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+          await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+            toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+          );
         }
 
         // Create audit log
@@ -1820,7 +1826,9 @@ export function InvoiceUpload() {
           }
 
           if (initialStatus === 'Approved') {
-            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+            await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
           }
 
           // Create audit log
@@ -2252,7 +2260,9 @@ export function InvoiceUpload() {
           }
 
           if (initialStatus === 'Approved') {
-            triggerGlPostForApprovedInvoice(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyIdQ);
+            await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyIdQ, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
           }
 
           // Create audit log
@@ -2559,7 +2569,9 @@ export function InvoiceUpload() {
         .eq('id', newInvoice.id);
 
       if (totalAmount < 500 && companyId) {
-        triggerGlPostForApprovedInvoice(newInvoice as import('../../lib/ap-invoice/supabase').Invoice, companyId);
+        await awaitGlPostAfterApproval(newInvoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+          toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+        );
       }
 
       // STEP 6: Duplicate detection

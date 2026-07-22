@@ -66,6 +66,7 @@ import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
 import { runAutoMatch, markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
+import { retryPendingGlPosts } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
 import {
@@ -374,6 +375,7 @@ export function InvoiceList() {
   }
 
   useEffect(() => {
+    void retryPendingGlPosts();
     fetchInvoices();
     void deleteDebugInvoicesOnce();
     // Check for vendor filter in URL

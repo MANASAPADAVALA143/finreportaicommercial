@@ -99,7 +99,7 @@ import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
-import { triggerGlPostForApprovedInvoice } from '@/lib/ap-invoice/glPostService';
+import { awaitGlPostAfterApproval } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
   getAccountingStandard,
@@ -777,6 +777,22 @@ export function InvoiceDetailModal({
       return;
     }
 
+    const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+    if (gulfDecision === 'HARD_BLOCK') {
+      toast({
+        title: 'Cannot approve',
+        description: 'VAT classification blocked. Fix the invoice first.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (gulfDecision === 'REVIEW_QUEUE') {
+      toast({
+        title: 'VAT review recommended',
+        description: 'GulfTax flagged this invoice for review. Proceeding with approval.',
+      });
+    }
+
     setLoading(true);
     try {
       const { data: authData } = await supabase.auth.getUser();
@@ -807,9 +823,13 @@ export function InvoiceDetailModal({
 
       try {
         const cid = invoice.company_id || (await getMyCompany())?.id || null;
-        if (cid) triggerGlPostForApprovedInvoice(invoice, cid);
-      } catch {
-        /* GL post is best-effort */
+        if (cid) {
+          await awaitGlPostAfterApproval(invoice, cid, (opts) =>
+            toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+          );
+        }
+      } catch (e) {
+        console.warn('[AP] GL post after approval failed:', e);
       }
 
       toast({
@@ -1130,6 +1150,24 @@ export function InvoiceDetailModal({
       return;
     }
 
+    if (newStatus === 'Approved') {
+      const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+      if (gulfDecision === 'HARD_BLOCK') {
+        toast({
+          title: 'Cannot approve',
+          description: 'VAT classification blocked. Fix the invoice first.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (gulfDecision === 'REVIEW_QUEUE') {
+        toast({
+          title: 'VAT review recommended',
+          description: 'GulfTax flagged this invoice for review. Proceeding with approval.',
+        });
+      }
+    }
+
     setLoading(true);
     try {
       const updates: any = {
@@ -1161,9 +1199,13 @@ export function InvoiceDetailModal({
         void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
         try {
           const cid = invoice.company_id || (await getMyCompany())?.id || null;
-          if (cid) triggerGlPostForApprovedInvoice(invoice, cid);
-        } catch {
-          /* GL post is best-effort */
+          if (cid) {
+            await awaitGlPostAfterApproval(invoice, cid, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
+          }
+        } catch (e) {
+          console.warn('[AP] GL post after status change failed:', e);
         }
       }
 

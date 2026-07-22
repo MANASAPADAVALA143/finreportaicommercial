@@ -13,6 +13,39 @@ from app.services.ap_company_resolver import resolve_ap_company_id
 
 logger = logging.getLogger(__name__)
 
+# Canonical UAE Accounting CoA (matches uae_coa_service.py)
+AP_EXPENSE_DEFAULT = "7140"
+AP_EXPENSE_NAME = "Professional Fees"
+AP_PAYABLE_CODE = "3001"
+AP_PAYABLE_NAME = "Trade Payables"
+AP_VAT_INPUT_CODE = "1110"
+AP_VAT_INPUT_NAME = "VAT Recoverable (Input Tax)"
+
+# Legacy AP InvoiceFlow gl_accounts codes → UAE Accounting uae_accounts
+AP_GL_CODE_ALIASES: dict[str, str] = {
+    "6100": "7140",
+    "6200": "7110",
+    "6300": "7120",
+    "6400": "7130",
+    "6500": "7150",
+    "6600": "7141",
+    "7000": "7140",
+    "7100": "7170",
+    "5000": "7001",
+    "1810": "1110",
+    "2100": "3001",
+    "2200": "3010",
+    "7140": "7140",
+    "3001": "3001",
+    "1110": "1110",
+}
+
+
+def map_ap_gl_code(raw: str | None) -> str:
+    """Map legacy AP gl_codes to canonical UAE Accounting account codes."""
+    code = (raw or AP_EXPENSE_DEFAULT).strip() or AP_EXPENSE_DEFAULT
+    return AP_GL_CODE_ALIASES.get(code, code)
+
 
 class ApInvoicePostRequest(BaseModel):
     invoice_number: str
@@ -27,7 +60,7 @@ class ApInvoicePostRequest(BaseModel):
     workspace_id: str = ""
     company_id: str = ""
     invoice_id: str = ""
-    gl_code: str = "6100"
+    gl_code: str = AP_EXPENSE_DEFAULT
     blocked_input_vat: bool = False
     uploaded_by_email: str = ""
     due_date: str = ""
@@ -44,6 +77,7 @@ def request_from_supabase_invoice(inv: dict[str, Any], workspace_id: str = "") -
     due = inv.get("due_date") or ""
     if due and "T" in str(due):
         due = str(due)[:10]
+    raw_gl = str(inv.get("gl_code") or inv.get("gl_account") or AP_EXPENSE_DEFAULT)
     return ApInvoicePostRequest(
         invoice_id=str(inv.get("id") or ""),
         invoice_number=str(inv.get("invoice_number") or ""),
@@ -56,7 +90,7 @@ def request_from_supabase_invoice(inv: dict[str, Any], workspace_id: str = "") -
         invoice_date=str(inv_date),
         company_id=str(inv.get("company_id") or ""),
         workspace_id=workspace_id,
-        gl_code=str(inv.get("gl_code") or inv.get("gl_account") or "6100"),
+        gl_code=map_ap_gl_code(raw_gl),
         blocked_input_vat=blocked,
         uploaded_by_email=str(inv.get("uploaded_by_email") or inv.get("created_by_email") or ""),
         due_date=str(due),
@@ -71,6 +105,35 @@ def _fetch_supabase_invoice(invoice_id: str) -> dict[str, Any] | None:
     except Exception:
         logger.exception("Failed to load invoice %s from Supabase", invoice_id)
         return None
+
+
+def _resolve_company_id_for_je(
+    db: Session,
+    tenant_id: str,
+    raw_company_id: str | None,
+    *,
+    invoice_ref: str = "",
+) -> str | None:
+    """Resolve ap_companies.id for JE rows — never use unvalidated body.company_id."""
+    raw = (raw_company_id or "").strip() or None
+    try:
+        resolved = resolve_ap_company_id(db, tenant_id, raw)
+    except Exception:
+        logger.warning(
+            "ap_companies resolve failed for company_id=%s tenant=%s invoice=%s — no JE company_id",
+            raw_company_id,
+            tenant_id,
+            invoice_ref,
+        )
+        return None
+    if resolved and raw and resolved != raw:
+        logger.warning(
+            "company_id remapped for JE: invoice=%s raw=%s resolved=%s",
+            invoice_ref,
+            raw,
+            resolved,
+        )
+    return resolved
 
 
 def _find_ap_journal(
@@ -124,7 +187,6 @@ def _existing_gl_post(
                 "message": "Invoice already posted to GL (existing journal entry).",
             }
 
-        # Orphan flag: Supabase says posted, but this GL database has no row.
         inv = _fetch_supabase_invoice(invoice_id)
         if inv and inv.get("je_posted"):
             from app.services.gulftax_supabase import clear_invoice_je_posted
@@ -142,6 +204,47 @@ def _existing_gl_post(
     return None
 
 
+def _build_ap_je_lines(
+    *,
+    expense_acct: str,
+    ap_acct: str,
+    vat_acct: str,
+    expense_debit: float,
+    vat_amount: float,
+    total_amount: float,
+    recoverable_vat: bool,
+    vendor_name: str,
+    invoice_number: str,
+    vat_treatment: str,
+) -> list[dict[str, Any]]:
+    """Single combined JE: Dr expense (+ input VAT) / Cr trade payables."""
+    lines: list[dict[str, Any]] = [
+        {
+            "account_code": expense_acct,
+            "account_name": AP_EXPENSE_NAME,
+            "debit": expense_debit,
+            "credit": 0.0,
+            "description": f"{vendor_name} — {vat_treatment}",
+        },
+    ]
+    if recoverable_vat:
+        lines.append({
+            "account_code": vat_acct,
+            "account_name": AP_VAT_INPUT_NAME,
+            "debit": vat_amount,
+            "credit": 0.0,
+            "description": f"Input VAT — {invoice_number}",
+        })
+    lines.append({
+        "account_code": ap_acct,
+        "account_name": AP_PAYABLE_NAME,
+        "debit": 0.0,
+        "credit": total_amount,
+        "description": f"AP {invoice_number}",
+    })
+    return lines
+
+
 def post_invoice_to_gl_and_tax(
     body: ApInvoicePostRequest,
     *,
@@ -155,14 +258,15 @@ def post_invoice_to_gl_and_tax(
     if body.decision == "HARD_BLOCK":
         return {"ok": False, "je_posted": False, "error": "HARD_BLOCKED"}
 
+    invoice_ref = body.invoice_id or body.invoice_number
+
     if body.invoice_id:
         prior = _existing_gl_post(body.invoice_id, tenant_id, db)
         if prior:
             ws_id = body.workspace_id or tenant_id
-            try:
-                company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
-            except Exception:
-                company_id = (body.company_id or "").strip() or None
+            company_id = _resolve_company_id_for_je(
+                db, tenant_id, body.company_id or None, invoice_ref=invoice_ref,
+            )
             if company_id:
                 try:
                     from app.services.gulftax_sync_service import (
@@ -215,46 +319,33 @@ def post_invoice_to_gl_and_tax(
     vat_amount = round(body.vat_amount_aed, 2)
 
     ws_id = body.workspace_id or tenant_id
-    # Prefer validated ap_companies row; fall back to Supabase company_id so JE
-    # rows are never company-orphaned (NULL) when the UI filters by company.
-    try:
-        resolved = resolve_ap_company_id(db, tenant_id, body.company_id or None)
-    except Exception:
-        logger.warning(
-            "ap_companies resolve failed for company_id=%s tenant=%s — using invoice company_id",
-            body.company_id,
-            tenant_id,
-        )
-        resolved = None
-    company_id = resolved or ((body.company_id or "").strip() or None)
+    company_id = _resolve_company_id_for_je(
+        db, tenant_id, body.company_id or None, invoice_ref=invoice_ref,
+    )
 
-    je_lines = [
-        {
-            "account": "5001",
-            "account_name": "Expenses / COGS",
-            "debit": net_amount,
-            "credit": 0.0,
-            "description": f"{body.vendor_name} — {body.vat_treatment}",
-        },
-        {
-            "account": "2001",
-            "account_name": "Accounts Payable",
-            "debit": 0.0,
-            "credit": body.total_amount,
-            "description": f"AP {body.invoice_number}",
-        },
-    ]
-    if vat_amount > 0:
-        je_lines.insert(
-            1,
-            {
-                "account": "2301",
-                "account_name": "Input VAT Recoverable",
-                "debit": vat_amount,
-                "credit": 0.0,
-                "description": f"Input VAT @ {body.vat_amount_aed} AED — {body.vat_treatment}",
-            },
-        )
+    recoverable_vat = (
+        body.vat_treatment == "standard_rated"
+        and vat_amount > 0
+        and not body.blocked_input_vat
+    )
+    expense_debit = net_amount if recoverable_vat else round(body.total_amount, 2)
+
+    expense_acct = map_ap_gl_code(body.gl_code)
+    ap_acct = AP_PAYABLE_CODE
+    vat_acct = AP_VAT_INPUT_CODE
+
+    je_lines = _build_ap_je_lines(
+        expense_acct=expense_acct,
+        ap_acct=ap_acct,
+        vat_acct=vat_acct,
+        expense_debit=expense_debit,
+        vat_amount=vat_amount,
+        total_amount=body.total_amount,
+        recoverable_vat=recoverable_vat,
+        vendor_name=body.vendor_name,
+        invoice_number=body.invoice_number,
+        vat_treatment=body.vat_treatment,
+    )
 
     purchase_invoice_id = None
     try:
@@ -265,7 +356,6 @@ def post_invoice_to_gl_and_tax(
 
         from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine, UAEVendor
 
-        # Local SQLite schemas may pre-date company_id — add it so ORM inserts work.
         try:
             db.execute(text(
                 "ALTER TABLE uae_purchase_invoices ADD COLUMN company_id VARCHAR(36)"
@@ -313,8 +403,8 @@ def post_invoice_to_gl_and_tax(
                 vendor_id=vendor.id,
                 invoice_date=inv_date,
                 due_date=inv_date,
-                subtotal=net_amount,
-                vat_amount=vat_amount,
+                subtotal=expense_debit,
+                vat_amount=vat_amount if recoverable_vat else 0.0,
                 total_amount=body.total_amount,
                 outstanding=body.total_amount,
                 status="posted",
@@ -328,10 +418,10 @@ def post_invoice_to_gl_and_tax(
                     invoice_id=pi.id,
                     description=f"{body.vendor_name} — {body.vat_treatment}",
                     quantity=1,
-                    unit_price=net_amount,
-                    line_total=net_amount,
+                    unit_price=expense_debit,
+                    line_total=expense_debit,
                     vat_rate=5,
-                    vat_amount=vat_amount,
+                    vat_amount=vat_amount if recoverable_vat else 0.0,
                 )
             )
             db.commit()
@@ -353,8 +443,8 @@ def post_invoice_to_gl_and_tax(
             source="ap_invoice",
             transaction_id=body.invoice_number,
             vendor_name=body.vendor_name,
-            net_amount=net_amount,
-            vat_amount=vat_amount if not body.blocked_input_vat else 0.0,
+            net_amount=expense_debit,
+            vat_amount=vat_amount if recoverable_vat else 0.0,
             vat_treatment=body.vat_treatment,
             blocked_input_vat=body.blocked_input_vat,
         )
@@ -364,7 +454,6 @@ def post_invoice_to_gl_and_tax(
         logger.exception("vat_return_entries insert failed for %s", body.invoice_number)
 
     je_id: str | None = None
-    je_id_vat: str | None = None
     je_posted = False
     period_row = None
     gl_error: str | None = None
@@ -385,88 +474,34 @@ def post_invoice_to_gl_and_tax(
             period_q = period_q.filter(AccountingPeriod.company_id == company_id)
         period_row = period_q.first()
 
-        expense_acct = (body.gl_code or "6100").strip() or "6100"
-        ap_acct = "2100"
-        vat_acct = "1810"
         je_reference = body.invoice_id or body.invoice_number
 
-        je_expense = create_journal_entry(
+        je = create_journal_entry(
             tenant_id=tenant_id,
             entry_date=inv_date,
             description=f"AP: {body.vendor_name} - {body.invoice_number}",
-            lines=[
-                {
-                    "account_code": expense_acct,
-                    "account_name": "Expenses",
-                    "debit": net_amount,
-                    "credit": 0.0,
-                    "description": f"{body.vendor_name} — {body.vat_treatment}",
-                },
-                {
-                    "account_code": ap_acct,
-                    "account_name": "Accounts Payable",
-                    "debit": 0.0,
-                    "credit": net_amount,
-                    "description": f"AP {body.invoice_number}",
-                },
-            ],
+            lines=je_lines,
             reference=je_reference,
             source="AP_INVOICE",
             company_id=company_id,
             db=db,
             auto_post=True,
         )
-        # create_journal_entry commits — re-read to prove the row exists before
-        # flipping invoices.je_posted. Never trust the in-memory object alone.
         db.expire_all()
-        verified = _find_ap_journal(body.invoice_id, tenant_id, db) if body.invoice_id else je_expense
+        verified = _find_ap_journal(body.invoice_id, tenant_id, db) if body.invoice_id else je
         if body.invoice_id and not verified:
             raise RuntimeError(
-                f"JE create returned {je_expense.entry_number} but no uae_journal_entries "
+                f"JE create returned {je.entry_number} but no uae_journal_entries "
                 f"row found for invoice {body.invoice_id} / tenant {tenant_id}"
             )
 
-        je_id = (verified.id if verified and hasattr(verified, "id") else None) or je_expense.id
+        je_id = (verified.id if verified and hasattr(verified, "id") else None) or je.id
         je_ref = (
             (verified.entry_number if verified and getattr(verified, "entry_number", None) else None)
-            or je_expense.entry_number
-            or je_expense.id
+            or je.entry_number
+            or je.id
         )
 
-        if (
-            body.vat_treatment == "standard_rated"
-            and vat_amount > 0
-            and not body.blocked_input_vat
-        ):
-            je_vat = create_journal_entry(
-                tenant_id=tenant_id,
-                entry_date=inv_date,
-                description=f"VAT input: {body.vendor_name} - {body.invoice_number}",
-                lines=[
-                    {
-                        "account_code": vat_acct,
-                        "account_name": "Input VAT Recoverable",
-                        "debit": vat_amount,
-                        "credit": 0.0,
-                        "description": f"Input VAT — {body.invoice_number}",
-                    },
-                    {
-                        "account_code": ap_acct,
-                        "account_name": "Accounts Payable",
-                        "debit": 0.0,
-                        "credit": vat_amount,
-                        "description": f"AP VAT {body.invoice_number}",
-                    },
-                ],
-                reference=je_reference,
-                source="AP_INVOICE_VAT",
-                company_id=company_id,
-                db=db,
-                auto_post=True,
-            )
-            je_id_vat = je_vat.id
-
-        # Only after verified GL row — never set the flag earlier.
         je_posted = True
         if body.invoice_id:
             from app.services.gulftax_supabase import mark_invoice_je_posted
@@ -614,7 +649,6 @@ def post_invoice_to_gl_and_tax(
             "skipped": False,
             "je_reference": None,
             "je_id": None,
-            "je_id_vat": None,
             "je_posted": False,
             "post_date": post_date,
             "invoice_number": body.invoice_number,
@@ -639,7 +673,6 @@ def post_invoice_to_gl_and_tax(
         "skipped": False,
         "je_reference": je_ref,
         "je_id": je_id,
-        "je_id_vat": je_id_vat,
         "je_posted": True,
         "post_date": post_date,
         "invoice_number": body.invoice_number,

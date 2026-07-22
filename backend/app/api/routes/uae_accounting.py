@@ -544,7 +544,7 @@ class APApproveRequest(BaseModel):
     workspace_id:   str    = ""
     company_id:     str    = ""
     invoice_id:     str    = ""
-    gl_code:        str    = "6100"
+    gl_code:        str    = "7140"
     blocked_input_vat: bool = False
     uploaded_by_email: str = ""
     due_date:       str    = ""

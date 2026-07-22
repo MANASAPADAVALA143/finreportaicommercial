@@ -221,6 +221,7 @@ const GATE_REASON_MESSAGES: Record<string, string> = {
   duplicate_flag: 'Potential duplicate detected',
   critical_risk_flag: 'Critical risk flag present',
   ocr_below_min_confidence: 'OCR confidence below minimum for auto-approve',
+  gulftax_hard_block: 'GulfTax VAT classification HARD_BLOCK',
 };
 
 function gateReasonMessage(code: string | undefined): string {
@@ -280,6 +281,10 @@ async function canAgentAutoApprove(
   invoice: Invoice,
   companyId: string
 ): Promise<{ ok: boolean; reason?: string }> {
+  if (String(invoice.gulftax_decision ?? '').toUpperCase() === 'HARD_BLOCK') {
+    return { ok: false, reason: 'gulftax_hard_block' };
+  }
+
   const agent = await getAgentAutonomyConfig();
   const base = await getCompanyBaseCurrency(companyId);
   const inInr = invoiceAmountInInr(invoice, base);
@@ -784,11 +789,11 @@ export async function runAutoMatch(
     try {
       const { data: invRow } = await supabase.from('invoices').select('*').eq('id', invoiceId).single();
       if (invRow) {
-        const { triggerGlPostForApprovedInvoice } = await import('./glPostService');
-        triggerGlPostForApprovedInvoice(invRow as import('./supabase').Invoice, companyId);
+        const { awaitGlPostAfterApproval } = await import('./glPostService');
+        await awaitGlPostAfterApproval(invRow as import('./supabase').Invoice, companyId);
       }
-    } catch {
-      /* GL post is best-effort */
+    } catch (e) {
+      console.warn('[threeWayMatchService] GL post after auto-approve failed:', e);
     }
   }
 

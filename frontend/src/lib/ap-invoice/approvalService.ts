@@ -48,6 +48,14 @@ async function finalizeInvoiceApproval(
   | { ok: true; fully_approved: true; gl_post?: ApproveAndPostResult }
   | { ok: false; message: string }
 > {
+  const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+  if (gulfDecision === 'HARD_BLOCK') {
+    return {
+      ok: false,
+      message: 'Cannot approve — VAT classification blocked. Fix the invoice first.',
+    };
+  }
+
   const { data: authData } = await supabase.auth.getUser();
   const approverUserId = authData.user?.id ?? null;
 
@@ -85,12 +93,23 @@ async function finalizeInvoiceApproval(
   let gl_post: ApproveAndPostResult | undefined;
   try {
     const cid = invoice.company_id || (await requireCompanyId());
-    const { postApprovedInvoiceToGL } = await import('./glPostService');
+    const { postApprovedInvoiceToGL, recordGlPostFailure, clearGlPostFailure } = await import('./glPostService');
     gl_post = await postApprovedInvoiceToGL(invoice, cid);
+    if (!gl_post.ok || (!gl_post.je_posted && !gl_post.skipped)) {
+      recordGlPostFailure(invoice.id, cid);
+    } else {
+      clearGlPostFailure(invoice.id);
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.warn('[AP] GL/GulfTax post after full approval failed:', message);
-    // Do not swallow — UI must show approval succeeded but JE did not post.
+    try {
+      const cid = invoice.company_id || (await requireCompanyId());
+      const { recordGlPostFailure } = await import('./glPostService');
+      recordGlPostFailure(invoice.id, cid);
+    } catch {
+      /* ignore */
+    }
     gl_post = { ok: false, je_posted: false, message };
   }
 
