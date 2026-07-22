@@ -201,16 +201,38 @@ def _resolve_company_id_for_je(
     raw_company_id: str | None,
     *,
     invoice_ref: str = "",
+    company_name: str | None = None,
 ) -> str:
-    """Resolve ap_companies.id for JE rows — never returns None."""
+    """Resolve ap_companies.id for JE rows — never returns None.
+
+    UAE Journal Entries UI filters by ``active_company_id`` (usually a
+    ``uae_company_profiles.id``). Prefer creating/using an ``ap_companies`` row
+    with that same UUID so posts remain visible.
+    """
     from fastapi import HTTPException
 
+    from app.models.client_data import ApCompany
     from app.models.company_setup import UaeCompanyProfile
     from app.services.ap_company_resolver import list_ap_companies
 
     raw = (raw_company_id or "").strip() or None
+    invoice_name = (company_name or "").strip().lower() or None
+
+    profiles = (
+        db.query(UaeCompanyProfile)
+        .filter(UaeCompanyProfile.workspace_id == tenant_id)
+        .order_by(UaeCompanyProfile.created_at.asc())
+        .all()
+    )
+
+    # 0) Raw id is a UAE profile → ensure matching ap_companies row (same UUID)
+    if raw:
+        by_id = next((p for p in profiles if p.id == raw), None)
+        if by_id:
+            return _ensure_ap_company_for_profile(db, tenant_id, by_id)
 
     # 1) Existing resolver (validates ap_companies / maps profile → ap_company)
+    resolved: str | None = None
     try:
         resolved = resolve_ap_company_id(db, tenant_id, raw)
         if resolved:
@@ -221,7 +243,34 @@ def _resolve_company_id_for_je(
                     raw,
                     resolved,
                 )
-            return resolved
+            # Trust only when raw was already a real ap_companies.id for this tenant.
+            # Sole-company / profile remap often returns an unrelated demo company
+            # (e.g. Al Noor) while the UI filters on Gnanova profile ids.
+            raw_is_ap = bool(
+                raw
+                and db.query(ApCompany)
+                .filter(ApCompany.id == raw, ApCompany.tenant_id == tenant_id)
+                .first()
+            )
+            if raw_is_ap:
+                return resolved
+            if profiles:
+                ap = db.get(ApCompany, resolved)
+                ap_name = ((ap.name if ap else "") or "").strip().lower()
+                if ap_name and any(
+                    (p.company_name or "").strip().lower() == ap_name for p in profiles
+                ):
+                    return resolved
+                # Name mismatch (or no ap name) → fall through to profile path
+                logger.warning(
+                    "Ignoring resolver company_id=%s (name=%s) for invoice=%s — "
+                    "prefer uae_company_profiles for JE visibility",
+                    resolved,
+                    ap_name or "?",
+                    invoice_ref,
+                )
+            else:
+                return resolved
     except HTTPException as exc:
         logger.warning(
             "ap_companies resolve rejected company_id=%s tenant=%s invoice=%s: %s — falling back",
@@ -240,20 +289,13 @@ def _resolve_company_id_for_je(
         )
 
     # 2) uae_company_profiles fallback
-    profiles = (
-        db.query(UaeCompanyProfile)
-        .filter(UaeCompanyProfile.workspace_id == tenant_id)
-        .order_by(UaeCompanyProfile.created_at.asc())
-        .all()
-    )
-
-    if raw:
-        by_id = next((p for p in profiles if p.id == raw), None)
-        if by_id:
-            return _ensure_ap_company_for_profile(db, tenant_id, by_id)
-
     if len(profiles) == 1:
         return _ensure_ap_company_for_profile(db, tenant_id, profiles[0])
+
+    if profiles and invoice_name:
+        for p in profiles:
+            if (p.company_name or "").strip().lower() == invoice_name:
+                return _ensure_ap_company_for_profile(db, tenant_id, p)
 
     if profiles and raw:
         # raw might be a display name
@@ -263,7 +305,7 @@ def _resolve_company_id_for_je(
                 return _ensure_ap_company_for_profile(db, tenant_id, p)
 
     if profiles:
-        # Prefer name match against any existing ap_companies, else first profile
+        # Prefer name match against any existing ap_companies, else first/primary profile
         ap_rows = list_ap_companies(db, tenant_id)
         for p in profiles:
             pname = (p.company_name or "").strip().lower()
@@ -273,8 +315,9 @@ def _resolve_company_id_for_je(
         return _ensure_ap_company_for_profile(db, tenant_id, profiles[0])
 
     # 3) Last resort — any ap_companies row or create Default
-    name = "Default"
-    return _ensure_default_ap_company(db, tenant_id, name=name)
+    if resolved:
+        return resolved
+    return _ensure_default_ap_company(db, tenant_id, name="Default")
 
 
 def _find_ap_journal(
