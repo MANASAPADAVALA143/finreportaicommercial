@@ -7,7 +7,7 @@ import { format, addDays, parseISO, startOfWeek, endOfWeek, isWithinInterval, st
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus, Upload,
+  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus, Upload, FileCode,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
@@ -336,18 +336,58 @@ export default function ARInvoices() {
     }
   };
 
+  const downloadEinvoiceXml = (inv: ARInvoice) => {
+    const row = aspByInvoiceId[inv.id];
+    const xml = row?.xml_payload;
+    if (!xml) {
+      toast.error('No PINT AE XML stored for this invoice yet');
+      return;
+    }
+    const blob = new Blob([xml], { type: 'application/xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pint-ae-${inv.invoice_number.replace(/[^\w.-]+/g, '_')}.xml`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const einvoicingBadge = (inv: ARInvoice) => {
-    const st = inv.einvoicing_status ?? aspByInvoiceId[inv.id]?.status;
-    if (!st) return null;
+    const row = aspByInvoiceId[inv.id];
+    const raw = inv.einvoicing_status ?? row?.status ?? null;
+    // Honest labels — pending = XML archived, not FTA-filed
+    let key: string | null = raw;
+    if (!key) key = 'none';
+    if (key === 'pending' && row?.submitted_at) key = 'submitted';
+
+    const labels: Record<string, string> = {
+      pending: 'XML Ready',
+      submitted: 'Submitted to ASP',
+      accepted: 'FTA Accepted',
+      rejected: 'FTA Rejected',
+      error: 'XML Error',
+      none: 'Not Generated',
+    };
     const styles: Record<string, string> = {
       pending: 'bg-amber-900/40 text-amber-300 border-amber-700',
+      submitted: 'bg-blue-900/40 text-blue-300 border-blue-700',
       accepted: 'bg-green-900/40 text-green-400 border-green-700',
       rejected: 'bg-red-900/40 text-red-400 border-red-700',
       error: 'bg-red-900/40 text-red-400 border-red-700',
+      none: 'bg-gray-800/60 text-gray-400 border-gray-600',
     };
+    const tip =
+      key === 'pending'
+        ? 'PINT AE XML generated — submit to ASP when configured'
+        : key === 'none'
+          ? 'E-invoice XML not generated yet (created on AR post)'
+          : undefined;
     return (
-      <span className={`ml-1 text-[10px] border px-1.5 py-0.5 rounded capitalize ${styles[st] ?? styles.pending}`}>
-        E-inv: {st}
+      <span
+        className={`ml-1 text-[10px] border px-1.5 py-0.5 rounded ${styles[key] ?? styles.pending}`}
+        title={tip}
+      >
+        E-inv: {labels[key] ?? key}
       </span>
     );
   };
@@ -771,6 +811,17 @@ export default function ARInvoices() {
                       >
                         <Download size={14} />
                       </button>
+                      {(inv.einvoicing_status === 'pending' || aspByInvoiceId[inv.id]?.status === 'pending') &&
+                        aspByInvoiceId[inv.id]?.xml_payload && (
+                        <button
+                          type="button"
+                          onClick={() => downloadEinvoiceXml(inv)}
+                          className="p-1 text-amber-400 hover:text-amber-200"
+                          title="Download PINT AE XML"
+                        >
+                          <FileCode size={14} />
+                        </button>
+                      )}
                       {aspByInvoiceId[inv.id]?.status === 'pending' && (
                         <button
                           type="button"
@@ -779,7 +830,7 @@ export default function ARInvoices() {
                           className="text-xs bg-amber-700 hover:bg-amber-600 disabled:opacity-50 px-2 py-1 rounded whitespace-nowrap"
                           title="Submit pending PINT AE XML to ASP"
                         >
-                          {aspSubmittingId === inv.id ? 'Submitting…' : 'Submit to ASP'}
+                          {aspSubmittingId === inv.id ? 'Submitting…' : 'Submit ASP'}
                         </button>
                       )}
                     </div>

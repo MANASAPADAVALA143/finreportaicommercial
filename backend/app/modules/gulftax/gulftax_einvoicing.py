@@ -63,6 +63,11 @@ class ReadinessRequest(BaseModel):
     invoices_per_month: int = Field(default=0, ge=0)
     business_type: Literal["B2B", "B2G", "B2C"] = "B2B"
     workspace_id: Optional[str] = None
+    # Honest demo checklist (Fix 5)
+    trn_recorded: bool = False
+    vat_registered: bool = True
+    has_company_profile: bool = True
+    has_einvoice_submissions_period: bool = False
 
 
 class GenerateXmlRequest(BaseModel):
@@ -160,6 +165,10 @@ def readiness_request_from_company(
     *,
     submission_count: int = 0,
     accepted_count: int = 0,
+    trn_recorded: bool = False,
+    vat_registered: bool | None = None,
+    has_company_profile: bool = True,
+    has_einvoice_submissions_period: bool = False,
 ) -> ReadinessRequest:
     settings = getattr(company, "settings", None) or {}
     revenue = float(
@@ -170,6 +179,12 @@ def readiness_request_from_company(
     master = settings.get("master_data_clean")
     if master not in ("YES", "PARTIAL", "NO"):
         master = "PARTIAL"
+    trn = str(getattr(company, "trn", None) or settings.get("trn") or "").strip()
+    vat_reg = (
+        bool(vat_registered)
+        if vat_registered is not None
+        else bool(getattr(company, "vat_registered", True))
+    )
     return ReadinessRequest(
         annual_revenue_aed=revenue,
         asp_appointed=_asp_appointed_from_company(company),
@@ -181,6 +196,11 @@ def readiness_request_from_company(
         ),
         master_data_clean=master,
         budget_confirmed=bool(settings.get("budget_confirmed")),
+        trn_recorded=trn_recorded or bool(trn),
+        vat_registered=vat_reg,
+        has_company_profile=has_company_profile,
+        has_einvoice_submissions_period=has_einvoice_submissions_period
+        or submission_count > 0,
     )
 
 
@@ -225,6 +245,25 @@ def _einvoicing_submission_counts(
     return len(rows), accepted
 
 
+def _einvoicing_submissions_this_quarter(
+    db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> int:
+    """Count outbound AR e-invoice submissions created in the current calendar quarter."""
+    today = date.today()
+    qtr = (today.month - 1) // 3 + 1
+    start_month = 3 * (qtr - 1) + 1
+    start = date(today.year, start_month, 1)
+    q = db.query(EinvoicingSubmission).filter(
+        EinvoicingSubmission.tenant_id == tenant_id,
+        EinvoicingSubmission.created_at >= datetime(start.year, start.month, start.day),
+    )
+    if company_id:
+        q = q.filter(EinvoicingSubmission.company_id == company_id)
+    return q.count()
+
+
 def compute_company_readiness(
     db: Session,
     ported_db: Session,
@@ -232,30 +271,57 @@ def compute_company_readiness(
     company_id: str | None,
 ) -> dict[str, Any]:
     """Shared readiness path for UAE Suite dashboard and GulfTax E-Invoicing page."""
+    profile = (
+        db.query(UaeCompanyProfile)
+        .filter(UaeCompanyProfile.workspace_id == tenant_id)
+        .order_by(UaeCompanyProfile.created_at.asc())
+        .first()
+    )
+    if company_id and (
+        not profile or (profile and profile.id != company_id)
+    ):
+        by_id = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == company_id).first()
+        if by_id:
+            profile = by_id
+
     company = resolve_gulftax_company(ported_db, company_id, tenant_id)
+
+    # Tenant-wide outbound submissions this quarter (company_id filters often miss)
+    period_subs = _einvoicing_submissions_this_quarter(db, tenant_id, None)
+    sub_count, accepted = _einvoicing_submission_counts(db, tenant_id, None)
+
+    trn_recorded = bool(
+        (getattr(profile, "trn", None) or "").strip()
+        or (getattr(company, "trn", None) or "").strip()
+    )
+    vat_registered = True
+    if company is not None and hasattr(company, "vat_registered"):
+        vat_registered = bool(company.vat_registered)
+    has_profile = profile is not None
+
     if company:
-        sub_count, accepted = _einvoicing_submission_counts(db, tenant_id, company_id)
         params = readiness_request_from_company(
             company,
             submission_count=sub_count,
             accepted_count=accepted,
+            trn_recorded=trn_recorded,
+            vat_registered=vat_registered,
+            has_company_profile=has_profile,
+            has_einvoice_submissions_period=period_subs > 0 or sub_count > 0,
         )
         result = _compute_readiness(params)
         result["inputs"] = {
             "annual_revenue_aed": params.annual_revenue_aed,
             "asp_appointed": params.asp_appointed,
+            "trn_recorded": params.trn_recorded,
+            "vat_registered": params.vat_registered,
+            "has_company_profile": params.has_company_profile,
+            "has_einvoice_submissions_period": params.has_einvoice_submissions_period,
             "invoice_format": params.invoice_format,
             "integration_status": params.integration_status,
-            "master_data_clean": params.master_data_clean,
-            "budget_confirmed": params.budget_confirmed,
         }
         return result
 
-    profile = (
-        db.query(UaeCompanyProfile)
-        .filter(UaeCompanyProfile.workspace_id == tenant_id)
-        .first()
-    )
     revenue = 5_000_000.0
     if profile:
         revenue = float(getattr(profile, "annual_revenue_aed", None) or revenue)
@@ -266,6 +332,10 @@ def compute_company_readiness(
         integration_status="not_started",
         master_data_clean="PARTIAL",
         budget_confirmed=False,
+        trn_recorded=trn_recorded,
+        vat_registered=vat_registered,
+        has_company_profile=has_profile,
+        has_einvoice_submissions_period=period_subs > 0 or sub_count > 0,
     )
     result = _compute_readiness(params)
     result["inputs"] = params.model_dump()
@@ -273,36 +343,51 @@ def compute_company_readiness(
 
 
 def _compute_readiness(params: ReadinessRequest) -> dict[str, Any]:
+    """Honest Fix-5 checklist score (0–100). Replaces phase-bracket stub."""
     phase = svc.calculate_phase(params.annual_revenue_aed)
     score = 100
     gaps: list[dict[str, str]] = []
+
     if not params.asp_appointed:
-        score -= 35
-        gaps.append({"level": "critical", "text": "No accredited ASP appointed"})
-    if params.invoice_format in ("PDF", "Paper", "Email"):
-        score -= 25
-        gaps.append({"level": "high", "text": "Invoice format not Peppol / PINT AE ready"})
-    if params.integration_status == "not_started":
+        score -= 20
+        gaps.append(
+            {
+                "level": "critical",
+                "text": "ASP provider not configured — required before Oct 30 2026",
+            }
+        )
+    if not params.trn_recorded:
         score -= 15
-        gaps.append({"level": "high", "text": "ERP / ASP integration not started"})
-    if params.master_data_clean in ("NO", "PARTIAL"):
-        score -= 12
-        gaps.append({"level": "high", "text": "Master data not clean for e-invoicing"})
-    if not params.budget_confirmed:
-        score -= 8
-        gaps.append({"level": "medium", "text": "ERP upgrade budget not confirmed"})
+        gaps.append({"level": "critical", "text": "Company TRN not recorded"})
+    if not params.has_einvoice_submissions_period:
+        score -= 10
+        gaps.append(
+            {
+                "level": "high",
+                "text": "No AR e-invoice XML generated this period",
+            }
+        )
+    if not params.vat_registered:
+        score -= 15
+        gaps.append({"level": "critical", "text": "Company not VAT-registered"})
+    if not params.has_company_profile:
+        score -= 10
+        gaps.append({"level": "high", "text": "UAE company profile not set up"})
+
     score = max(0, min(100, score))
-    urgency = "GREEN"
-    if phase["phase_num"] == 1 and score < 40:
-        urgency = "RED"
-    elif phase["phase_num"] == 1 or score < 55:
+    if score >= 80:
+        urgency = "GREEN"
+    elif score >= 50:
         urgency = "AMBER"
+    else:
+        urgency = "RED"
     return {
         **phase,
         "readiness_score": score,
         "urgency": urgency,
         "gaps": gaps,
         "days_to_go_live": phase["days_to_mandatory"],
+        "asp_appointed": params.asp_appointed,
     }
 
 

@@ -608,10 +608,27 @@ export default function GulfTaxDashboard() {
                         ? `${s.e_invoicing.readiness_score}/100`
                         : "—"
                     }
+                    valueClass={
+                      loadState === "ok" && s
+                        ? s.e_invoicing.readiness_score >= 80
+                          ? "text-green"
+                          : s.e_invoicing.readiness_score >= 50
+                            ? "text-amber"
+                            : "text-red"
+                        : undefined
+                    }
                   />
                   <div className="h-1 bg-[rgba(255,255,255,0.07)] rounded-full mt-2 overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-gold to-gold-lt transition-all"
+                      className={`h-full rounded-full transition-all ${
+                        loadState === "ok" && s
+                          ? s.e_invoicing.readiness_score >= 80
+                            ? "bg-green"
+                            : s.e_invoicing.readiness_score >= 50
+                              ? "bg-amber"
+                              : "bg-red"
+                          : "bg-gradient-to-r from-gold to-gold-lt"
+                      }`}
                       style={{
                         width:
                           loadState === "ok" && s
@@ -620,11 +637,21 @@ export default function GulfTaxDashboard() {
                       }}
                     />
                   </div>
-                  <div className="text-[11px] text-muted font-mono">
-                    {loadState === "ok" && s
-                      ? `${s.e_invoicing.days_to_mandate}d to e-invoicing mandate · ASP ${s.e_invoicing.asp_appointed ? "on file" : "not recorded"}`
-                      : "—"}
-                  </div>
+                  {loadState === "ok" && s && !s.e_invoicing.asp_appointed ? (
+                    <Link
+                      to="/gulftax/settings"
+                      className="mt-2 block rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] text-amber hover:bg-amber/20 transition-colors"
+                    >
+                      ASP provider not configured — required before Oct 30 2026.
+                      Configure in Settings →
+                    </Link>
+                  ) : (
+                    <div className="text-[11px] text-muted font-mono">
+                      {loadState === "ok" && s
+                        ? `${s.e_invoicing.days_to_mandate}d to e-invoicing mandate · ASP on file`
+                        : "—"}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -678,11 +705,19 @@ export default function GulfTaxDashboard() {
   );
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function MetricRow({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+}) {
   return (
     <div className="flex items-center justify-between px-4 py-3 rounded-[10px] border bg-[rgba(15,40,90,0.35)] border-border">
       <div className="text-xs text-muted">{label}</div>
-      <div className="font-mono text-sm font-semibold text-white">{value}</div>
+      <div className={`font-mono text-sm font-semibold text-white ${valueClass ?? ""}`}>{value}</div>
     </div>
   );
 }

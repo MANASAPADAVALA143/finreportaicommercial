@@ -150,13 +150,30 @@ async def dashboard_summary(
     revenue = company.annual_revenue_aed or 0.0
     asp_ok = bool(company.asp_appointed)
 
-    readiness = 72
-    if revenue >= 50_000_000:
-        readiness = 38 if not asp_ok else 55
-    elif revenue >= 10_000_000:
-        readiness = 58 if not asp_ok else 72
-    if not company.vat_registered:
-        readiness = min(readiness, 50)
+    readiness = 0
+    try:
+        from app.core.database import SessionLocal
+        from app.modules.gulftax.gulftax_einvoicing import compute_company_readiness
+
+        fr_db = SessionLocal()
+        try:
+            ready = compute_company_readiness(
+                fr_db, db, workspace_id, active_company or company_id
+            )
+            readiness = int(ready.get("readiness_score") or 0)
+            asp_ok = bool(ready.get("asp_appointed") or (ready.get("inputs") or {}).get("asp_appointed"))
+            if ready.get("days_to_go_live") is not None:
+                days_to_mandate = int(ready["days_to_go_live"])
+        finally:
+            fr_db.close()
+    except Exception:
+        # Fallback: honest minimal deductions without phase stub 72
+        readiness = 100
+        if not asp_ok:
+            readiness -= 20
+        if not str(getattr(company, "trn", None) or "").strip():
+            readiness -= 15
+        readiness = max(0, readiness)
 
     recent_activity: List[Dict[str, Any]] = []
     try:
