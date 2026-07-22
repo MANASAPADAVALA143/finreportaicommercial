@@ -237,10 +237,16 @@ def _einvoicing_submission_counts(
     tenant_id: str,
     company_id: str | None,
 ) -> tuple[int, int]:
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR
+
     q = db.query(EinvoicingSubmission).filter(EinvoicingSubmission.tenant_id == tenant_id)
     if company_id:
         q = q.filter(EinvoicingSubmission.company_id == company_id)
-    rows = q.all()
+    rows = [
+        r
+        for r in q.all()
+        if (getattr(r, "record_type", None) or "outbound_ar") != RECORD_TYPE_INTERNAL_VENDOR
+    ]
     accepted = sum(1 for r in rows if (r.submission_status or "").lower() == "accepted")
     return len(rows), accepted
 
@@ -251,6 +257,10 @@ def _einvoicing_submissions_this_quarter(
     company_id: str | None,
 ) -> int:
     """Count outbound AR e-invoice submissions created in the current calendar quarter."""
+    from sqlalchemy import or_
+
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR, RECORD_TYPE_OUTBOUND_AR
+
     today = date.today()
     qtr = (today.month - 1) // 3 + 1
     start_month = 3 * (qtr - 1) + 1
@@ -258,6 +268,18 @@ def _einvoicing_submissions_this_quarter(
     q = db.query(EinvoicingSubmission).filter(
         EinvoicingSubmission.tenant_id == tenant_id,
         EinvoicingSubmission.created_at >= datetime(start.year, start.month, start.day),
+        or_(
+            EinvoicingSubmission.record_type == RECORD_TYPE_OUTBOUND_AR,
+            EinvoicingSubmission.record_type.is_(None),
+            EinvoicingSubmission.record_type == "",
+        ),
+    )
+    # Explicitly exclude vendor-received internal archives
+    q = q.filter(
+        or_(
+            EinvoicingSubmission.record_type.is_(None),
+            EinvoicingSubmission.record_type != RECORD_TYPE_INTERNAL_VENDOR,
+        )
     )
     if company_id:
         q = q.filter(EinvoicingSubmission.company_id == company_id)
@@ -458,6 +480,48 @@ def company_readiness_assessment(
     cid = (company_id or x_company_id or "").strip() or None
     result = compute_company_readiness(db, ported_db, tenant, cid)
     return {"workspace_id": tenant, "company_id": cid, **result}
+
+
+@router.get("/{invoice_id}/download-xml")
+def download_stored_einvoice_xml(
+    invoice_id: str,
+    workspace_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    """Download stored PINT AE XML for an AR invoice (outbound only)."""
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR
+
+    tenant = _tenant(x_workspace_id or workspace_id)
+    row = (
+        db.query(EinvoicingSubmission)
+        .filter(
+            EinvoicingSubmission.tenant_id == tenant,
+            EinvoicingSubmission.invoice_id == invoice_id,
+        )
+        .order_by(EinvoicingSubmission.created_at.desc())
+        .first()
+    )
+    if not row or not (row.xml_payload or "").strip():
+        row = (
+            db.query(EinvoicingSubmission)
+            .filter(EinvoicingSubmission.invoice_id == invoice_id)
+            .order_by(EinvoicingSubmission.created_at.desc())
+            .first()
+        )
+    if not row or not (row.xml_payload or "").strip():
+        raise HTTPException(404, "No e-invoice XML found for this invoice")
+    if (getattr(row, "record_type", None) or "") == RECORD_TYPE_INTERNAL_VENDOR:
+        raise HTTPException(
+            400,
+            "Vendor-received internal records cannot be downloaded as outbound e-invoices",
+        )
+    filename = f"pint-ae-{(row.invoice_number or invoice_id).replace('/', '-')}.xml"
+    return Response(
+        content=row.xml_payload,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/generate-xml")

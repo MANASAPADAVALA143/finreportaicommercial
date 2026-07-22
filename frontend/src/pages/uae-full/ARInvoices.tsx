@@ -336,7 +336,28 @@ export default function ARInvoices() {
     }
   };
 
-  const downloadEinvoiceXml = (inv: ARInvoice) => {
+  const downloadEinvoiceXml = async (inv: ARInvoice) => {
+    try {
+      const { backendOrigin } = await import('../../utils/backendOrigin');
+      const { getStoredAccessToken, workspaceHeaders } = await import('../../utils/workspaceHeaders');
+      const origin = backendOrigin() || '';
+      const url = `${origin}/api/gulftax/einvoicing/${encodeURIComponent(inv.id)}/download-xml`;
+      const res = await fetch(url, {
+        headers: workspaceHeaders(getStoredAccessToken()),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `pint-ae-${inv.invoice_number.replace(/[^\w.-]+/g, '_')}.xml`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
+      }
+    } catch {
+      /* fall through to cached payload */
+    }
     const row = aspByInvoiceId[inv.id];
     const xml = row?.xml_payload;
     if (!xml) {
@@ -811,11 +832,12 @@ export default function ARInvoices() {
                       >
                         <Download size={14} />
                       </button>
-                      {(inv.einvoicing_status === 'pending' || aspByInvoiceId[inv.id]?.status === 'pending') &&
-                        aspByInvoiceId[inv.id]?.xml_payload && (
+                      {(inv.einvoicing_status === 'pending' ||
+                        aspByInvoiceId[inv.id]?.status === 'pending' ||
+                        Boolean(aspByInvoiceId[inv.id]?.submitted_at)) && (
                         <button
                           type="button"
-                          onClick={() => downloadEinvoiceXml(inv)}
+                          onClick={() => void downloadEinvoiceXml(inv)}
                           className="p-1 text-amber-400 hover:text-amber-200"
                           title="Download PINT AE XML"
                         >

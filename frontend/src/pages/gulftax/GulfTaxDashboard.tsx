@@ -642,7 +642,7 @@ export default function GulfTaxDashboard() {
                       to="/gulftax/settings"
                       className="mt-2 block rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] text-amber hover:bg-amber/20 transition-colors"
                     >
-                      ASP provider not configured — required before Oct 30 2026.
+                      ⚠ ASP provider not configured — required before Oct 30 2026.
                       Configure in Settings →
                     </Link>
                   ) : (
