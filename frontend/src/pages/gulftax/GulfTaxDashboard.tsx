@@ -312,13 +312,13 @@ export default function GulfTaxDashboard() {
         </div>
         <div className="flex gap-2.5 flex-wrap">
           <Link
-            href="/dashboard/vat-classifier"
+            to="/gulftax/vat-classifier"
             className="inline-flex items-center justify-center px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer border border-border-g text-gold hover:bg-gold-pale transition-all"
           >
             📥 Import CSV
           </Link>
           <Link
-            href="/dashboard/vat-return"
+            to="/gulftax/vat-return"
             className="inline-flex items-center justify-center px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer bg-gradient-to-br from-gold to-gold-lt text-deep shadow-[0_4px_18px_rgba(201,168,76,0.38)] hover:shadow-[0_6px_24px_rgba(201,168,76,0.52)] hover:-translate-y-px transition-all"
           >
             ⚡ Generate VAT Return
@@ -440,7 +440,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Hard blocked</div>
                 <div className="text-[11px] text-muted2 mt-0.5">Finance Manager override required</div>
                 {s.invoice_flow.escalated > 0 && (
-                  <Link href="/dashboard/invoice-flow/review?status=escalated" className="text-[11px] text-red hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/invoice-flow/review?status=escalated" className="text-[11px] text-red hover:underline mt-1 inline-block">
                     Review now →
                   </Link>
                 )}
@@ -459,7 +459,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Awaiting review</div>
                 <div className="text-[11px] text-muted2 mt-0.5">AP accountant approval needed</div>
                 {s.invoice_flow.pending_review > 0 && (
-                  <Link href="/dashboard/invoice-flow/review?status=review" className="text-[11px] text-amber hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/invoice-flow/review?status=review" className="text-[11px] text-amber hover:underline mt-1 inline-block">
                     Review queue →
                   </Link>
                 )}
@@ -478,7 +478,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Auto-approved today</div>
                 <div className="text-[11px] text-muted2 mt-0.5">Clean invoices · in VAT Return</div>
                 {s.invoice_flow.auto_approved_today > 0 && (
-                  <Link href="/dashboard/vat-classifier" className="text-[11px] text-green hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/vat-classifier" className="text-[11px] text-green hover:underline mt-1 inline-block">
                     View in classifier →
                   </Link>
                 )}

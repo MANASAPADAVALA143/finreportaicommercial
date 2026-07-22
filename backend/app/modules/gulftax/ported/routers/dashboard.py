@@ -1,16 +1,15 @@
 """Dashboard summary API."""
 from calendar import monthrange
 from datetime import date, timedelta
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.auth import get_current_company_id
-from models import AuditLog, Company, Invoice, ReconciliationResult, Transaction
-from routers.vat_return import calculate_vat_return_boxes
+from models import AuditLog, Company, Invoice, ReconciliationResult
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -42,10 +41,46 @@ def _days_between(d0: date, d1: date) -> int:
     return (d1 - d0).days
 
 
+def _real_vat_kpis(
+    *,
+    workspace_id: str,
+    company_id: str,
+    period: str,
+) -> Dict[str, Any]:
+    """VAT Due + classified counts from real AR + gulftax (not ported Transaction)."""
+    from app.core.database import SessionLocal
+    from app.modules.gulftax.vat_return_service import fetch_all_vat_return_boxes
+    from app.services.ap_invoice_post_service import _resolve_company_id_for_je
+
+    fr_db = SessionLocal()
+    try:
+        resolved = _resolve_company_id_for_je(
+            fr_db, workspace_id, company_id, invoice_ref="dashboard-summary"
+        )
+        boxes = fetch_all_vat_return_boxes(
+            fr_db,
+            workspace_id=workspace_id,
+            company_id=resolved,
+            period=period,
+        )
+        return {
+            "estimated_payable_aed": round(
+                float(boxes.get("box12_net_vat_payable_or_refundable") or 0), 2
+            ),
+            "transactions_classified": int(boxes.get("sales_invoice_count") or 0)
+            + int(boxes.get("purchase_entry_count") or 0),
+            "transactions_needing_review": 0,
+        }
+    finally:
+        fr_db.close()
+
+
 @router.get("/summary")
 async def dashboard_summary(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
+    x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
 ) -> Dict[str, Any]:
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
@@ -56,55 +91,55 @@ async def dashboard_summary(
     filing_deadline = _vat_filing_deadline(period_end)
     days_to_filing = _days_between(today, filing_deadline)
 
-    period_tx = (
-        db.query(Transaction)
-        .filter(
-            and_(
-                Transaction.company_id == company_id,
-                Transaction.date >= period_start,
-                Transaction.date <= period_end,
-            )
-        )
-        .all()
+    active_company = (
+        (x_company_id or getattr(company, "external_id", None) or company_id or "")
+    ).strip()
+    workspace_id = (
+        (x_workspace_id or "").strip()
+        or str(getattr(company, "workspace_id", None) or "").strip()
+        or active_company
     )
-
-    # If no data in current quarter, fall back to the quarter of the most recent transaction
-    if not period_tx:
-        latest_tx = (
-            db.query(Transaction)
-            .filter(Transaction.company_id == company_id)
-            .order_by(Transaction.date.desc())
-            .first()
-        )
-        if latest_tx:
-            period_start, period_end, label = _calendar_quarter(latest_tx.date)
-            filing_deadline = _vat_filing_deadline(period_end)
-            days_to_filing = _days_between(today, filing_deadline)
-            period_tx = (
-                db.query(Transaction)
-                .filter(
-                    and_(
-                        Transaction.company_id == company_id,
-                        Transaction.date >= period_start,
-                        Transaction.date <= period_end,
-                    )
-                )
-                .all()
-            )
-
-    transactions_classified = len([t for t in period_tx if t.vat_treatment])
-    transactions_needing_review = len(
-        [
-            t
-            for t in period_tx
-            if t.vat_treatment and (t.confidence_score is None or t.confidence_score < 70)
-        ]
-    )
+    q = (today.month - 1) // 3 + 1
+    tax_period = f"{today.year}-Q{q}"
 
     estimated_payable_aed = 0.0
-    if period_tx:
-        boxes = calculate_vat_return_boxes(period_tx)
-        estimated_payable_aed = max(0.0, boxes["box8_vat_payable_or_refundable"])
+    transactions_classified = 0
+    transactions_needing_review = 0
+    try:
+        vat_kpis = _real_vat_kpis(
+            workspace_id=workspace_id,
+            company_id=active_company,
+            period=tax_period,
+        )
+        estimated_payable_aed = float(vat_kpis["estimated_payable_aed"])
+        transactions_classified = int(vat_kpis["transactions_classified"])
+        transactions_needing_review = int(vat_kpis["transactions_needing_review"])
+        # If current quarter empty, fall back to prior quarter with data
+        if transactions_classified == 0 and estimated_payable_aed == 0:
+            prev = today.month - 3
+            py, pm = (today.year, prev) if prev > 0 else (today.year - 1, prev + 12)
+            pq = (pm - 1) // 3 + 1
+            prev_period = f"{py}-Q{pq}"
+            prev_kpis = _real_vat_kpis(
+                workspace_id=workspace_id,
+                company_id=active_company,
+                period=prev_period,
+            )
+            if (
+                int(prev_kpis["transactions_classified"]) > 0
+                or float(prev_kpis["estimated_payable_aed"]) != 0
+            ):
+                estimated_payable_aed = float(prev_kpis["estimated_payable_aed"])
+                transactions_classified = int(prev_kpis["transactions_classified"])
+                period_start, period_end, label = _calendar_quarter(date(py, max(pm, 1), 1))
+                filing_deadline = _vat_filing_deadline(period_end)
+                days_to_filing = _days_between(today, filing_deadline)
+                tax_period = prev_period
+    except Exception:
+        # Do NOT fall back to ported Transaction table for VAT KPIs.
+        estimated_payable_aed = 0.0
+        transactions_classified = 0
+        transactions_needing_review = 0
 
     last_fy_end = date(today.year - 1, 12, 31)
     ct_deadline = _add_months(last_fy_end, 9)
@@ -144,15 +179,19 @@ async def dashboard_summary(
     except Exception:
         db.rollback()
 
-    pending_approvals = len(
-        [
-            t
-            for t in period_tx
-            if not t.is_verified
-            and t.vat_treatment
-            and (t.confidence_score is None or t.confidence_score < 85)
-        ]
-    )
+    pending_approvals = 0
+    try:
+        pending_approvals = (
+            db.query(func.count(Invoice.id))
+            .filter(
+                Invoice.company_id == company_id,
+                Invoice.status.in_(["pending", "review", "escalated"]),
+            )
+            .scalar()
+            or 0
+        )
+    except Exception:
+        db.rollback()
 
     open_mismatches = 0
     try:
@@ -170,7 +209,7 @@ async def dashboard_summary(
     except Exception:
         db.rollback()
 
-    # ── Invoice Flow queue stats ───────────────────────────────────────────────
+    # ── Invoice Flow queue stats (ported Invoice table — unchanged) ────────────
     all_invoices: List[Any] = []
     try:
         all_invoices = (
@@ -208,6 +247,7 @@ async def dashboard_summary(
             "start_date": period_start.isoformat(),
             "end_date": period_end.isoformat(),
             "label": label,
+            "tax_period": tax_period,
         },
         "vat": {
             "estimated_payable_aed": round(float(estimated_payable_aed), 2),

@@ -48,7 +48,7 @@ def _fta_box(vat_category: str, direction: str) -> str:
         if vat_category == "standard":
             return "box1"
         if vat_category == "zero":
-            return "box3"
+            return "box4"  # zero-rated supplies (not reverse charge)
         if vat_category == "exempt":
             return "box5"
         if vat_category == "reverse_charge":
@@ -226,8 +226,41 @@ def sync_approved_invoice_to_gulftax(
     if status != "Approved":
         return {"ok": False, "error": f"invoice_not_approved:{status}"}
 
+    # Prefer UAE profile company_id (same Fix 3 resolver) — never stamp a mismatched demo company.
+    resolved_company_id = company_id
+    tenant_id = (workspace_id or "").strip() or None
+    try:
+        from app.core.database import SessionLocal
+        from app.services.ap_invoice_post_service import _resolve_company_id_for_je
+
+        company = _fetch_company_config(company_id)
+        tenant_id = (
+            (workspace_id or "").strip()
+            or str(company.get("workspace_id") or "").strip()
+            or str(invoice.get("workspace_id") or "").strip()
+            or None
+        )
+        if tenant_id:
+            db = SessionLocal()
+            try:
+                resolved_company_id = _resolve_company_id_for_je(
+                    db,
+                    tenant_id,
+                    company_id,
+                    invoice_ref=invoice_id,
+                    company_name=invoice.get("company_name") or invoice.get("vendor_name"),
+                )
+            finally:
+                db.close()
+    except Exception:
+        logger.exception(
+            "company_id resolve failed for gulftax sync invoice=%s — using requested id",
+            invoice_id,
+        )
+        resolved_company_id = company_id
+
     company_err = _assert_invoice_company_match(invoice, company_id)
-    if company_err:
+    if company_err and resolved_company_id == company_id:
         logger.warning(
             "GulfTax sync rejected for invoice %s: %s (invoice company=%s, requested=%s)",
             invoice_id,
@@ -236,8 +269,17 @@ def sync_approved_invoice_to_gulftax(
             company_id,
         )
         return {"ok": False, "error": company_err}
+    if company_err:
+        logger.warning(
+            "GulfTax sync company mismatch for invoice %s (%s) — stamping resolved company_id=%s",
+            invoice_id,
+            company_err,
+            resolved_company_id,
+        )
 
-    row = build_transaction_row(invoice, company_id=company_id, workspace_id=workspace_id)
+    row = build_transaction_row(
+        invoice, company_id=resolved_company_id, workspace_id=tenant_id or workspace_id
+    )
 
     try:
         from app.core.supabase import get_supabase
@@ -253,7 +295,7 @@ def sync_approved_invoice_to_gulftax(
             "transaction_id": inserted.get("id") if inserted else None,
             "tax_period": row["tax_period"],
             "fta_box": row["fta_box"],
-            "company_id": company_id,
+            "company_id": resolved_company_id,
         }
     except Exception as exc:
         err = str(exc)
@@ -291,7 +333,7 @@ def sync_approved_invoice_to_gulftax(
                     "transaction_id": inserted.get("id") if inserted else None,
                     "tax_period": row["tax_period"],
                     "fta_box": row["fta_box"],
-                    "company_id": company_id,
+                    "company_id": resolved_company_id,
                     "note": "inserted_without_dz_columns",
                 }
             except Exception as exc2:

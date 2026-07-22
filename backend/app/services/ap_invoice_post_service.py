@@ -114,6 +114,23 @@ def _slugify(name: str) -> str:
     return (s or "company")[:120]
 
 
+def _canonical_uae_profile(profiles: list, match=None):
+    """Prefer earliest profile among same-name duplicates (canonical primary)."""
+    if not profiles:
+        return None
+    if match is not None:
+        name = (getattr(match, "company_name", None) or "").strip().lower()
+        same = [
+            p
+            for p in profiles
+            if (getattr(p, "company_name", None) or "").strip().lower() == name
+        ]
+        if same:
+            return min(same, key=lambda p: getattr(p, "created_at", None) or 0)
+    # profiles already ordered by created_at asc from caller
+    return profiles[0]
+
+
 def _ensure_ap_company_for_profile(
     db: Session,
     tenant_id: str,
@@ -226,10 +243,12 @@ def _resolve_company_id_for_je(
     )
 
     # 0) Raw id is a UAE profile → ensure matching ap_companies row (same UUID)
+    #    Collapse same-name duplicates to the earliest (canonical) profile.
     if raw:
         by_id = next((p for p in profiles if p.id == raw), None)
         if by_id:
-            return _ensure_ap_company_for_profile(db, tenant_id, by_id)
+            canonical = _canonical_uae_profile(profiles, by_id) or by_id
+            return _ensure_ap_company_for_profile(db, tenant_id, canonical)
 
     # 1) Existing resolver (validates ap_companies / maps profile → ap_company)
     resolved: str | None = None
@@ -243,25 +262,53 @@ def _resolve_company_id_for_je(
                     raw,
                     resolved,
                 )
-            # Trust only when raw was already a real ap_companies.id for this tenant.
-            # Sole-company / profile remap often returns an unrelated demo company
-            # (e.g. Al Noor) while the UI filters on Gnanova profile ids.
+            # Trust only when raw was already a real ap_companies.id whose name
+            # matches a UAE profile. Sole-company remap to an unrelated demo
+            # company (e.g. Al Noor vs Gnanova) must fall through to profiles.
             raw_is_ap = bool(
                 raw
                 and db.query(ApCompany)
                 .filter(ApCompany.id == raw, ApCompany.tenant_id == tenant_id)
                 .first()
             )
-            if raw_is_ap:
-                return resolved
             if profiles:
                 ap = db.get(ApCompany, resolved)
                 ap_name = ((ap.name if ap else "") or "").strip().lower()
-                if ap_name and any(
-                    (p.company_name or "").strip().lower() == ap_name for p in profiles
-                ):
+                name_ok = bool(
+                    ap_name
+                    and any(
+                        (p.company_name or "").strip().lower() == ap_name for p in profiles
+                    )
+                )
+                if raw_is_ap and name_ok:
+                    # Map to canonical profile with same name when duplicates exist
+                    match = next(
+                        (
+                            p
+                            for p in profiles
+                            if (p.company_name or "").strip().lower() == ap_name
+                        ),
+                        None,
+                    )
+                    if match:
+                        return _ensure_ap_company_for_profile(
+                            db, tenant_id, _canonical_uae_profile(profiles, match) or match
+                        )
                     return resolved
-                # Name mismatch (or no ap name) → fall through to profile path
+                if name_ok and not raw_is_ap:
+                    match = next(
+                        (
+                            p
+                            for p in profiles
+                            if (p.company_name or "").strip().lower() == ap_name
+                        ),
+                        None,
+                    )
+                    if match:
+                        return _ensure_ap_company_for_profile(
+                            db, tenant_id, _canonical_uae_profile(profiles, match) or match
+                        )
+                    return resolved
                 logger.warning(
                     "Ignoring resolver company_id=%s (name=%s) for invoice=%s — "
                     "prefer uae_company_profiles for JE visibility",
@@ -269,6 +316,8 @@ def _resolve_company_id_for_je(
                     ap_name or "?",
                     invoice_ref,
                 )
+            elif raw_is_ap:
+                return resolved
             else:
                 return resolved
     except HTTPException as exc:
@@ -295,24 +344,31 @@ def _resolve_company_id_for_je(
     if profiles and invoice_name:
         for p in profiles:
             if (p.company_name or "").strip().lower() == invoice_name:
-                return _ensure_ap_company_for_profile(db, tenant_id, p)
+                return _ensure_ap_company_for_profile(
+                    db, tenant_id, _canonical_uae_profile(profiles, p) or p
+                )
 
     if profiles and raw:
         # raw might be a display name
         target = raw.strip().lower()
         for p in profiles:
             if (p.company_name or "").strip().lower() == target:
-                return _ensure_ap_company_for_profile(db, tenant_id, p)
+                return _ensure_ap_company_for_profile(
+                    db, tenant_id, _canonical_uae_profile(profiles, p) or p
+                )
 
     if profiles:
-        # Prefer name match against any existing ap_companies, else first/primary profile
+        # Prefer name match against any existing ap_companies, else canonical primary
         ap_rows = list_ap_companies(db, tenant_id)
         for p in profiles:
             pname = (p.company_name or "").strip().lower()
             for ap in ap_rows:
                 if (ap.name or "").strip().lower() == pname:
-                    return ap.id
-        return _ensure_ap_company_for_profile(db, tenant_id, profiles[0])
+                    return _ensure_ap_company_for_profile(
+                        db, tenant_id, _canonical_uae_profile(profiles, p) or p
+                    )
+        primary = _canonical_uae_profile(profiles) or profiles[0]
+        return _ensure_ap_company_for_profile(db, tenant_id, primary)
 
     # 3) Last resort — any ap_companies row or create Default
     if resolved:

@@ -177,12 +177,19 @@ def sync_ar_invoice_to_gulftax(
     if (inv.status or "") not in ("posted", "sent", "partial", "paid", "overdue"):
         return {"ok": False, "error": f"invoice_not_posted:{inv.status}"}
 
+    from app.services.ap_invoice_post_service import _resolve_company_id_for_je
+
+    ws = workspace_id or inv.tenant_id
+    resolved_company_id = _resolve_company_id_for_je(
+        db, ws, company_id or inv.company_id, invoice_ref=sales_invoice_id
+    )
+
     customer_name = inv.customer.name if inv.customer else "Customer"
     row = build_ar_transaction_row(
         inv,
         customer_name=customer_name,
-        company_id=company_id,
-        workspace_id=workspace_id or inv.tenant_id,
+        company_id=resolved_company_id,
+        workspace_id=ws,
     )
 
     try:
@@ -192,7 +199,7 @@ def sync_ar_invoice_to_gulftax(
             "transaction_id": tx.id,
             "tax_period": row["tax_period"],
             "fta_box": row["fta_box"],
-            "company_id": company_id,
+            "company_id": resolved_company_id,
             "store": "rds",
             "gross_amount": row["gross_amount"],
             "vat_amount": row["vat_amount"],
@@ -319,6 +326,7 @@ def sync_ap_invoice_to_rds_gulftax(
         }
 
     from app.services.gulftax_sync_service import _fetch_invoice, build_transaction_row
+    from app.services.ap_invoice_post_service import _resolve_company_id_for_je
 
     invoice = _fetch_invoice(invoice_id)
     if not invoice:
@@ -326,10 +334,15 @@ def sync_ap_invoice_to_rds_gulftax(
     if (invoice.get("status") or "").strip() != "Approved":
         return {"ok": False, "error": f"invoice_not_approved:{invoice.get('status')}"}
 
+    ws = (workspace_id or "").strip() or str(invoice.get("workspace_id") or "").strip() or company_id
+    resolved_company_id = _resolve_company_id_for_je(
+        db, ws, company_id, invoice_ref=invoice_id
+    )
+
     from app.services.gulftax_sync_service import _assert_invoice_company_match
 
     company_err = _assert_invoice_company_match(invoice, company_id)
-    if company_err:
+    if company_err and resolved_company_id == company_id:
         logger.warning(
             "RDS GulfTax sync rejected for invoice %s: %s (invoice company=%s, requested=%s)",
             invoice_id,
@@ -338,9 +351,16 @@ def sync_ap_invoice_to_rds_gulftax(
             company_id,
         )
         return {"ok": False, "error": company_err}
+    if company_err:
+        logger.warning(
+            "RDS GulfTax sync company mismatch for invoice %s (%s) — stamping resolved=%s",
+            invoice_id,
+            company_err,
+            resolved_company_id,
+        )
 
-    row = build_transaction_row(invoice, company_id=company_id, workspace_id=workspace_id)
-    row["tenant_id"] = workspace_id or row.get("workspace_id") or company_id
+    row = build_transaction_row(invoice, company_id=resolved_company_id, workspace_id=ws)
+    row["tenant_id"] = ws
     row["transaction_date"] = date.fromisoformat(str(row["transaction_date"])[:10])
 
     try:
@@ -350,6 +370,7 @@ def sync_ap_invoice_to_rds_gulftax(
             "transaction_id": tx.id,
             "tax_period": row["tax_period"],
             "store": "rds",
+            "company_id": resolved_company_id,
             "designated_zone": row.get("designated_zone", False),
         }
     except Exception as exc:
