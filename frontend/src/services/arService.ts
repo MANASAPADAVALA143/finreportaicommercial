@@ -189,14 +189,23 @@ export async function bulkImportARInvoices(
   company_id: string,
   workspace_id?: string,
 ): Promise<ARBulkImportResult> {
+  if (!(file instanceof File)) {
+    throw new Error('No file selected for import');
+  }
+
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', file, file.name);
   form.append('company_id', company_id);
   if (workspace_id) form.append('workspace_id', workspace_id);
 
+  // Do NOT set Content-Type — browser must set multipart/form-data with boundary.
+  // workspaceHeaders() defaults to application/json, which strips the file from the body.
+  const headers = workspaceHeaders(getStoredAccessToken());
+  delete headers['Content-Type'];
+
   const res = await fetch(`${BASE}/bulk-import`, {
     method: 'POST',
-    headers: workspaceHeaders(getStoredAccessToken()),
+    headers,
     body: form,
     credentials: 'include',
   });

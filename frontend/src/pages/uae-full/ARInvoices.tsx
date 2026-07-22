@@ -266,7 +266,9 @@ export default function ARInvoices() {
   };
 
   const handleBulkFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
     if (!file) return;
     if (!companyId) {
       toast.error('Select a company first');
