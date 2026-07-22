@@ -10,6 +10,8 @@ import {
   processApprovalAction,
   emailsMatch,
   pickApprovalRule,
+  reassignPendingApprover,
+  resetInvoiceApprovalChain,
 } from '@/lib/ap-invoice/approvalService';
 import { ApprovalStatusBadge } from '@/components/approvals/ApprovalStatusBadge';
 import { Button } from '@/components/ui/button';
@@ -38,7 +40,7 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
   const [hasMatchingRule, setHasMatchingRule] = useState(false);
   const [rulesError, setRulesError] = useState('');
 
-  const chainStatus = invoice.approval_status ?? 'not_required';
+  const rawChainStatus = invoice.approval_status ?? 'not_required';
 
   const loadRules = useCallback(async () => {
     setRulesLoaded(false);
@@ -84,6 +86,27 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
   }, [loadRules]);
 
   const pendingRow = rows.find((r) => r.status === 'pending');
+  // Heal stuck UI: invoice_approvals has a pending step but invoices.approval_status
+  // was never flipped (missing column / failed update) — still treat as pending.
+  const chainStatus =
+    rawChainStatus === 'not_required' && pendingRow
+      ? 'pending'
+      : rows.some((r) => r.status === 'approved' || r.status === 'rejected') && rawChainStatus === 'not_required'
+        ? (rows.some((r) => r.status === 'rejected') ? 'rejected' : 'pending')
+        : rawChainStatus;
+
+  // Best-effort heal of invoices.approval_status when steps exist but flag is stuck.
+  useEffect(() => {
+    if (!pendingRow || rawChainStatus === 'pending' || rawChainStatus === 'approved') return;
+    void import('@/lib/ap-invoice/supabase').then(async ({ supabase }) => {
+      const { error } = await supabase
+        .from('invoices')
+        .update({ approval_status: 'pending', updated_at: new Date().toISOString() })
+        .eq('id', invoice.id);
+      if (!error) onRefresh();
+    });
+  }, [pendingRow, rawChainStatus, invoice.id, onRefresh]);
+
   const isCurrentApprover = pendingRow && workEmail.trim() && emailsMatch(pendingRow.approver_email, workEmail);
 
   const readyForSubmit =
@@ -278,9 +301,61 @@ export function ApprovalChainPanel({ invoice, onRefresh }: Props) {
       )}
 
       {chainStatus === 'pending' && pendingRow && workEmail.trim() && !isCurrentApprover && (
-        <p className="text-xs text-gray-600">
-          Pending step is assigned to <strong>{pendingRow.approver_email}</strong>. Switch work email or use My Approvals when it is your turn.
-        </p>
+        <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+          <p className="text-xs text-gray-700">
+            Pending step is assigned to <strong>{pendingRow.approver_email}</strong>. Changing the Settings rule does not
+            update this invoice — reassign or reset below.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              className="bg-[#0A4B8F] hover:bg-[#083d75] text-white"
+              disabled={loading}
+              onClick={() => void (async () => {
+                setLoading(true);
+                try {
+                  const res = await reassignPendingApprover(invoice.id, workEmail.trim());
+                  if (!res.ok) {
+                    toast({ title: 'Reassign failed', description: res.message, variant: 'destructive' });
+                    return;
+                  }
+                  toast({ title: 'Reassigned', description: `Pending step is now ${workEmail.trim()}` });
+                  await loadRows();
+                  onRefresh();
+                } finally {
+                  setLoading(false);
+                }
+              })()}
+            >
+              Reassign pending step to my email
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={loading}
+              onClick={() => void (async () => {
+                if (!confirm('Clear this approval chain so you can submit again with the updated rule?')) return;
+                setLoading(true);
+                try {
+                  const res = await resetInvoiceApprovalChain(invoice.id);
+                  if (!res.ok) {
+                    toast({ title: 'Reset failed', description: res.message, variant: 'destructive' });
+                    return;
+                  }
+                  toast({ title: 'Chain cleared', description: 'You can submit for approval again.' });
+                  await loadRows();
+                  onRefresh();
+                } finally {
+                  setLoading(false);
+                }
+              })()}
+            >
+              Reset chain & re-submit
+            </Button>
+          </div>
+        </div>
       )}
 
       <div className="flex items-center gap-2 text-xs text-gray-500 border-t pt-3">

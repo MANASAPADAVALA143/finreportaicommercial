@@ -180,15 +180,36 @@ export function Settings() {
     try {
       const cid = (await getMyCompany())?.id;
       if (!cid) return;
-      const { data, error } = await supabase
+      // Prefer UAE market columns; fall back if live Supabase schema lacks them (400 / PGRST204).
+      let data: Record<string, unknown> | null = null;
+      const full = await supabase
         .from('companies')
         .select('fta_registration, vat_filing_frequency, emirate')
         .eq('id', cid)
         .maybeSingle();
-      if (error || !data) return;
+      if (full.error) {
+        const msg = (full.error.message || '').toLowerCase();
+        const missingCol =
+          msg.includes('fta_registration') ||
+          msg.includes('vat_filing_frequency') ||
+          msg.includes('emirate') ||
+          msg.includes('schema cache') ||
+          full.error.code === '42703' ||
+          full.error.code === 'PGRST204';
+        if (!missingCol) {
+          console.warn('companies market fields:', full.error.message);
+          return;
+        }
+        console.warn(
+          'companies.fta_registration / vat_filing_frequency / emirate missing — run UAE companies migration on Supabase. Skipping market fields.',
+        );
+        return;
+      }
+      data = full.data as Record<string, unknown> | null;
+      if (!data) return;
       if (data.fta_registration) setFtaRegistration(String(data.fta_registration));
       if (data.vat_filing_frequency === 'monthly' || data.vat_filing_frequency === 'quarterly') {
-        setVatFilingFrequency(data.vat_filing_frequency);
+        setVatFilingFrequency(data.vat_filing_frequency as 'monthly' | 'quarterly');
       }
       if (data.emirate) setEmirate(String(data.emirate));
     } catch (e) {
@@ -312,9 +333,34 @@ export function Settings() {
           emirate: emirate || null,
         })
         .eq('id', company_id);
-      if (marketErr) throw marketErr;
-
-      if (isUAE && !ftaRegistration.trim()) {
+      if (marketErr) {
+        const msg = (marketErr.message || '').toLowerCase();
+        const missingCol =
+          msg.includes('fta_registration') ||
+          msg.includes('vat_filing_frequency') ||
+          msg.includes('emirate') ||
+          msg.includes('schema cache') ||
+          marketErr.code === '42703' ||
+          marketErr.code === 'PGRST204';
+        if (missingCol) {
+          // Retry without UAE-only columns so Company Settings still save.
+          const { error: fallbackErr } = await supabase
+            .from('companies')
+            .update({
+              market: isUAE ? 'uae' : market,
+              admin_email: companyRow.cfo_email?.trim() || null,
+            })
+            .eq('id', company_id);
+          if (fallbackErr) throw fallbackErr;
+          toast({
+            title: 'Saved (partial)',
+            description:
+              'Company settings saved. FTA / VAT filing / emirate columns are missing on Supabase — run the UAE companies migration to enable them.',
+          });
+        } else {
+          throw marketErr;
+        }
+      } else if (isUAE && !ftaRegistration.trim()) {
         toast({
           title: 'Saved — FTA Registration recommended',
           description: 'Add your FTA Registration Number for UAE VAT compliance.',

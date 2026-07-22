@@ -457,21 +457,107 @@ export async function fetchMyApprovalHistory(
 
 export async function saveApprovalRule(rule: Partial<ApprovalRule> & { min_amount: number; required_approvers: number; approver_emails: string[] }) {
   const company_id = await requireCompanyId();
-  const fields = {
+  const baseFields = {
     min_amount: rule.min_amount,
     max_amount: rule.max_amount ?? null,
     required_approvers: rule.required_approvers,
     approver_emails: rule.approver_emails,
-    approver_phones: rule.approver_phones?.length ? rule.approver_phones : null,
     department: rule.department?.trim() || null,
   };
+  const withPhones = {
+    ...baseFields,
+    approver_phones: rule.approver_phones?.length ? rule.approver_phones : null,
+  };
+
+  const looksLikeMissingCol = (error: { message?: string; code?: string } | null) => {
+    if (!error) return false;
+    const msg = (error.message || '').toLowerCase();
+    return (
+      msg.includes('approver_phones') ||
+      msg.includes('schema cache') ||
+      msg.includes('could not find') ||
+      error.code === '42703' ||
+      error.code === 'PGRST204'
+    );
+  };
+
   if (rule.id) {
-    const { error } = await supabase.from('approval_rules').update(fields).eq('id', rule.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from('approval_rules').insert({ ...fields, company_id });
-    if (error) throw error;
+    const { error } = await supabase.from('approval_rules').update(withPhones).eq('id', rule.id);
+    if (!error) return;
+    if (looksLikeMissingCol(error)) {
+      const retry = await supabase.from('approval_rules').update(baseFields).eq('id', rule.id);
+      if (retry.error) throw new Error(retry.error.message);
+      return;
+    }
+    throw new Error(error.message);
   }
+
+  const { error } = await supabase.from('approval_rules').insert({ ...withPhones, company_id });
+  if (!error) return;
+  if (looksLikeMissingCol(error)) {
+    const retry = await supabase.from('approval_rules').insert({ ...baseFields, company_id });
+    if (retry.error) throw new Error(retry.error.message);
+    return;
+  }
+  throw new Error(error.message);
+}
+
+/** Re-point the current pending approval step to a different email (stuck chain / wrong rule). */
+export async function reassignPendingApprover(
+  invoiceId: string,
+  newApproverEmail: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const email = newApproverEmail.trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    return { ok: false, message: 'Enter a valid approver email.' };
+  }
+
+  const { data: pending, error: findErr } = await supabase
+    .from('invoice_approvals')
+    .select('id')
+    .eq('invoice_id', invoiceId)
+    .eq('status', 'pending')
+    .order('step_index', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (findErr) return { ok: false, message: findErr.message };
+  if (!pending?.id) return { ok: false, message: 'No pending approval step on this invoice.' };
+
+  const { error: upErr } = await supabase
+    .from('invoice_approvals')
+    .update({ approver_email: email })
+    .eq('id', pending.id);
+  if (upErr) return { ok: false, message: upErr.message };
+
+  // Keep invoice chain fields in sync when columns exist.
+  await updateInvoiceSafe(invoiceId, {
+    approval_status: 'pending',
+    approval_chain_emails: [email],
+    updated_at: new Date().toISOString(),
+  });
+
+  return { ok: true };
+}
+
+/** Clear stuck chain so invoice can be submitted again under the current rule. */
+export async function resetInvoiceApprovalChain(
+  invoiceId: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error: delErr } = await supabase.from('invoice_approvals').delete().eq('invoice_id', invoiceId);
+  if (delErr) return { ok: false, message: delErr.message };
+
+  const { error } = await updateInvoiceSafe(invoiceId, {
+    approval_status: 'not_required',
+    current_approver_index: 0,
+    approval_rule_id: null,
+    approval_chain_emails: null,
+    approval_total_steps: null,
+    submitted_for_approval_at: null,
+    approval_submitted_by: null,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) return { ok: false, message: error.message };
+  return { ok: true };
 }
 
 export async function deleteApprovalRule(id: string) {

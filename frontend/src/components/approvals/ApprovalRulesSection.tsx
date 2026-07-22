@@ -113,9 +113,12 @@ export function ApprovalRulesSection() {
       setOpen(false);
       await load();
     } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
       toast({
         title: 'Save failed',
-        description: e instanceof Error ? e.message : 'Unknown error',
+        description: msg.includes('approver_phones')
+          ? 'approver_phones column missing on Supabase — retrying without phones failed. Check RLS / company_id on approval_rules.'
+          : msg,
         variant: 'destructive',
       });
     } finally {
