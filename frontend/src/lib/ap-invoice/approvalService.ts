@@ -455,51 +455,97 @@ export async function fetchMyApprovalHistory(
     .filter((x): x is { approval: InvoiceApprovalRow; invoice: Invoice } => x != null);
 }
 
+/** Format Supabase / unknown throwables for toasts (PostgrestError is often not `instanceof Error`). */
+export function formatSupabaseError(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message;
+  if (e && typeof e === 'object') {
+    const o = e as { message?: string; details?: string; hint?: string; code?: string };
+    const parts = [o.message, o.details, o.hint, o.code ? `code ${o.code}` : ''].filter(Boolean);
+    if (parts.length) return parts.join(' — ');
+  }
+  return String(e || 'Unknown error');
+}
+
+function isMissingColumnError(error: { message?: string; code?: string; details?: string } | null): boolean {
+  if (!error) return false;
+  const msg = `${error.message || ''} ${error.details || ''}`.toLowerCase();
+  return (
+    msg.includes('approver_phones') ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find') ||
+    msg.includes('column') ||
+    error.code === '42703' ||
+    error.code === 'PGRST204'
+  );
+}
+
+/** Keep only E.164-ish phones; drop emails mistakenly pasted into the phones field. */
+export function sanitizeApproverPhones(phones: string[] | null | undefined): string[] | null {
+  if (!phones?.length) return null;
+  const cleaned = phones
+    .map((p) => p.trim())
+    .filter((p) => p && !p.includes('@') && /^\+?[\d\s()-]{7,}$/.test(p));
+  return cleaned.length ? cleaned : null;
+}
+
 export async function saveApprovalRule(rule: Partial<ApprovalRule> & { min_amount: number; required_approvers: number; approver_emails: string[] }) {
-  const company_id = await requireCompanyId();
-  const baseFields = {
+  let company_id: string;
+  try {
+    // Prefer workspace-synced Supabase company (matches invoices / RLS tenant).
+    const { resolveApSupabaseCompanyId } = await import('./workspaceCompanySync');
+    company_id = await resolveApSupabaseCompanyId();
+  } catch {
+    company_id = await requireCompanyId();
+  }
+
+  const phones = sanitizeApproverPhones(rule.approver_phones);
+  const baseFields: Record<string, unknown> = {
     min_amount: rule.min_amount,
     max_amount: rule.max_amount ?? null,
     required_approvers: rule.required_approvers,
     approver_emails: rule.approver_emails,
     department: rule.department?.trim() || null,
   };
-  const withPhones = {
-    ...baseFields,
-    approver_phones: rule.approver_phones?.length ? rule.approver_phones : null,
-  };
 
-  const looksLikeMissingCol = (error: { message?: string; code?: string } | null) => {
-    if (!error) return false;
-    const msg = (error.message || '').toLowerCase();
-    return (
-      msg.includes('approver_phones') ||
-      msg.includes('schema cache') ||
-      msg.includes('could not find') ||
-      error.code === '42703' ||
-      error.code === 'PGRST204'
-    );
-  };
-
-  if (rule.id) {
-    const { error } = await supabase.from('approval_rules').update(withPhones).eq('id', rule.id);
-    if (!error) return;
-    if (looksLikeMissingCol(error)) {
-      const retry = await supabase.from('approval_rules').update(baseFields).eq('id', rule.id);
-      if (retry.error) throw new Error(retry.error.message);
-      return;
+  const tryWrite = async (fields: Record<string, unknown>, mode: 'update' | 'insert') => {
+    if (mode === 'update') {
+      return supabase.from('approval_rules').update(fields).eq('id', rule.id!);
     }
-    throw new Error(error.message);
+    return supabase.from('approval_rules').insert({ ...fields, company_id });
+  };
+
+  const mode = rule.id ? 'update' : 'insert';
+
+  // 1) With phones (only if we have real phone numbers)
+  if (phones) {
+    const first = await tryWrite({ ...baseFields, approver_phones: phones }, mode);
+    if (!first.error) return;
+    if (!isMissingColumnError(first.error)) {
+      // Retry without company_id on insert if FK/RLS company mismatch
+      if (mode === 'insert') {
+        const noCo = await supabase.from('approval_rules').insert(baseFields);
+        if (!noCo.error) return;
+        throw new Error(formatSupabaseError(first.error));
+      }
+      throw new Error(formatSupabaseError(first.error));
+    }
   }
 
-  const { error } = await supabase.from('approval_rules').insert({ ...withPhones, company_id });
-  if (!error) return;
-  if (looksLikeMissingCol(error)) {
-    const retry = await supabase.from('approval_rules').insert({ ...baseFields, company_id });
-    if (retry.error) throw new Error(retry.error.message);
-    return;
+  // 2) Without phones (live schema often lacks approver_phones)
+  const second = await tryWrite(baseFields, mode);
+  if (!second.error) return;
+
+  // 3) Insert without company_id (older schemas / RLS mismatches)
+  if (mode === 'insert') {
+    const third = await supabase.from('approval_rules').insert(baseFields);
+    if (!third.error) return;
+    throw new Error(
+      formatSupabaseError(second.error) +
+        ` | retry: ${formatSupabaseError(third.error)} | company_id=${company_id}`,
+    );
   }
-  throw new Error(error.message);
+
+  throw new Error(formatSupabaseError(second.error));
 }
 
 /** Re-point the current pending approval step to a different email (stuck chain / wrong rule). */
@@ -529,7 +575,6 @@ export async function reassignPendingApprover(
     .eq('id', pending.id);
   if (upErr) return { ok: false, message: upErr.message };
 
-  // Keep invoice chain fields in sync when columns exist.
   await updateInvoiceSafe(invoiceId, {
     approval_status: 'pending',
     approval_chain_emails: [email],
@@ -562,5 +607,5 @@ export async function resetInvoiceApprovalChain(
 
 export async function deleteApprovalRule(id: string) {
   const { error } = await supabase.from('approval_rules').delete().eq('id', id);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
 }

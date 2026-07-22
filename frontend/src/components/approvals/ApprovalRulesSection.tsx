@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
 import type { ApprovalRule } from '@/lib/ap-invoice/supabase';
-import { fetchApprovalRules, saveApprovalRule, deleteApprovalRule } from '@/lib/ap-invoice/approvalService';
+import { fetchApprovalRules, saveApprovalRule, deleteApprovalRule, formatSupabaseError } from '@/lib/ap-invoice/approvalService';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -85,10 +85,20 @@ export function ApprovalRulesSection() {
       .split(/[,;\n]/)
       .map((s) => s.trim())
       .filter(Boolean);
-    const phones = form.approver_phones
+    const phonesRaw = form.approver_phones
       .split(/[,;\n]/)
       .map((s) => s.trim())
       .filter(Boolean);
+    // Common mistake: paste email into WhatsApp phones field → causes 400 on save.
+    if (phonesRaw.some((p) => p.includes('@'))) {
+      toast({
+        title: 'WhatsApp field needs a phone number',
+        description: 'Leave phones blank, or use E.164 like +971501234567 — not an email.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const phones = phonesRaw;
     const req = Math.max(1, parseInt(form.required_approvers, 10) || 1);
     if (emails.length === 0) {
       toast({ title: 'Add at least one approver email', variant: 'destructive' });
@@ -113,12 +123,10 @@ export function ApprovalRulesSection() {
       setOpen(false);
       await load();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Unknown error';
+      console.error('[approval_rules] save failed', e);
       toast({
         title: 'Save failed',
-        description: msg.includes('approver_phones')
-          ? 'approver_phones column missing on Supabase — retrying without phones failed. Check RLS / company_id on approval_rules.'
-          : msg,
+        description: formatSupabaseError(e),
         variant: 'destructive',
       });
     } finally {
