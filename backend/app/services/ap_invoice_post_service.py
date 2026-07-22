@@ -107,33 +107,174 @@ def _fetch_supabase_invoice(invoice_id: str) -> dict[str, Any] | None:
         return None
 
 
+def _slugify(name: str) -> str:
+    import re
+
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "company").lower()).strip("-")
+    return (s or "company")[:120]
+
+
+def _ensure_ap_company_for_profile(
+    db: Session,
+    tenant_id: str,
+    profile,
+) -> str:
+    """Ensure an ap_companies row exists for a UAE profile; prefer same UUID as profile.id."""
+    import uuid as _uuid
+
+    from app.models.client_data import ApCompany
+    from app.services.ap_company_resolver import list_ap_companies
+
+    # 1) Same id as profile (UI active_company_id is usually the profile id)
+    existing = db.get(ApCompany, profile.id)
+    if existing:
+        if existing.tenant_id != tenant_id:
+            existing.tenant_id = tenant_id
+            db.add(existing)
+            db.commit()
+        return existing.id
+
+    # 2) Name match against existing ap_companies for tenant
+    target = (profile.company_name or "").strip().lower()
+    if target:
+        for row in list_ap_companies(db, tenant_id):
+            if (row.name or "").strip().lower() == target:
+                return row.id
+
+    # 3) Insert using profile.id so Journal Entries company filter matches
+    slug = _slugify(profile.company_name or "company")
+    # Avoid unique (tenant_id, slug) collisions
+    clash = (
+        db.query(ApCompany)
+        .filter(ApCompany.tenant_id == tenant_id, ApCompany.slug == slug)
+        .first()
+    )
+    if clash:
+        slug = f"{slug}-{str(_uuid.uuid4())[:8]}"
+
+    row = ApCompany(
+        id=profile.id,
+        tenant_id=tenant_id,
+        name=(profile.company_name or "Default").strip() or "Default",
+        slug=slug,
+        market="uae",
+        accounting_standard=getattr(profile, "reporting_standard", None) or "IFRS",
+    )
+    db.add(row)
+    db.commit()
+    logger.info(
+        "Created ap_companies row id=%s name=%s for tenant=%s from uae_company_profiles",
+        row.id,
+        row.name,
+        tenant_id,
+    )
+    return row.id
+
+
+def _ensure_default_ap_company(db: Session, tenant_id: str, name: str = "Default") -> str:
+    import uuid as _uuid
+
+    from app.models.client_data import ApCompany
+    from app.services.ap_company_resolver import list_ap_companies
+
+    rows = list_ap_companies(db, tenant_id)
+    if rows:
+        return rows[0].id
+
+    row = ApCompany(
+        id=str(_uuid.uuid4()),
+        tenant_id=tenant_id,
+        name=(name or "Default").strip() or "Default",
+        slug=_slugify(name or "default"),
+        market="uae",
+        accounting_standard="IFRS",
+    )
+    db.add(row)
+    db.commit()
+    logger.info("Created fallback ap_companies row id=%s for tenant=%s", row.id, tenant_id)
+    return row.id
+
+
 def _resolve_company_id_for_je(
     db: Session,
     tenant_id: str,
     raw_company_id: str | None,
     *,
     invoice_ref: str = "",
-) -> str | None:
-    """Resolve ap_companies.id for JE rows — never use unvalidated body.company_id."""
+) -> str:
+    """Resolve ap_companies.id for JE rows — never returns None."""
+    from fastapi import HTTPException
+
+    from app.models.company_setup import UaeCompanyProfile
+    from app.services.ap_company_resolver import list_ap_companies
+
     raw = (raw_company_id or "").strip() or None
+
+    # 1) Existing resolver (validates ap_companies / maps profile → ap_company)
     try:
         resolved = resolve_ap_company_id(db, tenant_id, raw)
-    except Exception:
+        if resolved:
+            if raw and resolved != raw:
+                logger.warning(
+                    "company_id remapped for JE: invoice=%s raw=%s resolved=%s",
+                    invoice_ref,
+                    raw,
+                    resolved,
+                )
+            return resolved
+    except HTTPException as exc:
         logger.warning(
-            "ap_companies resolve failed for company_id=%s tenant=%s invoice=%s — no JE company_id",
+            "ap_companies resolve rejected company_id=%s tenant=%s invoice=%s: %s — falling back",
             raw_company_id,
             tenant_id,
             invoice_ref,
+            getattr(exc, "detail", exc),
         )
-        return None
-    if resolved and raw and resolved != raw:
+    except Exception:
         logger.warning(
-            "company_id remapped for JE: invoice=%s raw=%s resolved=%s",
+            "ap_companies resolve failed for company_id=%s tenant=%s invoice=%s — falling back",
+            raw_company_id,
+            tenant_id,
             invoice_ref,
-            raw,
-            resolved,
+            exc_info=True,
         )
-    return resolved
+
+    # 2) uae_company_profiles fallback
+    profiles = (
+        db.query(UaeCompanyProfile)
+        .filter(UaeCompanyProfile.workspace_id == tenant_id)
+        .order_by(UaeCompanyProfile.created_at.asc())
+        .all()
+    )
+
+    if raw:
+        by_id = next((p for p in profiles if p.id == raw), None)
+        if by_id:
+            return _ensure_ap_company_for_profile(db, tenant_id, by_id)
+
+    if len(profiles) == 1:
+        return _ensure_ap_company_for_profile(db, tenant_id, profiles[0])
+
+    if profiles and raw:
+        # raw might be a display name
+        target = raw.strip().lower()
+        for p in profiles:
+            if (p.company_name or "").strip().lower() == target:
+                return _ensure_ap_company_for_profile(db, tenant_id, p)
+
+    if profiles:
+        # Prefer name match against any existing ap_companies, else first profile
+        ap_rows = list_ap_companies(db, tenant_id)
+        for p in profiles:
+            pname = (p.company_name or "").strip().lower()
+            for ap in ap_rows:
+                if (ap.name or "").strip().lower() == pname:
+                    return ap.id
+        return _ensure_ap_company_for_profile(db, tenant_id, profiles[0])
+
+    # 3) Last resort — any ap_companies row or create Default
+    name = "Default"
+    return _ensure_default_ap_company(db, tenant_id, name=name)
 
 
 def _find_ap_journal(
