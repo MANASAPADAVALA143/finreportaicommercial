@@ -1,16 +1,11 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase as sharedSupabase } from '../supabase';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env — app will load but data features will fail until set.');
-}
-
-export const supabase: SupabaseClient = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key'
-);
+/**
+ * Singleton Supabase client — re-exported from the app-wide client in
+ * `frontend/src/lib/supabase.ts` to avoid "Multiple GoTrueClient instances".
+ */
+export const supabase: SupabaseClient = sharedSupabase;
 
 export type Invoice = {
   id: string;

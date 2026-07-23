@@ -60,30 +60,75 @@ const ICONS: Record<string, React.ElementType> = {
 
 // ── GulfTax status widget (UAE suite only) ────────────────────────────────────
 
-const GULFTAX_API = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001');
+const GULFTAX_API = String(import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
-type GulfTaxStatus = { online: boolean; status_code?: number; url?: string; error?: string };
+type GulfTaxWidgetState =
+  | { kind: 'loading' }
+  | { kind: 'online' }
+  | { kind: 'auth' }
+  | { kind: 'unavailable'; message?: string };
 
 function GulfTaxWidget() {
-  const [status, setStatus]   = useState<GulfTaxStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { accessToken } = useAuth();
+  const [state, setState] = useState<GulfTaxWidgetState>({ kind: 'loading' });
 
-  const poll = () => {
-    // GulfTax is now embedded — call the built-in status endpoint
-    fetch(`/api/gulftax/status`)
-      .then(r => r.json())
-      .then((d: GulfTaxStatus) => setStatus(d))
-      .catch(() => setStatus({ online: false, error: 'Backend offline' }))
-      .finally(() => setLoading(false));
+  const poll = async () => {
+    const base = GULFTAX_API || '';
+    if (!base) {
+      setState({ kind: 'unavailable', message: 'VITE_API_URL not set' });
+      return;
+    }
+    const url = `${base}/api/gulftax/status`;
+    try {
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      const token = accessToken || (typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null);
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await fetch(url, { headers });
+      if (res.status === 401 || res.status === 403) {
+        setState({ kind: 'auth' });
+        return;
+      }
+      if (!res.ok) {
+        setState({ kind: 'unavailable', message: `HTTP ${res.status}` });
+        return;
+      }
+      const data = (await res.json()) as { online?: boolean };
+      if (data?.online === false) {
+        setState({ kind: 'unavailable', message: 'Classifier offline' });
+        return;
+      }
+      setState({ kind: 'online' });
+    } catch {
+      setState({ kind: 'unavailable' });
+    }
   };
 
   useEffect(() => {
-    poll();
-    const t = setInterval(poll, 30_000); // re-check every 30 s
+    void poll();
+    const t = setInterval(() => void poll(), 30_000);
     return () => clearInterval(t);
-  }, []);
+    // Re-poll when auth token becomes available
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
 
-  const online = status?.online ?? false;
+  const online = state.kind === 'online';
+  const loading = state.kind === 'loading';
+
+  const badgeLabel =
+    loading ? 'Checking…'
+    : state.kind === 'online' ? 'Online'
+    : state.kind === 'auth' ? 'Auth required'
+    : 'Unavailable';
+
+  const subLabel =
+    state.kind === 'online'
+      ? 'UAE VAT classification active. Invoices auto-classified on upload.'
+      : state.kind === 'auth'
+        ? 'GulfTax AI — Auth required'
+        : state.kind === 'unavailable'
+          ? 'GulfTax AI — Unavailable'
+          : 'Checking GulfTax status…';
 
   return (
     <div className="mx-3 mb-2 rounded-lg border border-white/8 bg-white/[0.03] p-2.5">
@@ -98,19 +143,22 @@ function GulfTaxWidget() {
         <span className={`flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full
           ${loading ? 'text-gray-500 bg-gray-700/40'
           : online  ? 'text-teal-300 bg-teal-900/40'
+          : state.kind === 'auth' ? 'text-amber-300 bg-amber-900/40'
           :           'text-red-300 bg-red-900/40'}`}>
           {!loading && (
-            <span className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-teal-400 animate-pulse' : 'bg-red-500'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              online ? 'bg-teal-400 animate-pulse'
+              : state.kind === 'auth' ? 'bg-amber-400'
+              : 'bg-red-500'
+            }`} />
           )}
-          {loading ? 'Checking…' : online ? 'Online' : 'Offline'}
+          {badgeLabel}
         </span>
       </div>
 
       {/* Sub-label */}
       <p className="text-[10px] text-gray-500 mb-2 leading-tight">
-        {online
-          ? 'UAE VAT classification active. Invoices auto-classified on upload.'
-          : 'UAE VAT classifier — restart FinReportAI backend to activate.'}
+        {subLabel}
       </p>
 
       {/* Quick stats row */}
