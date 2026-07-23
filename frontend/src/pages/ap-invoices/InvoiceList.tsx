@@ -53,6 +53,8 @@ function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | nu
     'risk_score',
     'payment_status',
     'ifrs_category',
+    'vat_treatment',
+    'gulftax_decision',
     'total_amount',
     'vendor_name',
     'updated_at',
@@ -1682,44 +1684,72 @@ export function InvoiceList() {
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {invoice.ifrs_category ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
-                            {invoice.ifrs_category}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <div
-                              style={{
-                                width: '50px',
-                                height: '4px',
-                                background: '#e5e7eb',
-                                borderRadius: '2px',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: `${Math.min(100, Math.max(0, Number(invoice.ifrs_confidence ?? 0)))}%`,
-                                  height: '100%',
-                                  background: '#1a56db',
-                                  borderRadius: '2px',
-                                }}
-                              />
+                      {(() => {
+                        const decision = String(invoice.gulftax_decision || '').trim().toUpperCase();
+                        const treatment = String(invoice.vat_treatment || '').trim();
+                        // Prefer GulfTax VAT treatment when classified (historical backfill + new uploads)
+                        if (decision || treatment) {
+                          const label = treatment || decision || 'classified';
+                          const color = !decision
+                            ? '#4b5563'
+                            : decision === 'AUTO_APPROVE'
+                              ? '#059669'
+                              : decision === 'REVIEW_QUEUE'
+                                ? '#d97706'
+                                : decision === 'HARD_BLOCK'
+                                  ? '#dc2626'
+                                  : '#4b5563';
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: 600, color }}>{label}</span>
+                              {decision ? (
+                                <span style={{ fontSize: '10px', color: '#9ca3af' }}>{decision}</span>
+                              ) : null}
                             </div>
-                            <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                              {Number(invoice.ifrs_confidence ?? 0)}%
+                          );
+                        }
+                        if (invoice.ifrs_category) {
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
+                                {invoice.ifrs_category}
+                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                <div
+                                  style={{
+                                    width: '50px',
+                                    height: '4px',
+                                    background: '#e5e7eb',
+                                    borderRadius: '2px',
+                                    overflow: 'hidden',
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      width: `${Math.min(100, Math.max(0, Number(invoice.ifrs_confidence ?? 0)))}%`,
+                                      height: '100%',
+                                      background: '#1a56db',
+                                      borderRadius: '2px',
+                                    }}
+                                  />
+                                </div>
+                                <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                                  {Number(invoice.ifrs_confidence ?? 0)}%
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div>
+                            <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
+                              ⚠ Not Classified
                             </span>
+                            <br />
+                            <span style={{ color: '#4b5563', fontSize: '12px', fontWeight: 500 }}>Fix required</span>
                           </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
-                            ⚠ Not Classified
-                          </span>
-                          <br />
-                          <span style={{ color: '#4b5563', fontSize: '12px', fontWeight: 500 }}>Fix required</span>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </TableCell>
                     <TableCell
                       className="hidden lg:table-cell cursor-pointer align-middle"
