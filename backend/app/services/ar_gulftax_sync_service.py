@@ -150,6 +150,27 @@ def _insert_rds_row(db: Session, row: dict[str, Any]) -> GulftaxTransaction:
     return tx
 
 
+def _mirror_to_vat_classifier(gt_row: Any) -> dict[str, Any]:
+    """Best-effort write into VAT Classifier `transactions` (Saved list)."""
+    try:
+        from app.services.vat_classifier_sync_service import sync_gulftax_orm_row_to_classifier
+
+        result = sync_gulftax_orm_row_to_classifier(gt_row)
+        if not result.get("ok"):
+            logger.warning(
+                "VAT Classifier mirror failed for %s: %s",
+                getattr(gt_row, "invoice_number", None),
+                result.get("error"),
+            )
+        return result
+    except Exception:
+        logger.exception(
+            "VAT Classifier mirror exception for %s",
+            getattr(gt_row, "invoice_number", None),
+        )
+        return {"ok": False, "error": "classifier_mirror_exception"}
+
+
 def sync_ar_invoice_to_gulftax(
     db: Session,
     sales_invoice_id: str,
@@ -163,11 +184,13 @@ def sync_ar_invoice_to_gulftax(
 
     existing = _existing_ar_in_gulftax(db, sales_invoice_id)
     if existing:
+        classifier = _mirror_to_vat_classifier(existing)
         return {
             "ok": True,
             "skipped": True,
             "reason": "already_synced",
             "transaction_id": existing.id,
+            "classifier": classifier,
         }
 
     inv = db.query(UAESalesInvoice).filter_by(id=sales_invoice_id).first()
@@ -194,6 +217,7 @@ def sync_ar_invoice_to_gulftax(
 
     try:
         tx = _insert_rds_row(db, row)
+        classifier = _mirror_to_vat_classifier(tx)
         return {
             "ok": True,
             "transaction_id": tx.id,
@@ -203,6 +227,7 @@ def sync_ar_invoice_to_gulftax(
             "store": "rds",
             "gross_amount": row["gross_amount"],
             "vat_amount": row["vat_amount"],
+            "classifier": classifier,
         }
     except Exception as exc:
         logger.exception("AR gulftax sync failed for sales invoice %s", sales_invoice_id)
@@ -318,11 +343,13 @@ def sync_ap_invoice_to_rds_gulftax(
 
     existing = _existing_ap_in_rds(db, invoice_id)
     if existing:
+        classifier = _mirror_to_vat_classifier(existing)
         return {
             "ok": True,
             "skipped": True,
             "reason": "already_synced",
             "transaction_id": existing.id,
+            "classifier": classifier,
         }
 
     from app.services.gulftax_sync_service import _fetch_invoice, build_transaction_row
@@ -365,6 +392,7 @@ def sync_ap_invoice_to_rds_gulftax(
 
     try:
         tx = _insert_rds_row(db, row)
+        classifier = _mirror_to_vat_classifier(tx)
         return {
             "ok": True,
             "transaction_id": tx.id,
@@ -372,6 +400,7 @@ def sync_ap_invoice_to_rds_gulftax(
             "store": "rds",
             "company_id": resolved_company_id,
             "designated_zone": row.get("designated_zone", False),
+            "classifier": classifier,
         }
     except Exception as exc:
         logger.exception("AP RDS gulftax sync failed for invoice %s", invoice_id)

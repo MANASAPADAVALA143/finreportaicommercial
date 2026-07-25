@@ -339,6 +339,7 @@ const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
 const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
 const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
 const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntelligencePage'));
+const AuditCommandCenterPage = safeLazy(() => import('./pages/audit/AuditCommandCenterPage'));
 // CA Firm Tools
 const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
 const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
@@ -450,6 +451,10 @@ const GulfTaxPartialExemption = safeLazy(() => import('./pages/gulftax/PartialEx
 const GulfTaxDesignatedZones = safeLazy(() => import('./pages/gulftax/DesignatedZones'));
 const GulfTaxBadDebtRelief = safeLazy(() => import('./pages/gulftax/BadDebtRelief'));
 const GulfTaxAuditExports = safeLazy(() => import('./pages/gulftax/AuditExports'));
+const GulfTaxTaxCompliance = safeLazy(() => import('./pages/gulftax/TaxComplianceReport'));
+const GulfTaxAnomalyDetection = safeLazy(() => import('./pages/gulftax/AnomalyDetection'));
+const GulfTaxFinancialStatements = safeLazy(() => import('./pages/gulftax/FinancialStatements'));
+const GulfTaxReconSummary = safeLazy(() => import('./pages/gulftax/ReconciliationSummary'));
 
 // Workspaces
 const WorkspaceList       = safeLazy(() => import('./pages/workspaces/WorkspaceList'));
@@ -562,6 +567,7 @@ function App() {
                 <Route path="/command-center" element={<CommandCenter />} />
                 <Route path="/agent-status" element={<AgentStatus />} />
                 <Route path="/audit" element={<AuditIntelligencePage />} />
+                <Route path="/audit/command-center" element={<AuditCommandCenterPage />} />
                 {/* Non-suite pages (no SuiteSidebar) */}
                 <Route path="/cfo-dashboard" element={<CFODashboard />} />
                 <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
@@ -626,6 +632,10 @@ function App() {
                     <Route path="tax-memo" element={<GulfTaxTaxMemo />} />
                     <Route path="fta-reports" element={<GulfTaxFTAReports />} />
                     <Route path="audit-exports" element={<GulfTaxAuditExports />} />
+                    <Route path="tax-compliance" element={<GulfTaxTaxCompliance />} />
+                    <Route path="anomaly-detection" element={<GulfTaxAnomalyDetection />} />
+                    <Route path="financial-statements" element={<GulfTaxFinancialStatements />} />
+                    <Route path="recon-summary" element={<GulfTaxReconSummary />} />
                     <Route path="suppliers" element={<GulfTaxSuppliers />} />
                     <Route path="settings" element={<GulfTaxSettings />} />
                   </Route>
@@ -752,6 +762,7 @@ function App() {
                 {/* Other shared pages */}
                 <Route path="/tb-variance"             element={<TBVariancePage />} />
                 <Route path="/audit"                   element={<AuditIntelligencePage />} />
+                <Route path="/audit/command-center"    element={<AuditCommandCenterPage />} />
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />
                 <Route path="/ifrs/agentic"            element={<AgenticGenerator />} />

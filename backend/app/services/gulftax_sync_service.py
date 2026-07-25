@@ -216,7 +216,34 @@ def sync_approved_invoice_to_gulftax(
         return {"ok": False, "error": "invoice_id and company_id required"}
 
     if _existing_for_invoice(invoice_id):
-        return {"ok": True, "skipped": True, "reason": "already_synced"}
+        classifier: dict[str, Any] = {}
+        try:
+            from app.core.database import SessionLocal
+            from app.models.client_data import GulftaxTransaction
+            from app.services.vat_classifier_sync_service import sync_gulftax_orm_row_to_classifier
+
+            db = SessionLocal()
+            try:
+                gt = (
+                    db.query(GulftaxTransaction)
+                    .filter(GulftaxTransaction.ap_invoice_id == invoice_id)
+                    .first()
+                )
+                if gt:
+                    classifier = sync_gulftax_orm_row_to_classifier(gt)
+            finally:
+                db.close()
+        except Exception:
+            logger.exception(
+                "VAT Classifier mirror on skip failed for already-synced invoice %s", invoice_id
+            )
+            classifier = {"ok": False, "error": "classifier_mirror_exception"}
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_synced",
+            "classifier": classifier,
+        }
 
     invoice = _fetch_invoice(invoice_id)
     if not invoice:
@@ -290,12 +317,37 @@ def sync_approved_invoice_to_gulftax(
         supabase_row = {k: v for k, v in row.items() if k != "tenant_id"}
         res = sb.table("gulftax_transactions").insert(supabase_row).execute()
         inserted = (res.data or [None])[0]
+        classifier: dict[str, Any] = {}
+        try:
+            from app.services.vat_classifier_sync_service import upsert_classifier_transaction
+
+            classifier = upsert_classifier_transaction(
+                finreport_company_id=resolved_company_id,
+                workspace_id=tenant_id or workspace_id,
+                invoice_number=row.get("invoice_number"),
+                vendor_or_customer=row.get("vendor_name"),
+                transaction_date=row.get("transaction_date"),
+                gross_amount=float(row.get("gross_amount") or 0),
+                vat_amount=float(row.get("vat_amount") or 0),
+                vat_category=row.get("vat_category"),
+                direction=row.get("direction") or "input",
+                source=row.get("source") or "ap_invoiceflow",
+                vendor_trn=row.get("vendor_trn"),
+                fta_box=row.get("fta_box"),
+                ap_invoice_id=invoice_id,
+            )
+        except Exception:
+            logger.exception(
+                "VAT Classifier mirror after Supabase gulftax sync failed for %s", invoice_id
+            )
+            classifier = {"ok": False, "error": "classifier_mirror_exception"}
         return {
             "ok": True,
             "transaction_id": inserted.get("id") if inserted else None,
             "tax_period": row["tax_period"],
             "fta_box": row["fta_box"],
             "company_id": resolved_company_id,
+            "classifier": classifier,
         }
     except Exception as exc:
         err = str(exc)

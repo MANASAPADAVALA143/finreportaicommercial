@@ -102,6 +102,7 @@ from app.api.routes import (
     ap_cfo_daily,
     ap_vendor_whatsapp,
     audit_log_routes,
+    audit_command_center,
     cit_return,
     ct_return,
     uae_suite_routes,
@@ -276,6 +277,7 @@ app.include_router(ap_aging.router)
 app.include_router(ap_cfo_daily.router)
 app.include_router(ap_vendor_whatsapp.router)
 app.include_router(audit_log_routes.router)
+app.include_router(audit_command_center.router)
 app.include_router(cit_return.router)
 app.include_router(ct_return.router)
 app.include_router(uae_suite_routes.router)

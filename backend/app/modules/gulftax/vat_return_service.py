@@ -434,12 +434,18 @@ def _aggregate_rds_gulftax_transactions(
         direction = tx.direction or "input"
         kind = tx.transaction_kind or "goods"
 
+        fta_box = (tx.fta_box or "").strip() or None
+        box_digits = "".join(ch for ch in str(fta_box or "") if ch.isdigit())
         entry = {
             "id": tx.id,
+            "transaction_id": tx.invoice_number or tx.id,
             "invoice_number": tx.invoice_number,
             "vendor_name": tx.vendor_name,
             "gross_amount": gross,
+            "net_amount": net,
             "vat_amount": vat,
+            "fta_box": fta_box,
+            "box_number": int(box_digits) if box_digits else None,
             "direction": direction,
             "source": tx.source,
             "designated_zone": bool(tx.designated_zone),

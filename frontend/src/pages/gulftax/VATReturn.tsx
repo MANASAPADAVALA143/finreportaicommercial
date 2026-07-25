@@ -110,6 +110,49 @@ function overridesFromSummary(summary: VatReturnSummary): Record<FilingOverrideK
   };
 }
 
+function allBoxesValueForOverride(boxes: AllBoxes, key: FilingOverrideKey): number {
+  if (key === 'box1_gross') return Number(boxes.box1_standard_rated_sales_net || 0);
+  if (key === 'box1_vat') return Number(boxes.box1_standard_rated_sales_vat || 0);
+  if (key === 'box3_gross') return Number(boxes.box4_zero_rated_supplies || 0);
+  if (key === 'box5_gross') return Number(boxes.box5_exempt_supplies || 0);
+  if (key === 'box9_gross') return Number(boxes.box9_standard_rated_expenses || 0);
+  if (key === 'box9_vat') return Number(boxes.box11_total_input_vat || 0);
+  if (key === 'box10_gross') return Number(boxes.box10_reverse_charge_expenses || 0);
+  return 0;
+}
+
+/** Prefill override editor from main all-boxes response (same source as box totals). */
+function overridesFromAllBoxes(boxes: AllBoxes): Record<FilingOverrideKey, string> {
+  return {
+    box1_gross: allBoxesValueForOverride(boxes, 'box1_gross').toFixed(2),
+    box1_vat: allBoxesValueForOverride(boxes, 'box1_vat').toFixed(2),
+    box3_gross: allBoxesValueForOverride(boxes, 'box3_gross').toFixed(2),
+    box5_gross: allBoxesValueForOverride(boxes, 'box5_gross').toFixed(2),
+    box9_gross: allBoxesValueForOverride(boxes, 'box9_gross').toFixed(2),
+    box9_vat: allBoxesValueForOverride(boxes, 'box9_vat').toFixed(2),
+    box10_gross: allBoxesValueForOverride(boxes, 'box10_gross').toFixed(2),
+  };
+}
+
+function summaryLooksEmpty(summary: VatReturnSummary | null): boolean {
+  if (!summary) return true;
+  return FILING_OVERRIDE_FIELDS.every((f) => apValueForOverride(summary, f.key) === 0);
+}
+
+function entryNetAmount(e: Record<string, unknown>): number {
+  if (e.net_amount != null && e.net_amount !== '') {
+    const n = Number(e.net_amount);
+    if (Number.isFinite(n)) return n;
+  }
+  const gross = Number(e.gross_amount ?? NaN);
+  const vat = Number(e.vat_amount ?? NaN);
+  if (Number.isFinite(gross) && Number.isFinite(vat)) {
+    return Math.round((gross - vat) * 100) / 100;
+  }
+  const amount = Number(e.amount ?? e.taxable_amount ?? e.base_amount ?? NaN);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
 export default function VATReturn() {
   const { activeCompany, activeCompanyId } = useCompany();
   const { activeWorkspace } = useWorkspace();
@@ -127,6 +170,7 @@ export default function VATReturn() {
   const [apSyncCount, setApSyncCount] = useState(0);
   const [apSummary, setApSummary] = useState<VatReturnSummary | null>(null);
   const [filingOverrides, setFilingOverrides] = useState<Record<FilingOverrideKey, string> | null>(null);
+  const [showFilingOverrides, setShowFilingOverrides] = useState(false);
   const [reconStatus, setReconStatus] = useState<VatReconStatus | null>(null);
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
@@ -158,13 +202,17 @@ export default function VATReturn() {
           ? fetchVatReturnSummary(period, activeCompanyId).catch(() => null)
           : Promise.resolve(null),
       ]);
-      setData(res as unknown as AllBoxes);
+      const boxes = res as unknown as AllBoxes;
+      setData(boxes);
       setApSummary(summary);
       setApSyncCount(
-        Number(summary?.ap_invoiceflow_count ?? res.ap_invoiceflow_count ?? 0),
+        Number(summary?.ap_invoiceflow_count ?? boxes.ap_invoiceflow_count ?? 0),
       );
-      if (summary) {
+      // Prefer main all-boxes values when summary endpoint is empty/zeros
+      if (summary && !summaryLooksEmpty(summary)) {
         setFilingOverrides(overridesFromSummary(summary));
+      } else if (boxes) {
+        setFilingOverrides(overridesFromAllBoxes(boxes));
       } else {
         setFilingOverrides(null);
       }
@@ -174,6 +222,7 @@ export default function VATReturn() {
       setApSyncCount(0);
       setApSummary(null);
       setFilingOverrides(null);
+      setShowFilingOverrides(false);
       setReconStatus(null);
     } finally {
       setLoading(false);
@@ -271,16 +320,24 @@ export default function VATReturn() {
 
   const fmt = (n: number) => `AED ${Number(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2 })}`;
 
+  const overrideSourceValue = (key: FilingOverrideKey): number => {
+    if (apSummary && !summaryLooksEmpty(apSummary)) {
+      return apValueForOverride(apSummary, key);
+    }
+    if (data) return allBoxesValueForOverride(data, key);
+    return 0;
+  };
+
   const overrideDiff = (key: FilingOverrideKey): number | null => {
-    if (!apSummary || !filingOverrides) return null;
-    const apVal = apValueForOverride(apSummary, key);
+    if (!filingOverrides) return null;
+    const sourceVal = overrideSourceValue(key);
     const manual = Number.parseFloat(filingOverrides[key]);
     if (!Number.isFinite(manual)) return null;
-    const diff = Math.round((manual - apVal) * 100) / 100;
+    const diff = Math.round((manual - sourceVal) * 100) / 100;
     return diff === 0 ? null : diff;
   };
 
-  const hasOverrideDiffs = apSummary && filingOverrides
+  const hasOverrideDiffs = filingOverrides
     ? FILING_OVERRIDE_FIELDS.some((f) => overrideDiff(f.key) !== null)
     : false;
 
@@ -386,16 +443,37 @@ export default function VATReturn() {
           >
             View AP invoices →
           </Link>
+          {filingOverrides && (
+            <button
+              type="button"
+              onClick={() => setShowFilingOverrides((v) => !v)}
+              className="text-xs text-gray-400 hover:text-gray-200 underline"
+            >
+              {showFilingOverrides ? 'Hide filing overrides' : 'Edit filing overrides'}
+            </button>
+          )}
         </div>
       )}
 
-      {apSummary && filingOverrides && (
+      {!apSyncCount && filingOverrides && data && (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setShowFilingOverrides((v) => !v)}
+            className="text-xs text-gray-400 hover:text-gray-200 underline"
+          >
+            {showFilingOverrides ? 'Hide filing overrides' : 'Add / edit filing overrides'}
+          </button>
+        </div>
+      )}
+
+      {showFilingOverrides && filingOverrides && (
         <div className="mb-6 rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <div>
               <h2 className="text-sm font-semibold text-white">FTA filing overrides</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Pre-filled from AP InvoiceFlow — edit before FTA submission if needed
+                Pre-filled from VAT return boxes — edit before FTA submission if needed
               </p>
             </div>
             {hasOverrideDiffs && (
@@ -407,7 +485,7 @@ export default function VATReturn() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {FILING_OVERRIDE_FIELDS.map((field) => {
               const diff = overrideDiff(field.key);
-              const apVal = apValueForOverride(apSummary, field.key);
+              const sourceVal = overrideSourceValue(field.key);
               return (
                 <label key={field.key} className="block rounded-lg border border-white/10 bg-gray-950/50 p-3">
                   <span className="text-[10px] font-mono text-gray-500">{field.label}</span>
@@ -422,10 +500,10 @@ export default function VATReturn() {
                     }
                     className="mt-1.5 w-full bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono"
                   />
-                  <p className="text-[10px] text-gray-600 mt-1">AP: {fmt(apVal)}</p>
+                  <p className="text-[10px] text-gray-600 mt-1">Source: {fmt(sourceVal)}</p>
                   {diff !== null && (
                     <p className="text-[10px] text-amber-400 mt-1 font-semibold">
-                      Differs from AP by {fmt(Math.abs(diff))} ({diff > 0 ? '+' : '−'})
+                      Differs from source by {fmt(Math.abs(diff))} ({diff > 0 ? '+' : '−'})
                     </p>
                   )}
                 </label>
@@ -578,11 +656,15 @@ export default function VATReturn() {
             <tbody>
               {data.entries.map((e, i) => (
                 <tr key={i} className="border-t border-white/5 text-gray-300">
-                  <td className="px-4 py-2">{String(e.transaction_id ?? '')}</td>
+                  <td className="px-4 py-2">
+                    {String(e.invoice_number ?? e.transaction_id ?? e.id ?? '')}
+                  </td>
                   <td className="px-4 py-2">{String(e.vendor_name ?? '')}</td>
-                  <td className="px-4 py-2 font-mono">{fmt(Number(e.net_amount ?? 0))}</td>
+                  <td className="px-4 py-2 font-mono">{fmt(entryNetAmount(e))}</td>
                   <td className="px-4 py-2 font-mono">{fmt(Number(e.vat_amount ?? 0))}</td>
-                  <td className="px-4 py-2 font-mono">{String(e.box_number ?? '')}</td>
+                  <td className="px-4 py-2 font-mono">
+                    {String(e.box_number ?? e.fta_box ?? '')}
+                  </td>
                 </tr>
               ))}
             </tbody>

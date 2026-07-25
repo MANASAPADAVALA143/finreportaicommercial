@@ -51,6 +51,7 @@ const ICONS: Record<string, React.ElementType> = {
   'presentation':    Presentation,
   'receipt':         Receipt,
   'shield':          Shield,
+  'shield-check':    ShieldCheck,
   'shopping-cart':   ShoppingCart,
   'sliders':         Sliders,
   'table':           Table,
