@@ -597,6 +597,12 @@ export default function ARInvoices() {
           >
             <Upload size={14} /> {bulkUploading ? 'Importing…' : 'Import Excel'}
           </button>
+          <Link
+            to="/uae-full/ar/extract-pdf"
+            className="flex items-center gap-2 bg-teal-800 hover:bg-teal-700 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            <Upload size={14} /> Scan PDF Invoice
+          </Link>
         </div>
       </div>
 

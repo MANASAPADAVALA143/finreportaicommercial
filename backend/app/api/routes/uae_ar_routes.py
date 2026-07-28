@@ -304,6 +304,40 @@ class ApproveAndPostIn(BaseModel):
     workspace_id: Optional[str] = None
 
 
+class ExtractedLineItemIn(BaseModel):
+    description: str = "Line item"
+    quantity: float = 1.0
+    unit_price: float = 0.0
+    vat_rate: float = 5.0
+    line_total: Optional[float] = None
+
+
+class ExtractedDataIn(BaseModel):
+    document_type: Optional[str] = "invoice"
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    due_date: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_trn: Optional[str] = None
+    seller_name: Optional[str] = None
+    seller_trn: Optional[str] = None
+    line_items: list[ExtractedLineItemIn] = Field(default_factory=list)
+    subtotal: Optional[float] = None
+    vat_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = "AED"
+    payment_terms: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CreateFromExtractionIn(BaseModel):
+    workspace_id: str
+    company_id: str
+    extracted_data: ExtractedDataIn
+    vat_treatment: Optional[str] = None
+    auto_approve: bool = False
+
+
 class SendInvoiceIn(BaseModel):
     invoice_id: str
     customer_email: str
@@ -578,6 +612,144 @@ async def bulk_import_ar_invoices(
     except Exception as exc:
         logger.exception("AR bulk import failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Bulk import failed: {exc}") from exc
+
+
+@router.post("/extract-pdf", summary="Extract AR sales invoice fields from PDF/image via Claude Vision")
+async def extract_ar_pdf(
+    request: Request,
+    file: UploadFile = File(...),
+    workspace_id: Optional[str] = Form(None),
+    company_id: Optional[str] = Form(None),
+):
+    """OCR / Claude Vision extraction for AR — does not create an invoice."""
+    from app.services.ar_pdf_extract_service import extract_ar_document, validate_ar_extract_file
+    from app.services.llm_service import LLMNotConfiguredError, LLMRateLimitError
+
+    _ = _ws(request, workspace_id)
+    _ = company_id or _company_id(request)
+
+    content = await file.read()
+    try:
+        validate_ar_extract_file(file.filename, file.content_type, len(content))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        return extract_ar_document(
+            file_bytes=content,
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AR PDF extract failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {exc}") from exc
+
+
+@router.post("/create-from-extraction", summary="Create AR invoice from reviewed PDF extraction")
+def create_ar_from_extraction(
+    body: CreateFromExtractionIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Map reviewed extraction → create_ar_invoice_with_classify; optional auto approve-and-post."""
+    ws = _ws(request, body.workspace_id)
+    cid = body.company_id or _company_id(request)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id is required")
+
+    data = body.extracted_data
+    customer_name = (data.customer_name or "").strip()
+    if not customer_name:
+        raise HTTPException(status_code=400, detail="customer_name is required")
+
+    if not data.line_items:
+        raise HTTPException(status_code=400, detail="At least one line item is required")
+
+    try:
+        inv_date = date.fromisoformat((data.invoice_date or date.today().isoformat())[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invoice_date must be YYYY-MM-DD") from exc
+
+    if data.due_date:
+        try:
+            due = date.fromisoformat(data.due_date[:10])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD") from exc
+    else:
+        due = inv_date + timedelta(days=30)
+
+    line_items = [
+        ARLineItemInput(
+            description=(li.description or "Line item").strip() or "Line item",
+            qty=float(li.quantity or 1),
+            unit_price=float(li.unit_price or 0),
+            vat_rate=float(li.vat_rate if li.vat_rate is not None else 5),
+        )
+        for li in data.line_items
+    ]
+
+    # Draft first when not auto-approving; post via same path as approve-and-post when true.
+    result = create_ar_invoice_with_classify(
+        db,
+        tenant_id=ws,
+        company_id=cid,
+        customer_name=customer_name,
+        customer_trn=(data.customer_trn or None),
+        invoice_date=inv_date,
+        due_date=due,
+        line_items=line_items,
+        skip_on_hard_block=False,
+        commit=True,
+        auto_post=bool(body.auto_approve),
+    )
+
+    if not result.success and not result.skipped_hard_block:
+        err = result.error or "create_failed"
+        if "period" in str(err).lower():
+            raise HTTPException(status_code=422, detail=err) from None
+        raise HTTPException(status_code=400, detail=err)
+
+    # Prefer extracted invoice number when available (cosmetic / audit trail).
+    if result.invoice_id and data.invoice_number:
+        inv = db.query(UAESalesInvoice).filter_by(id=result.invoice_id, tenant_id=ws).first()
+        if inv and data.invoice_number.strip():
+            inv.invoice_number = data.invoice_number.strip()[:50]
+            if body.vat_treatment:
+                inv.vat_treatment = body.vat_treatment
+            db.add(inv)
+            db.commit()
+            db.refresh(inv)
+            result.invoice_number = inv.invoice_number
+            result.vat_treatment = inv.vat_treatment or result.vat_treatment
+
+    gulftax_tx_id = None
+    if isinstance(result.gulftax, dict):
+        gulftax_tx_id = result.gulftax.get("gulftax_transaction_id") or result.gulftax.get("id")
+
+    return {
+        "invoice_id": result.invoice_id,
+        "invoice_number": result.invoice_number,
+        "status": "posted" if result.posted else "draft",
+        "journal_entry_id": result.je_id if result.posted else None,
+        "gulftax_transaction_id": gulftax_tx_id if result.posted else None,
+        "vat_classification": {
+            "vat_treatment": result.vat_treatment or body.vat_treatment,
+            "gulftax_decision": result.gulftax_decision,
+            "gulftax_reasoning": result.gulftax_reasoning,
+            "gulftax_risk_score": result.gulftax_risk_score,
+            "gulftax_confidence": result.gulftax_confidence,
+            "trn_valid": result.trn_valid,
+            "flag_for_review": result.flag_for_review,
+        },
+        "message": result.message,
+        "posted": result.posted,
+        "je_reference": result.je_reference,
+        "gulftax": result.gulftax,
+    }
 
 
 @router.post("/send-invoice")

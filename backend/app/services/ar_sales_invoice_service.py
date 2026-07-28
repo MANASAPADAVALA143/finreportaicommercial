@@ -115,12 +115,14 @@ def create_ar_invoice_with_classify(
     line_items: list[ARLineItemInput],
     skip_on_hard_block: bool = False,
     commit: bool = True,
+    auto_post: bool = True,
 ) -> CreateARInvoiceResult:
     """
     Classify-before-persist AR invoice creation.
 
     skip_on_hard_block=True (bulk import): HARD_BLOCK returns skipped_hard_block, no DB row.
     skip_on_hard_block=False (single create): HARD_BLOCK saves draft, does not post.
+    auto_post=False: classify + save draft only (no GL/GulfTax post).
     """
     if not line_items:
         return CreateARInvoiceResult(success=False, error="At least one line item required")
@@ -236,6 +238,33 @@ def create_ar_invoice_with_classify(
                 "Invoice saved as draft and NOT posted — GulfTax HARD_BLOCK. "
                 "Resolve VAT/TRN issues, then use Approve & Post."
             ),
+        )
+
+    if not auto_post:
+        inv.status = "draft"
+        db.add(inv)
+        _recalc_credit(db, tenant_id, company_id, customer_name)
+        if commit:
+            db.commit()
+            db.refresh(inv)
+        return CreateARInvoiceResult(
+            success=True,
+            invoice_id=inv.id,
+            invoice_number=invoice_number,
+            subtotal=round(subtotal, 2),
+            vat_amount=round(vat_amount, 2),
+            total=round(total, 2),
+            status=inv.status,
+            posted=False,
+            needs_manual_review=bool(inv.flag_for_review),
+            flag_for_review=bool(inv.flag_for_review),
+            gulftax_decision=inv.gulftax_decision,
+            gulftax_reasoning=inv.gulftax_reasoning,
+            vat_treatment=inv.vat_treatment,
+            gulftax_risk_score=_f(inv.gulftax_risk_score) if inv.gulftax_risk_score is not None else None,
+            gulftax_confidence=_f(inv.gulftax_confidence) if inv.gulftax_confidence is not None else None,
+            trn_valid=inv.trn_valid,
+            message="Invoice saved as draft — approve when ready.",
         )
 
     post_result = post_sales_invoice_to_gl_and_tax(

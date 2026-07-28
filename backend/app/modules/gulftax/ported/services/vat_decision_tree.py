@@ -111,7 +111,9 @@ def determine_transaction_side(
     explicit_type: Optional[str] = None,
     vendor_or_customer: Optional[str] = None,
 ) -> str:
-    """Purchase keywords checked first — expenses default to purchase."""
+    """Honor explicit CSV/API type first; otherwise keyword heuristics."""
+    if explicit_type and explicit_type.lower() in ("sale", "purchase"):
+        return explicit_type.lower()
     combined = f"{description or ''} {vendor_or_customer or ''}".lower()
     if _contains_any(combined, STRONG_SALE_KEYWORDS):
         return "sale"
@@ -119,8 +121,6 @@ def determine_transaction_side(
         return "purchase"
     if _contains_any(combined, SALE_KEYWORDS):
         return "sale"
-    if explicit_type and explicit_type.lower() in ("sale", "purchase"):
-        return explicit_type.lower()
     return "purchase"
 
 
@@ -194,6 +194,29 @@ def map_box_number(vat_treatment: str, transaction_side: str) -> int:
     if treatment == "exempt":
         return 11
     return 9
+
+
+def coerce_box_number(
+    transaction_type: str,
+    vat_treatment: Optional[str] = None,
+    box_number: Optional[int] = None,
+) -> int:
+    """Ensure purchases never keep output boxes (1–4) and sales never keep input boxes (7/9–11).
+
+    Standard rule: purchase → Box 9, sale → Box 1 (refined by vat_treatment via map_box_number).
+    """
+    side = (transaction_type or "purchase").lower()
+    if side not in ("sale", "purchase"):
+        side = "purchase"
+    treatment = vat_treatment or "standard_rated"
+    expected = map_box_number(treatment, side)
+    if box_number is None:
+        return expected
+    if side == "purchase" and int(box_number) in (1, 2, 3, 4):
+        return expected
+    if side == "sale" and int(box_number) in (7, 9, 10, 11):
+        return expected
+    return int(box_number)
 
 
 def build_risk_flags(

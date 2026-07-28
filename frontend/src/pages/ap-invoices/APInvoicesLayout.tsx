@@ -18,10 +18,10 @@ import {
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import {
   LayoutDashboard, FileText, Upload, CheckCircle, Users,
-  ShoppingCart, Package, ListTodo, TrendingUp, Landmark,
+  ShoppingCart, Package, ListTodo, TrendingUp,   Landmark,
   Receipt, CalendarDays, BookOpen, Link2, Settings,
   BarChart3, Mail, AlertTriangle, ClipboardList, Building,
-  Database, CreditCard, Shield, MessageSquare, FileDown,
+  Database, CreditCard, Shield, MessageSquare, FileDown, Banknote,
 } from 'lucide-react';
 
 type NavItem = { to: string; label: string; icon: React.ElementType; end?: boolean };
@@ -61,6 +61,7 @@ function useNavSections(isUAE: boolean): NavSection[] {
       label: 'Analytics & Recon',
       items: [
         { to: '/ap-invoices/aging',        label: 'AP Aging',             icon: TrendingUp },
+        { to: '/ap-invoices/payment-run',  label: 'Payment Runs',         icon: Banknote },
         { to: '/ap-invoices/bank-recon',   label: 'Bank Recon',           icon: Landmark },
         { to: '/ap-invoices/gst-recon',    label: isUAE ? 'VAT Recon' : 'GST Recon', icon: Receipt },
         { to: '/ap-invoices/calendar',     label: 'Payment Calendar',     icon: CalendarDays },

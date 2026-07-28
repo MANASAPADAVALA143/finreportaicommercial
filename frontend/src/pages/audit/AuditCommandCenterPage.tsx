@@ -31,6 +31,8 @@ type ScoreResult = {
   last_run: string;
   period?: string;
   company_name?: string;
+  going_concern_warning?: boolean | null;
+  going_concern_level?: 'none' | 'low' | 'medium' | 'high' | null;
 };
 
 const RISK_COLOR: Record<RiskLevel, string> = {
@@ -258,6 +260,12 @@ export default function AuditCommandCenterPage() {
 
       {score && (
         <>
+          {score.going_concern_warning === true && (
+            <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              ⚠️ Material Going Concern Uncertainty Detected — ISA 570 modified opinion may be required.{" "}
+              <Link to="/audit" className="underline text-red-100">View assessment →</Link>
+            </div>
+          )}
           <div className={`mb-6 rounded-2xl border-2 p-6 bg-white/[0.02] ${RISK_COLOR[risk]}`}>
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -304,6 +312,12 @@ export default function AuditCommandCenterPage() {
               detailTo="/gulftax/tax-compliance"
             />
           </div>
+          {score.going_concern_warning === null && (
+            <div className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              Going concern not yet assessed for this period.{" "}
+              <Link to="/audit" className="underline text-amber-100">Run assessment →</Link>
+            </div>
+          )}
         </>
       )}
 

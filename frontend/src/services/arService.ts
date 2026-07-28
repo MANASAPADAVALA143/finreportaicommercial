@@ -217,9 +217,97 @@ export async function bulkImportARInvoices(
     } catch {
       detail = await res.text();
     }
-    throw new Error(detail);
+    throw new Error(detail || 'Bulk import failed');
   }
   return res.json();
+}
+
+export interface ARExtractedLineItem {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  vat_rate: number;
+  line_total: number;
+}
+
+export interface ARExtractedData {
+  document_type?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  due_date?: string | null;
+  customer_name?: string | null;
+  customer_trn?: string | null;
+  seller_name?: string | null;
+  seller_trn?: string | null;
+  line_items: ARExtractedLineItem[];
+  subtotal?: number | null;
+  vat_amount?: number | null;
+  total_amount?: number | null;
+  currency?: string | null;
+  payment_terms?: string | null;
+  notes?: string | null;
+}
+
+export interface ARExtractPdfResult {
+  extraction_status: 'success' | 'partial' | 'failed' | string;
+  extracted_data: ARExtractedData;
+  vat_treatment: string;
+  confidence_notes: string;
+  raw_text?: string;
+}
+
+export async function extractARPdf(
+  file: File,
+  company_id: string,
+  workspace_id?: string,
+): Promise<ARExtractPdfResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('company_id', company_id);
+  if (workspace_id) form.append('workspace_id', workspace_id);
+
+  const headers = workspaceHeaders(getStoredAccessToken());
+  delete headers['Content-Type'];
+
+  const res = await fetch(`${BASE}/extract-pdf`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || 'PDF extraction failed');
+  }
+  return res.json();
+}
+
+export interface ARCreateFromExtractionResult {
+  invoice_id: string | null;
+  invoice_number?: string | null;
+  status: 'draft' | 'posted' | string;
+  journal_entry_id?: string | null;
+  gulftax_transaction_id?: string | null;
+  vat_classification?: Record<string, unknown>;
+  message?: string | null;
+  posted?: boolean;
+  je_reference?: string | null;
+}
+
+export async function createARFromExtraction(body: {
+  workspace_id: string;
+  company_id: string;
+  extracted_data: ARExtractedData;
+  vat_treatment: string;
+  auto_approve: boolean;
+}): Promise<ARCreateFromExtractionResult> {
+  return post<ARCreateFromExtractionResult>('/create-from-extraction', body);
 }
 
 export const approveAndPostARInvoice = (invoice_id: string, company_id?: string) =>

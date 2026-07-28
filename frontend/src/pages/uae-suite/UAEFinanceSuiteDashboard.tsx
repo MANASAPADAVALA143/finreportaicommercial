@@ -9,6 +9,8 @@ import {
 import * as suiteSvc from '../../services/uaeSuite.service';
 import type { UaeSuiteSummary } from '../../services/uaeSuite.service';
 import { useCompany } from '../../context/CompanyContext';
+import { useWorkspace } from '../../context/WorkspaceContext';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
 
 function fmt(n: number) {
   return `AED ${n.toLocaleString('en-AE', { minimumFractionDigits: 0 })}`;
@@ -85,16 +87,48 @@ function emptySuiteSummary(): UaeSuiteSummary & { setup_required: boolean } {
 export default function UAEFinanceSuiteDashboard() {
   const navigate = useNavigate();
   const { activeCompanyId, companiesList } = useCompany();
+  const { activeWorkspace, loading: workspaceLoading, refreshWorkspaces } = useWorkspace();
   const [data, setData] = useState<(UaeSuiteSummary & { setup_required?: boolean }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingWorkspace, setResolvingWorkspace] = useState(true);
 
   const resolvedCompanyId = activeCompanyId ?? companiesList[0]?.id ?? null;
+  const workspaceId = activeWorkspace?.id ?? getStoredWorkspaceId();
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolveWorkspace = async () => {
+      if (workspaceLoading) return;
+      // Already resolved through context or persisted workspace id.
+      if (activeWorkspace?.id || getStoredWorkspaceId()) {
+        if (!cancelled) setResolvingWorkspace(false);
+        return;
+      }
+      // Equivalent to a "current workspace" lookup: refresh server list first.
+      try {
+        await refreshWorkspaces();
+      } finally {
+        if (!cancelled) setResolvingWorkspace(false);
+      }
+    };
+    void resolveWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace?.id, workspaceLoading, refreshWorkspaces]);
 
   const load = async () => {
+    if (resolvingWorkspace || workspaceLoading) return;
     setLoading(true);
     setError(null);
     try {
+      // If no workspace exists after refresh, show setup-required state
+      // instead of redirecting early.
+      if (!workspaceId) {
+        setData(emptySuiteSummary());
+        return;
+      }
       setData(await suiteSvc.fetchUaeSuiteSummary(undefined, resolvedCompanyId));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to load dashboard';
@@ -109,9 +143,9 @@ export default function UAEFinanceSuiteDashboard() {
     }
   };
 
-  useEffect(() => { void load(); }, [resolvedCompanyId]);
+  useEffect(() => { void load(); }, [resolvedCompanyId, workspaceId, resolvingWorkspace, workspaceLoading]);
 
-  if (loading && !data) {
+  if ((resolvingWorkspace || workspaceLoading || loading) && !data) {
     return <div className="min-h-screen bg-gray-950 text-gray-400 p-8">Loading UAE Finance Suite…</div>;
   }
 

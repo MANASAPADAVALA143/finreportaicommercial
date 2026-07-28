@@ -11,6 +11,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_no_content_company_config(exc: Exception) -> bool:
+    """Treat Supabase/PostgREST 204 from maybe_single as a valid empty state."""
+    text = str(exc)
+    if "PGRST204" in text:
+        return True
+    if "'code': '204'" in text or '"code": "204"' in text:
+        return True
+    if "Missing response" in text and "204" in text:
+        return True
+    return False
+
+
 def _assert_invoice_company_match(invoice: dict[str, Any], company_id: str) -> str | None:
     """Return an error code when the invoice does not belong to the requested company."""
     invoice_company = str(invoice.get("company_id") or "").strip()
@@ -90,7 +102,10 @@ def _fetch_company_config(company_id: str) -> dict[str, Any]:
             .execute()
         )
         return res.data or {}
-    except Exception:
+    except Exception as exc:
+        if _is_no_content_company_config(exc):
+            logger.debug("Company %s has no config row yet (204 no content)", company_id)
+            return {}
         logger.exception("Failed to load company %s", company_id)
         return {}
 

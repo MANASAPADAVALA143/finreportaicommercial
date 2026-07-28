@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.audit_intelligence import AuditRun
 from app.modules.gulftax.ported_mount import get_ported_db
 from app.services.audit_command_center_service import (
     compute_command_center_score,
@@ -59,13 +60,43 @@ def audit_command_center_score(
 ) -> dict[str, Any]:
     company_id = _company_from_headers(body.company_id, x_company_id)
     try:
-        return compute_command_center_score(
+        result = compute_command_center_score(
             db,
             ported_db,
             period=body.period.strip(),
             workspace_id=body.workspace_id.strip(),
             company_id=company_id,
         )
+        period = body.period.strip()
+        latest_gc = (
+            db.query(AuditRun)
+            .filter(AuditRun.agent_type == "going_concern")
+            .order_by(AuditRun.run_timestamp.desc())
+            .limit(50)
+            .all()
+        )
+        matched: dict[str, Any] | None = None
+        matched_run_id: int | None = None
+        for run in latest_gc:
+            full = run.full_result if isinstance(run.full_result, dict) else {}
+            if (
+                str(full.get("period") or "") == period
+                and str(full.get("workspace_id") or "") == body.workspace_id.strip()
+                and str(full.get("company_id") or "") == company_id
+            ):
+                matched = full
+                matched_run_id = run.id
+                break
+        if matched is None:
+            result["going_concern_warning"] = None
+            result["going_concern_level"] = None
+            result["going_concern_run_id"] = None
+        else:
+            lvl = str(matched.get("going_concern_level") or "none").lower()
+            result["going_concern_warning"] = lvl == "high"
+            result["going_concern_level"] = lvl
+            result["going_concern_run_id"] = matched_run_id
+        return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Score computation failed: {exc}") from exc
 

@@ -21,6 +21,7 @@ import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
 import { LandingPage } from './components/landing/LandingPage';
+import GulfTaxLayout from './pages/gulftax/GulfTaxLayout';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
 
@@ -359,6 +360,7 @@ const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/Cha
 const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
 const UAESalesInvoices       = safeLazy(() => import('./pages/uae-accounting/SalesInvoices'));
 const ARInvoices             = safeLazy(() => import('./pages/uae-full/ARInvoices'));
+const ARInvoiceExtract       = safeLazy(() => import('./pages/uae-full/ARInvoiceExtract'));
 const ARCustomerRisk         = safeLazy(() => import('./pages/uae-full/ARCustomerRisk'));
 const ARDunning              = safeLazy(() => import('./pages/uae-full/ARDunning'));
 const ARRecurringInvoices    = safeLazy(() => import('./pages/uae-full/ARRecurringInvoices'));
@@ -402,6 +404,9 @@ const APEmailInvoices   = namedLazy(() => import('./pages/ap-invoices/EmailInvoi
 const APMonthEndClose   = namedLazy(() => import('./pages/ap-invoices/MonthEndChecklist'), 'MonthEndChecklist');
 const APAnomalyIntel    = namedLazy(() => import('./pages/ap-invoices/AnomalyIntelligence'), 'AnomalyIntelligence');
 const APPaymentLog      = namedLazy(() => import('./pages/ap-invoices/PaymentLog'), 'PaymentLog');
+const APPaymentRunDashboard = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunDashboard'));
+const APPaymentRunNew = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunNew'));
+const APPaymentRunDetail = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunDetail'));
 const APVendorPortal    = namedLazy(() => import('./pages/ap-invoices/VendorUploadPortal'), 'VendorUploadPortal');
 const APCompanyConfig   = namedLazy(() => import('./pages/ap-invoices/CompanyConfig'), 'CompanyConfig');
 const APTrainingData    = namedLazy(() => import('./pages/ap-invoices/TrainingData'), 'TrainingData');
@@ -431,7 +436,6 @@ const IndiaPeriodClose        = safeLazy(() => import('./pages/india-accounting/
 const IndiaManagementAccounts = safeLazy(() => import('./pages/india-accounting/IndiaManagementAccounts'));
 
 // GulfTax AI (embedded from uaetax)
-const GulfTaxLayout       = safeLazy(() => import('./pages/gulftax/GulfTaxLayout'));
 const GulfTaxDashboard    = safeLazy(() => import('./pages/gulftax/GulfTaxDashboard'));
 const GulfTaxVATClassifier = safeLazy(() => import('./pages/gulftax/VATClassifier'));
 const GulfTaxVATReturn    = safeLazy(() => import('./pages/gulftax/VATReturn'));
@@ -664,6 +668,9 @@ function App() {
                   <Route path="month-end"      element={<APMonthEndClose />} />
                   <Route path="anomaly"        element={<APAnomalyIntel />} />
                   <Route path="payment-log"    element={<APPaymentLog />} />
+                  <Route path="payment-run" element={<ErrorBoundary><APPaymentRunDashboard /></ErrorBoundary>} />
+                  <Route path="payment-run/new" element={<ErrorBoundary><APPaymentRunNew /></ErrorBoundary>} />
+                  <Route path="payment-run/:id" element={<ErrorBoundary><APPaymentRunDetail /></ErrorBoundary>} />
                   <Route path="vendor-portal"  element={<APVendorPortal />} />
                   <Route path="company-config" element={<APCompanyConfig />} />
                   <Route path="training"       element={<APTrainingData />} />
@@ -701,6 +708,7 @@ function App() {
                 <Route path="/uae-full/journals"                           element={<UAEJournalEntries />} />
                 <Route path="/uae-full/invoices"                           element={<UAESalesInvoices />} />
                 <Route path="/uae-full/ar"                                 element={<ARInvoices />} />
+                <Route path="/uae-full/ar/extract-pdf"                   element={<ARInvoiceExtract />} />
                 <Route path="/uae-full/ar/customer-risk"                 element={<ARCustomerRisk />} />
                 <Route path="/uae-full/ar/dunning"                       element={<ARDunning />} />
                 <Route path="/uae-full/ar/recurring"                     element={<ARRecurringInvoices />} />

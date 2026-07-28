@@ -69,4 +69,9 @@ def result_summary_for_agent(agent_type: str, result: dict[str, Any]) -> str:
     if agent_type == "aml-monitor":
         s = result.get("summary") or {}
         return f"Flagged {s.get('flagged_count', '—')} / {s.get('total_scanned', '—')}; SAR {s.get('sar_required', '—')}"
+    if agent_type == "going_concern":
+        return (
+            f"Level {result.get('going_concern_level', '—')}; "
+            f"triggered {result.get('triggered_count', '—')}/6"
+        )
     return "Completed"

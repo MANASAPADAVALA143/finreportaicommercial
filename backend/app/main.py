@@ -117,6 +117,7 @@ from app.api.routes import (
     ap_companies_rds,
     vat_advanced_rds,
     system_routes,
+    ap_payment_run_routes,
 )
 from app.modules.ifrs9.router import router as ifrs9_router
 from app.modules.ifrs15.router import router as ifrs15_router
@@ -291,8 +292,9 @@ app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
-app.include_router(ap_invoices_rds.router)
-app.include_router(ap_companies_rds.router)
+    app.include_router(ap_invoices_rds.router)
+    app.include_router(ap_payment_run_routes.router)
+    app.include_router(ap_companies_rds.router)
 app.include_router(vat_advanced_rds.router)
 app.include_router(system_routes.router)
 

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from datetime import date
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.client_data import GulftaxTransaction
 from app.modules.gulftax.vat_return_service import fetch_all_vat_return_boxes, parse_period
+
+logger = logging.getLogger(__name__)
 
 _MISMATCH_THRESHOLD_AED = 100.0
 
@@ -25,6 +29,121 @@ def _ported_models():
     from models import ReconciliationResult, VATReturn  # noqa: WPS433
 
     return ReconciliationResult, VATReturn
+
+
+def _ported_company_model():
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "modules" / "gulftax" / "ported"
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from models import Company  # noqa: WPS433
+
+    return Company
+
+
+def ensure_ported_company_for_recon(
+    db: Session,
+    ported_db: Session,
+    *,
+    company_id: str,
+    tenant_id: str | None = None,
+) -> str:
+    """
+    Ensure ``companies.id`` exists for reconciliation_results.company_id FK.
+
+    FinReportAI often passes uae_company_profiles / ap_companies UUID which may
+    only appear as companies.external_id. Resolve existing row first; otherwise
+    seed companies from uae_company_profiles (then ap_companies).
+    """
+    Company = _ported_company_model()
+    cid = (company_id or "").strip()
+    if not cid:
+        raise ValueError("company_id required for reconciliation")
+
+    row = ported_db.query(Company).filter(Company.id == cid).first()
+    if row:
+        return row.id
+
+    row = ported_db.query(Company).filter(Company.external_id == cid).first()
+    if row:
+        return row.id
+
+    ws = (tenant_id or "").strip() or None
+    if ws:
+        row = (
+            ported_db.query(Company)
+            .filter(Company.workspace_id == ws, Company.external_id == cid)
+            .first()
+        )
+        if row:
+            return row.id
+
+    name = "FinReportAI Company"
+    trn: str | None = None
+    license_no: str | None = None
+    entity_type = "mainland"
+
+    try:
+        from app.models.company_setup import UaeCompanyProfile
+
+        profile = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == cid).first()
+        if profile:
+            name = (profile.company_name or name).strip() or name
+            trn = (profile.trn or "").strip() or None
+            license_no = (profile.license_number or "").strip() or None
+            ws = ws or profile.workspace_id
+            lt = (profile.legal_type or "").strip().lower()
+            if "free" in lt or "fze" in lt or "fzco" in lt:
+                entity_type = "free_zone"
+    except Exception:
+        logger.exception("uae_company_profiles lookup failed for %s", cid)
+
+    if name == "FinReportAI Company":
+        try:
+            from app.models.client_data import ApCompany
+
+            ap = db.query(ApCompany).filter(ApCompany.id == cid).first()
+            if ap:
+                name = (ap.name or name).strip() or name
+                ws = ws or ap.tenant_id
+        except Exception:
+            logger.exception("ap_companies lookup failed for %s", cid)
+
+    suffix = cid.replace("-", "")[:8] or "demo"
+    new_row = Company(
+        id=cid,
+        name=name[:255],
+        trade_license_number=license_no or f"FR-{suffix}-{uuid.uuid4().hex[:6]}",
+        trn=trn or f"100{abs(hash(cid)) % 10**12:012d}"[:15],
+        entity_type=entity_type,
+        vat_registered=True,
+        ct_registered=True,
+        external_id=cid,
+        workspace_id=ws,
+    )
+    try:
+        ported_db.add(new_row)
+        ported_db.commit()
+        ported_db.refresh(new_row)
+        logger.info(
+            "Seeded companies row id=%s name=%s for reconciliation FK",
+            new_row.id,
+            new_row.name,
+        )
+        return new_row.id
+    except Exception:
+        ported_db.rollback()
+        row = (
+            ported_db.query(Company)
+            .filter(or_(Company.id == cid, Company.external_id == cid))
+            .first()
+        )
+        if row:
+            return row.id
+        logger.exception("Failed to seed companies row for recon company_id=%s", cid)
+        raise
 
 
 def _period_label(period_start: date, period_end: date) -> str:
@@ -69,13 +188,25 @@ def get_vat_periods(
     ]
 
 
-def _find_vat_return(ported_db: Session, *, company_id: str, period_start: date, period_end: date):
+def _find_vat_return(
+    ported_db: Session,
+    *,
+    company_id: str,
+    period_start: date,
+    period_end: date,
+    alt_company_ids: list[str] | None = None,
+):
     _, VATReturn = _ported_models()
+
+    ids = [company_id]
+    for alt in alt_company_ids or []:
+        if alt and alt not in ids:
+            ids.append(alt)
 
     return (
         ported_db.query(VATReturn)
         .filter(
-            VATReturn.company_id == company_id,
+            VATReturn.company_id.in_(ids),
             VATReturn.period_start <= period_end,
             VATReturn.period_end >= period_start,
         )
@@ -172,11 +303,20 @@ def run_vat_recon(
     """
     ReconciliationResult, _ = _ported_models()
 
+    finreport_cid = (company_id or "").strip()
+    # reconciliation_results.company_id FK → companies.id (ported GulfTax)
+    ported_cid = ensure_ported_company_for_recon(
+        db,
+        ported_db,
+        company_id=finreport_cid,
+        tenant_id=tenant_id,
+    )
+
     period = tax_period or _period_label(period_start, period_end)
     computed = fetch_all_vat_return_boxes(
         db,
         workspace_id=tenant_id,
-        company_id=company_id,
+        company_id=finreport_cid,
         period=period,
     )
     boxes = _box_breakdown(computed)
@@ -185,7 +325,7 @@ def run_vat_recon(
         db.query(func.count(GulftaxTransaction.id))
         .filter(
             GulftaxTransaction.tenant_id == tenant_id,
-            GulftaxTransaction.company_id == company_id,
+            GulftaxTransaction.company_id == finreport_cid,
             GulftaxTransaction.tax_period == period,
             GulftaxTransaction.status == "posted",
         )
@@ -195,9 +335,10 @@ def run_vat_recon(
 
     vat_return = _find_vat_return(
         ported_db,
-        company_id=company_id,
+        company_id=ported_cid,
         period_start=period_start,
         period_end=period_end,
+        alt_company_ids=[finreport_cid] if finreport_cid != ported_cid else None,
     )
 
     if not vat_return:
@@ -225,7 +366,7 @@ def run_vat_recon(
         )
 
     row = ReconciliationResult(
-        company_id=company_id,
+        company_id=ported_cid,
         vat_return_id=vat_return_id,
         tax_period=period,
         period_start=period_start,
@@ -267,6 +408,8 @@ def run_vat_recon(
         "mismatches": mismatches,
         "recommendation": recommendation,
         "source": "gulftax_transactions",
+        "company_id": ported_cid,
+        "finreport_company_id": finreport_cid,
     }
 
 
@@ -277,7 +420,10 @@ def get_recon_status(
     period: str,
 ) -> dict[str, Any]:
     """Latest reconciliation result for a tax period."""
-    row = _latest_recon(ported_db, company_id=company_id, tax_period=period)
+    resolved = _resolve_company_id_for_lookup(ported_db, company_id)
+    row = _latest_recon(ported_db, company_id=resolved, tax_period=period)
+    if not row and resolved != company_id:
+        row = _latest_recon(ported_db, company_id=company_id, tax_period=period)
     if not row:
         period_start, period_end = parse_period(period)
         return {
@@ -307,6 +453,18 @@ def get_recon_status(
     }
 
 
+def _resolve_company_id_for_lookup(ported_db: Session, company_id: str) -> str:
+    """Map FinReport UUID → companies.id when only external_id matches."""
+    Company = _ported_company_model()
+    cid = (company_id or "").strip()
+    if not cid:
+        return cid
+    if ported_db.query(Company).filter(Company.id == cid).first():
+        return cid
+    row = ported_db.query(Company).filter(Company.external_id == cid).first()
+    return row.id if row else cid
+
+
 def get_recon_history(
     ported_db: Session,
     *,
@@ -314,10 +472,11 @@ def get_recon_history(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     ReconciliationResult, _ = _ported_models()
+    resolved = _resolve_company_id_for_lookup(ported_db, company_id)
 
     rows = (
         ported_db.query(ReconciliationResult)
-        .filter(ReconciliationResult.company_id == company_id)
+        .filter(ReconciliationResult.company_id.in_({resolved, company_id}))
         .order_by(ReconciliationResult.created_at.desc())
         .limit(limit)
         .all()
@@ -347,7 +506,10 @@ def set_recon_override(
     reason: str,
 ) -> dict[str, Any]:
     """Record filing override reason on the latest recon row for a period."""
-    row = _latest_recon(ported_db, company_id=company_id, tax_period=period)
+    resolved = _resolve_company_id_for_lookup(ported_db, company_id)
+    row = _latest_recon(ported_db, company_id=resolved, tax_period=period)
+    if not row and resolved != company_id:
+        row = _latest_recon(ported_db, company_id=company_id, tax_period=period)
     if not row:
         raise ValueError("No reconciliation run found for this period — run recon first.")
     if row.status != "mismatch_found":

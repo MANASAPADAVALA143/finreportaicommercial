@@ -38,6 +38,7 @@ def init_db():
     import app.models.ifrs9_ecl  # noqa: F401 - IFRS 9 ECL portfolios
     import app.models.uae_account_classification  # noqa: F401 - GL account FS/CIT classification
     import app.models.client_data  # noqa: F401 - AP + GulfTax client data (AWS RDS)
+    import app.models.ap_payment_run  # noqa: F401 - AP Payment Run Center
     Base.metadata.create_all(bind=engine)
 
     # ── Safe column / table additions for SQLite (create_all skips existing tables)

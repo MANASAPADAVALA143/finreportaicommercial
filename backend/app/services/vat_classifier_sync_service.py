@@ -7,6 +7,7 @@ The VAT Classifier Saved list reads RDS `transactions` filtered by GulfTax
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -308,3 +309,211 @@ def backfill_classifier_from_gulftax(
         "failed": failed,
         "errors": errors[:20],
     }
+
+
+CLASSIFIER_GULFTAX_SOURCE = "vat_classifier_approved"
+_CLASSIFIER_TX_NS = uuid.UUID("b8d4f2a0-6c1e-4f9b-8d3a-7e5c4b2a1f09")
+
+
+def _classifier_ap_invoice_id(classifier_txn_id: int | str) -> str:
+    return str(uuid.uuid5(_CLASSIFIER_TX_NS, f"vat-classifier-txn:{classifier_txn_id}"))
+
+
+def _finreport_ids_from_ported_company(ported_company: Any) -> tuple[str, str]:
+    """Return (finreport_company_id, workspace/tenant_id) for gulftax_transactions."""
+    if ported_company is None:
+        return "", ""
+    finreport_cid = (
+        (getattr(ported_company, "external_id", None) or "").strip()
+        or (getattr(ported_company, "id", None) or "")
+    )
+    tenant_id = (getattr(ported_company, "workspace_id", None) or "").strip() or finreport_cid
+    return str(finreport_cid), str(tenant_id)
+
+
+def sync_classifier_transaction_to_gulftax(
+    db: Session,
+    classifier_txn: Any,
+    *,
+    ported_company: Any | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Insert one approved VAT Classifier transaction into RDS gulftax_transactions.
+
+    Idempotent via source=vat_classifier_approved + deterministic ap_invoice_id.
+    direction: output for sales, input for purchases.
+    """
+    from app.models.client_data import GulftaxTransaction
+    from app.services.gulftax_sync_service import (
+        _fta_box,
+        _norm_treatment,
+        tax_period_for_date,
+    )
+
+    txn_id = getattr(classifier_txn, "id", None)
+    if txn_id is None:
+        return {"ok": False, "error": "missing_classifier_txn_id"}
+
+    ap_id = _classifier_ap_invoice_id(txn_id)
+    existing = (
+        db.query(GulftaxTransaction)
+        .filter(
+            GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
+            GulftaxTransaction.ap_invoice_id == ap_id,
+        )
+        .first()
+    )
+    if existing:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_synced",
+            "transaction_id": existing.id,
+        }
+
+    # Secondary dedupe: same company + invoice_number + direction + period
+    finreport_cid, tenant_from_company = _finreport_ids_from_ported_company(ported_company)
+    company_id = finreport_cid or str(getattr(classifier_txn, "company_id", "") or "")
+    tenant_id = (workspace_id or "").strip() or tenant_from_company or company_id
+    if not company_id or not tenant_id:
+        return {"ok": False, "error": "company_id_or_tenant_missing"}
+
+    tx_type = (getattr(classifier_txn, "transaction_type", None) or "purchase").lower()
+    direction = "output" if tx_type == "sale" else "input"
+
+    tx_date = getattr(classifier_txn, "date", None) or date.today()
+    if isinstance(tx_date, datetime):
+        tx_date = tx_date.date()
+    elif isinstance(tx_date, str):
+        tx_date = date.fromisoformat(tx_date[:10])
+
+    filing = "quarterly"
+    try:
+        from app.services.gulftax_sync_service import _fetch_company_config
+
+        cfg = _fetch_company_config(company_id)
+        filing = cfg.get("vat_filing_frequency") or "quarterly"
+    except Exception:
+        pass
+
+    tax_period = tax_period_for_date(tx_date, filing)
+    inv_no = (getattr(classifier_txn, "invoice_number", None) or "").strip() or None
+    if inv_no:
+        dup = (
+            db.query(GulftaxTransaction)
+            .filter(
+                GulftaxTransaction.company_id == company_id,
+                GulftaxTransaction.invoice_number == inv_no,
+                GulftaxTransaction.direction == direction,
+                GulftaxTransaction.tax_period == tax_period,
+                GulftaxTransaction.status == "posted",
+            )
+            .first()
+        )
+        if dup:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "duplicate_invoice_number",
+                "transaction_id": dup.id,
+            }
+
+    net = round(float(getattr(classifier_txn, "amount_aed", 0) or 0), 2)
+    vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
+    gross = round(net + vat, 2) if vat > 0 else net
+
+    vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
+    vat_category = _norm_treatment(vat_treatment)
+    stored_box = getattr(classifier_txn, "box_number", None)
+    if stored_box is not None:
+        fta_box = f"box{int(stored_box)}"
+    else:
+        fta_box = _fta_box(vat_category, direction)
+
+    try:
+        gt = GulftaxTransaction(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            company_id=company_id,
+            source=CLASSIFIER_GULFTAX_SOURCE,
+            ap_invoice_id=ap_id,
+            tax_period=tax_period,
+            transaction_date=tx_date,
+            vendor_name=getattr(classifier_txn, "vendor_or_customer", None),
+            vendor_trn=getattr(classifier_txn, "vendor_trn", None),
+            invoice_number=inv_no,
+            gross_amount=gross,
+            vat_amount=vat,
+            vat_category=vat_category,
+            fta_box=fta_box,
+            direction=direction,
+            status="posted",
+            designated_zone=False,
+            transaction_kind="goods",
+            created_at=datetime.utcnow(),
+        )
+        db.add(gt)
+        db.commit()
+        db.refresh(gt)
+        return {
+            "ok": True,
+            "transaction_id": gt.id,
+            "tax_period": tax_period,
+            "fta_box": fta_box,
+            "direction": direction,
+            "company_id": company_id,
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            "Classifier→gulftax sync failed for txn id=%s", txn_id
+        )
+        return {"ok": False, "error": str(exc)}
+
+
+def sync_approved_classifier_transactions_to_gulftax(
+    *,
+    classifier_txns: list[Any],
+    ported_company: Any | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Batch sync approved classifier transactions into gulftax_transactions."""
+    from app.core.database import SessionLocal
+
+    db = SessionLocal()
+    synced = skipped = errors = 0
+    try:
+        for txn in classifier_txns:
+            try:
+                result = sync_classifier_transaction_to_gulftax(
+                    db,
+                    txn,
+                    ported_company=ported_company,
+                    workspace_id=workspace_id,
+                )
+                if result.get("ok") and result.get("skipped"):
+                    skipped += 1
+                elif result.get("ok"):
+                    synced += 1
+                else:
+                    errors += 1
+                    logger.warning(
+                        "Classifier gulftax sync failed id=%s: %s",
+                        getattr(txn, "id", None),
+                        result.get("error"),
+                    )
+            except Exception:
+                errors += 1
+                logger.exception(
+                    "Classifier gulftax sync exception id=%s",
+                    getattr(txn, "id", None),
+                )
+        return {
+            "ok": errors == 0,
+            "synced": synced,
+            "skipped": skipped,
+            "errors": errors,
+        }
+    finally:
+        db.close()
+

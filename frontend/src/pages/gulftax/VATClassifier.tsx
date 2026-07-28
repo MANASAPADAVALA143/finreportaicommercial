@@ -273,7 +273,16 @@ export default function VATClassifier() {
         min_confidence: 0.85,
         verified_by: "user",
       });
-      setUploadMsg(`✅ Approved ${data.approved_count} transaction(s)${data.skipped_blocked ? ` · ${data.skipped_blocked} blocked skipped` : ""}.`);
+      const syncBit =
+        data.gulftax_synced != null
+          ? ` · GulfTax synced ${data.gulftax_synced}`
+          : "";
+      const akkBit = data.akk_fixed ? ` · AKK box fixed ${data.akk_fixed}` : "";
+      setUploadMsg(
+        `✅ Approved ${data.approved_count} transaction(s)${
+          data.skipped_blocked ? ` · ${data.skipped_blocked} blocked skipped` : ""
+        }${akkBit}${syncBit}.`
+      );
       await fetchSaved();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
