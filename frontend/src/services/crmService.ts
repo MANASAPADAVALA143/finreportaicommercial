@@ -204,7 +204,16 @@ export function createQuote(line_items: CRMQuote['line_items'], deal_id?: string
 }
 
 export function convertQuoteToInvoice(quoteId: string) {
-  return post<{ invoice_id: string; invoice_number: string; total: number }>(`/quotes/${quoteId}/convert-to-invoice`, {});
+  return post<{
+    invoice_id: string;
+    invoice_number: string;
+    total: number;
+    posted?: boolean;
+    journal_entry_id?: string;
+    gulftax_transaction_id?: string;
+    status?: string;
+    deal_stage?: string | null;
+  }>(`/quotes/${quoteId}/convert-to-invoice`, {});
 }
 
 export function fetchCreditRiskSummary() {

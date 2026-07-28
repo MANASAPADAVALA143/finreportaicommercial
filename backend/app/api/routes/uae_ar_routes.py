@@ -463,16 +463,43 @@ def ar_classify_invoice(body: ARClassifyRequest) -> dict[str, Any]:
 
 @router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
 def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
+    """Approve draft/pending AR invoice → JE (1200/4100/2200) + GulfTax output + VAT Classifier."""
     ws = _ws(request, body.workspace_id)
+    poster = (
+        request.headers.get("x-user-email")
+        or request.headers.get("X-User-Email")
+        or "system"
+    )
     result = post_sales_invoice_to_gl_and_tax(
         body.invoice_id,
         tenant_id=ws,
         company_id=body.company_id or _company_id(request),
         db=db,
+        approved_by=poster,
     )
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
-    return result
+    if not result.get("ok") and not result.get("success"):
+        err = result.get("error", "post_failed")
+        err_type = result.get("error_type") or "unknown"
+        status = 404 if err_type == "not_found" else 400
+        raise HTTPException(
+            status_code=status,
+            detail={"error": err, "error_type": err_type, "message": str(err)},
+        )
+    return {
+        "success": True,
+        "ok": True,
+        "invoice_id": result.get("invoice_id") or body.invoice_id,
+        "journal_entry_id": result.get("journal_entry_id") or result.get("je_id"),
+        "gulftax_transaction_id": result.get("gulftax_transaction_id"),
+        "status": result.get("status", "posted"),
+        "invoice_number": result.get("invoice_number"),
+        "je_reference": result.get("je_reference"),
+        "je_posted": result.get("je_posted", True),
+        "skipped": result.get("skipped", False),
+        "gulftax": result.get("gulftax"),
+        "einvoicing": result.get("einvoicing"),
+        "message": result.get("message"),
+    }
 
 
 @router.post("/create-invoice")

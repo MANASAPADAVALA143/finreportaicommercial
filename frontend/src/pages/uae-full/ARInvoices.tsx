@@ -7,7 +7,7 @@ import { format, addDays, parseISO, startOfWeek, endOfWeek, isWithinInterval, st
 import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus, Upload, FileCode,
+  Plus, RefreshCw, Send, CreditCard, Eye, Download, X, Search, Zap, TrendingUp, FileMinus, Upload, FileCode, CheckCircle2,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
@@ -249,11 +249,11 @@ export default function ARInvoices() {
         );
       } else if (decision === 'REVIEW_QUEUE' || res.flag_for_review || res.needs_manual_review) {
         toast(
-          `Invoice ${res.invoice_number} posted — flagged for VAT review. ${reasoning}`,
+          `${arSvc.arPostedToastMessage(res.invoice_number)} — flagged for VAT review. ${reasoning}`,
           { icon: '⚠️', duration: 6000 },
         );
       } else {
-        toast.success(`Invoice ${res.invoice_number} created`);
+        toast.success(arSvc.arPostedToastMessage(res.invoice_number));
       }
       setShowNew(false);
       setCustName(''); setCustTrn(''); setLines([emptyLine()]);
@@ -316,6 +316,21 @@ export default function ARInvoices() {
       void load();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Send failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApproveAndPost = async (inv: ARInvoice) => {
+    if (!companyId) { toast.error('Select a company first'); return; }
+    setSubmitting(true);
+    try {
+      const res = await arSvc.approveAndPostARInvoice(inv.id, companyId);
+      const num = res.invoice_number || inv.invoice_number;
+      toast.success(res.message || arSvc.arPostedToastMessage(num));
+      void load();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Approve & Post failed');
     } finally {
       setSubmitting(false);
     }
@@ -807,12 +822,22 @@ export default function ARInvoices() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-1">
                       {inv.status === 'draft' && (
-                        <button
-                          onClick={() => { setShowSend(inv); setSendEmail(''); }}
-                          className="text-xs bg-blue-700 hover:bg-blue-600 px-2 py-1 rounded flex items-center gap-1"
-                        >
-                          <Send size={10} /> Send
-                        </button>
+                        <>
+                          <button
+                            onClick={() => void handleApproveAndPost(inv)}
+                            disabled={submitting}
+                            className="text-xs bg-emerald-700 hover:bg-emerald-600 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"
+                            title="Post to GL + GulfTax VAT"
+                          >
+                            <CheckCircle2 size={10} /> Approve & Post
+                          </button>
+                          <button
+                            onClick={() => { setShowSend(inv); setSendEmail(''); }}
+                            className="text-xs bg-blue-700 hover:bg-blue-600 px-2 py-1 rounded flex items-center gap-1"
+                          >
+                            <Send size={10} /> Send
+                          </button>
+                        </>
                       )}
                       {(inv.status === 'sent' || inv.status === 'overdue' || inv.status === 'partial') && (
                         <button

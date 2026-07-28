@@ -225,6 +225,45 @@ def sync_gulftax_orm_row_to_classifier(gt_row: Any) -> dict[str, Any]:
     )
 
 
+def sync_ar_invoice_to_vat_classifier(
+    *,
+    finreport_company_id: str,
+    workspace_id: str | None = None,
+    invoice_number: str | None,
+    customer_name: str | None,
+    transaction_date: date | None,
+    gross_amount: float,
+    vat_amount: float,
+    vat_category: str | None = None,
+    vendor_trn: str | None = None,
+    fta_box: str | None = None,
+    sales_invoice_id: str | None = None,
+    source: str = "ar_approve_and_post",
+) -> dict[str, Any]:
+    """Mirror an AR (output VAT) invoice into Classifier `transactions` (Saved tab).
+
+    Always labels direction as output so VAT Classifier can distinguish AR vs AP.
+    """
+    return upsert_classifier_transaction(
+        finreport_company_id=finreport_company_id,
+        workspace_id=workspace_id,
+        invoice_number=invoice_number,
+        vendor_or_customer=customer_name,
+        transaction_date=transaction_date,
+        gross_amount=gross_amount,
+        vat_amount=vat_amount,
+        vat_category=vat_category,
+        direction="output",
+        source=source or "ar_approve_and_post",
+        vendor_trn=vendor_trn,
+        fta_box=fta_box,
+        ap_invoice_id=sales_invoice_id,
+        description=(
+            f"AR sale {invoice_number}" if invoice_number else "AR sales invoice"
+        ),
+    )
+
+
 def backfill_classifier_from_gulftax(
     db: Session,
     *,

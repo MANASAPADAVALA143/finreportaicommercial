@@ -1019,21 +1019,27 @@ def post_invoice(inv_id: str, request: Request, db: Session = Depends(get_db)):
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
+    poster = request.headers.get("x-user-email") or request.headers.get("X-User-Email") or "system"
     result = post_sales_invoice_to_gl_and_tax(
         inv_id,
         tenant_id=tenant_id,
         company_id=inv.company_id,
         db=db,
+        approved_by=poster,
     )
-    if not result.get("ok"):
+    if not result.get("ok") and not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
     return {
         "id": inv_id,
+        "success": True,
         "status": result.get("status", "posted"),
         "je_id": result.get("je_id"),
+        "journal_entry_id": result.get("journal_entry_id") or result.get("je_id"),
+        "gulftax_transaction_id": result.get("gulftax_transaction_id"),
         "je_reference": result.get("je_reference"),
         "skipped": result.get("skipped", False),
         "gulftax": result.get("gulftax"),
+        "message": result.get("message"),
     }
 
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Plus, FileText } from 'lucide-react';
 import { convertQuoteToInvoice, createQuote, listQuotes, type CRMQuote } from '../../services/crmService';
+import { arPostedToastMessage } from '../../services/arService';
 
 function emptyLine() {
   return { description: '', qty: 1, unit_price: 0, vat_rate: 5 };
@@ -53,7 +54,13 @@ export default function CRMQuotes() {
     setConverting(q.id);
     try {
       const res = await convertQuoteToInvoice(q.id);
-      toast.success(`Invoice ${res.invoice_number} created — deal marked Won`);
+      if (res.posted) {
+        toast.success(arPostedToastMessage(res.invoice_number));
+      } else {
+        toast.success(
+          `Invoice ${res.invoice_number} created — deal marked Won (draft; use Approve & Post if needed)`,
+        );
+      }
       void load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Convert failed');

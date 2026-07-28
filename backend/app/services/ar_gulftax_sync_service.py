@@ -35,7 +35,7 @@ def _existing_ar_in_gulftax(db: Session, ap_invoice_id: str) -> GulftaxTransacti
             GulftaxTransaction.ap_invoice_id == ap_invoice_id,
             GulftaxTransaction.direction == "output",
             GulftaxTransaction.status == "posted",
-            GulftaxTransaction.source == "ar_sales",
+            GulftaxTransaction.source.in_(("ar_approve_and_post", "ar_sales")),
         )
         .first()
     )
@@ -66,6 +66,7 @@ def build_ar_transaction_row(
     customer_name: str,
     company_id: str,
     workspace_id: str,
+    source: str = "ar_approve_and_post",
 ) -> dict[str, Any]:
     from app.modules.gulftax.vat_return_service import (
         _company_entity_type,
@@ -87,7 +88,9 @@ def build_ar_transaction_row(
     if vat <= 0 and gross > 0 and subtotal > 0:
         vat = round(gross - subtotal, 2)
 
-    vat_category = _norm_treatment(_supply_to_vat_treatment(inv.supply_type))
+    # Prefer classify-on-create vat_treatment when present
+    raw_treatment = inv.vat_treatment or _supply_to_vat_treatment(inv.supply_type)
+    vat_category = _norm_treatment(raw_treatment)
     fta_box = _fta_box(vat_category, "output")
 
     entity_type = _company_entity_type(company_id)
@@ -99,7 +102,7 @@ def build_ar_transaction_row(
 
     return {
         "tenant_id": workspace_id or inv.tenant_id,
-        "source": "ar_sales",
+        "source": source or "ar_approve_and_post",
         "ap_invoice_id": inv.id,
         "company_id": company_id,
         "tax_period": tax_period,
@@ -111,12 +114,13 @@ def build_ar_transaction_row(
         "vat_amount": vat,
         "vat_category": vat_category,
         "fta_box": fta_box,
-        "direction": "output",
+        "direction": "output",  # AR = OUTPUT VAT (opposite of AP input)
         "status": "posted",
         "designated_zone": dz_flag,
         "transaction_kind": tx_kind,
         "dz_supplier_location": sup_loc,
         "dz_customer_location": cust_loc,
+        "net_amount": subtotal,
     }
 
 
@@ -153,9 +157,22 @@ def _insert_rds_row(db: Session, row: dict[str, Any]) -> GulftaxTransaction:
 def _mirror_to_vat_classifier(gt_row: Any) -> dict[str, Any]:
     """Best-effort write into VAT Classifier `transactions` (Saved list)."""
     try:
-        from app.services.vat_classifier_sync_service import sync_gulftax_orm_row_to_classifier
+        from app.services.vat_classifier_sync_service import sync_ar_invoice_to_vat_classifier
 
-        result = sync_gulftax_orm_row_to_classifier(gt_row)
+        result = sync_ar_invoice_to_vat_classifier(
+            finreport_company_id=str(gt_row.company_id or ""),
+            workspace_id=str(getattr(gt_row, "tenant_id", None) or "") or None,
+            invoice_number=gt_row.invoice_number,
+            customer_name=gt_row.vendor_name,
+            transaction_date=gt_row.transaction_date,
+            gross_amount=float(gt_row.gross_amount or 0),
+            vat_amount=float(gt_row.vat_amount or 0),
+            vat_category=gt_row.vat_category,
+            vendor_trn=gt_row.vendor_trn,
+            fta_box=gt_row.fta_box,
+            sales_invoice_id=gt_row.ap_invoice_id,
+            source=gt_row.source or "ar_approve_and_post",
+        )
         if not result.get("ok"):
             logger.warning(
                 "VAT Classifier mirror failed for %s: %s",
@@ -177,6 +194,7 @@ def sync_ar_invoice_to_gulftax(
     company_id: str,
     *,
     workspace_id: str | None = None,
+    source: str = "ar_approve_and_post",
 ) -> dict[str, Any]:
     """Insert one posted AR sales invoice into RDS gulftax_transactions (idempotent)."""
     if not sales_invoice_id or not company_id:
@@ -213,6 +231,7 @@ def sync_ar_invoice_to_gulftax(
         customer_name=customer_name,
         company_id=resolved_company_id,
         workspace_id=ws,
+        source=source or "ar_approve_and_post",
     )
 
     try:

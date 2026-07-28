@@ -1,10 +1,13 @@
 /**
  * Sales Invoices — UAE FTA-compliant VAT invoices + AR Aging
+ * Approve/Post routes through POST /api/uae/ar/approve-and-post (same as AR Suite + CRM).
  */
 import { useEffect, useState } from 'react';
 import { FileText, AlertTriangle, RefreshCw } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { SalesInvoice } from '../../services/uaeFullAccounting.service';
+import { arPostedToastMessage } from '../../services/arService';
 
 const STATUS_STYLE: Record<string, string> = {
   draft:  'bg-gray-700 text-gray-300 border-gray-600',
@@ -18,6 +21,7 @@ export default function SalesInvoices() {
   const [aging, setAging]         = useState<Record<string, number> | null>(null);
   const [tab, setTab]             = useState<'invoices' | 'aging'>('invoices');
   const [loading, setLoading]     = useState(true);
+  const [postingId, setPostingId] = useState<string | null>(null);
   const [error, setError]         = useState('');
 
   const load = () => {
@@ -36,12 +40,20 @@ export default function SalesInvoices() {
 
   useEffect(load, []);
 
-  const handlePost = async (id: string) => {
+  const handlePost = async (inv: SalesInvoice) => {
+    setError('');
+    setPostingId(inv.id);
     try {
-      await svc.postInvoice(id);
+      const res = await svc.approveAndPostSalesInvoice(inv.id);
+      const num = res.invoice_number || inv.invoice_number;
+      toast.success(res.message || arPostedToastMessage(num));
       load();
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Post failed';
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setPostingId(null);
     }
   };
 
@@ -169,12 +181,13 @@ export default function SalesInvoices() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2 flex-wrap">
-                        {inv.status === 'draft' && (
+                        {(inv.status === 'draft' || inv.status === 'pending') && (
                           <button
-                            onClick={() => handlePost(inv.id)}
-                            className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors"
+                            onClick={() => void handlePost(inv)}
+                            disabled={postingId === inv.id}
+                            className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors disabled:opacity-50"
                           >
-                            Post
+                            {postingId === inv.id ? 'Posting…' : 'Approve & Post'}
                           </button>
                         )}
                       </div>

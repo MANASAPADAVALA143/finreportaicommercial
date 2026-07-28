@@ -149,6 +149,8 @@ class UAESalesInvoice(Base):
     flag_for_review     = Column(Boolean, default=False)
     gulftax_reasoning   = Column(Text, nullable=True)
     journal_entry_id = Column(String(36), ForeignKey("uae_journal_entries.id"), nullable=True)
+    approved_at     = Column(DateTime, nullable=True)
+    approved_by     = Column(String(200), nullable=True)
     notes           = Column(Text)
     sent_at         = Column(DateTime, nullable=True)
     paid_date       = Column(Date, nullable=True)

@@ -274,6 +274,48 @@ export const createInvoice = (body: {
 }) => post<{ id: string; invoice_number: string; total_amount: number }>('/invoices', body);
 export const postInvoice = (invId: string) =>
   post<{ id: string; status: string; je_id: string }>(`/invoices/${invId}/post`);
+
+/**
+ * Canonical AR approve-and-post — routes through /api/uae/ar/approve-and-post
+ * (same path as AR Suite + CRM) rather than the legacy /full/invoices/{id}/post alias.
+ */
+export async function approveAndPostSalesInvoice(invoiceId: string): Promise<{
+  success: boolean;
+  invoice_id?: string;
+  invoice_number?: string;
+  journal_entry_id?: string;
+  gulftax_transaction_id?: string;
+  status?: string;
+  message?: string;
+}> {
+  const origin = backendOrigin();
+  const base = origin ? `${origin}/api/uae/ar` : '/api/uae/ar';
+  const res = await fetch(`${base}/approve-and-post`, {
+    method: 'POST',
+    headers: hdrs(),
+    credentials: 'include',
+    body: JSON.stringify({
+      invoice_id: invoiceId,
+      company_id: localStorage.getItem('active_company_id'),
+      workspace_id:
+        localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId'),
+    }),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail =
+        typeof err.detail === 'string'
+          ? err.detail
+          : err.detail?.message || err.detail?.error || JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
 export const getARaging = (asOf?: string) =>
   get<{ as_of: string; buckets: Record<string, number>; invoices: unknown[] }>(
     '/ar-aging', asOf ? { as_of: asOf } : undefined

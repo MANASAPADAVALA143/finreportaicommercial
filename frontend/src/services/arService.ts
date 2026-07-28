@@ -224,10 +224,13 @@ export async function bulkImportARInvoices(
 
 export const approveAndPostARInvoice = (invoice_id: string, company_id?: string) =>
   post<{
+    success: boolean;
     ok: boolean;
     skipped?: boolean;
     je_posted: boolean;
     je_id?: string;
+    journal_entry_id?: string;
+    gulftax_transaction_id?: string;
     je_reference?: string;
     status?: string;
     invoice_id?: string;
@@ -239,6 +242,11 @@ export const approveAndPostARInvoice = (invoice_id: string, company_id?: string)
     company_id: company_id ?? localStorage.getItem('active_company_id'),
     workspace_id: localStorage.getItem('gnanova_workspace_id'),
   });
+
+/** Shared success copy for all AR approve-and-post entry points */
+export function arPostedToastMessage(invoiceNumber: string): string {
+  return `Invoice ${invoiceNumber} posted → GL entry created + VAT recorded in GulfTax`;
+}
 
 export const listARCreditNotes = (params?: {
   status?: string;
