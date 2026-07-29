@@ -2,6 +2,10 @@
 
 import { useRef, useState } from "react";
 import { apiClient } from '../../services/gulfTaxClient';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
+import { getActiveCompanyId } from '../../context/CompanyContext';
+import { getStoredAccessToken } from '../../utils/authToken';
+import { supabase } from '../../lib/supabase';
 import { Link } from 'react-router-dom';
 
 type Stage = "idle" | "uploading" | "extracting" | "classifying" | "done" | "error";
@@ -84,6 +88,59 @@ export default function InvoiceFlowPage() {
   const removeFile = (idx: number) =>
     setFiles((prev) => prev.filter((_, i) => i !== idx));
 
+  const extractInvoiceFile = async (file: File) => {
+    // Native fetch + FormData — never set Content-Type (browser adds boundary).
+    const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") || "";
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    const headers: Record<string, string> = {};
+    const ws =
+      localStorage.getItem("active_workspace_id") ||
+      getStoredWorkspaceId() ||
+      localStorage.getItem("tenantId") ||
+      "";
+    const cid = getActiveCompanyId() || localStorage.getItem("gulftax_company_id") || "";
+    if (ws) headers["X-Workspace-Id"] = ws;
+    if (cid) headers["X-Company-Id"] = cid;
+
+    let token = getStoredAccessToken();
+    if (!token) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        token = data.session?.access_token ?? null;
+      } catch {
+        token = null;
+      }
+    }
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(`${API}/api/invoice/extract`, {
+      method: "POST",
+      headers,
+      body: form,
+      credentials: "include",
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const err = await res.json();
+        detail =
+          typeof err.detail === "string"
+            ? err.detail
+            : Array.isArray(err.detail)
+              ? err.detail.map((d: { msg?: string }) => d.msg).join(", ")
+              : JSON.stringify(err.detail ?? err);
+      } catch {
+        /* ignore */
+      }
+      throw Object.assign(new Error(detail || `Extract failed (${res.status})`), {
+        response: { data: { detail }, status: res.status },
+      });
+    }
+    return { data: await res.json() };
+  };
+
   const handleProcess = async () => {
     if (!files.length) return;
     // Prevent double-submission (ref is synchronous, unlike state)
@@ -99,12 +156,7 @@ export default function InvoiceFlowPage() {
       try {
         // Step 1: Extract
         setStage("extracting");
-        const form = new FormData();
-        form.append("file", file);
-        // Do NOT set Content-Type — browser must set multipart/form-data with boundary.
-        const extractRes = await apiClient.post("/api/invoice/extract", form, {
-          timeout: 60_000,
-        });
+        const extractRes = await extractInvoiceFile(file);
         const { invoice_id, extracted } = extractRes.data;
 
         // Step 2: Classify + risk
