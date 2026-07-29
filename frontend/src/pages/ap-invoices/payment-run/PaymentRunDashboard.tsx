@@ -2,17 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { Banknote, Plus, RefreshCw } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { Button } from '../../components/ui/button';
-import { Badge } from '../../components/ui/badge';
-import { Input } from '../../components/ui/input';
+import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Button } from '../../../components/ui/button';
+import { Badge } from '../../../components/ui/badge';
+import { Input } from '../../../components/ui/input';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../components/ui/select';
+} from '../../../components/ui/select';
 import {
   Table,
   TableBody,
@@ -20,14 +20,14 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
-import { useToast } from '../../hooks/use-toast';
-import { formatCurrency } from '../../utils/currency';
+} from '../../../components/ui/table';
+import { useToast } from '../../../hooks/use-toast';
+import { formatCurrency } from '../../../utils/currency';
 import {
   listPaymentRuns,
   type PaymentRun,
   type PaymentRunStatus,
-} from '../../lib/ap-invoice/paymentRunService';
+} from '../../../lib/ap-invoice/paymentRunService';
 
 const statusBadge: Record<string, string> = {
   draft: 'bg-gray-100 text-gray-800 border-gray-200',
