@@ -345,7 +345,6 @@ def sync_classifier_transaction_to_gulftax(
     """
     from app.models.client_data import GulftaxTransaction
     from app.services.gulftax_sync_service import (
-        _fta_box,
         _norm_treatment,
         tax_period_for_date,
     )
@@ -398,15 +397,14 @@ def sync_classifier_transaction_to_gulftax(
 
     tax_period = tax_period_for_date(tx_date, filing)
     inv_no = (getattr(classifier_txn, "invoice_number", None) or "").strip() or None
+    # Dedupe: invoice_number + source + company_id (do not skip when AP/AR has same invoice #)
     if inv_no:
         dup = (
             db.query(GulftaxTransaction)
             .filter(
                 GulftaxTransaction.company_id == company_id,
                 GulftaxTransaction.invoice_number == inv_no,
-                GulftaxTransaction.direction == direction,
-                GulftaxTransaction.tax_period == tax_period,
-                GulftaxTransaction.status == "posted",
+                GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
             )
             .first()
         )
@@ -422,13 +420,10 @@ def sync_classifier_transaction_to_gulftax(
     vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
     gross = round(net + vat, 2) if vat > 0 else net
 
+    # Hard box rule: purchase→9, sale→1
+    fta_box = "box1" if direction == "output" else "box9"
     vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
     vat_category = _norm_treatment(vat_treatment)
-    stored_box = getattr(classifier_txn, "box_number", None)
-    if stored_box is not None:
-        fta_box = f"box{int(stored_box)}"
-    else:
-        fta_box = _fta_box(vat_category, direction)
 
     try:
         gt = GulftaxTransaction(

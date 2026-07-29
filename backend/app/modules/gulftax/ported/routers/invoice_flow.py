@@ -16,11 +16,54 @@ from sqlalchemy.orm import Session
 from database import get_db
 from middleware.auth import get_current_company_id
 from models import Company, Invoice, Transaction
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
 
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 claude_client = Anthropic(api_key=anthropic_api_key) if anthropic_api_key else None
+
+
+def _sync_invoice_flow_txns_to_gulftax(
+    db: Session,
+    *,
+    company_id: str,
+    invoice_id: int,
+) -> Dict[str, Any]:
+    """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return)."""
+    try:
+        from app.services.vat_classifier_sync_service import (
+            sync_approved_classifier_transactions_to_gulftax,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        txns = (
+            db.query(Transaction)
+            .filter(
+                Transaction.company_id == company_id,
+                Transaction.source_invoice_id == invoice_id,
+                Transaction.is_verified == True,  # noqa: E712
+            )
+            .all()
+        )
+        for t in txns:
+            side = (t.transaction_type or "purchase").lower()
+            t.box_number = 1 if side == "sale" else 9
+        if txns:
+            db.commit()
+        return sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=txns,
+            ported_company=company,
+        )
+    except Exception:
+        logger.exception(
+            "Invoice Flow gulftax sync failed company=%s invoice=%s",
+            company_id,
+            invoice_id,
+        )
+        return {"ok": False, "synced": 0, "skipped": 0, "errors": 1}
 
 # ── UAE TRN: 15 digits, starts with 1 ─────────────────────────────────────────
 UAE_TRN_VALID = re.compile(r"^1\d{14}$")
@@ -1005,6 +1048,7 @@ Return JSON only:
                     vat_treatment=vat_treatment,
                     amount_aed=round(subtotal, 2),
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_auto",
@@ -1044,6 +1088,7 @@ Return JSON only:
                     vat_treatment=vat_treatment,
                     amount_aed=amount,
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_auto",
@@ -1066,6 +1111,13 @@ Return JSON only:
 
     db.commit()
 
+    gulftax_synced = 0
+    if transactions_created > 0:
+        sync_res = _sync_invoice_flow_txns_to_gulftax(
+            db, company_id=company_id, invoice_id=inv.id
+        )
+        gulftax_synced = int(sync_res.get("synced") or 0)
+
     return {
         "invoice_id": inv.id,
         "vat_result": vat_result,
@@ -1075,6 +1127,7 @@ Return JSON only:
         "recommendation": risk.recommendation,
         "auto_approved": auto_approved,
         "transactions_created": transactions_created,
+        "gulftax_synced": gulftax_synced,
     }
 
 
@@ -1179,6 +1232,7 @@ def review_invoice(
                     vat_treatment=vat_treatment,
                     amount_aed=round(subtotal, 2),
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_reviewed",
@@ -1224,6 +1278,7 @@ def review_invoice(
                     vat_treatment=vat_treatment,
                     amount_aed=amount,
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_reviewed",
@@ -1236,12 +1291,20 @@ def review_invoice(
     db.commit()
     db.refresh(inv)
 
+    gulftax_synced = 0
+    if transactions_created > 0:
+        sync_res = _sync_invoice_flow_txns_to_gulftax(
+            db, company_id=company_id, invoice_id=inv.id
+        )
+        gulftax_synced = int(sync_res.get("synced") or 0)
+
     return {
         "invoice_id": inv.id,
         "status": inv.status,
         "vat_treatment": inv.vat_treatment,
         "approved": inv.status == "approved",
         "transactions_created": transactions_created,
+        "gulftax_synced": gulftax_synced,
         "zoho_ready": True,
     }
 

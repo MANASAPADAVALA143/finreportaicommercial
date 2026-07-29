@@ -190,46 +190,51 @@ def _save_classification_fields(
 
 
 def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
-    """Correct AKK Consulting + any purchase rows wrongly sitting on output boxes."""
+    """Force purchase→Box 9 / sale→Box 1; fix AKK Consulting and any purchase+Box1 rows."""
     akk_fixed = 0
     purchase_box_fixed = 0
     fixed_txns: List[Transaction] = []
-    akk_rows = (
-        db.query(Transaction)
-        .filter(
-            Transaction.company_id == company_id,
-            Transaction.vendor_or_customer.ilike("%AKK Consulting%"),
-        )
-        .all()
-    )
-    for t in akk_rows:
-        changed = False
-        if (t.transaction_type or "").lower() != "purchase":
-            t.transaction_type = "purchase"
-            changed = True
-        if t.box_number != 9:
-            t.box_number = 9
-            changed = True
-        if changed:
-            akk_fixed += 1
-        fixed_txns.append(t)
 
+    # Global correction for this company: purchase + box 1 → box 9
     bad_purchases = (
         db.query(Transaction)
         .filter(
             Transaction.company_id == company_id,
             Transaction.transaction_type == "purchase",
-            Transaction.box_number.in_([1, 2, 3, 4]),
+            Transaction.box_number == 1,
         )
         .all()
     )
     for t in bad_purchases:
-        new_box = coerce_box_number("purchase", t.vat_treatment, t.box_number)
-        if new_box != t.box_number:
-            t.box_number = new_box
-            purchase_box_fixed += 1
-            if t not in fixed_txns:
-                fixed_txns.append(t)
+        t.box_number = 9
+        purchase_box_fixed += 1
+        fixed_txns.append(t)
+
+    # Also coerce any other wrong side/box pairs for this company
+    all_rows = db.query(Transaction).filter(Transaction.company_id == company_id).all()
+    for t in all_rows:
+        side = (t.transaction_type or "purchase").lower()
+        expected = 1 if side == "sale" else 9
+        # AKK Consulting must be purchase + box 9
+        vendor = (t.vendor_or_customer or "").lower()
+        if "akk consulting" in vendor:
+            if side != "purchase" or t.box_number != 9:
+                t.transaction_type = "purchase"
+                t.box_number = 9
+                akk_fixed += 1
+                if t not in fixed_txns:
+                    fixed_txns.append(t)
+            continue
+        if t.box_number != expected and side in ("sale", "purchase"):
+            # Only auto-fix standard output/input mixups (1 vs 9)
+            if (side == "purchase" and t.box_number in (1, 2, 3, 4)) or (
+                side == "sale" and t.box_number in (7, 9, 10, 11)
+            ):
+                t.box_number = expected
+                if t not in fixed_txns:
+                    fixed_txns.append(t)
+                    if side == "purchase":
+                        purchase_box_fixed += 1
 
     return {
         "akk_fixed": akk_fixed,
@@ -1239,7 +1244,8 @@ async def bulk_approve_high_confidence(
         for t in box_fixes.get("fixed_txns") or []:
             if t.is_verified:
                 sync_targets[t.id] = t
-        # Backfill other verified classifier-origin rows (idempotent)
+        # Classifier / Invoice Flow origins only — do NOT re-sync AR/AP mirrors
+        # (those already live in gulftax_transactions from approve-and-post).
         for t in (
             db.query(Transaction)
             .filter(

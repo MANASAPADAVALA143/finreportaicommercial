@@ -101,8 +101,8 @@ export default function InvoiceFlowPage() {
         setStage("extracting");
         const form = new FormData();
         form.append("file", file);
+        // Do NOT set Content-Type — browser must set multipart/form-data with boundary.
         const extractRes = await apiClient.post("/api/invoice/extract", form, {
-          headers: { "Content-Type": "multipart/form-data" },
           timeout: 60_000,
         });
         const { invoice_id, extracted } = extractRes.data;

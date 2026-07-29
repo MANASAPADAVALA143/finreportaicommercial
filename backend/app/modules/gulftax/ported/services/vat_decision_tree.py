@@ -201,22 +201,17 @@ def coerce_box_number(
     vat_treatment: Optional[str] = None,
     box_number: Optional[int] = None,
 ) -> int:
-    """Ensure purchases never keep output boxes (1–4) and sales never keep input boxes (7/9–11).
+    """Hard rule for VAT Classifier UI / FTA mapping by side.
 
-    Standard rule: purchase → Box 9, sale → Box 1 (refined by vat_treatment via map_box_number).
+    purchase → Box 9, sale → Box 1 (always).
+    ``vat_treatment`` / stored ``box_number`` are ignored for this coercion —
+    side alone determines the box so purchase+Box1 cannot persist.
     """
+    del vat_treatment, box_number  # explicit: side wins
     side = (transaction_type or "purchase").lower()
-    if side not in ("sale", "purchase"):
-        side = "purchase"
-    treatment = vat_treatment or "standard_rated"
-    expected = map_box_number(treatment, side)
-    if box_number is None:
-        return expected
-    if side == "purchase" and int(box_number) in (1, 2, 3, 4):
-        return expected
-    if side == "sale" and int(box_number) in (7, 9, 10, 11):
-        return expected
-    return int(box_number)
+    if side == "sale":
+        return 1
+    return 9
 
 
 def build_risk_flags(
