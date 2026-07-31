@@ -83,6 +83,13 @@ export async function savePartialExemption(
   inputs: { taxable: number; exempt: number; inputVat: number; provisionalPct?: number },
   result: PartialExemptionResult,
 ): Promise<PartialExemptionRecord> {
+  // Production OpenAPI still types breakdown as object|null — sending the UI's
+  // label/value array causes 422 "Input should be a valid dictionary".
+  const breakdownDict: Record<string, string> = {};
+  for (const row of result.breakdown ?? []) {
+    if (row?.label != null) breakdownDict[String(row.label)] = String(row.value ?? '');
+  }
+
   return apiFetch<PartialExemptionRecord>('/api/gulftax/vat-advanced/partial-exemption', {
     method: 'POST',
     body: JSON.stringify({
@@ -94,7 +101,7 @@ export async function savePartialExemption(
       recovery_pct: result.recoveryPct,
       recoverable_vat: result.recoverableVat,
       irrecoverable_vat: result.irrecoverableVat,
-      breakdown: result.breakdown,
+      breakdown: breakdownDict,
     }),
   });
 }

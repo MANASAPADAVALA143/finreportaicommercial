@@ -21,11 +21,6 @@ from app.models.client_data import (
 router = APIRouter(prefix="/api/gulftax/vat-advanced", tags=["VAT Advanced RDS"])
 
 
-class PartialExemptionBreakdownRow(BaseModel):
-    label: str
-    value: str
-
-
 class PartialExemptionIn(BaseModel):
     period: str
     period_type: str = "quarterly"
@@ -35,22 +30,20 @@ class PartialExemptionIn(BaseModel):
     recovery_pct: float
     recoverable_vat: float
     irrecoverable_vat: float
-    # Frontend sends label/value rows; also accept a plain dict for older clients
-    breakdown: Optional[Union[list[PartialExemptionBreakdownRow], list[dict[str, Any]], dict[str, Any]]] = None
+    # Accept list (UI rows) or dict — use Any so Pydantic never 422s on shape
+    breakdown: Optional[Any] = None
 
 
-def _normalize_breakdown(
-    breakdown: Optional[Union[list[PartialExemptionBreakdownRow], list[dict[str, Any]], dict[str, Any]]],
-) -> Any:
+def _normalize_breakdown(breakdown: Any) -> Any:
     if breakdown is None:
         return None
     if isinstance(breakdown, list):
         out: list[dict[str, Any]] = []
         for row in breakdown:
-            if isinstance(row, PartialExemptionBreakdownRow):
-                out.append(row.model_dump())
-            elif isinstance(row, dict):
+            if isinstance(row, dict):
                 out.append(row)
+            elif hasattr(row, "model_dump"):
+                out.append(row.model_dump())
             else:
                 out.append({"label": str(row), "value": ""})
         return out
