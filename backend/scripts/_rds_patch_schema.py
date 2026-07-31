@@ -407,6 +407,27 @@ DDL = [
     # No blind tenant→company backfill: multi-company workspaces are not 1:1.
     "ALTER TABLE uae_fixed_assets ADD COLUMN IF NOT EXISTS company_id VARCHAR(36)",
     "CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_company_id ON uae_fixed_assets (company_id)",
+    # Invoice Flow: transactions.source_invoice_id must FK gulftax_invoices (not AP invoices).
+    """
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'transactions_source_invoice_id_fkey'
+          AND pg_get_constraintdef(oid) LIKE '%REFERENCES invoices(%'
+      ) THEN
+        ALTER TABLE transactions DROP CONSTRAINT transactions_source_invoice_id_fkey;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'transactions_source_invoice_id_fkey'
+      ) THEN
+        ALTER TABLE transactions
+          ADD CONSTRAINT transactions_source_invoice_id_fkey
+          FOREIGN KEY (source_invoice_id) REFERENCES gulftax_invoices(id)
+          ON DELETE SET NULL;
+      END IF;
+    END $$
+    """,
 ]
 
 
