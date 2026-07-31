@@ -71,12 +71,10 @@ export default function DesignatedZones() {
         result,
       );
       setSaveOk(true);
-      setSaveMsg(
-        `Logged — ${result.vatTreatment} at ${result.vatRate}% (${transactionType}: ${supplierLocation} → ${customerLocation}).`,
-      );
+      setSaveMsg('Transaction logged.');
     } catch (e) {
       setSaveOk(false);
-      setSaveMsg(`Could not log — ${e instanceof Error ? e.message : String(e)}`);
+      setSaveMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }

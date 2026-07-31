@@ -68,20 +68,10 @@ class DesignatedZoneIn(BaseModel):
     transaction_type: str
     vat_treatment: str
     vat_rate: float = 0
-    explanation: str
+    explanation: str = ""
     warning: Optional[str] = None
     supplier_zone_name: Optional[str] = None
     customer_zone_name: Optional[str] = None
-
-
-def _bad_debt_period_key(extra: Optional[dict[str, Any]], claim_period: Optional[str] = None) -> str:
-    extra = extra or {}
-    return str(
-        extra.get("vat_return_period")
-        or claim_period
-        or extra.get("claim_period")
-        or ""
-    ).strip()
 
 
 def _assert_no_duplicate_bad_debt(
@@ -89,27 +79,24 @@ def _assert_no_duplicate_bad_debt(
     tenant_id: str,
     company_id: str,
     invoice_number: str,
-    period_key: str,
+    period_key: str = "",
     db: Session,
 ) -> None:
+    """Reject if same invoice_number already exists for this company_id."""
     inv = (invoice_number or "").strip()
     if not inv:
         return
     try:
-        rows = (
+        existing = (
             db.query(BadDebtReliefClaim)
-            .filter_by(tenant_id=tenant_id, company_id=company_id, invoice_number=inv)
-            .all()
+            .filter_by(company_id=company_id, invoice_number=inv)
+            .first()
         )
-        for row in rows:
-            row_period = _bad_debt_period_key(
-                row.extra if isinstance(row.extra, dict) else {},
-                row.claim_period,
+        if existing:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Claim for this invoice already exists.",
             )
-            if period_key and row_period and period_key.lower() == row_period.lower():
-                raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
-            if not period_key and not row_period:
-                raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
     except HTTPException:
         raise
     except Exception:
@@ -120,18 +107,10 @@ def _assert_no_duplicate_bad_debt(
             continue
         if str(r.get("invoice_number") or "").strip() != inv:
             continue
-        row_period = _bad_debt_period_key(
-            {
-                "vat_return_period": r.get("vat_return_period"),
-                "claim_period": r.get("claim_period"),
-            },
-            r.get("claim_period"),
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Claim for this invoice already exists.",
         )
-        if period_key and row_period and period_key.lower() == row_period.lower():
-            raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
-        if not period_key and not row_period:
-            raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
-
 
 def _dz_explanation(body: DesignatedZoneIn) -> str:
     explanation = body.explanation or ""
@@ -405,12 +384,10 @@ def save_bad_debt(
     assert_write_allowed()
     extra = body.extra or {}
     claim_period = extra.get("claim_period")
-    period_key = _bad_debt_period_key(extra, claim_period)
     _assert_no_duplicate_bad_debt(
         tenant_id=tenant_id,
         company_id=company_id,
         invoice_number=body.invoice_number,
-        period_key=period_key,
         db=db,
     )
     try:

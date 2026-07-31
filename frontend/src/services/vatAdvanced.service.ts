@@ -132,7 +132,7 @@ export async function approvePartialExemption(recordId: string): Promise<Partial
 
 export async function saveBadDebtClaim(
   _workspaceId: string,
-  _companyId: string | null,
+  companyId: string | null,
   input: {
     invoiceNumber: string;
     invoiceDate: string;
@@ -146,26 +146,42 @@ export async function saveBadDebtClaim(
   },
   result: BadDebtResult,
 ): Promise<BadDebtClaimRecord> {
-  return apiFetch<BadDebtClaimRecord>('/api/gulftax/vat-advanced/bad-debt', {
-    method: 'POST',
-    body: JSON.stringify({
-      invoice_number: input.invoiceNumber,
-      invoice_date: input.invoiceDate,
-      due_date: input.dueDate,
-      invoice_amount: input.invoiceAmount,
-      vat_amount: input.vatAmount,
-      status: result.eligible ? 'eligible' : 'ineligible',
-      eligible: result.eligible,
-      eligibility_reason: result.eligible ? null : result.reasons.join(' '),
-      extra: {
-        vat_return_period: input.vatReturnPeriod,
-        written_off_date: input.writtenOffDate,
-        recovery_steps: input.recoverySteps,
-        connected_party: input.connectedParty,
-        claim_period: result.claimPeriod,
-      },
-    }),
-  });
+  const payload = {
+    invoice_number: input.invoiceNumber,
+    invoice_date: input.invoiceDate,
+    due_date: input.dueDate,
+    invoice_amount: input.invoiceAmount,
+    vat_amount: input.vatAmount,
+    status: result.eligible ? 'eligible' : 'ineligible',
+    eligible: result.eligible,
+    eligibility_reason: result.eligible ? null : result.reasons.join(' '),
+    company_id: companyId || undefined,
+    vat_return_period: input.vatReturnPeriod,
+    written_off_date: input.writtenOffDate,
+    recovery_steps: input.recoverySteps,
+    connected_party: input.connectedParty,
+    claim_period: result.claimPeriod,
+    extra: {
+      vat_return_period: input.vatReturnPeriod,
+      written_off_date: input.writtenOffDate,
+      recovery_steps: input.recoverySteps,
+      connected_party: input.connectedParty,
+      claim_period: result.claimPeriod,
+    },
+  };
+  try {
+    return await apiFetch<BadDebtClaimRecord>('/api/gulftax/bad-debt/claim', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (primary) {
+    return apiFetch<BadDebtClaimRecord>('/api/gulftax/vat-advanced/bad-debt', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }).catch(() => {
+      throw primary instanceof Error ? primary : new Error(String(primary));
+    });
+  }
 }
 
 export async function listBadDebtClaims(_workspaceId: string): Promise<BadDebtClaimRecord[]> {
@@ -198,7 +214,7 @@ export async function getPendingBadDebtTotal(workspaceId: string): Promise<numbe
 
 export async function saveDesignatedZoneTransaction(
   _workspaceId: string,
-  _companyId: string | null,
+  companyId: string | null,
   input: {
     supplierLocation: string;
     customerLocation: string;
@@ -209,30 +225,20 @@ export async function saveDesignatedZoneTransaction(
   result: DesignatedZoneResult,
 ): Promise<{ id?: string; vat_treatment?: string }> {
   const payload = {
+    transaction_type: input.transactionType === 'services' ? 'Services' : 'Goods',
     supplier_location: input.supplierLocation,
+    supplier_zone: input.supplierZoneName || '',
     customer_location: input.customerLocation,
-    transaction_type: input.transactionType,
     vat_treatment: result.vatTreatment,
     vat_rate: result.vatRate,
     explanation: result.explanation,
     warning: result.warning,
+    company_id: companyId || undefined,
     supplier_zone_name: input.supplierZoneName || null,
     customer_zone_name: input.customerZoneName || null,
   };
-  try {
-    return await apiFetch<{ id?: string; vat_treatment?: string }>(
-      '/api/gulftax/designated-zones/log',
-      { method: 'POST', body: JSON.stringify(payload) },
-    );
-  } catch (primary) {
-    // Fallback to VAT Advanced path if /log is not deployed yet
-    try {
-      return await apiFetch<{ id?: string; vat_treatment?: string }>(
-        '/api/gulftax/vat-advanced/designated-zones',
-        { method: 'POST', body: JSON.stringify(payload) },
-      );
-    } catch {
-      throw primary instanceof Error ? primary : new Error(String(primary));
-    }
-  }
+  return apiFetch<{ id?: string; vat_treatment?: string }>(
+    '/api/gulftax/designated-zones/log',
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
 }

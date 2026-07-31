@@ -1,4 +1,4 @@
-"""Bad debt duplicate + designated zone explanation helpers."""
+"""Bad debt duplicate + designated zone + ESR helpers."""
 from __future__ import annotations
 
 import unittest
@@ -9,35 +9,26 @@ from fastapi import HTTPException
 from app.api.routes.vat_advanced_rds import (
     DesignatedZoneIn,
     _assert_no_duplicate_bad_debt,
-    _bad_debt_period_key,
     _dz_explanation,
 )
+from app.modules.gulftax.esr_filing import ESRCalculateRequest, compute_esr_result
 
 
 class BadDebtDuplicateTests(unittest.TestCase):
-    def test_period_key_prefers_vat_return_period(self):
-        self.assertEqual(
-            _bad_debt_period_key({"vat_return_period": "2025-Q4", "claim_period": "2026-Q1"}),
-            "2025-Q4",
-        )
-
-    def test_duplicate_same_invoice_and_period(self):
+    def test_duplicate_same_invoice_and_company(self):
         db = MagicMock()
         existing = MagicMock()
-        existing.extra = {"vat_return_period": "2025-Q4"}
-        existing.claim_period = "2026-Q1"
-        db.query.return_value.filter_by.return_value.all.return_value = [existing]
+        db.query.return_value.filter_by.return_value.first.return_value = existing
 
         with self.assertRaises(HTTPException) as ctx:
             _assert_no_duplicate_bad_debt(
                 tenant_id="ws",
                 company_id="co",
                 invoice_number="INV-2025-001",
-                period_key="2025-Q4",
                 db=db,
             )
         self.assertEqual(ctx.exception.status_code, 409)
-        self.assertEqual(ctx.exception.detail, "duplicate claim")
+        self.assertEqual(ctx.exception.detail, "Claim for this invoice already exists.")
 
     def test_dz_explanation_appends_zones(self):
         body = DesignatedZoneIn(
@@ -52,21 +43,34 @@ class BadDebtDuplicateTests(unittest.TestCase):
         self.assertIn("Jebel Ali Free Zone", _dz_explanation(body))
 
 
-class EsrRouteImportTests(unittest.TestCase):
-    def test_esr_module_calculate(self):
-        from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
-
-        out = esr_calculate(
+class EsrCalculateTests(unittest.TestCase):
+    def test_pass(self):
+        out = compute_esr_result(
             ESRCalculateRequest(
-                activity_type="Banking",
-                directors_meetings_in_uae=True,
-                ciga_in_uae=True,
-                employee_count_uae=2,
-                expenditure_uae_aed=1000,
-                assets_uae_aed=1000,
+                relevant_activity="Banking",
+                directed_managed_uae=True,
+                cigas_uae=True,
+                uae_employees=5,
+                uae_expenditure=250000,
+                uae_assets=100000,
             )
         )
-        self.assertEqual(out["overall_status"], "PASS")
+        self.assertTrue(out["substance_test_passed"])
+        self.assertEqual(out["status"], "PASS")
+
+    def test_fail_missing_employees(self):
+        out = compute_esr_result(
+            ESRCalculateRequest(
+                relevant_activity="Shipping",
+                directed_managed_uae=True,
+                cigas_uae=True,
+                uae_employees=0,
+                uae_expenditure=1000,
+                uae_assets=1000,
+            )
+        )
+        self.assertEqual(out["status"], "FAIL")
+        self.assertTrue(any("employee" in r.lower() for r in out["reasons"]))
 
 
 if __name__ == "__main__":

@@ -1,11 +1,18 @@
 """GulfTax — Economic Substance Regulations (ESR) filing assessment."""
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+import json
+from datetime import date, datetime
+from typing import Any, Optional
+from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.tenant import get_company_id, get_tenant_id
 
 router = APIRouter(prefix="/api/gulftax/esr", tags=["GulfTax ESR"])
 
@@ -21,6 +28,23 @@ RELEVANT_ACTIVITIES = [
     "Distribution and Service Centre",
     "None / Not Applicable",
 ]
+
+_ESR_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS esr_filings (
+    id VARCHAR(36) PRIMARY KEY,
+    tenant_id VARCHAR(64),
+    company_id VARCHAR(64) NOT NULL,
+    relevant_activity VARCHAR(128) NOT NULL,
+    directed_managed_uae BOOLEAN NOT NULL DEFAULT FALSE,
+    cigas_uae BOOLEAN NOT NULL DEFAULT FALSE,
+    uae_employees INTEGER NOT NULL DEFAULT 0,
+    uae_expenditure NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    uae_assets NUMERIC(15, 2) NOT NULL DEFAULT 0,
+    status VARCHAR(16) NOT NULL,
+    reasons JSONB,
+    created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+)
+"""
 
 
 class ESRCalculateRequest(BaseModel):
@@ -44,6 +68,7 @@ class ESRCalculateRequest(BaseModel):
     uae_assets: Optional[float] = Field(None, ge=0)
     assets_uae_aed: Optional[float] = Field(None, ge=0)
 
+    company_id: Optional[str] = None
     financial_year_end: str = Field("12-31", description="MM-DD")
 
     @model_validator(mode="after")
@@ -87,30 +112,87 @@ class ESRStatusResponse(BaseModel):
     message: str
 
 
-@router.get("/status")
-def esr_status() -> ESRStatusResponse:
-    """ESR calendar and supported relevant activities."""
-    fy = date.today().year
-    return ESRStatusResponse(
-        activities=RELEVANT_ACTIVITIES,
-        notification_deadline=f"{fy}-06-30",
-        filing_deadline=f"{fy}-12-31",
-        message="ESR notification within 6 months and report within 12 months of financial year end.",
-    )
+def _ensure_esr_table(db: Session) -> None:
+    try:
+        db.execute(text(_ESR_TABLE_SQL))
+        db.commit()
+    except Exception:
+        db.rollback()
 
 
-@router.post("/calculate")
-def esr_calculate(body: ESRCalculateRequest) -> dict:
-    """Run ESR substance tests for a relevant activity.
+def _persist_esr(
+    db: Session,
+    *,
+    tenant_id: Optional[str],
+    company_id: str,
+    body: ESRCalculateRequest,
+    status: str,
+    reasons: list[str],
+) -> None:
+    _ensure_esr_table(db)
+    payload = {
+        "id": str(uuid4()),
+        "tenant_id": tenant_id,
+        "company_id": company_id,
+        "relevant_activity": body.relevant_activity,
+        "directed_managed_uae": bool(body.directed_managed_uae),
+        "cigas_uae": bool(body.cigas_uae),
+        "uae_employees": int(body.uae_employees or 0),
+        "uae_expenditure": float(body.uae_expenditure or 0),
+        "uae_assets": float(body.uae_assets or 0),
+        "status": status,
+        "reasons": json.dumps(reasons),
+        "created_at": datetime.utcnow(),
+    }
+    try:
+        db.execute(
+            text(
+                """
+                INSERT INTO esr_filings (
+                    id, tenant_id, company_id, relevant_activity,
+                    directed_managed_uae, cigas_uae, uae_employees,
+                    uae_expenditure, uae_assets, status, reasons, created_at
+                ) VALUES (
+                    :id, :tenant_id, :company_id, :relevant_activity,
+                    :directed_managed_uae, :cigas_uae, :uae_employees,
+                    :uae_expenditure, :uae_assets, :status, CAST(:reasons AS JSONB), :created_at
+                )
+                """
+            ),
+            payload,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        try:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO esr_filings (
+                        id, tenant_id, company_id, relevant_activity,
+                        directed_managed_uae, cigas_uae, uae_employees,
+                        uae_expenditure, uae_assets, status, reasons, created_at
+                    ) VALUES (
+                        :id, :tenant_id, :company_id, :relevant_activity,
+                        :directed_managed_uae, :cigas_uae, :uae_employees,
+                        :uae_expenditure, :uae_assets, :status, :reasons, :created_at
+                    )
+                    """
+                ),
+                {**payload, "created_at": datetime.utcnow().isoformat()},
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
 
-    PASS when directed & managed in UAE, CIGAs in UAE, and UAE employees,
-    expenditure, and assets are all greater than zero.
-    """
+
+def compute_esr_result(body: ESRCalculateRequest) -> dict[str, Any]:
     activity = body.relevant_activity or ""
     exempt = activity == "None / Not Applicable"
     fy = date.today().year
 
     if exempt:
+        reasons = ["Not in a relevant activity — ESR report not required."]
         return {
             "activity_type": activity,
             "relevant_activity": activity,
@@ -120,7 +202,7 @@ def esr_calculate(body: ESRCalculateRequest) -> dict:
             "overall_status": "EXEMPT",
             "substance_test_passed": True,
             "status": "PASS",
-            "reasons": ["Not in a relevant activity — ESR report not required."],
+            "reasons": reasons,
             "recommendations": [],
             "filing_deadline": None,
             "notification_deadline": None,
@@ -149,7 +231,9 @@ def esr_calculate(body: ESRCalculateRequest) -> dict:
         recommendations.append("Hold board meetings in the UAE with a quorum of directors physically present.")
     if not passes_ciga:
         reasons.append("CIGA test failed — core income-generating activities must be performed in the UAE.")
-        recommendations.append("Ensure core income-generating activities for the relevant activity are carried out in the UAE.")
+        recommendations.append(
+            "Ensure core income-generating activities for the relevant activity are carried out in the UAE."
+        )
     if not employees_ok:
         reasons.append("Adequacy failed — UAE employee count must be greater than zero.")
         recommendations.append("Employ an adequate number of qualified full-time employees in the UAE.")
@@ -163,7 +247,6 @@ def esr_calculate(body: ESRCalculateRequest) -> dict:
         reasons.append("All ESR substance tests passed.")
 
     return {
-        # Frontend (ESRFiling.tsx) shape
         "activity_type": activity,
         "passes_dm_test": passes_dm,
         "passes_ciga_test": passes_ciga,
@@ -188,10 +271,42 @@ def esr_calculate(body: ESRCalculateRequest) -> dict:
                 else "Failed — UAE employees, expenditure and assets must all be greater than zero."
             ),
         },
-        # Public API contract
         "relevant_activity": activity,
         "substance_test_passed": substance_test_passed,
         "status": status,
         "reasons": reasons,
         "recommendations": recommendations,
     }
+
+
+@router.get("/status")
+def esr_status() -> ESRStatusResponse:
+    """ESR calendar and supported relevant activities."""
+    fy = date.today().year
+    return ESRStatusResponse(
+        activities=RELEVANT_ACTIVITIES,
+        notification_deadline=f"{fy}-06-30",
+        filing_deadline=f"{fy}-12-31",
+        message="ESR notification within 6 months and report within 12 months of financial year end.",
+    )
+
+
+@router.post("/calculate")
+def esr_calculate(
+    body: ESRCalculateRequest,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Run ESR substance tests and persist to esr_filings."""
+    result = compute_esr_result(body)
+    cid = (body.company_id or company_id or "").strip() or company_id
+    _persist_esr(
+        db,
+        tenant_id=tenant_id,
+        company_id=cid,
+        body=body,
+        status=str(result.get("status") or "FAIL"),
+        reasons=list(result.get("reasons") or []),
+    )
+    return result

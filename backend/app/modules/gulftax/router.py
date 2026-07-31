@@ -699,7 +699,7 @@ def fta_audit_checklist(
     return build_fta_audit_checklist(db, company_id, period_start, period_end)
 
 
-# ── ESR (also mounted via esr_filing; kept here so production gulftax router always exposes them) ─
+# ── ESR (also mounted via esr_filing router) ──────────────────────────────────
 
 @router.get("/esr/status")
 def gulftax_esr_status():
@@ -709,25 +709,218 @@ def gulftax_esr_status():
 
 
 @router.post("/esr/calculate")
-def gulftax_esr_calculate(body: dict[str, Any]):
-    from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
-    from fastapi import HTTPException
-
-    try:
-        req = ESRCalculateRequest(**body)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    return esr_calculate(req)
-
-# ── Designated Zones log (alias of VAT Advanced save) ─────────────────────────
-
-@router.post("/designated-zones/log", status_code=201)
-def gulftax_designated_zones_log(
+def gulftax_esr_calculate(
     body: dict[str, Any],
     tenant_id: str = Depends(get_tenant_id),
     company_id: str = Depends(get_company_id),
     db: Session = Depends(get_db),
 ):
+    from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
+
+    try:
+        req = ESRCalculateRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return esr_calculate(req, tenant_id=tenant_id, company_id=company_id, db=db)
+
+
+# ── Designated Zones log ──────────────────────────────────────────────────────
+
+class DesignatedZoneLogIn(BaseModel):
+    transaction_type: str
+    supplier_location: str
+    customer_location: str
+    vat_treatment: str
+    vat_rate: float = 0
+    supplier_zone: Optional[str] = None
+    supplier_zone_name: Optional[str] = None
+    customer_zone: Optional[str] = None
+    customer_zone_name: Optional[str] = None
+    explanation: Optional[str] = None
+    warning: Optional[str] = None
+    company_id: Optional[str] = None
+
+
+@router.post("/designated-zones/log", status_code=201)
+def gulftax_designated_zones_log(
+    body: DesignatedZoneLogIn,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    """Log a designated-zone VAT evaluation to designated_zone_transactions."""
     from app.api.routes.vat_advanced_rds import DesignatedZoneIn, save_dz
 
-    return save_dz(DesignatedZoneIn(**body), tenant_id=tenant_id, company_id=company_id, db=db)
+    zone = body.supplier_zone or body.supplier_zone_name
+    cust_zone = body.customer_zone or body.customer_zone_name
+    tx = (body.transaction_type or "").strip()
+    tx_norm = tx.lower() if tx.lower() in ("goods", "services") else tx
+
+    explanation = body.explanation or (
+        f"{body.vat_treatment} at {body.vat_rate}% "
+        f"({tx_norm}: {body.supplier_location} → {body.customer_location})"
+    )
+    payload = DesignatedZoneIn(
+        supplier_location=body.supplier_location,
+        customer_location=body.customer_location,
+        transaction_type=tx_norm,
+        vat_treatment=body.vat_treatment,
+        vat_rate=body.vat_rate,
+        explanation=explanation,
+        warning=body.warning,
+        supplier_zone_name=zone,
+        customer_zone_name=cust_zone,
+    )
+    cid = (body.company_id or company_id or "").strip() or company_id
+    return save_dz(payload, tenant_id=tenant_id, company_id=cid, db=db)
+
+
+# ── Bad Debt claim (duplicate by invoice + company) ───────────────────────────
+
+class BadDebtClaimIn(BaseModel):
+    invoice_number: str
+    invoice_date: str
+    due_date: str
+    invoice_amount: float
+    vat_amount: float
+    status: Optional[str] = "draft"
+    eligible: bool = False
+    eligibility_reason: Optional[str] = None
+    company_id: Optional[str] = None
+    extra: Optional[dict[str, Any]] = None
+    vat_return_period: Optional[str] = None
+    written_off_date: Optional[str] = None
+    recovery_steps: Optional[str] = None
+    connected_party: Optional[bool] = None
+    claim_period: Optional[str] = None
+
+
+@router.post("/bad-debt/claim", status_code=201)
+def gulftax_bad_debt_claim(
+    body: BadDebtClaimIn,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    """Save a bad debt claim — rejects duplicate invoice_number + company_id."""
+    from datetime import date as date_cls
+    from datetime import datetime
+    from uuid import uuid4
+
+    from app.api.routes.vat_advanced_rds import _sb_insert, _sb_list
+    from app.core.tenant import assert_write_allowed
+    from app.models.client_data import BadDebtReliefClaim
+
+    assert_write_allowed()
+    cid = (body.company_id or company_id or "").strip() or company_id
+    inv = (body.invoice_number or "").strip()
+    if not inv:
+        raise HTTPException(400, "invoice_number is required")
+
+    try:
+        existing = (
+            db.query(BadDebtReliefClaim)
+            .filter_by(company_id=cid, invoice_number=inv)
+            .first()
+        )
+        if existing:
+            raise HTTPException(409, "Claim for this invoice already exists.")
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+
+    for r in _sb_list("bad_debt_relief_claims", tenant_id, 200):
+        if str(r.get("company_id") or "") == str(cid) and str(r.get("invoice_number") or "").strip() == inv:
+            raise HTTPException(409, "Claim for this invoice already exists.")
+
+    extra = dict(body.extra or {})
+    if body.vat_return_period:
+        extra["vat_return_period"] = body.vat_return_period
+    if body.written_off_date:
+        extra["written_off_date"] = body.written_off_date
+    if body.recovery_steps is not None:
+        extra["recovery_steps"] = body.recovery_steps
+    if body.connected_party is not None:
+        extra["connected_party"] = body.connected_party
+    if body.claim_period:
+        extra["claim_period"] = body.claim_period
+
+    inv_date = date_cls.fromisoformat(body.invoice_date[:10])
+    due = date_cls.fromisoformat(body.due_date[:10])
+    claim_period = extra.get("claim_period")
+    status_val = body.status or ("eligible" if body.eligible else "ineligible")
+
+    try:
+        row = BadDebtReliefClaim(
+            tenant_id=tenant_id,
+            company_id=cid,
+            invoice_number=inv,
+            invoice_date=inv_date,
+            due_date=due,
+            invoice_amount=body.invoice_amount,
+            vat_amount=body.vat_amount,
+            status=status_val,
+            eligible=body.eligible,
+            eligibility_reason=body.eligibility_reason,
+            claim_period=claim_period,
+            extra=extra,
+            created_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {
+            "id": row.id,
+            "invoice_number": row.invoice_number,
+            "invoice_date": row.invoice_date.isoformat(),
+            "due_date": row.due_date.isoformat(),
+            "invoice_amount": float(row.invoice_amount),
+            "vat_amount": float(row.vat_amount),
+            "status": row.status,
+            "eligible": row.eligible,
+            "eligibility_reason": row.eligibility_reason,
+            "claim_period": row.claim_period,
+            "extra": row.extra,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+
+    sb_row = _sb_insert(
+        "bad_debt_relief_claims",
+        {
+            "id": str(uuid4()),
+            "workspace_id": tenant_id,
+            "company_id": cid,
+            "invoice_number": inv,
+            "invoice_date": inv_date.isoformat(),
+            "due_date": due.isoformat(),
+            "invoice_amount": body.invoice_amount,
+            "vat_amount": body.vat_amount,
+            "vat_return_period": extra.get("vat_return_period"),
+            "written_off_date": extra.get("written_off_date"),
+            "recovery_steps": extra.get("recovery_steps"),
+            "connected_party": bool(extra.get("connected_party")),
+            "eligible": body.eligible,
+            "eligibility_reason": body.eligibility_reason,
+            "claim_period": claim_period,
+            "status": status_val,
+        },
+    )
+    return {
+        "id": sb_row.get("id"),
+        "invoice_number": sb_row.get("invoice_number"),
+        "invoice_date": sb_row.get("invoice_date"),
+        "due_date": sb_row.get("due_date"),
+        "invoice_amount": float(sb_row.get("invoice_amount") or 0),
+        "vat_amount": float(sb_row.get("vat_amount") or 0),
+        "status": sb_row.get("status"),
+        "eligible": bool(sb_row.get("eligible")),
+        "eligibility_reason": sb_row.get("eligibility_reason"),
+        "claim_period": sb_row.get("claim_period"),
+        "extra": extra,
+        "created_at": sb_row.get("created_at"),
+    }

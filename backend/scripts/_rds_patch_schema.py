@@ -328,6 +328,23 @@ DDL = [
     "ALTER TABLE company_config ALTER COLUMN tenant_id TYPE VARCHAR(64)",
     "ALTER TABLE partial_exemption_calculations ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'draft'",
     "ALTER TABLE bad_debt_relief_claims ADD COLUMN IF NOT EXISTS claim_period VARCHAR(16)",
+    """
+    CREATE TABLE IF NOT EXISTS esr_filings (
+        id VARCHAR(36) PRIMARY KEY,
+        tenant_id VARCHAR(64),
+        company_id VARCHAR(64) NOT NULL,
+        relevant_activity VARCHAR(128) NOT NULL,
+        directed_managed_uae BOOLEAN NOT NULL DEFAULT FALSE,
+        cigas_uae BOOLEAN NOT NULL DEFAULT FALSE,
+        uae_employees INTEGER NOT NULL DEFAULT 0,
+        uae_expenditure NUMERIC(15, 2) NOT NULL DEFAULT 0,
+        uae_assets NUMERIC(15, 2) NOT NULL DEFAULT 0,
+        status VARCHAR(16) NOT NULL,
+        reasons JSONB,
+        created_at TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_esr_filings_company_id ON esr_filings (company_id)",
   # gulftax_ct_returns — UAE CT return workflow on RDS (separate from ported ct_returns)
     """
     CREATE TABLE IF NOT EXISTS gulftax_ct_returns (

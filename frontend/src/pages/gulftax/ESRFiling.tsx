@@ -52,15 +52,30 @@ export default function ESRFiling() {
   const calculate = async () => {
     setLoading(true);
     try {
-      const data = await gulfTaxPost<ESRResult>('/api/gulftax/esr/calculate', {
-        activity_type: activity,
-        directors_meetings_in_uae: dm,
-        ciga_in_uae: ciga,
-        employee_count_uae: employees,
-        expenditure_uae_aed: spend,
-        assets_uae_aed: assets,
+      const data = await gulfTaxPost<ESRResult & { status?: string; substance_test_passed?: boolean; reasons?: string[] }>(
+        '/api/gulftax/esr/calculate',
+        {
+          relevant_activity: activity,
+          directed_managed_uae: dm,
+          cigas_uae: ciga,
+          uae_employees: employees,
+          uae_expenditure: spend,
+          uae_assets: assets,
+          company_id: activeCompanyId || undefined,
+          // legacy aliases still accepted by backend
+          activity_type: activity,
+          directors_meetings_in_uae: dm,
+          ciga_in_uae: ciga,
+          employee_count_uae: employees,
+          expenditure_uae_aed: spend,
+          assets_uae_aed: assets,
+        },
+      );
+      setResult({
+        ...data,
+        overall_status: data.overall_status || data.status || 'FAIL',
+        activity_type: data.activity_type || activity,
       });
-      setResult(data);
     } catch (e) {
       setResult(null);
       alert(e instanceof Error ? e.message : 'ESR calculation failed');

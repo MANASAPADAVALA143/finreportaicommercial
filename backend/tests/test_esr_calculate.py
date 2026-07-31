@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate, esr_status
+from app.modules.gulftax.esr_filing import ESRCalculateRequest, compute_esr_result, esr_status
 
 
 class ESRCalculateTests(unittest.TestCase):
     def test_pass_contract(self):
-        data = esr_calculate(
+        data = compute_esr_result(
             ESRCalculateRequest(
                 relevant_activity="Banking",
                 directed_managed_uae=True,
@@ -23,7 +23,7 @@ class ESRCalculateTests(unittest.TestCase):
         self.assertEqual(data["overall_status"], "PASS")
 
     def test_frontend_payload_shape(self):
-        data = esr_calculate(
+        data = compute_esr_result(
             ESRCalculateRequest(
                 activity_type="Headquarters",
                 directors_meetings_in_uae=True,
@@ -39,7 +39,7 @@ class ESRCalculateTests(unittest.TestCase):
         self.assertEqual(data["overall_status"], "PASS")
 
     def test_fail_missing_employees(self):
-        data = esr_calculate(
+        data = compute_esr_result(
             ESRCalculateRequest(
                 relevant_activity="Shipping",
                 directed_managed_uae=True,
