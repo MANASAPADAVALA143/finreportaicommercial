@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant import get_company_id, get_tenant_id
 from app.modules.gulftax.auth_cfo import get_current_company_id
 from app.modules.gulftax.classifier import classify_batch, classify_transaction
 from app.modules.gulftax.ported_mount import get_ported_db
@@ -696,3 +697,37 @@ def fta_audit_checklist(
 
     _alias_ported_orm_modules()
     return build_fta_audit_checklist(db, company_id, period_start, period_end)
+
+
+# ── ESR (also mounted via esr_filing; kept here so production gulftax router always exposes them) ─
+
+@router.get("/esr/status")
+def gulftax_esr_status():
+    from app.modules.gulftax.esr_filing import esr_status
+
+    return esr_status()
+
+
+@router.post("/esr/calculate")
+def gulftax_esr_calculate(body: dict[str, Any]):
+    from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
+    from fastapi import HTTPException
+
+    try:
+        req = ESRCalculateRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return esr_calculate(req)
+
+# ── Designated Zones log (alias of VAT Advanced save) ─────────────────────────
+
+@router.post("/designated-zones/log", status_code=201)
+def gulftax_designated_zones_log(
+    body: dict[str, Any],
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    from app.api.routes.vat_advanced_rds import DesignatedZoneIn, save_dz
+
+    return save_dz(DesignatedZoneIn(**body), tenant_id=tenant_id, company_id=company_id, db=db)

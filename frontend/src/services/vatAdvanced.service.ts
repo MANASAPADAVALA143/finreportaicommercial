@@ -207,17 +207,32 @@ export async function saveDesignatedZoneTransaction(
     customerZoneName?: string;
   },
   result: DesignatedZoneResult,
-): Promise<void> {
-  await apiFetch('/api/gulftax/vat-advanced/designated-zones', {
-    method: 'POST',
-    body: JSON.stringify({
-      supplier_location: input.supplierLocation,
-      customer_location: input.customerLocation,
-      transaction_type: input.transactionType,
-      vat_treatment: result.vatTreatment,
-      vat_rate: result.vatRate,
-      explanation: result.explanation,
-      warning: result.warning,
-    }),
-  });
+): Promise<{ id?: string; vat_treatment?: string }> {
+  const payload = {
+    supplier_location: input.supplierLocation,
+    customer_location: input.customerLocation,
+    transaction_type: input.transactionType,
+    vat_treatment: result.vatTreatment,
+    vat_rate: result.vatRate,
+    explanation: result.explanation,
+    warning: result.warning,
+    supplier_zone_name: input.supplierZoneName || null,
+    customer_zone_name: input.customerZoneName || null,
+  };
+  try {
+    return await apiFetch<{ id?: string; vat_treatment?: string }>(
+      '/api/gulftax/designated-zones/log',
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  } catch (primary) {
+    // Fallback to VAT Advanced path if /log is not deployed yet
+    try {
+      return await apiFetch<{ id?: string; vat_treatment?: string }>(
+        '/api/gulftax/vat-advanced/designated-zones',
+        { method: 'POST', body: JSON.stringify(payload) },
+      );
+    } catch {
+      throw primary instanceof Error ? primary : new Error(String(primary));
+    }
+  }
 }

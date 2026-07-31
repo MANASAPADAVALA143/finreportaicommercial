@@ -27,32 +27,59 @@ export default function DesignatedZones() {
   const [transactionType, setTransactionType] = useState<TransactionKind>('goods');
   const [supplierZone, setSupplierZone] = useState('jafza');
   const [customerZone, setCustomerZone] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState(false);
+
+  const supplierZoneName =
+    supplierLocation === 'designated_zone'
+      ? DESIGNATED_ZONES.find((z) => z.id === supplierZone)?.name ?? supplierZone
+      : undefined;
+  const customerZoneName =
+    customerLocation === 'designated_zone'
+      ? DESIGNATED_ZONES.find((z) => z.id === customerZone)?.name ?? customerZone
+      : undefined;
 
   const result = evaluateDesignatedZone({
     supplierLocation,
     customerLocation,
     transactionType,
-    supplierZoneName: supplierLocation === 'designated_zone' ? supplierZone : undefined,
-    customerZoneName: customerLocation === 'designated_zone' ? customerZone : undefined,
+    supplierZoneName,
+    customerZoneName,
   });
 
-  const onEvaluate = () => {
-    if (!wsId) return;
-    void saveDesignatedZoneTransaction(
-      wsId,
-      activeCompanyId,
-      {
-        supplierLocation,
-        customerLocation,
-        transactionType,
-        supplierZoneName: supplierLocation === 'designated_zone' ? supplierZone : undefined,
-        customerZoneName: customerLocation === 'designated_zone' ? customerZone : undefined,
-      },
-      result,
-    ).catch((e) => {
-      console.warn('[DesignatedZones] save failed:', e);
-      alert(e instanceof Error ? e.message : 'Could not save designated zone transaction');
-    });
+  const onEvaluate = async () => {
+    if (!wsId) {
+      setSaveOk(false);
+      setSaveMsg('No active workspace — complete company setup first.');
+      return;
+    }
+    setSaving(true);
+    setSaveMsg(null);
+    setSaveOk(false);
+    try {
+      await saveDesignatedZoneTransaction(
+        wsId,
+        activeCompanyId,
+        {
+          supplierLocation,
+          customerLocation,
+          transactionType,
+          supplierZoneName,
+          customerZoneName,
+        },
+        result,
+      );
+      setSaveOk(true);
+      setSaveMsg(
+        `Logged — ${result.vatTreatment} at ${result.vatRate}% (${transactionType}: ${supplierLocation} → ${customerLocation}).`,
+      );
+    } catch (e) {
+      setSaveOk(false);
+      setSaveMsg(`Could not log — ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -135,11 +162,15 @@ export default function DesignatedZones() {
           )}
           <button
             type="button"
-            onClick={onEvaluate}
-            className="px-4 py-2 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 text-sm"
+            onClick={() => void onEvaluate()}
+            disabled={saving || !wsId}
+            className="px-4 py-2 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 text-sm disabled:opacity-50"
           >
-            Evaluate &amp; log transaction
+            {saving ? 'Logging…' : 'Evaluate & log transaction'}
           </button>
+          {saveMsg && (
+            <p className={`text-sm ${saveOk ? 'text-green-400' : 'text-red-400'}`}>{saveMsg}</p>
+          )}
         </div>
 
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6">

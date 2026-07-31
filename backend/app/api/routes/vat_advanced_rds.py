@@ -70,6 +70,79 @@ class DesignatedZoneIn(BaseModel):
     vat_rate: float = 0
     explanation: str
     warning: Optional[str] = None
+    supplier_zone_name: Optional[str] = None
+    customer_zone_name: Optional[str] = None
+
+
+def _bad_debt_period_key(extra: Optional[dict[str, Any]], claim_period: Optional[str] = None) -> str:
+    extra = extra or {}
+    return str(
+        extra.get("vat_return_period")
+        or claim_period
+        or extra.get("claim_period")
+        or ""
+    ).strip()
+
+
+def _assert_no_duplicate_bad_debt(
+    *,
+    tenant_id: str,
+    company_id: str,
+    invoice_number: str,
+    period_key: str,
+    db: Session,
+) -> None:
+    inv = (invoice_number or "").strip()
+    if not inv:
+        return
+    try:
+        rows = (
+            db.query(BadDebtReliefClaim)
+            .filter_by(tenant_id=tenant_id, company_id=company_id, invoice_number=inv)
+            .all()
+        )
+        for row in rows:
+            row_period = _bad_debt_period_key(
+                row.extra if isinstance(row.extra, dict) else {},
+                row.claim_period,
+            )
+            if period_key and row_period and period_key.lower() == row_period.lower():
+                raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
+            if not period_key and not row_period:
+                raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+
+    for r in _sb_list("bad_debt_relief_claims", tenant_id, 200):
+        if str(r.get("company_id") or "") != str(company_id):
+            continue
+        if str(r.get("invoice_number") or "").strip() != inv:
+            continue
+        row_period = _bad_debt_period_key(
+            {
+                "vat_return_period": r.get("vat_return_period"),
+                "claim_period": r.get("claim_period"),
+            },
+            r.get("claim_period"),
+        )
+        if period_key and row_period and period_key.lower() == row_period.lower():
+            raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
+        if not period_key and not row_period:
+            raise HTTPException(status.HTTP_409_CONFLICT, "duplicate claim")
+
+
+def _dz_explanation(body: DesignatedZoneIn) -> str:
+    explanation = body.explanation or ""
+    bits: list[str] = []
+    if body.supplier_zone_name:
+        bits.append(f"Supplier zone: {body.supplier_zone_name}")
+    if body.customer_zone_name:
+        bits.append(f"Customer zone: {body.customer_zone_name}")
+    if bits:
+        return f"{explanation} ({'; '.join(bits)})" if explanation else "; ".join(bits)
+    return explanation
 
 
 def _supabase():
@@ -322,7 +395,7 @@ def list_bad_debt(
     return {"items": items}
 
 
-@router.post("/bad-debt")
+@router.post("/bad-debt", status_code=status.HTTP_201_CREATED)
 def save_bad_debt(
     body: BadDebtIn,
     tenant_id: str = Depends(get_tenant_id),
@@ -330,11 +403,21 @@ def save_bad_debt(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     assert_write_allowed()
+    extra = body.extra or {}
+    claim_period = extra.get("claim_period")
+    period_key = _bad_debt_period_key(extra, claim_period)
+    _assert_no_duplicate_bad_debt(
+        tenant_id=tenant_id,
+        company_id=company_id,
+        invoice_number=body.invoice_number,
+        period_key=period_key,
+        db=db,
+    )
     try:
         row = BadDebtReliefClaim(
             tenant_id=tenant_id,
             company_id=company_id,
-            invoice_number=body.invoice_number,
+            invoice_number=body.invoice_number.strip(),
             invoice_date=body.invoice_date,
             due_date=body.due_date,
             invoice_amount=body.invoice_amount,
@@ -342,18 +425,19 @@ def save_bad_debt(
             status=body.status,
             eligible=body.eligible,
             eligibility_reason=body.eligibility_reason,
-            claim_period=(body.extra or {}).get("claim_period") if body.extra else None,
-            extra=body.extra or {},
+            claim_period=claim_period,
+            extra=extra,
             created_at=datetime.utcnow(),
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         return _bad_debt_dict(row)
+    except HTTPException:
+        raise
     except Exception:
         db.rollback()
 
-    extra = body.extra or {}
     sb_row = _sb_insert(
         "bad_debt_relief_claims",
         {
@@ -474,7 +558,7 @@ def list_dz(
     return {"items": items}
 
 
-@router.post("/designated-zones")
+@router.post("/designated-zones", status_code=status.HTTP_201_CREATED)
 def save_dz(
     body: DesignatedZoneIn,
     tenant_id: str = Depends(get_tenant_id),
@@ -482,6 +566,7 @@ def save_dz(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     assert_write_allowed()
+    explanation = _dz_explanation(body)
     try:
         row = DesignatedZoneTransaction(
             tenant_id=tenant_id,
@@ -491,7 +576,7 @@ def save_dz(
             transaction_type=body.transaction_type,
             vat_treatment=body.vat_treatment,
             vat_rate=body.vat_rate,
-            explanation=body.explanation,
+            explanation=explanation,
             warning=body.warning,
             created_at=datetime.utcnow(),
         )
@@ -502,21 +587,23 @@ def save_dz(
     except Exception:
         db.rollback()
 
-    sb_row = _sb_insert(
-        "designated_zone_transactions",
-        {
-            "id": str(uuid4()),
-            "workspace_id": tenant_id,
-            "company_id": company_id,
-            "supplier_location": body.supplier_location,
-            "customer_location": body.customer_location,
-            "transaction_type": body.transaction_type,
-            "vat_treatment": body.vat_treatment,
-            "vat_rate": body.vat_rate,
-            "explanation": body.explanation,
-            "warning": body.warning,
-        },
-    )
+    payload: dict[str, Any] = {
+        "id": str(uuid4()),
+        "workspace_id": tenant_id,
+        "company_id": company_id,
+        "supplier_location": body.supplier_location,
+        "customer_location": body.customer_location,
+        "transaction_type": body.transaction_type,
+        "vat_treatment": body.vat_treatment,
+        "vat_rate": body.vat_rate,
+        "explanation": explanation,
+        "warning": body.warning,
+    }
+    if body.supplier_zone_name:
+        payload["supplier_zone_name"] = body.supplier_zone_name
+    if body.customer_zone_name:
+        payload["customer_zone_name"] = body.customer_zone_name
+    sb_row = _sb_insert("designated_zone_transactions", payload)
     return _dz_dict_sb(sb_row)
 
 

@@ -46,6 +46,8 @@ export default function BadDebtRelief() {
   const [claims, setClaims] = useState<BadDebtClaimRecord[]>([]);
   const [saving, setSaving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [saveOk, setSaveOk] = useState(false);
 
   const result = evaluateBadDebtRelief({
     invoiceNumber: form.invoiceNumber,
@@ -69,8 +71,19 @@ export default function BadDebtRelief() {
     setForm((f) => ({ ...f, [key]: value }));
 
   const onSave = async () => {
-    if (!wsId) return;
+    if (!wsId) {
+      setSaveOk(false);
+      setSaveMsg('No active workspace — complete company setup first.');
+      return;
+    }
+    if (!form.recoverySteps.trim()) {
+      setSaveOk(false);
+      setSaveMsg('Fill "Recovery steps taken" before saving — otherwise the claim stays ineligible.');
+      return;
+    }
     setSaving(true);
+    setSaveMsg(null);
+    setSaveOk(false);
     try {
       const saved = await saveBadDebtClaim(
         wsId,
@@ -89,8 +102,15 @@ export default function BadDebtRelief() {
         result,
       );
       setClaims((c) => [saved, ...c]);
+      setSaveOk(true);
+      setSaveMsg(
+        saved.eligible
+          ? 'Claim saved as eligible (draft). Approve it to apply to the VAT return.'
+          : `Claim saved as ineligible — ${saved.eligibility_reason || result.reasons.join(' ')}`,
+      );
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Could not save bad debt claim');
+      setSaveOk(false);
+      setSaveMsg(e instanceof Error ? e.message : 'Could not save bad debt claim');
     } finally {
       setSaving(false);
     }
@@ -177,6 +197,9 @@ export default function BadDebtRelief() {
           >
             {saving ? 'Saving…' : 'Save claim'}
           </button>
+          {saveMsg && (
+            <p className={`text-sm ${saveOk ? 'text-green-400' : 'text-red-400'}`}>{saveMsg}</p>
+          )}
         </div>
 
         <div className="space-y-4">
