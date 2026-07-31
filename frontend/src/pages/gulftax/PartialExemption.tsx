@@ -61,28 +61,33 @@ export default function PartialExemption() {
   }, [wsId]);
 
   const onSave = async () => {
-    if (!wsId) return;
+    if (!wsId) {
+      setSaveMsg('No active workspace — complete company setup first.');
+      return;
+    }
     setSaving(true);
     setSaveMsg(null);
-    const saved = await savePartialExemption(
-      wsId,
-      activeCompanyId,
-      period,
-      periodType,
-      {
-        taxable: Number(taxable) || 0,
-        exempt: Number(exempt) || 0,
-        inputVat: Number(inputVat) || 0,
-        provisionalPct: provisionalPct ? Number(provisionalPct) : undefined,
-      },
-      result,
-    );
-    setSaving(false);
-    if (saved) {
+    try {
+      const saved = await savePartialExemption(
+        wsId,
+        activeCompanyId,
+        period,
+        periodType,
+        {
+          taxable: Number(taxable) || 0,
+          exempt: Number(exempt) || 0,
+          inputVat: Number(inputVat) || 0,
+          provisionalPct: provisionalPct ? Number(provisionalPct) : undefined,
+        },
+        result,
+      );
       setSaveMsg('Calculation saved.');
       setHistory((h) => [saved, ...h]);
-    } else {
-      setSaveMsg('Could not save — run migration 026_vat_advanced.sql in Supabase.');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveMsg(`Could not save — ${msg}`);
+    } finally {
+      setSaving(false);
     }
   };
 

@@ -70,7 +70,7 @@ class Transaction(Base):
     vendor_or_customer = Column(String(255))
     invoice_number = Column(String(100))
     vat_treatment = Column(String(50), nullable=True)  # standard_rated / zero_rated / exempt / out_of_scope / reverse_charge
-    transaction_type = Column(String(20), nullable=False, default="sale")  # sale | purchase
+    transaction_type = Column(String(20), nullable=False, default="purchase")  # sale | purchase
     vat_amount_aed = Column(Float, default=0.0)
     confidence_score = Column(Float)  # AI confidence score (0-100)
     ai_reasoning = Column(Text)  # AI reasoning text

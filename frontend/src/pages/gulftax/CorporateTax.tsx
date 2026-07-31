@@ -37,6 +37,17 @@ function fmtAed(n: number): string {
   }).format(Math.round(n));
 }
 
+/** Parse exact AED amounts. Strips thousand separators so "500,000" → 500000 (not 500). */
+function parseAedInput(raw: string): number {
+  const cleaned = String(raw ?? "")
+    .trim()
+    .replace(/[\s,_\u00A0]/g, "")
+    .replace(/[^\d.-]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === "." || cleaned === "-.") return 0;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function CorporateTaxPage() {
   const [tab, setTab] = useState(0);
   const [toast, setToast] = useState<{ kind: "success" | "error"; message: string } | null>(null);
@@ -90,13 +101,13 @@ export default function CorporateTaxPage() {
     setComputeLoading(true);
     try {
       const res = await apiClient.post<CTComputeResult>("/api/corporatetax/compute", {
-        accounting_profit: parseFloat(accountingProfit) || 0,
+        accounting_profit: parseAedInput(accountingProfit),
         free_zone_status: freeZoneStatus,
-        revenue: parseFloat(revenue) || 0,
-        related_party_transactions: parseFloat(relatedParty) || 0,
-        exempt_income: parseFloat(exemptIncome) || 0,
-        non_deductible_expenses: parseFloat(nonDeductible) || 0,
-        qualifying_income: freeZoneStatus === "free_zone_qfzp" ? parseFloat(qualifyingIncome) || undefined : undefined,
+        revenue: parseAedInput(revenue),
+        related_party_transactions: parseAedInput(relatedParty),
+        exempt_income: parseAedInput(exemptIncome),
+        non_deductible_expenses: parseAedInput(nonDeductible),
+        qualifying_income: freeZoneStatus === "free_zone_qfzp" ? parseAedInput(qualifyingIncome) || undefined : undefined,
         small_business_relief: sbr,
       });
       setComputeResult(res.data);
@@ -117,10 +128,10 @@ export default function CorporateTaxPage() {
         {
           tax_period_start: `${year}-01-01`,
           tax_period_end: `${year}-12-31`,
-          revenue: parseFloat(returnRevenue) || 0,
-          taxable_income: parseFloat(returnTaxable) || 0,
-          exemptions_claimed: parseFloat(returnExemptions) || 0,
-          ct_payable: parseFloat(returnPayable) || 0,
+          revenue: parseAedInput(returnRevenue),
+          taxable_income: parseAedInput(returnTaxable),
+          exemptions_claimed: parseAedInput(returnExemptions),
+          ct_payable: parseAedInput(returnPayable),
         },
         { responseType: "blob" }
       );
@@ -145,11 +156,11 @@ export default function CorporateTaxPage() {
     setTpResult(null);
     try {
       const res = await apiClient.post<TPCheckResult>("/api/corporatetax/tp-check", {
-        transaction_amount: parseFloat(tpAmount) || 0,
+        transaction_amount: parseAedInput(tpAmount),
         party_name: tpParty,
         relationship: tpRelationship,
-        party_ytd_total: parseFloat(tpPartyYtd) || 0,
-        all_related_party_total: parseFloat(tpAggregate) || 0,
+        party_ytd_total: parseAedInput(tpPartyYtd),
+        all_related_party_total: parseAedInput(tpAggregate),
       });
       setTpResult(res.data);
     } catch {
@@ -206,8 +217,8 @@ export default function CorporateTaxPage() {
         <div className="bg-gradient-to-br from-card to-[#071228] border border-border rounded-2xl p-8 space-y-6">
           <form onSubmit={onCompute} className="grid gap-5 md:grid-cols-2">
             <div>
-              <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">Accounting profit (AED)</label>
-              <input value={accountingProfit} onChange={(e) => setAccountingProfit(e.target.value)} inputMode="decimal" required className="w-full rounded-[10px] bg-[rgba(4,12,30,0.85)] border border-border px-4 py-2.5 text-white text-sm focus:border-border-g focus:outline-none" />
+              <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">Accounting profit (AED exact)</label>
+              <input value={accountingProfit} onChange={(e) => setAccountingProfit(e.target.value)} inputMode="decimal" required placeholder="e.g. 500000 or 500,000" className="w-full rounded-[10px] bg-[rgba(4,12,30,0.85)] border border-border px-4 py-2.5 text-white text-sm focus:border-border-g focus:outline-none" />
             </div>
             <div>
               <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">Revenue (AED) — for SBR</label>

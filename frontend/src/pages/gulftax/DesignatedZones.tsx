@@ -49,7 +49,10 @@ export default function DesignatedZones() {
         customerZoneName: customerLocation === 'designated_zone' ? customerZone : undefined,
       },
       result,
-    );
+    ).catch((e) => {
+      console.warn('[DesignatedZones] save failed:', e);
+      alert(e instanceof Error ? e.message : 'Could not save designated zone transaction');
+    });
   };
 
   return (

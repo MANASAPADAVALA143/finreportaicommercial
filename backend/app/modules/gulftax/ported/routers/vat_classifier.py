@@ -75,7 +75,7 @@ class TransactionResponse(BaseModel):
     vendor_or_customer: Optional[str]
     invoice_number: Optional[str]
     vat_treatment: Optional[str]
-    transaction_type: str = "sale"
+    transaction_type: str = "purchase"
     vat_amount_aed: float
     confidence_score: Optional[float]
     ai_reasoning: Optional[str]
@@ -190,42 +190,30 @@ def _save_classification_fields(
 
 
 def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
-    """Force purchase→Box 9 / sale→Box 1; fix AKK Consulting and any purchase+Box1 rows."""
+    """Enforce purchase→Box 9 / sale→Box 1 (incl. AKK Consulting by transaction type)."""
     akk_fixed = 0
     purchase_box_fixed = 0
     fixed_txns: List[Transaction] = []
 
-    # Global correction for this company: purchase + box 1 → box 9
-    bad_purchases = (
-        db.query(Transaction)
-        .filter(
-            Transaction.company_id == company_id,
-            Transaction.transaction_type == "purchase",
-            Transaction.box_number == 1,
-        )
-        .all()
-    )
-    for t in bad_purchases:
-        t.box_number = 9
-        purchase_box_fixed += 1
-        fixed_txns.append(t)
-
-    # Also coerce any other wrong side/box pairs for this company
     all_rows = db.query(Transaction).filter(Transaction.company_id == company_id).all()
     for t in all_rows:
         side = (t.transaction_type or "purchase").lower()
+        if side not in ("sale", "purchase"):
+            side = "purchase"
+            t.transaction_type = "purchase"
         expected = 1 if side == "sale" else 9
-        # AKK Consulting must be purchase + box 9
         vendor = (t.vendor_or_customer or "").lower()
+
+        # AKK: map by type (purchase→9, sale→1) — do not force type
         if "akk consulting" in vendor:
-            if side != "purchase" or t.box_number != 9:
-                t.transaction_type = "purchase"
-                t.box_number = 9
+            if t.box_number != expected:
+                t.box_number = expected
                 akk_fixed += 1
                 if t not in fixed_txns:
                     fixed_txns.append(t)
             continue
-        if t.box_number != expected and side in ("sale", "purchase"):
+
+        if t.box_number != expected:
             # Only auto-fix standard output/input mixups (1 vs 9)
             if (side == "purchase" and t.box_number in (1, 2, 3, 4)) or (
                 side == "sale" and t.box_number in (7, 9, 10, 11)
@@ -1238,15 +1226,13 @@ async def bulk_approve_high_confidence(
         )
 
         company = db.query(Company).filter(Company.id == company_id).first()
-        sync_targets: Dict[int, Transaction] = {}
-        for t in approved_txns:
-            sync_targets[t.id] = t
+        sync_ids = {t.id for t in approved_txns}
         for t in box_fixes.get("fixed_txns") or []:
-            if t.is_verified:
-                sync_targets[t.id] = t
+            if getattr(t, "is_verified", False):
+                sync_ids.add(t.id)
+
         # Classifier / Invoice Flow origins only — do NOT re-sync AR/AP mirrors
-        # (those already live in gulftax_transactions from approve-and-post).
-        for t in (
+        origin_rows = (
             db.query(Transaction)
             .filter(
                 Transaction.company_id == company_id,
@@ -1262,11 +1248,19 @@ async def bulk_approve_high_confidence(
                 ),
             )
             .all()
-        ):
-            sync_targets[t.id] = t
+        )
+        for t in origin_rows:
+            sync_ids.add(t.id)
+
+        # Re-query after commit so we don't pass expired ORM instances into a new Session
+        fresh = (
+            db.query(Transaction).filter(Transaction.id.in_(list(sync_ids))).all()
+            if sync_ids
+            else []
+        )
 
         sync_result = sync_approved_classifier_transactions_to_gulftax(
-            classifier_txns=list(sync_targets.values()),
+            classifier_txns=fresh,
             ported_company=company,
         )
         synced = int(sync_result.get("synced") or 0)
@@ -1371,10 +1365,39 @@ async def verify_transaction(
     db.commit()
     db.refresh(transaction)
 
+    gulftax_synced = 0
+    gulftax_error = None
+    if request.is_verified:
+        try:
+            from app.services.vat_classifier_sync_service import (
+                sync_classifier_transaction_to_gulftax,
+            )
+
+            company = db.query(Company).filter(Company.id == company_id).first()
+            # Re-load after commit for a clean object graph
+            fresh = (
+                db.query(Transaction)
+                .filter(Transaction.id == transaction_id, Transaction.company_id == company_id)
+                .first()
+            )
+            if fresh:
+                sync_res = sync_classifier_transaction_to_gulftax(
+                    classifier_txn=fresh,
+                    ported_company=company,
+                )
+                if sync_res.get("ok") and not sync_res.get("skipped"):
+                    gulftax_synced = 1
+                elif not sync_res.get("ok"):
+                    gulftax_error = sync_res.get("error")
+        except Exception as exc:
+            gulftax_error = str(exc)
+
     return {
         "status": "success",
         "message": "Transaction updated",
         "transaction": TransactionResponse.model_validate(transaction),
+        "gulftax_synced": gulftax_synced,
+        "gulftax_error": gulftax_error,
     }
 
 

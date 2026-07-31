@@ -420,8 +420,16 @@ def sync_classifier_transaction_to_gulftax(
     vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
     gross = round(net + vat, 2) if vat > 0 else net
 
-    # Hard box rule: purchase→9, sale→1
-    fta_box = "box1" if direction == "output" else "box9"
+    # Hard box rule: purchase→9, sale→1 (prefer stored classifier box_number when set)
+    box_num = getattr(classifier_txn, "box_number", None)
+    try:
+        box_num_i = int(box_num) if box_num is not None else None
+    except (TypeError, ValueError):
+        box_num_i = None
+    if box_num_i in (1, 9):
+        fta_box = f"box{box_num_i}"
+    else:
+        fta_box = "box1" if direction == "output" else "box9"
     vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
     vat_category = _norm_treatment(vat_treatment)
 

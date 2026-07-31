@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 router = APIRouter(prefix="/api/gulftax/esr", tags=["GulfTax ESR"])
 
@@ -22,28 +22,62 @@ RELEVANT_ACTIVITIES = [
     "None / Not Applicable",
 ]
 
-ActivityType = Literal[
-    "Banking",
-    "Insurance",
-    "Investment Fund Management",
-    "Lease Finance",
-    "Headquarters",
-    "Shipping",
-    "Holding Company",
-    "Intellectual Property",
-    "Distribution and Service Centre",
-    "None / Not Applicable",
-]
-
 
 class ESRCalculateRequest(BaseModel):
-    activity_type: ActivityType
-    directors_meetings_in_uae: bool = Field(..., description="Directed & managed in UAE")
-    ciga_in_uae: bool = Field(..., description="Core income-generating activities in UAE")
-    employee_count_uae: int = Field(0, ge=0)
-    expenditure_uae_aed: float = Field(0, ge=0)
-    assets_uae_aed: float = Field(0, ge=0)
+    """Accepts both GulfTax UI field names and the public API contract."""
+
+    relevant_activity: Optional[str] = None
+    activity_type: Optional[str] = None
+
+    directed_managed_uae: Optional[bool] = None
+    directors_meetings_in_uae: Optional[bool] = None
+
+    cigas_uae: Optional[bool] = None
+    ciga_in_uae: Optional[bool] = None
+
+    uae_employees: Optional[int] = Field(None, ge=0)
+    employee_count_uae: Optional[int] = Field(None, ge=0)
+
+    uae_expenditure: Optional[float] = Field(None, ge=0)
+    expenditure_uae_aed: Optional[float] = Field(None, ge=0)
+
+    uae_assets: Optional[float] = Field(None, ge=0)
+    assets_uae_aed: Optional[float] = Field(None, ge=0)
+
     financial_year_end: str = Field("12-31", description="MM-DD")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ESRCalculateRequest":
+        activity = (self.relevant_activity or self.activity_type or "").strip()
+        if not activity:
+            raise ValueError("relevant_activity (or activity_type) is required")
+        self.relevant_activity = activity
+        self.activity_type = activity
+
+        dm = self.directed_managed_uae if self.directed_managed_uae is not None else self.directors_meetings_in_uae
+        if dm is None:
+            raise ValueError("directed_managed_uae (or directors_meetings_in_uae) is required")
+        self.directed_managed_uae = bool(dm)
+        self.directors_meetings_in_uae = bool(dm)
+
+        ciga = self.cigas_uae if self.cigas_uae is not None else self.ciga_in_uae
+        if ciga is None:
+            raise ValueError("cigas_uae (or ciga_in_uae) is required")
+        self.cigas_uae = bool(ciga)
+        self.ciga_in_uae = bool(ciga)
+
+        employees = self.uae_employees if self.uae_employees is not None else self.employee_count_uae
+        self.uae_employees = int(employees or 0)
+        self.employee_count_uae = self.uae_employees
+
+        spend = self.uae_expenditure if self.uae_expenditure is not None else self.expenditure_uae_aed
+        self.uae_expenditure = float(spend or 0)
+        self.expenditure_uae_aed = self.uae_expenditure
+
+        assets = self.uae_assets if self.uae_assets is not None else self.assets_uae_aed
+        self.uae_assets = float(assets or 0)
+        self.assets_uae_aed = self.uae_assets
+        return self
 
 
 class ESRStatusResponse(BaseModel):
@@ -67,15 +101,27 @@ def esr_status() -> ESRStatusResponse:
 
 @router.post("/calculate")
 def esr_calculate(body: ESRCalculateRequest) -> dict:
-    """Run ESR substance tests for a relevant activity."""
-    exempt = body.activity_type == "None / Not Applicable"
+    """Run ESR substance tests for a relevant activity.
+
+    PASS when directed & managed in UAE, CIGAs in UAE, and UAE employees,
+    expenditure, and assets are all greater than zero.
+    """
+    activity = body.relevant_activity or ""
+    exempt = activity == "None / Not Applicable"
+    fy = date.today().year
+
     if exempt:
         return {
-            "activity_type": body.activity_type,
+            "activity_type": activity,
+            "relevant_activity": activity,
             "passes_dm_test": True,
             "passes_ciga_test": True,
             "passes_adequacy_test": True,
             "overall_status": "EXEMPT",
+            "substance_test_passed": True,
+            "status": "PASS",
+            "reasons": ["Not in a relevant activity — ESR report not required."],
+            "recommendations": [],
             "filing_deadline": None,
             "notification_deadline": None,
             "explanations": {
@@ -85,37 +131,67 @@ def esr_calculate(body: ESRCalculateRequest) -> dict:
             },
         }
 
-    passes_dm = body.directors_meetings_in_uae
-    passes_ciga = body.ciga_in_uae
-  # Adequacy: simplified — employees OR meaningful UAE spend/assets
-    passes_adequacy = (
-        body.employee_count_uae >= 1
-        and (body.expenditure_uae_aed >= 50_000 or body.assets_uae_aed >= 50_000)
-    )
+    passes_dm = bool(body.directed_managed_uae)
+    passes_ciga = bool(body.cigas_uae)
+    employees_ok = (body.uae_employees or 0) > 0
+    expenditure_ok = (body.uae_expenditure or 0) > 0
+    assets_ok = (body.uae_assets or 0) > 0
+    passes_adequacy = employees_ok and expenditure_ok and assets_ok
 
-    if passes_dm and passes_ciga and passes_adequacy:
-        overall = "PASS"
-    else:
-        overall = "FAIL"
+    substance_test_passed = passes_dm and passes_ciga and passes_adequacy
+    status = "PASS" if substance_test_passed else "FAIL"
 
-    fy = date.today().year
+    reasons: list[str] = []
+    recommendations: list[str] = []
+
+    if not passes_dm:
+        reasons.append("Directed & managed in UAE test failed — board meetings / management must occur in UAE.")
+        recommendations.append("Hold board meetings in the UAE with a quorum of directors physically present.")
+    if not passes_ciga:
+        reasons.append("CIGA test failed — core income-generating activities must be performed in the UAE.")
+        recommendations.append("Ensure core income-generating activities for the relevant activity are carried out in the UAE.")
+    if not employees_ok:
+        reasons.append("Adequacy failed — UAE employee count must be greater than zero.")
+        recommendations.append("Employ an adequate number of qualified full-time employees in the UAE.")
+    if not expenditure_ok:
+        reasons.append("Adequacy failed — UAE expenditure must be greater than zero.")
+        recommendations.append("Incur adequate operating expenditure in the UAE for the relevant activity.")
+    if not assets_ok:
+        reasons.append("Adequacy failed — UAE assets must be greater than zero.")
+        recommendations.append("Maintain adequate physical assets in the UAE (office, equipment, etc.).")
+    if substance_test_passed:
+        reasons.append("All ESR substance tests passed.")
+
     return {
-        "activity_type": body.activity_type,
+        # Frontend (ESRFiling.tsx) shape
+        "activity_type": activity,
         "passes_dm_test": passes_dm,
         "passes_ciga_test": passes_ciga,
         "passes_adequacy_test": passes_adequacy,
-        "overall_status": overall,
+        "overall_status": status,
         "notification_deadline": f"{fy}-06-30",
         "filing_deadline": f"{fy}-12-31",
         "explanations": {
-            "dm": "Passed — entity directed and managed in UAE."
-            if passes_dm
-            else "Failed — board meetings / management must occur in UAE.",
-            "ciga": "Passed — CIGAs performed in UAE."
-            if passes_ciga
-            else "Failed — core income-generating activities must be in UAE.",
-            "adequacy": "Passed — adequate employees, expenditure and assets in UAE."
-            if passes_adequacy
-            else "Failed — insufficient UAE employees, spend or assets for the activity.",
+            "dm": (
+                "Passed — entity directed and managed in UAE."
+                if passes_dm
+                else "Failed — board meetings / management must occur in UAE."
+            ),
+            "ciga": (
+                "Passed — CIGAs performed in UAE."
+                if passes_ciga
+                else "Failed — core income-generating activities must be in UAE."
+            ),
+            "adequacy": (
+                "Passed — adequate UAE employees, expenditure and assets."
+                if passes_adequacy
+                else "Failed — UAE employees, expenditure and assets must all be greater than zero."
+            ),
         },
+        # Public API contract
+        "relevant_activity": activity,
+        "substance_test_passed": substance_test_passed,
+        "status": status,
+        "reasons": reasons,
+        "recommendations": recommendations,
     }

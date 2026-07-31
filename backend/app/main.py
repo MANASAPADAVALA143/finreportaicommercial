@@ -292,19 +292,21 @@ app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
-    app.include_router(ap_invoices_rds.router)
-    app.include_router(ap_payment_run_routes.router)
-    app.include_router(ap_companies_rds.router)
+app.include_router(ap_invoices_rds.router)
+app.include_router(ap_payment_run_routes.router)
+app.include_router(ap_companies_rds.router)
 app.include_router(vat_advanced_rds.router)
 app.include_router(system_routes.router)
 
 # GulfTax AI — embedded (replaces external localhost:8000 service)
 from app.modules.gulftax.router import router as gulftax_router
 from app.modules.gulftax.gulftax_einvoicing import router as gulftax_einvoicing_router
+from app.modules.gulftax.esr_filing import router as gulftax_esr_router
 from app.modules.gulftax.ported_mount import register_gulftax_ported_routers
 
 app.include_router(gulftax_router)
 app.include_router(gulftax_einvoicing_router)
+app.include_router(gulftax_esr_router)
 app.include_router(gulftax_audit_routes.router)
 register_gulftax_ported_routers(app)
 

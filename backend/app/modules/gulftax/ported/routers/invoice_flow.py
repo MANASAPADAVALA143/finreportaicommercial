@@ -1031,7 +1031,9 @@ Return JSON only:
         vat_treatment = inv.vat_treatment or "standard_rated"
         line_items = inv.line_items or []
 
-        if not line_items and inv.total_aed:
+        def _add_header_total_txn(*, source: str, reasoning: str) -> int:
+            if not inv.total_aed:
+                return 0
             subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
@@ -1041,34 +1043,36 @@ Return JSON only:
                     Transaction.amount_aed == round(subtotal, 2),
                 )
             ).first()
-            if not exists:
-                vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
-                db.add(Transaction(
-                    company_id=company_id,
-                    date=inv_date,
-                    description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
-                    vendor_or_customer=inv.vendor_name,
-                    invoice_number=inv.invoice_number,
-                    transaction_type="purchase",
-                    vat_treatment=vat_treatment,
-                    amount_aed=round(subtotal, 2),
-                    vat_amount_aed=vat_amount,
-                    box_number=9,
-                    confidence_score=round((inv.confidence or 0.9) * 100, 1),
-                    is_verified=True,
-                    source="invoice_flow_auto",
-                    source_invoice_id=inv.id,
-                    ai_reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
-                ))
-                transactions_created += 1
-        else:
+            if exists:
+                return 0
+            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            db.add(Transaction(
+                company_id=company_id,
+                date=inv_date,
+                description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
+                vendor_or_customer=inv.vendor_name,
+                invoice_number=inv.invoice_number,
+                transaction_type="purchase",
+                vat_treatment=vat_treatment,
+                amount_aed=round(subtotal, 2),
+                vat_amount_aed=vat_amount,
+                box_number=9,
+                confidence_score=round((inv.confidence or 0.9) * 100, 1),
+                is_verified=True,
+                source=source,
+                source_invoice_id=inv.id,
+                ai_reasoning=reasoning,
+            ))
+            return 1
+
+        if line_items:
             for li in line_items:
                 desc = (li.get("description") or "").strip() or inv.vendor_name or "Invoice line item"
-                qty = float(li.get("quantity", 1) or 1)
-                unit_price = float(li.get("unit_price", 0) or 0)
+                qty = float(li.get("quantity") or li.get("qty") or 1)
+                unit_price = float(li.get("unit_price") or li.get("unitPrice") or 0)
                 amount = round(qty * unit_price, 2)
                 if amount <= 0:
-                    amount = round(float(li.get("amount", 0) or 0), 2)
+                    amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
                 exists = db.query(Transaction).filter(
@@ -1101,6 +1105,13 @@ Return JSON only:
                     ai_reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
                 ))
                 transactions_created += 1
+
+        # Fallback: empty line_items OR all lines had zero/missing amounts
+        if transactions_created == 0:
+            transactions_created += _add_header_total_txn(
+                source="invoice_flow_auto",
+                reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
+            )
 
     elif risk.risk_score < 30 and len(high_flags) > 0:
         # Low score but a serious flag (e.g. exact duplicate) — must go to review
@@ -1214,8 +1225,9 @@ def review_invoice(
         vat_treatment = inv.vat_treatment or "standard_rated"
         line_items = inv.line_items or []
 
-        # If no line items, create one transaction from the invoice total
-        if not line_items and inv.total_aed:
+        def _add_header_total_txn(*, source: str, reasoning: str) -> int:
+            if not inv.total_aed:
+                return 0
             subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
@@ -1225,40 +1237,39 @@ def review_invoice(
                     Transaction.amount_aed == round(subtotal, 2),
                 )
             ).first()
-            if not exists:
-                vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
-                tx = Transaction(
-                    company_id=company_id,
-                    date=inv_date,
-                    description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
-                    vendor_or_customer=inv.vendor_name,
-                    invoice_number=inv.invoice_number,
-                    transaction_type="purchase",
-                    vat_treatment=vat_treatment,
-                    amount_aed=round(subtotal, 2),
-                    vat_amount_aed=vat_amount,
-                    box_number=9,
-                    confidence_score=round((inv.confidence or 0.9) * 100, 1),
-                    is_verified=True,
-                    source="invoice_flow_reviewed",
-                    source_invoice_id=inv.id,
-                    ai_reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
-                )
-                db.add(tx)
-                transactions_created += 1
-        else:
+            if exists:
+                return 0
+            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            db.add(Transaction(
+                company_id=company_id,
+                date=inv_date,
+                description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
+                vendor_or_customer=inv.vendor_name,
+                invoice_number=inv.invoice_number,
+                transaction_type="purchase",
+                vat_treatment=vat_treatment,
+                amount_aed=round(subtotal, 2),
+                vat_amount_aed=vat_amount,
+                box_number=9,
+                confidence_score=round((inv.confidence or 0.9) * 100, 1),
+                is_verified=True,
+                source=source,
+                source_invoice_id=inv.id,
+                ai_reasoning=reasoning,
+            ))
+            return 1
+
+        if line_items:
             for li in line_items:
-                desc = li.get("description", "").strip() or inv.vendor_name or "Invoice line item"
-                qty = float(li.get("quantity", 1) or 1)
-                unit_price = float(li.get("unit_price", 0) or 0)
+                desc = (li.get("description") or "").strip() or inv.vendor_name or "Invoice line item"
+                qty = float(li.get("quantity") or li.get("qty") or 1)
+                unit_price = float(li.get("unit_price") or li.get("unitPrice") or 0)
                 amount = round(qty * unit_price, 2)
-                # Fallback: use total from line item dict if available
                 if amount <= 0:
-                    amount = round(float(li.get("amount", 0) or 0), 2)
+                    amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
 
-                # Dedup: skip if identical line already exists
                 exists = db.query(Transaction).filter(
                     and_(
                         Transaction.company_id == company_id,
@@ -1273,7 +1284,7 @@ def review_invoice(
                 vat_rate = float(li.get("vat_rate", 5) or 5)
                 vat_amount = round(amount * vat_rate / 100, 2) if vat_treatment == "standard_rated" else 0.0
 
-                tx = Transaction(
+                db.add(Transaction(
                     company_id=company_id,
                     date=inv_date,
                     description=desc,
@@ -1289,9 +1300,14 @@ def review_invoice(
                     source="invoice_flow_reviewed",
                     source_invoice_id=inv.id,
                     ai_reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
-                )
-                db.add(tx)
+                ))
                 transactions_created += 1
+
+        if transactions_created == 0:
+            transactions_created += _add_header_total_txn(
+                source="invoice_flow_reviewed",
+                reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
+            )
 
     db.commit()
     db.refresh(inv)

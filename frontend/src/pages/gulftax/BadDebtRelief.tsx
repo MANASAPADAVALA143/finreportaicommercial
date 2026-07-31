@@ -71,24 +71,29 @@ export default function BadDebtRelief() {
   const onSave = async () => {
     if (!wsId) return;
     setSaving(true);
-    const saved = await saveBadDebtClaim(
-      wsId,
-      activeCompanyId,
-      {
-        invoiceNumber: form.invoiceNumber,
-        invoiceDate: form.invoiceDate,
-        dueDate: form.dueDate,
-        invoiceAmount: Number(form.invoiceAmount) || 0,
-        vatAmount: Number(form.vatAmount) || 0,
-        vatReturnPeriod: form.vatReturnPeriod,
-        writtenOffDate: form.writtenOffDate,
-        recoverySteps: form.recoverySteps,
-        connectedParty: form.connectedParty,
-      },
-      result,
-    );
-    setSaving(false);
-    if (saved) setClaims((c) => [saved, ...c]);
+    try {
+      const saved = await saveBadDebtClaim(
+        wsId,
+        activeCompanyId,
+        {
+          invoiceNumber: form.invoiceNumber,
+          invoiceDate: form.invoiceDate,
+          dueDate: form.dueDate,
+          invoiceAmount: Number(form.invoiceAmount) || 0,
+          vatAmount: Number(form.vatAmount) || 0,
+          vatReturnPeriod: form.vatReturnPeriod,
+          writtenOffDate: form.writtenOffDate,
+          recoverySteps: form.recoverySteps,
+          connectedParty: form.connectedParty,
+        },
+        result,
+      );
+      setClaims((c) => [saved, ...c]);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not save bad debt claim');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const onApprove = async (id: string) => {

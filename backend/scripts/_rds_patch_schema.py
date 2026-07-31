@@ -298,6 +298,24 @@ DDL = [
         updated_at         TIMESTAMP DEFAULT (now() AT TIME ZONE 'utc')
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS designated_zone_transactions (
+        id                 VARCHAR(36) PRIMARY KEY,
+        tenant_id          VARCHAR(36) NOT NULL,
+        company_id         VARCHAR(36) NOT NULL,
+        supplier_location  VARCHAR(64) NOT NULL,
+        customer_location  VARCHAR(64) NOT NULL,
+        transaction_type   VARCHAR(64) NOT NULL,
+        vat_treatment      VARCHAR(64) NOT NULL,
+        vat_rate           NUMERIC(5, 2) DEFAULT 0,
+        explanation        TEXT NOT NULL,
+        warning            TEXT,
+        created_at         TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_designated_zone_transactions_tenant_id ON designated_zone_transactions (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_designated_zone_transactions_company_id ON designated_zone_transactions (company_id)",
+    "ALTER TABLE designated_zone_transactions ALTER COLUMN tenant_id TYPE VARCHAR(64)",
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS designated_zone BOOLEAN DEFAULT FALSE",
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS transaction_kind VARCHAR(16) DEFAULT 'goods'",
     "ALTER TABLE gulftax_transactions ADD COLUMN IF NOT EXISTS dz_supplier_location VARCHAR(64)",
