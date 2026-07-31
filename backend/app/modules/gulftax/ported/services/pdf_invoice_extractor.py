@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from services.vat_decision_tree import classify_with_decision_tree
 from services.vat_enrichment import validate_trn
 
+try:
+    from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+except Exception:  # pragma: no cover
+    DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
 EXTRACT_PROMPT = """Extract from this UAE invoice:
 - vendor_name
 - vendor_trn (15-digit TRN if present)
@@ -158,7 +163,7 @@ def extract_and_classify_invoice(
     try:
         user_content = _build_claude_content(content, filename, mime, extracted_text)
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=1200,
             temperature=0,
             messages=[{"role": "user", "content": user_content}],

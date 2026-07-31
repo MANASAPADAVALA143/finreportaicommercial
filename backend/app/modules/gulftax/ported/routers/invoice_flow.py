@@ -18,6 +18,11 @@ from middleware.auth import get_current_company_id
 from models import Company, Invoice, Transaction
 import logging
 
+try:
+    from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+except Exception:  # pragma: no cover — ported package may load without app package
+    DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
@@ -830,7 +835,7 @@ def extract_invoice(
 
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=1200,
             temperature=0,
             messages=[{"role": "user", "content": user_content}],
@@ -972,7 +977,7 @@ Return JSON only:
     print(f"[classify-and-risk] calling Claude for VAT classification", flush=True)
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=300,
             temperature=0.1,
             messages=[{"role": "user", "content": classify_prompt}],
