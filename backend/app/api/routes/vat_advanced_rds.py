@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -21,6 +21,11 @@ from app.models.client_data import (
 router = APIRouter(prefix="/api/gulftax/vat-advanced", tags=["VAT Advanced RDS"])
 
 
+class PartialExemptionBreakdownRow(BaseModel):
+    label: str
+    value: str
+
+
 class PartialExemptionIn(BaseModel):
     period: str
     period_type: str = "quarterly"
@@ -30,7 +35,26 @@ class PartialExemptionIn(BaseModel):
     recovery_pct: float
     recoverable_vat: float
     irrecoverable_vat: float
-    breakdown: Optional[dict[str, Any]] = None
+    # Frontend sends label/value rows; also accept a plain dict for older clients
+    breakdown: Optional[Union[list[PartialExemptionBreakdownRow], list[dict[str, Any]], dict[str, Any]]] = None
+
+
+def _normalize_breakdown(
+    breakdown: Optional[Union[list[PartialExemptionBreakdownRow], list[dict[str, Any]], dict[str, Any]]],
+) -> Any:
+    if breakdown is None:
+        return None
+    if isinstance(breakdown, list):
+        out: list[dict[str, Any]] = []
+        for row in breakdown:
+            if isinstance(row, PartialExemptionBreakdownRow):
+                out.append(row.model_dump())
+            elif isinstance(row, dict):
+                out.append(row)
+            else:
+                out.append({"label": str(row), "value": ""})
+        return out
+    return breakdown
 
 
 class BadDebtIn(BaseModel):
@@ -134,7 +158,7 @@ def list_partial_exemption(
     return {"items": items}
 
 
-@router.post("/partial-exemption")
+@router.post("/partial-exemption", status_code=status.HTTP_201_CREATED)
 def save_partial_exemption(
     body: PartialExemptionIn,
     tenant_id: str = Depends(get_tenant_id),
@@ -142,6 +166,7 @@ def save_partial_exemption(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     assert_write_allowed()
+    breakdown = _normalize_breakdown(body.breakdown)
     try:
         row = PartialExemptionCalculation(
             tenant_id=tenant_id,
@@ -154,7 +179,7 @@ def save_partial_exemption(
             recovery_pct=body.recovery_pct,
             recoverable_vat=body.recoverable_vat,
             irrecoverable_vat=body.irrecoverable_vat,
-            breakdown=body.breakdown,
+            breakdown=breakdown,
             status="draft",
             created_at=datetime.utcnow(),
         )
@@ -180,7 +205,7 @@ def save_partial_exemption(
             "recovery_pct": body.recovery_pct,
             "recoverable_vat": body.recoverable_vat,
             "irrecoverable_vat": body.irrecoverable_vat,
-            "breakdown": body.breakdown,
+            "breakdown": breakdown,
         },
     )
     return {
