@@ -6,6 +6,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
 import { WorkspaceProvider } from './context/WorkspaceContext';
+import { IndustryConfigProvider } from './context/IndustryConfigContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { SuiteProvider } from './context/SuiteContext';
 import { MarketProvider } from './contexts/MarketContext';
@@ -355,6 +356,8 @@ const UAETrialBalanceViewer  = safeLazy(() => import('./pages/uae-accounting/Tri
 // UAE Full Accounting Suite (Phase C)
 const UAEAccountingOverview  = safeLazy(() => import('./pages/uae-accounting/UAEAccountingOverview'));
 const CompanySetupWizard       = safeLazy(() => import('./pages/company-setup/CompanySetupWizard'));
+const CostCentersSettingsPage  = safeLazy(() => import('./pages/settings/CostCentersSettingsPage'));
+const IndustrySelectorPage     = safeLazy(() => import('./pages/settings/IndustrySelector'));
 const ConsolidationPage        = safeLazy(() => import('./pages/consolidation/ConsolidationPage'));
 const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/ChartOfAccounts'));
 const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
@@ -544,6 +547,7 @@ function App() {
     <AgentActivityProvider>
       <ClientProvider>
         <WorkspaceProvider>
+          <IndustryConfigProvider>
           <CompanyProvider>
             <MarketProvider>
             <SuiteProvider>
@@ -662,6 +666,7 @@ function App() {
                   <Route path="gl-accounts"  element={<APGLAccounts />} />
                   <Route path="integrations"   element={<APIntegrations />} />
                   <Route path="settings"       element={<APSettings />} />
+                  <Route path="settings/cost-centers" element={<CostCentersSettingsPage />} />
                   <Route path="cfo"            element={<APCFODashboard />} />
                   <Route path="audit-log"      element={<APAuditLog />} />
                   <Route path="email-invoices" element={<APEmailInvoices />} />
@@ -700,6 +705,8 @@ function App() {
                 <Route path="/uae-accounting/trial-balances/:id"           element={<UAETrialBalanceViewer />} />
                 {/* UAE Full Accounting Suite */}
                 <Route path="/company-setup" element={<CompanySetupWizard />} />
+                <Route path="/settings/industry" element={<IndustrySelectorPage />} />
+                <Route path="/settings/cost-centers" element={<CostCentersSettingsPage />} />
                 <Route path="/uae-select" element={<UAESuiteSelector />} />
                 <Route path="/uae-suite" element={<UAEFinanceSuiteDashboard />} />
                 <Route path="/consolidation" element={<ConsolidationPage />} />
@@ -813,6 +820,7 @@ function App() {
             </SuiteProvider>
             </MarketProvider>
           </CompanyProvider>
+          </IndustryConfigProvider>
         </WorkspaceProvider>
         <Toaster position="top-right" />
         <ShadcnToaster />

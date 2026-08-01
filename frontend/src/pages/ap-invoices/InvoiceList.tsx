@@ -97,6 +97,8 @@ import {
   type NormalizedExtractedInvoice,
 } from '@/lib/ap-invoice/cameraService';
 import { useMarket } from '@/contexts/MarketContext';
+import { useIndustryConfig } from '@/context/IndustryConfigContext';
+import { spendByTitle } from '@/services/industryConfig.service';
 import { PintAeValidateModal } from '@/components/gulftax/PintAeValidateModal';
 
 const DEBUG_INVOICE_NUMBERS = [
@@ -312,6 +314,7 @@ export function InvoiceList() {
   const { accessToken } = useAuth();
   const workspaceId = getStoredWorkspaceId();
   const { market, isUAE } = useMarket();
+  const { costCenterLabel } = useIndustryConfig();
   const { dateFormat } = useCompanySettings();
   const tallySettings = useErpSettings();
   const [showExport, setShowExport] = useState(false);
@@ -320,6 +323,7 @@ export function InvoiceList() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [costCenterFilter, setCostCenterFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review' | 'anomalies'>('all');
   const [anomalyInvoiceIds, setAnomalyInvoiceIds] = useState<Set<string>>(new Set());
   const [confidenceSort, setConfidenceSort] = useState<'none' | 'high_first' | 'low_first'>('none');
@@ -441,6 +445,7 @@ export function InvoiceList() {
     invoices,
     searchTerm,
     statusFilter,
+    costCenterFilter,
     startDate,
     endDate,
     viewMode,
@@ -469,6 +474,7 @@ export function InvoiceList() {
   function clearInvoiceListFilters() {
     setSearchTerm('');
     setStatusFilter('all');
+    setCostCenterFilter('all');
     setViewMode('all');
     setIfrsFilter('all');
     setMatchStatusFilter('all');
@@ -804,6 +810,10 @@ export function InvoiceList() {
       filtered = filtered.filter((inv) => inv.status === statusFilter);
     }
 
+    if (costCenterFilter !== 'all') {
+      filtered = filtered.filter((inv) => (inv.cost_center || '') === costCenterFilter);
+    }
+
     if (startDate) {
       filtered = filtered.filter(
         (inv) => new Date(inv.invoice_date) >= new Date(startDate)
@@ -997,7 +1007,7 @@ export function InvoiceList() {
     const headers = [
       'Invoice #', 'Vendor', 'Date', 'Due Date', 'Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
-      'Department', 'Cost Center', 'Project Code', 'Match Status', 'Risk Score',
+      'Department', costCenterLabel, 'Project Code', 'Match Status', 'Risk Score',
       'Approval Level', 'Approved By', 'Payment Status',
     ];
     const rows = invList.map((inv) => [
@@ -1086,7 +1096,7 @@ export function InvoiceList() {
   }
 
   function exportSAPCSV(invList: Invoice[]) {
-    const headers = 'Vendor,Document,Posting Date,Due Date,Amount,Currency,Cost Center,GL Account';
+    const headers = `Vendor,Document,Posting Date,Due Date,Amount,Currency,${costCenterLabel},GL Account`;
     const rows = invList.map((inv) =>
       [inv.vendor_name, inv.invoice_number, inv.invoice_date, inv.due_date, inv.total_amount, inv.currency, inv.cost_center || '', inv.gl_code || '']
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
@@ -1383,6 +1393,23 @@ export function InvoiceList() {
                   <SelectItem value="Paid">Paid</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
+                <SelectTrigger className="w-full md:w-[180px]">
+                  <SelectValue placeholder={costCenterLabel} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All {costCenterLabel}s</SelectItem>
+                  {Array.from(
+                    new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
+                  )
+                    .sort()
+                    .map((cc) => (
+                      <SelectItem key={cc} value={cc}>
+                        {cc}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
               <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
                 <SelectTrigger className="w-full md:w-[200px]">
                   <SelectValue placeholder="IFRS Category" />
@@ -1565,6 +1592,7 @@ export function InvoiceList() {
                   </TableHead>
                   <TableHead>3-Way Match</TableHead>
                   <TableHead>GL Account</TableHead>
+                  <TableHead>{costCenterLabel}</TableHead>
                   <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -1821,6 +1849,12 @@ export function InvoiceList() {
                       ) : (
                         <span style={{ color: '#9ca3af' }}>—</span>
                       )}
+                    </TableCell>
+                    <TableCell
+                      className="cursor-pointer text-sm text-slate-700"
+                      onClick={() => setSelectedInvoice(invoice)}
+                    >
+                      {invoice.cost_center || '—'}
                     </TableCell>
                     <TableCell
                       className="cursor-pointer"

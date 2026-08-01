@@ -12,6 +12,8 @@ import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
 import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { withIndustryNavLabels } from '../config/industryNav';
+import { useIndustryConfig } from '../context/IndustryConfigContext';
 import { isUaeFinanceSuiteOnly, isUaeSuite, filterNavByRole } from '../config/productRole';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { Button } from './ui/button';
@@ -307,6 +309,7 @@ export function SuiteSidebar() {
   const { activeSuite } = useSuite();
   const { companiesList } = useCompany();
   const { productRole, user } = useAuth();
+  const industryCfg = useIndustryConfig();
   const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const uaeSuite = isUaeSuite(productRole);
   const accentColor = SUITE_COLOR[activeSuite];
@@ -334,7 +337,7 @@ export function SuiteSidebar() {
         ]
       : UAE_NAV;
 
-  const navItems = filterNavByRole(
+  const baseNav = filterNavByRole(
     uaeOnly || uaeSuite
       ? uaeNav
       : activeSuite === 'india'
@@ -345,6 +348,11 @@ export function SuiteSidebar() {
     productRole,
     user?.role,
   );
+
+  const navItems =
+    activeSuite === 'uae' || uaeOnly || uaeSuite
+      ? withIndustryNavLabels(baseNav, industryCfg)
+      : baseNav;
 
   return (
     <TooltipProvider delayDuration={0}>

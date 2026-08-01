@@ -19,6 +19,7 @@ export interface CompanyProfile {
   reporting_standard: string;
   financial_year_start: number;
   industry?: string | null;
+  industry_label?: string | null;
   address?: string | null;
   phone?: string | null;
   email?: string | null;

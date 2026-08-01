@@ -77,6 +77,7 @@ export interface ARInvoice {
   paid_date?: string | null;
   payment_reference?: string | null;
   line_items: ARLineItem[];
+  cost_center?: string | null;
   vat_treatment?: string | null;
   gulftax_decision?: 'AUTO_APPROVE' | 'REVIEW_QUEUE' | 'HARD_BLOCK' | string | null;
   gulftax_risk_score?: number | null;
@@ -129,6 +130,7 @@ export interface CreateInvoicePayload {
   line_items: ARLineItem[];
   company_id: string;
   workspace_id?: string;
+  cost_center?: string;
 }
 
 export const listARInvoices = (status?: string) =>

@@ -35,6 +35,8 @@ import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useCompany } from '../../context/CompanyContext';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import { spendByTitle } from '../../services/industryConfig.service';
 import APInsightsPanel from '@/components/ap-invoices/APInsightsPanel';
 import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard';
 import { ExtractionReviewCard } from '@/components/dashboard/ExtractionReviewCard';
@@ -69,6 +71,7 @@ export function Dashboard() {
   const { dateFormat } = useCompanySettings();
   const { currency: baseCurrencyDisplay, fmt } = useDisplayCurrency();
   const { activeCompanyId } = useCompany();
+  const { costCenterLabel } = useIndustryConfig();
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
     localStorage.getItem('active_workspace_id') ??
@@ -1094,7 +1097,51 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Spend by GL Account */}
+        {/* Spend by cost center + Spend by GL Account */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              {spendByTitle(costCenterLabel)}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const ccSpend = invoices
+                .filter((inv) => inv.cost_center)
+                .reduce((acc, inv) => {
+                  const key = String(inv.cost_center);
+                  if (!acc[key]) acc[key] = { name: key, totalSpend: 0, invoiceCount: 0 };
+                  acc[key].totalSpend += Number(inv.total_amount);
+                  acc[key].invoiceCount += 1;
+                  return acc;
+                }, {} as Record<string, { name: string; totalSpend: number; invoiceCount: number }>);
+              const top = Object.values(ccSpend)
+                .sort((a, b) => b.totalSpend - a.totalSpend)
+                .slice(0, 5);
+              if (top.length === 0) {
+                return (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    No {costCenterLabel.toLowerCase()} tagged invoices yet.
+                  </p>
+                );
+              }
+              return (
+                <div className="space-y-3">
+                  {top.map((row) => (
+                    <div key={row.name} className="flex items-center justify-between text-sm">
+                      <span className="font-medium text-slate-800 truncate mr-3">{row.name}</span>
+                      <span className="text-slate-600 shrink-0">
+                        {fmt(row.totalSpend)} · {row.invoiceCount} inv
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

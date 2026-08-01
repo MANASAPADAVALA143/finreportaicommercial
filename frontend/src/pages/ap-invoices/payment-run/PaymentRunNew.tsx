@@ -23,6 +23,8 @@ import {
 import { Checkbox } from '../../../components/ui/checkbox';
 import { useToast } from '../../../hooks/use-toast';
 import { formatCurrency } from '../../../utils/currency';
+import { useIndustryConfig } from '../../../context/IndustryConfigContext';
+import { CostCenterSelect } from '../../../components/industry/CostCenterSelect';
 import {
   createPaymentRun,
   listEligibleInvoices,
@@ -35,6 +37,7 @@ const STEPS = ['Select invoices', 'Review run', 'Approve & execute'] as const;
 export default function PaymentRunNew() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { costCenterLabel } = useIndustryConfig();
   const today = format(new Date(), 'yyyy-MM-dd');
   const week = format(addDays(new Date(), 7), 'yyyy-MM-dd');
 
@@ -200,11 +203,12 @@ export default function PaymentRunNew() {
                 <Input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Search vendor" />
               </div>
               <div>
-                <label className="text-xs text-slate-500">Property</label>
-                <Input
+                <label className="text-xs text-slate-500">{costCenterLabel}</label>
+                <CostCenterSelect
+                  hideLabel
                   value={property}
-                  onChange={(e) => setProperty(e.target.value)}
-                  placeholder="Property name / id"
+                  onChange={setProperty}
+                  className="mt-0"
                 />
               </div>
               <div>
@@ -258,7 +262,7 @@ export default function PaymentRunNew() {
                     <TableHead className="w-10" />
                     <TableHead>Invoice #</TableHead>
                     <TableHead>Vendor</TableHead>
-                    <TableHead>Property</TableHead>
+                    <TableHead>{costCenterLabel}</TableHead>
                     <TableHead>Due Date</TableHead>
                     <TableHead>Amount AED</TableHead>
                     <TableHead>Days Overdue</TableHead>

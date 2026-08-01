@@ -46,7 +46,8 @@ class Workspace(Base):
     currency = Column(String(3), nullable=False, default="AED")
     fiscal_year_start_month = Column(Integer, nullable=False, default=1)  # 1=Jan
     fiscal_year_end_month = Column(Integer, nullable=False, default=12)
-    industry = Column(String(128), nullable=True)
+    industry = Column(String(128), nullable=True, default="general")
+    industry_label = Column(String(128), nullable=True, default="Cost Center")
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

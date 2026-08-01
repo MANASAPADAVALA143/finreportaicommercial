@@ -9,6 +9,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useMarket } from '../../contexts/MarketContext';
 import { MarketToggle } from '../../components/MarketToggle';
 import { useAuth } from '../../context/AuthContext';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
 import {
   ensureApCompanySynced,
   getApCompanySyncStatus,
@@ -21,13 +22,13 @@ import {
   ShoppingCart, Package, ListTodo, TrendingUp,   Landmark,
   Receipt, CalendarDays, BookOpen, Link2, Settings,
   BarChart3, Mail, AlertTriangle, ClipboardList, Building,
-  Database, CreditCard, Shield, MessageSquare, FileDown, Banknote,
+  Database, CreditCard, Shield, MessageSquare, FileDown, Banknote, Building2,
 } from 'lucide-react';
 
 type NavItem = { to: string; label: string; icon: React.ElementType; end?: boolean };
 type NavSection = { label: string | null; items: NavItem[] };
 
-function useNavSections(isUAE: boolean): NavSection[] {
+function useNavSections(isUAE: boolean, costCenterLabel: string, apLabel: string): NavSection[] {
   return [
     {
       label: null,
@@ -87,6 +88,7 @@ function useNavSections(isUAE: boolean): NavSection[] {
         { to: '/ap-invoices/onboarding',     label: 'Onboarding',         icon: ClipboardList },
         { to: '/ap-invoices/admin/clients',  label: 'Admin Clients',      icon: Users },
         { to: '/ap-invoices/integrations',   label: 'Integrations',       icon: Link2 },
+        { to: '/ap-invoices/settings/cost-centers', label: costCenterLabel, icon: Building2 },
         { to: '/ap-invoices/settings',       label: 'Settings',           icon: Settings },
       ],
     },
@@ -142,6 +144,7 @@ function ApWorkspaceSync() {
 
 function APInvoicesLayoutInner() {
   const { isUAE } = useMarket();
+  const { apLabel, costCenterLabel } = useIndustryConfig();
   return (
     /* 36px = GnanovaBanner height; min-h-0 lets flex children scroll */
     <div className="relative flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
@@ -156,7 +159,7 @@ function APInvoicesLayoutInner() {
             </div>
             <div>
               <p className="text-sm font-bold text-white leading-tight">InvoiceFlow</p>
-              <p className="text-[10px] text-slate-500">AP Processing</p>
+              <p className="text-[10px] text-slate-500">{apLabel}</p>
             </div>
           </div>
           <span className="inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full bg-green-900 text-green-300 border border-green-800 font-medium">
@@ -168,7 +171,7 @@ function APInvoicesLayoutInner() {
 
         {/* Nav — scrollable */}
         <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-4 sidebar-scroll">
-          {useNavSections(isUAE).map((section, si) => (
+          {useNavSections(isUAE, costCenterLabel, apLabel).map((section, si) => (
             <div key={si}>
               {section.label && (
                 <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">

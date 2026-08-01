@@ -18,6 +18,7 @@ import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } 
 import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { useAuth } from '../../context/AuthContext';
+import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
@@ -140,6 +141,7 @@ export function InvoiceUpload() {
     tax_type: 'None' as 'None' | 'VAT' | 'GST' | 'Sales Tax' | 'Withholding Tax',
     tax_rate: '',
     po_number: '',
+    cost_center: '',
   });
 
   const [lineItems, setLineItems] = useState<LineItem[]>([
@@ -2451,6 +2453,7 @@ export function InvoiceUpload() {
           invoice_date: invoiceDate,
           due_date: dueDate,
           po_number: String((dataToUse as Record<string, unknown>).po_number ?? '').trim() || null,
+          cost_center: String((dataToUse as Record<string, unknown>).cost_center ?? formData.cost_center ?? '').trim() || null,
           currency: dataToUse.currency || 'INR',
           exchange_rate_to_base: 1,
           tax_code: (dataToUse as { taxCode?: string }).taxCode ?? formData.taxCode,
@@ -3089,6 +3092,11 @@ export function InvoiceUpload() {
                 />
               </div>
             </div>
+
+            <CostCenterSelect
+              value={formData.cost_center}
+              onChange={(v) => setFormData({ ...formData, cost_center: v })}
+            />
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">

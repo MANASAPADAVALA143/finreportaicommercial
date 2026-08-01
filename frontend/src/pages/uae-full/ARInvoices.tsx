@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import * as arSvc from '../../services/arService';
 import type { ARInvoice, ARLineItem, ARCreditNote } from '../../services/arService';
 import {
@@ -68,6 +70,7 @@ function emptyLine(): ARLineItem {
 export default function ARInvoices() {
   const { activeCompanyId } = useCompany();
   const { activeWorkspace } = useWorkspace();
+  const { arLabel, costCenterLabel } = useIndustryConfig();
   const companyId = activeCompanyId ?? '';
   const workspaceId = activeWorkspace?.id ?? localStorage.getItem('gnanova_workspace_id');
 
@@ -78,6 +81,7 @@ export default function ARInvoices() {
   const [totalOutstanding, setTotalOutstanding] = useState(0);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('all');
+  const [costCenter, setCostCenter] = useState('');
   const [search, setSearch] = useState('');
   const [bankAccounts, setBankAccounts] = useState<{ code: string; name: string }[]>([]);
 
@@ -238,6 +242,7 @@ export default function ARInvoices() {
         line_items: lines.filter(l => l.description),
         company_id: companyId,
         workspace_id: workspaceId,
+        cost_center: costCenter || undefined,
       });
       const decision = res.gulftax_decision;
       const reasoning = res.gulftax_reasoning || res.message || '';
@@ -256,7 +261,7 @@ export default function ARInvoices() {
         toast.success(arSvc.arPostedToastMessage(res.invoice_number));
       }
       setShowNew(false);
-      setCustName(''); setCustTrn(''); setLines([emptyLine()]);
+      setCustName(''); setCustTrn(''); setLines([emptyLine()]); setCostCenter('');
       void load();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Create failed');
@@ -546,7 +551,7 @@ export default function ARInvoices() {
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Sales Invoices</h1>
+          <h1 className="text-2xl font-bold text-white">{arLabel}</h1>
           <p className="text-gray-400 text-sm mt-1">UAE VAT-compliant accounts receivable</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -767,21 +772,22 @@ export default function ARInvoices() {
         <table className="w-full text-sm min-w-[800px]">
           <thead>
             <tr className="border-b border-gray-700 bg-gray-800/80">
-              {['Invoice No', 'Customer', 'Invoice Date', 'Due Date', 'Amount AED', 'VAT AED', 'Total AED', 'Payment Forecast', 'Status', 'Actions'].map(h => (
+              {['Invoice No', 'Customer', costCenterLabel, 'Invoice Date', 'Due Date', 'Amount AED', 'VAT AED', 'Total AED', 'Payment Forecast', 'Status', 'Actions'].map(h => (
                 <th key={h} className={`px-4 py-3 text-xs text-gray-400 font-semibold ${h.includes('AED') ? 'text-right' : 'text-left'}`}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={10} className="px-4 py-12 text-center text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={11} className="px-4 py-12 text-center text-gray-500">Loading…</td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={10} className="px-4 py-12 text-center text-gray-500">No invoices found.</td></tr>
+              <tr><td colSpan={11} className="px-4 py-12 text-center text-gray-500">No invoices found.</td></tr>
             ) : (
               filtered.map(inv => (
                 <tr key={inv.id} className="border-b border-gray-700/30 hover:bg-gray-700/20">
                   <td className="px-4 py-3 font-mono text-blue-400 text-xs">{inv.invoice_number}</td>
                   <td className="px-4 py-3 text-gray-300">{inv.customer_name}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{inv.cost_center || '—'}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(inv.invoice_date)}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(inv.due_date)}</td>
                   <td className="px-4 py-3 text-right text-white text-xs">{inv.subtotal.toLocaleString()}</td>
@@ -901,7 +907,9 @@ export default function ARInvoices() {
 
       {/* AR Aging — always visible */}
       <div id="ar-aging" className="scroll-mt-6">
-        <h2 className="text-lg font-semibold text-white mb-4">AR Aging</h2>
+        <h2 className="text-lg font-semibold text-white mb-4">
+          AR Aging · {costCenterLabel}
+        </h2>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {aging.map(b => (
             <div key={b.bucket} className="bg-gray-800/60 border border-gray-700 rounded-xl p-4">
@@ -923,7 +931,7 @@ export default function ARInvoices() {
 
       {/* New Invoice Modal */}
       {showNew && (
-        <Modal title="New Sales Invoice" onClose={() => setShowNew(false)}>
+        <Modal title={`New ${arLabel.replace(/s$/, '')}`} onClose={() => setShowNew(false)}>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <Field label="Customer Name">
@@ -943,6 +951,7 @@ export default function ARInvoices() {
                   className="input-dark w-full" />
               </Field>
             </div>
+            <CostCenterSelect value={costCenter} onChange={setCostCenter} />
             <div>
               <div className="flex justify-between items-center mb-2">
                 <span className="text-xs text-gray-400 uppercase tracking-wide">Line Items</span>

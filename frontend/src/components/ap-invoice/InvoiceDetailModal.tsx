@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
+import { CostCenterSelect } from '@/components/industry/CostCenterSelect';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
 import { classifyVATWithGulfTax } from '@/lib/ap-invoice/gulfTaxService';
 import {
@@ -2905,14 +2906,11 @@ export function InvoiceDetailModal({
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="cost_center">Cost Center</Label>
-                  <Input
-                    id="cost_center"
+                  <CostCenterSelect
                     value={editedInvoice.cost_center || ''}
-                    onChange={(e) =>
-                      setEditedInvoice({ ...editedInvoice, cost_center: e.target.value })
+                    onChange={(v) =>
+                      setEditedInvoice({ ...editedInvoice, cost_center: v })
                     }
-                    placeholder="e.g. ADM-001"
                   />
                 </div>
                 <div
