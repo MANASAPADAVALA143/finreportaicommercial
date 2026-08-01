@@ -35,7 +35,7 @@ function GnanovaBanner() {
 
   const showAp = !isAuthenticated || canAccessPath(productRole, '/ap-invoices', user?.role);
   const showGulfTax = !isAuthenticated || canAccessPath(productRole, '/gulftax', user?.role);
-  const showSettings = isAuthenticated && canAccessPath(productRole, '/settings/industry', user?.role);
+  const showSettings = isAuthenticated && canAccessPath(productRole, '/ap-invoices', user?.role);
 
   const handleLogout = async () => {
     try {
@@ -108,7 +108,7 @@ function GnanovaBanner() {
       )}
       {showSettings && (
       <a
-        href="/settings/industry"
+        href="/ap-invoices/industry"
         style={{
           color: '#a5b4fc',
           textDecoration: 'none',
@@ -685,6 +685,7 @@ function App() {
                   <Route path="integrations"   element={<APIntegrations />} />
                   <Route path="settings"       element={<APSettings />} />
                   <Route path="settings/cost-centers" element={<CostCentersSettingsPage />} />
+                  <Route path="industry"       element={<IndustrySelectorPage />} />
                   <Route path="cfo"            element={<APCFODashboard />} />
                   <Route path="audit-log"      element={<APAuditLog />} />
                   <Route path="email-invoices" element={<APEmailInvoices />} />

@@ -67,6 +67,7 @@ export const WORKSPACE_OPTIONAL_PREFIXES = [
   '/gulftax',
   '/ap-invoices',
   '/ifrs/16',
+  '/settings',
 ];
 
 export function isWorkspaceOptionalPath(pathname: string): boolean {

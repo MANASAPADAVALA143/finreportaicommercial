@@ -139,8 +139,8 @@ export function withIndustryNavLabels(nav: NavEntry[], cfg: IndustryConfig): Nav
     out.push({
       section: 'SETTINGS',
       items: [
-        { label: 'Industry & Workspace', path: '/settings/industry', icon: 'sliders' },
-        { label: plural, path: '/settings/cost-centers', icon: 'building-2' },
+        { label: 'Industry & Workspace', path: '/ap-invoices/industry', icon: 'sliders' },
+        { label: plural, path: '/ap-invoices/settings/cost-centers', icon: 'building-2' },
       ],
     });
   }
