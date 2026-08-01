@@ -40,6 +40,7 @@ import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard'
 import { ExtractionReviewCard } from '@/components/dashboard/ExtractionReviewCard';
 import { GstReconSummaryCard } from '@/components/dashboard/GstReconSummaryCard';
 import { AnomalyDashboardCard } from '@/components/dashboard/AnomalyDashboardCard';
+import { PaymentRunsThisMonthCard } from '@/components/dashboard/PaymentRunsThisMonthCard';
 import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
 import { getMyCompany } from '../../lib/ap-invoice/companyService';
 import { getCashFlowForecast } from '../../lib/ap-invoice/paymentService';
@@ -418,6 +419,7 @@ export function Dashboard() {
         <DuplicateAlertsCard invoices={invoices} />
         <ExtractionReviewCard invoices={invoices} />
         <AnomalyDashboardCard />
+        <PaymentRunsThisMonthCard />
 
         <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">

@@ -1,4 +1,4 @@
-/** AP Payment Run Center — /api/ap-invoices/payment-run */
+/** AP Payment Run Center — /api/ap-invoices/payment-run (+ /api/ap/payment-runs alias) */
 
 import { backendOrigin } from '../../utils/backendOrigin';
 import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
@@ -47,6 +47,7 @@ export type PaymentRunStatus =
   | 'approved'
   | 'executed'
   | 'rejected'
+  | 'cancelled'
   | string;
 
 export type PaymentRun = {
@@ -62,11 +63,16 @@ export type PaymentRun = {
   executed_at?: string | null;
   status: PaymentRunStatus;
   rejection_reason?: string | null;
+  payment_date?: string | null;
+  bank_account?: string | null;
+  notes?: string | null;
   total_invoices: number;
+  invoice_count?: number;
   vendor_count?: number;
   total_net_aed: number;
   total_vat_aed: number;
   total_gross_aed: number;
+  total_amount_aed?: number;
   invoice_ids: string[];
   journal_entry_id?: string | null;
   invoices?: EligibleInvoice[];
@@ -79,14 +85,25 @@ export type EligibleInvoice = {
   vendor_name: string;
   due_date: string | null;
   amount: number;
+  amount_aed?: number;
   net_amount?: number;
   vat_amount?: number;
   days_overdue: number;
   discount_available?: number | null;
   category?: string;
+  property_id?: string | null;
+  property_name?: string | null;
   currency?: string;
   status?: string;
   payment_status?: string;
+};
+
+export type PaymentRunMonthlyStats = {
+  runs_executed: number;
+  total_paid_aed: number;
+  pending_approval: number;
+  scheduled_this_week: number;
+  month: string;
 };
 
 export async function listPaymentRuns(params?: {
@@ -106,6 +123,16 @@ export async function listPaymentRuns(params?: {
   return res.json();
 }
 
+export async function fetchPaymentRunMonthlyStats(): Promise<PaymentRunMonthlyStats> {
+  const q = new URLSearchParams({
+    workspace_id: workspaceId(),
+    company_id: companyId(),
+  });
+  const res = await fetch(`${BASE}/stats/monthly?${q}`, { headers: hdrs(), credentials: 'include' });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function listEligibleInvoices(params?: {
   due_from?: string;
   due_to?: string;
@@ -113,7 +140,12 @@ export async function listEligibleInvoices(params?: {
   amount_min?: number;
   amount_max?: number;
   category?: string;
-}): Promise<{ invoices: EligibleInvoice[]; categories: string[]; filters: { due_from: string; due_to: string } }> {
+  property_id?: string;
+}): Promise<{
+  invoices: EligibleInvoice[];
+  categories: string[];
+  filters: { due_from: string; due_to: string };
+}> {
   const q = new URLSearchParams({
     workspace_id: workspaceId(),
     company_id: companyId(),
@@ -124,12 +156,16 @@ export async function listEligibleInvoices(params?: {
   if (params?.amount_min != null) q.set('amount_min', String(params.amount_min));
   if (params?.amount_max != null) q.set('amount_max', String(params.amount_max));
   if (params?.category) q.set('category', params.category);
+  if (params?.property_id) q.set('property_id', params.property_id);
   const res = await fetch(`${BASE}/eligible?${q}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
 
-export async function createPaymentRun(invoice_ids: string[]): Promise<PaymentRun> {
+export async function createPaymentRun(
+  invoice_ids: string[],
+  opts?: { payment_date?: string; bank_account?: string; notes?: string },
+): Promise<PaymentRun> {
   const res = await fetch(BASE, {
     method: 'POST',
     headers: hdrs(),
@@ -138,6 +174,9 @@ export async function createPaymentRun(invoice_ids: string[]): Promise<PaymentRu
       invoice_ids,
       workspace_id: workspaceId(),
       company_id: companyId(),
+      payment_date: opts?.payment_date,
+      bank_account: opts?.bank_account,
+      notes: opts?.notes,
     }),
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -172,6 +211,7 @@ async function postAction(id: string, action: string, body?: unknown): Promise<P
 export const submitPaymentRun = (id: string) => postAction(id, 'submit');
 export const approvePaymentRun = (id: string) => postAction(id, 'approve');
 export const rejectPaymentRun = (id: string, reason: string) => postAction(id, 'reject', { reason });
+export const cancelPaymentRun = (id: string) => postAction(id, 'cancel');
 export const executePaymentRun = (id: string) => postAction(id, 'execute');
 
 export function bankFileUrl(id: string): string {

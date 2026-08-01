@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
-from app.models.ap_payment_run import ApPaymentRun
+from app.models.ap_payment_run import ApPaymentRun, ApPaymentRunItem
 from app.models.client_data import ApInvoice, ApVendor
 from app.services.uae_journal_service import create_journal_entry
 
@@ -30,11 +30,30 @@ VALID_STATUSES = {
     "approved",
     "executed",
     "rejected",
+    "cancelled",
 }
 
 
 def ensure_payment_runs_table() -> None:
     ApPaymentRun.__table__.create(bind=engine, checkfirst=True)
+    ApPaymentRunItem.__table__.create(bind=engine, checkfirst=True)
+
+
+def _property_id(inv: ApInvoice) -> str | None:
+    ex = _extra(inv)
+    raw = ex.get("property_id") or ex.get("propertyId") or ex.get("property")
+    if raw is None:
+        return None
+    return str(raw).strip() or None
+
+
+def _property_label(inv: ApInvoice) -> str | None:
+    ex = _extra(inv)
+    for key in ("property_name", "property", "property_label", "building"):
+        if ex.get(key):
+            return str(ex[key]).strip()
+    pid = _property_id(inv)
+    return pid
 
 
 def _f(v: Any) -> float:
@@ -157,6 +176,7 @@ def list_eligible_invoices(
     amount_min: float | None = None,
     amount_max: float | None = None,
     category: str | None = None,
+    property_id: str | None = None,
 ) -> list[dict[str, Any]]:
     q = db.query(ApInvoice).filter(
         ApInvoice.tenant_id == workspace_id,
@@ -177,12 +197,19 @@ def list_eligible_invoices(
     out: list[dict[str, Any]] = []
     today = date.today()
     cat_filter = (category or "").strip().lower()
+    prop_filter = (property_id or "").strip().lower()
     for inv in rows:
         if not _is_approved(inv) or not _is_unpaid(inv):
             continue
         cat = _category(inv)
         if cat_filter and cat_filter not in {"all", ""} and cat.lower() != cat_filter:
             continue
+        prop_id = _property_id(inv)
+        prop_label = _property_label(inv) or ""
+        if prop_filter and prop_filter not in {"all", ""}:
+            hay = f"{prop_id or ''} {prop_label}".lower()
+            if prop_filter not in hay:
+                continue
         gross = _f(inv.total_amount)
         vat = _vat_amount(inv)
         out.append(
@@ -198,6 +225,8 @@ def list_eligible_invoices(
                 "days_overdue": _days_overdue(inv.due_date, today),
                 "discount_available": _discount_available(inv),
                 "category": cat,
+                "property_id": prop_id,
+                "property_name": prop_label or None,
                 "currency": inv.currency or "AED",
                 "status": inv.status,
                 "payment_status": _payment_status(inv),
@@ -228,6 +257,9 @@ def create_payment_run(
     company_id: str,
     invoice_ids: list[str],
     created_by: str | None,
+    payment_date: date | None = None,
+    bank_account: str | None = None,
+    notes: str | None = None,
 ) -> ApPaymentRun:
     ensure_payment_runs_table()
     ids = [str(i).strip() for i in invoice_ids if str(i).strip()]
@@ -269,6 +301,9 @@ def create_payment_run(
         created_by=created_by,
         created_at=datetime.utcnow(),
         status="draft",
+        payment_date=payment_date or date.today(),
+        bank_account=(bank_account or "").strip() or None,
+        notes=(notes or "").strip() or None,
         total_invoices=len(selected),
         total_net_aed=round(total_net, 2),
         total_vat_aed=round(total_vat, 2),
@@ -277,6 +312,19 @@ def create_payment_run(
         extra={},
     )
     db.add(run)
+    db.flush()
+    for inv in selected:
+        db.add(
+            ApPaymentRunItem(
+                id=str(uuid.uuid4()),
+                payment_run_id=run.id,
+                invoice_id=inv.id,
+                vendor_name=inv.vendor_name,
+                amount_aed=round(_f(inv.total_amount), 2),
+                property_id=_property_id(inv),
+                created_at=datetime.utcnow(),
+            )
+        )
     db.commit()
     db.refresh(run)
     return run
@@ -356,11 +404,16 @@ def run_to_dict(run: ApPaymentRun, invoices: list[ApInvoice] | None = None) -> d
         "executed_at": run.executed_at.isoformat() if run.executed_at else None,
         "status": run.status,
         "rejection_reason": run.rejection_reason,
+        "payment_date": run.payment_date.isoformat() if getattr(run, "payment_date", None) else None,
+        "bank_account": getattr(run, "bank_account", None),
+        "notes": getattr(run, "notes", None),
         "total_invoices": run.total_invoices,
+        "invoice_count": run.total_invoices,
         "vendor_count": vendor_count,
         "total_net_aed": _f(run.total_net_aed),
         "total_vat_aed": _f(run.total_vat_aed),
         "total_gross_aed": _f(run.total_gross_aed),
+        "total_amount_aed": _f(run.total_gross_aed),
         "invoice_ids": list(run.invoice_ids or []),
         "journal_entry_id": run.journal_entry_id,
     }
@@ -373,11 +426,14 @@ def invoice_row_dict(inv: ApInvoice) -> dict[str, Any]:
         "vendor_name": inv.vendor_name,
         "due_date": inv.due_date.isoformat() if inv.due_date else None,
         "amount": _f(inv.total_amount),
+        "amount_aed": _f(inv.total_amount),
         "net_amount": _net_amount(inv),
         "vat_amount": _vat_amount(inv),
         "days_overdue": _days_overdue(inv.due_date),
         "discount_available": _discount_available(inv),
         "category": _category(inv),
+        "property_id": _property_id(inv),
+        "property_name": _property_label(inv),
         "status": inv.status,
         "payment_status": _payment_status(inv),
         "currency": inv.currency or "AED",
@@ -398,6 +454,10 @@ def submit_run(db: Session, run: ApPaymentRun) -> ApPaymentRun:
 def approve_run(db: Session, run: ApPaymentRun, *, approved_by: str | None) -> ApPaymentRun:
     if run.status != "pending_approval":
         raise ValueError("Only PENDING_APPROVAL runs can be approved")
+    actor = (approved_by or "").strip().lower()
+    creator = (run.created_by or "").strip().lower()
+    if actor and creator and actor == creator:
+        raise ValueError("Maker-checker: approver must be different from the creator")
     run.status = "approved"
     run.approved_by = approved_by
     run.approved_at = datetime.utcnow()
@@ -405,6 +465,64 @@ def approve_run(db: Session, run: ApPaymentRun, *, approved_by: str | None) -> A
     db.commit()
     db.refresh(run)
     return run
+
+
+def cancel_run(db: Session, run: ApPaymentRun, *, cancelled_by: str | None = None) -> ApPaymentRun:
+    if run.status in {"executed", "cancelled"}:
+        raise ValueError("Executed or already cancelled runs cannot be cancelled")
+    run.status = "cancelled"
+    ex = run.extra if isinstance(run.extra, dict) else {}
+    ex = dict(ex or {})
+    ex["cancelled_by"] = cancelled_by
+    ex["cancelled_at"] = datetime.utcnow().isoformat()
+    run.extra = ex
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def monthly_dashboard_stats(
+    db: Session,
+    *,
+    workspace_id: str,
+    company_id: str,
+    as_of: date | None = None,
+) -> dict[str, Any]:
+    ensure_payment_runs_table()
+    today = as_of or date.today()
+    month_start = today.replace(day=1)
+    week_end = today + timedelta(days=(6 - today.weekday()))
+    runs = (
+        db.query(ApPaymentRun)
+        .filter(
+            ApPaymentRun.workspace_id == workspace_id,
+            ApPaymentRun.company_id == company_id,
+        )
+        .all()
+    )
+    executed = 0
+    total_paid = 0.0
+    pending = 0
+    scheduled_week = 0
+    for run in runs:
+        st = str(run.status or "").lower()
+        created = run.created_at.date() if run.created_at else None
+        pay_d = run.payment_date if getattr(run, "payment_date", None) else created
+        if st == "executed" and run.executed_at and run.executed_at.date() >= month_start:
+            executed += 1
+            total_paid += _f(run.total_gross_aed)
+        if st == "pending_approval":
+            pending += 1
+        if st in {"draft", "pending_approval", "approved"} and pay_d and today <= pay_d <= week_end:
+            scheduled_week += 1
+    return {
+        "runs_executed": executed,
+        "total_paid_aed": round(total_paid, 2),
+        "pending_approval": pending,
+        "scheduled_this_week": scheduled_week,
+        "month": month_start.strftime("%Y-%m"),
+    }
 
 
 def reject_run(

@@ -19,6 +19,7 @@ import { formatCurrency } from '../../../utils/currency';
 import {
   approvePaymentRun,
   bankFileUrl,
+  cancelPaymentRun,
   downloadAuthenticated,
   executePaymentRun,
   getPaymentRun,
@@ -33,6 +34,7 @@ const statusBadge: Record<string, string> = {
   pending_approval: 'bg-amber-100 text-amber-800 border-amber-200',
   approved: 'bg-blue-100 text-blue-800 border-blue-200',
   executed: 'bg-green-100 text-green-800 border-green-200',
+  cancelled: 'bg-red-100 text-red-800 border-red-200',
   rejected: 'bg-red-100 text-red-800 border-red-200',
 };
 
@@ -139,11 +141,23 @@ export default function PaymentRunDetail() {
             <p className="font-medium">{status.toUpperCase()}</p>
           </div>
           <div>
+            <p className="text-slate-500">Payment date</p>
+            <p className="font-medium">{run.payment_date || '—'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Bank account</p>
+            <p className="font-medium">{run.bank_account || '—'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500">Approved by</p>
+            <p className="font-medium">{run.approved_by || '—'}</p>
+          </div>
+          <div>
             <p className="text-slate-500">Total invoices</p>
             <p className="font-medium">{run.total_invoices}</p>
           </div>
           <div>
-            <p className="text-slate-500">Total amount</p>
+            <p className="text-slate-500">Total amount AED</p>
             <p className="font-medium">{formatCurrency(Number(run.total_gross_aed || 0), 'AED')}</p>
           </div>
           <div>
@@ -154,6 +168,12 @@ export default function PaymentRunDetail() {
             <p className="text-slate-500">Journal</p>
             <p className="font-medium text-xs break-all">{run.journal_entry_id || '—'}</p>
           </div>
+          {run.notes ? (
+            <div className="sm:col-span-2 lg:col-span-4">
+              <p className="text-slate-500">Notes</p>
+              <p className="font-medium">{run.notes}</p>
+            </div>
+          ) : null}
           {run.rejection_reason ? (
             <div className="sm:col-span-2 lg:col-span-4 text-red-700">
               Rejection reason: {run.rejection_reason}
@@ -200,16 +220,28 @@ export default function PaymentRunDetail() {
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3 items-end">
           {status === 'draft' && (
-            <Button
-              disabled={busy}
-              onClick={() => void act(() => submitPaymentRun(run.id), 'Submitted for approval')}
-            >
-              Submit for Approval
-            </Button>
+            <>
+              <Button
+                disabled={busy}
+                onClick={() => void act(() => submitPaymentRun(run.id), 'Submitted for approval')}
+              >
+                Submit for Approval
+              </Button>
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => void act(() => cancelPaymentRun(run.id), 'Payment run cancelled')}
+              >
+                Cancel run
+              </Button>
+            </>
           )}
 
           {status === 'pending_approval' && (
             <>
+              <p className="w-full text-xs text-slate-500">
+                Maker-checker: approver must be a different user than {run.created_by || 'the creator'}.
+              </p>
               <Button
                 disabled={busy}
                 onClick={() => void act(() => approvePaymentRun(run.id), 'Payment run approved')}

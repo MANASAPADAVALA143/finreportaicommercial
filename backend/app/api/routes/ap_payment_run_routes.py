@@ -71,6 +71,9 @@ class CreateRunIn(BaseModel):
     invoice_ids: list[str] = Field(..., min_length=1)
     workspace_id: str
     company_id: str
+    payment_date: Optional[str] = None
+    bank_account: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class RejectIn(BaseModel):
@@ -122,6 +125,7 @@ def list_eligible(
     amount_min: Optional[float] = Query(None),
     amount_max: Optional[float] = Query(None),
     category: Optional[str] = Query(None),
+    property_id: Optional[str] = Query(None),
     x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
@@ -147,6 +151,7 @@ def list_eligible(
         amount_min=amount_min,
         amount_max=amount_max,
         category=category,
+        property_id=property_id,
     )
     categories = sorted({str(i.get("category") or "Uncategorized") for i in invoices})
     return {
@@ -160,6 +165,22 @@ def list_eligible(
     }
 
 
+@router.get("/stats/monthly")
+def payment_run_monthly_stats(
+    request: Request,
+    workspace_id: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    ws = _ws(request, workspace_id, x_workspace_id)
+    cid = _company(request, company_id, x_company_id)
+    if not ws or not cid:
+        raise HTTPException(status_code=400, detail="workspace_id and company_id required")
+    return svc.monthly_dashboard_stats(db, workspace_id=ws, company_id=cid)
+
+
 @router.post("")
 def create_payment_run(
     body: CreateRunIn,
@@ -167,12 +188,16 @@ def create_payment_run(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     try:
+        pay_d = date.fromisoformat(body.payment_date[:10]) if body.payment_date else None
         run = svc.create_payment_run(
             db,
             workspace_id=body.workspace_id.strip(),
             company_id=body.company_id.strip(),
             invoice_ids=body.invoice_ids,
             created_by=_actor(request),
+            payment_date=pay_d,
+            bank_account=body.bank_account,
+            notes=body.notes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -271,6 +296,28 @@ def reject_payment_run(
         raise HTTPException(status_code=404, detail="Payment run not found")
     try:
         run = svc.reject_run(db, run, reason=body.reason, rejected_by=_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return svc.run_to_dict(run, svc.invoices_for_run(db, run))
+
+
+@router.post("/{run_id}/cancel")
+def cancel_payment_run(
+    run_id: str,
+    request: Request,
+    workspace_id: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    ws = _ws(request, workspace_id, x_workspace_id)
+    cid = _company(request, company_id, x_company_id) or None
+    run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
+    if not run:
+        raise HTTPException(status_code=404, detail="Payment run not found")
+    try:
+        run = svc.cancel_run(db, run, cancelled_by=_actor(request))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return svc.run_to_dict(run, svc.invoices_for_run(db, run))
