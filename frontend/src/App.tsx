@@ -35,6 +35,7 @@ function GnanovaBanner() {
 
   const showAp = !isAuthenticated || canAccessPath(productRole, '/ap-invoices', user?.role);
   const showGulfTax = !isAuthenticated || canAccessPath(productRole, '/gulftax', user?.role);
+  const showSettings = isAuthenticated && canAccessPath(productRole, '/settings/industry', user?.role);
 
   const handleLogout = async () => {
     try {
@@ -103,6 +104,23 @@ function GnanovaBanner() {
         onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#fcd34d'; }}
       >
         🇦🇪 GulfTax →
+      </a>
+      )}
+      {showSettings && (
+      <a
+        href="/settings/industry"
+        style={{
+          color: '#a5b4fc',
+          textDecoration: 'none',
+          fontWeight: 500,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#c7d2fe'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#a5b4fc'; }}
+      >
+        ⚙️ Industry →
       </a>
       )}
       {isAuthenticated && (

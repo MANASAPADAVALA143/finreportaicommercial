@@ -13,6 +13,7 @@ import {
   ShoppingCart,
   Shield,
   Receipt,
+  Settings,
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
@@ -98,6 +99,14 @@ const UAE_PRIMARY_HUB: DashboardModule[] = [
     badge: 'UAE',
   },
   {
+    icon: <Settings className="w-16 h-16 text-slate-300" />,
+    title: 'Industry & Workspace',
+    description: 'Choose your industry — Real Estate, Construction, Manufacturing, and more',
+    link: '/settings/industry',
+    bgColor: 'bg-slate-500/10',
+    badge: 'Settings',
+  },
+  {
     icon: <BarChart3 className="w-16 h-16 text-green-400" />,
     title: 'FP&A Suite',
     description: 'Comprehensive planning, budgeting, and forecasting',
@@ -130,6 +139,14 @@ const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
     link: '/gulftax/e-invoicing',
     bgColor: 'bg-blue-500/10',
     badge: 'Peppol',
+  },
+  {
+    icon: <Settings className="w-14 h-14 text-slate-300" />,
+    title: 'Industry & Workspace',
+    description: 'Choose Real Estate, Construction, etc. — labels and cost centers update for your industry',
+    link: '/settings/industry',
+    bgColor: 'bg-slate-500/10',
+    badge: 'Settings',
   },
 ];
 
