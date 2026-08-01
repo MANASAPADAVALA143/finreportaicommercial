@@ -354,23 +354,6 @@ def sync_classifier_transaction_to_gulftax(
         return {"ok": False, "error": "missing_classifier_txn_id"}
 
     ap_id = _classifier_ap_invoice_id(txn_id)
-    existing = (
-        db.query(GulftaxTransaction)
-        .filter(
-            GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
-            GulftaxTransaction.ap_invoice_id == ap_id,
-        )
-        .first()
-    )
-    if existing:
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": "already_synced",
-            "transaction_id": existing.id,
-        }
-
-    # Secondary dedupe: same company + invoice_number + direction + period
     finreport_cid, tenant_from_company = _finreport_ids_from_ported_company(ported_company)
     company_id = finreport_cid or str(getattr(classifier_txn, "company_id", "") or "")
     tenant_id = (workspace_id or "").strip() or tenant_from_company or company_id
@@ -378,6 +361,8 @@ def sync_classifier_transaction_to_gulftax(
         return {"ok": False, "error": "company_id_or_tenant_missing"}
 
     tx_type = (getattr(classifier_txn, "transaction_type", None) or "purchase").lower()
+    if tx_type not in ("sale", "purchase"):
+        tx_type = "purchase"
     direction = "output" if tx_type == "sale" else "input"
 
     tx_date = getattr(classifier_txn, "date", None) or date.today()
@@ -397,7 +382,51 @@ def sync_classifier_transaction_to_gulftax(
 
     tax_period = tax_period_for_date(tx_date, filing)
     inv_no = (getattr(classifier_txn, "invoice_number", None) or "").strip() or None
-    # Dedupe: invoice_number + source + company_id (do not skip when AP/AR has same invoice #)
+
+    net = round(float(getattr(classifier_txn, "amount_aed", 0) or 0), 2)
+    vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
+    gross = round(net + vat, 2) if vat > 0 else net
+
+    # Hard rule for all tenants: purchase→box9, sale→box1
+    fta_box = "box1" if tx_type == "sale" else "box9"
+    vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
+    vat_category = _norm_treatment(vat_treatment)
+
+    existing = (
+        db.query(GulftaxTransaction)
+        .filter(
+            GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
+            GulftaxTransaction.ap_invoice_id == ap_id,
+        )
+        .first()
+    )
+    if existing:
+        changed = False
+        if (existing.fta_box or "").lower() != fta_box:
+            existing.fta_box = fta_box
+            changed = True
+        if (existing.direction or "").lower() != direction:
+            existing.direction = direction
+            changed = True
+        if changed:
+            db.add(existing)
+            db.commit()
+            db.refresh(existing)
+            return {
+                "ok": True,
+                "updated": True,
+                "reason": "corrected_box_or_direction",
+                "transaction_id": existing.id,
+                "fta_box": fta_box,
+            }
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "already_synced",
+            "transaction_id": existing.id,
+        }
+
+    # Secondary dedupe: same company + invoice_number + classifier source
     if inv_no:
         dup = (
             db.query(GulftaxTransaction)
@@ -409,29 +438,30 @@ def sync_classifier_transaction_to_gulftax(
             .first()
         )
         if dup:
+            changed = False
+            if (dup.fta_box or "").lower() != fta_box:
+                dup.fta_box = fta_box
+                changed = True
+            if (dup.direction or "").lower() != direction:
+                dup.direction = direction
+                changed = True
+            if changed:
+                db.add(dup)
+                db.commit()
+                db.refresh(dup)
+                return {
+                    "ok": True,
+                    "updated": True,
+                    "reason": "corrected_duplicate_box",
+                    "transaction_id": dup.id,
+                    "fta_box": fta_box,
+                }
             return {
                 "ok": True,
                 "skipped": True,
                 "reason": "duplicate_invoice_number",
                 "transaction_id": dup.id,
             }
-
-    net = round(float(getattr(classifier_txn, "amount_aed", 0) or 0), 2)
-    vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
-    gross = round(net + vat, 2) if vat > 0 else net
-
-    # Hard box rule: purchase→9, sale→1 (prefer stored classifier box_number when set)
-    box_num = getattr(classifier_txn, "box_number", None)
-    try:
-        box_num_i = int(box_num) if box_num is not None else None
-    except (TypeError, ValueError):
-        box_num_i = None
-    if box_num_i in (1, 9):
-        fta_box = f"box{box_num_i}"
-    else:
-        fta_box = "box1" if direction == "output" else "box9"
-    vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
-    vat_category = _norm_treatment(vat_treatment)
 
     try:
         gt = GulftaxTransaction(
@@ -496,6 +526,8 @@ def sync_approved_classifier_transactions_to_gulftax(
                 )
                 if result.get("ok") and result.get("skipped"):
                     skipped += 1
+                elif result.get("ok") and result.get("updated"):
+                    synced += 1
                 elif result.get("ok"):
                     synced += 1
                 else:

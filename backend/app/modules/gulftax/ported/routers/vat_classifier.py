@@ -190,7 +190,7 @@ def _save_classification_fields(
 
 
 def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
-    """Enforce purchase→Box 9 / sale→Box 1 (incl. AKK Consulting by transaction type)."""
+    """Enforce purchase→Box 9 / sale→Box 1 for every tenant (incl. AKK Consulting)."""
     akk_fixed = 0
     purchase_box_fixed = 0
     fixed_txns: List[Transaction] = []
@@ -201,28 +201,18 @@ def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
         if side not in ("sale", "purchase"):
             side = "purchase"
             t.transaction_type = "purchase"
-        expected = 1 if side == "sale" else 9
+        expected = coerce_box_number(side, t.vat_treatment, t.box_number)
         vendor = (t.vendor_or_customer or "").lower()
 
-        # AKK: map by type (purchase→9, sale→1) — do not force type
-        if "akk consulting" in vendor:
-            if t.box_number != expected:
-                t.box_number = expected
-                akk_fixed += 1
-                if t not in fixed_txns:
-                    fixed_txns.append(t)
-            continue
-
         if t.box_number != expected:
-            # Only auto-fix standard output/input mixups (1 vs 9)
-            if (side == "purchase" and t.box_number in (1, 2, 3, 4)) or (
-                side == "sale" and t.box_number in (7, 9, 10, 11)
-            ):
-                t.box_number = expected
-                if t not in fixed_txns:
-                    fixed_txns.append(t)
-                    if side == "purchase":
-                        purchase_box_fixed += 1
+            prev = t.box_number
+            t.box_number = expected
+            if t not in fixed_txns:
+                fixed_txns.append(t)
+            if "akk consulting" in vendor:
+                akk_fixed += 1
+            elif side == "purchase" or prev in (1, 2, 3, 4):
+                purchase_box_fixed += 1
 
     return {
         "akk_fixed": akk_fixed,
