@@ -222,6 +222,29 @@ export async function setTenantIndustry(industry: string): Promise<IndustryConfi
       body,
     });
   }
+  // Backend not redeployed yet — apply seeded preview so UI is usable
+  if (res.status === 404) {
+    const key = industry.trim().toLowerCase().replace(/\s+/g, '_');
+    const preview = INDUSTRY_PREVIEW[key] || INDUSTRY_PREVIEW.general;
+    const card = INDUSTRY_CARDS.find((c) => c.key === key);
+    return {
+      ...DEFAULT_INDUSTRY_CONFIG,
+      industry: key,
+      industry_label: card?.label || DEFAULT_INDUSTRY_CONFIG.industry_label,
+      cost_center_label: preview.costCenterLabel,
+      cost_center_placeholder: `Select ${preview.costCenterLabel.split('/')[0].trim().toLowerCase()}...`,
+      ap_label: preview.apLabel,
+      ar_label: preview.arLabel,
+      sidebar_theme: key,
+      show_ifrs15: preview.showIfrs15,
+      show_ifrs16: preview.showIfrs16,
+      show_rera: preview.showRera,
+      show_ejari: preview.showRera,
+      show_property_tagging: true,
+      show_site_tagging: key === 'construction',
+      workspace_industry: key,
+    };
+  }
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
