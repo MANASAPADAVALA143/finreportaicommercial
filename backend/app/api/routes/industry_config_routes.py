@@ -516,3 +516,4 @@ def delete_cost_center(
     db.add(row)
     db.commit()
     return {"ok": True, "id": cost_center_id}
+ # force Railway backend redeploy
