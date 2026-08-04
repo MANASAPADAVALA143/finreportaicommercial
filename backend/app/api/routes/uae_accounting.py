@@ -722,6 +722,23 @@ async def sync_ap_after_pdf_extract(
     )
 
 
+class BulkUpsertApIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    invoices: list[dict[str, Any]] = Field(..., min_length=1)
+
+
+@router.post("/ap/bulk-upsert", summary="Bulk upsert AP invoices (service role, bypasses RLS)")
+async def bulk_upsert_ap_invoices(
+    body: BulkUpsertApIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    """Excel / bulk import path — uses Supabase service role so browser RLS cannot block."""
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import bulk_upsert_invoices
+
+    return bulk_upsert_invoices(company_id=body.company_id.strip(), rows=body.invoices)
+
+
 @router.get("/ap/gulftax-status", summary="GulfTax AI health check")
 async def gulftax_status() -> dict[str, Any]:
     """

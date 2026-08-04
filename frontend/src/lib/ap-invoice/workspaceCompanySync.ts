@@ -100,10 +100,33 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
     markSyncFailed(workspaceId, 0, 'VITE_API_URL not set');
     return null;
   }
+
+  // Supabase auth user must be in company_members for invoices RLS inserts
+  let supabaseUserId: string | null = null;
+  let email: string | null = null;
+  let name: string | null = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    supabaseUserId = data.user?.id ?? null;
+    email = data.user?.email ?? null;
+    const meta = data.user?.user_metadata as Record<string, unknown> | undefined;
+    name = typeof meta?.name === 'string' ? meta.name : email;
+  } catch {
+    /* ignore */
+  }
+
   const res = await fetch(`${base}/api/workspaces/${workspaceId}/sync-ap-company`, {
     method: 'POST',
-    headers: workspaceHeaders(token),
+    headers: {
+      ...workspaceHeaders(token),
+      'Content-Type': 'application/json',
+    },
     credentials: 'include',
+    body: JSON.stringify({
+      supabase_user_id: supabaseUserId,
+      email,
+      name,
+    }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
@@ -114,6 +137,16 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
   if (body.company?.id) {
     cacheCompany(workspaceId, body.company);
     clearCompanyCache();
+    // Align JWT active_company_id so get_effective_company_id() matches inserts
+    if (supabaseUserId) {
+      try {
+        await supabase.auth.updateUser({
+          data: { active_company_id: body.company.id },
+        });
+      } catch (e) {
+        console.warn('[AP] could not set active_company_id metadata:', e);
+      }
+    }
     return body.company;
   }
   markSyncFailed(workspaceId, 502, 'empty company payload');
@@ -214,6 +247,37 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
     }
   })();
 
+  return _syncInFlight;
+}
+
+/**
+ * Force company sync + company_members for the current Supabase user.
+ * Call before Excel / PDF bulk inserts so invoices RLS WITH CHECK passes.
+ */
+export async function ensureApMembershipForUpload(
+  accessToken?: string | null,
+): Promise<Company | null> {
+  const token = accessToken ?? _accessToken;
+  const workspaceId = getStoredWorkspaceId();
+  if (!workspaceId || !token) {
+    return ensureApCompanySynced(accessToken);
+  }
+  delete _failedUntilByWorkspace[workspaceId];
+  if (_syncInFlight) {
+    await _syncInFlight.catch(() => null);
+  }
+  setSyncStatus('syncing');
+  _syncInFlight = (async () => {
+    try {
+      return await syncViaBackend(workspaceId, token);
+    } catch (e) {
+      console.warn('[AP] ensureApMembershipForUpload:', e);
+      markSyncFailed(workspaceId, 0, e instanceof Error ? e.message : String(e));
+      return findCompanyByWorkspaceId(workspaceId);
+    } finally {
+      _syncInFlight = null;
+    }
+  })();
   return _syncInFlight;
 }
 

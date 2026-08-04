@@ -91,8 +91,83 @@ def _link_orphan_company(sb: Any, ws: Workspace, ws_id: str) -> dict[str, Any] |
         return None
 
 
-def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
-    """Upsert a Supabase companies row linked to this workspace. Uses service role (bypasses RLS)."""
+def _ensure_company_config(sb: Any, company_id: str) -> None:
+    try:
+        sb.table("company_config").upsert({"company_id": company_id}, on_conflict="company_id").execute()
+    except Exception as exc:
+        logger.warning("company_config upsert failed for %s: %s", company_id, exc)
+
+
+def ensure_company_member(
+    company_id: str,
+    user_id: str,
+    *,
+    role: str = "admin",
+    email: str | None = None,
+    name: str | None = None,
+) -> bool:
+    """Add (or reactivate) auth user as company_members row — required for invoices RLS inserts."""
+    if not company_id or not user_id:
+        return False
+    try:
+        sb = get_supabase()
+    except RuntimeError:
+        return False
+
+    role_ok = role if role in (
+        "super_admin", "owner", "admin", "finance_manager", "approver", "viewer"
+    ) else "admin"
+    row: dict[str, Any] = {
+        "company_id": company_id,
+        "user_id": user_id,
+        "role": role_ok,
+        "is_active": True,
+        "joined_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+    }
+    if email:
+        row["email"] = email
+    if name:
+        row["name"] = name
+
+    try:
+        sb.table("company_members").upsert(row, on_conflict="company_id,user_id").execute()
+        logger.info("Ensured company_members company=%s user=%s", company_id, user_id)
+        return True
+    except Exception as exc:
+        logger.warning("company_members upsert failed: %s — trying insert", exc)
+        try:
+            existing = (
+                sb.table("company_members")
+                .select("id")
+                .eq("company_id", company_id)
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                sb.table("company_members").update(
+                    {"is_active": True, "role": role_ok}
+                ).eq("company_id", company_id).eq("user_id", user_id).execute()
+                return True
+            sb.table("company_members").insert(row).execute()
+            return True
+        except Exception as exc2:
+            logger.exception("company_members ensure failed: %s", exc2)
+            return False
+
+
+def sync_ap_company_for_workspace(
+    ws: Workspace,
+    *,
+    supabase_user_id: str | None = None,
+    user_email: str | None = None,
+    user_name: str | None = None,
+) -> dict[str, Any] | None:
+    """Upsert a Supabase companies row linked to this workspace. Uses service role (bypasses RLS).
+
+    When supabase_user_id is provided, also ensures company_members so browser inserts
+    (Excel upload) pass invoices RLS.
+    """
     try:
         sb = get_supabase()
     except RuntimeError as exc:
@@ -100,6 +175,7 @@ def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
         return None
 
     ws_id = ws.id
+    company: dict[str, Any] | None = None
     try:
         existing = (
             sb.table("companies")
@@ -109,56 +185,63 @@ def sync_ap_company_for_workspace(ws: Workspace) -> dict[str, Any] | None:
             .execute()
         )
         if existing.data:
-            return _apply_uae_market(sb, ws, existing.data)
+            company = _apply_uae_market(sb, ws, existing.data)
     except Exception as exc:
         logger.warning("companies lookup by workspace_id failed (%s): %s", ws_id, exc)
 
-    linked = _link_orphan_company(sb, ws, ws_id)
-    if linked:
-        return linked
+    if not company:
+        linked = _link_orphan_company(sb, ws, ws_id)
+        if linked:
+            company = linked
 
-    slug = f"{_slugify(ws.name)}-{ws_id[:8]}"
-    country = (ws.country or "").lower()
-    market = "uae" if country in ("uae", "ae") else "india"
+    if not company:
+        slug = f"{_slugify(ws.name)}-{ws_id[:8]}"
+        country = (ws.country or "").lower()
+        market = "uae" if country in ("uae", "ae") else "india"
 
-    row: dict[str, Any] = {
-        "name": ws.name,
-        "slug": slug,
-        "industry": ws.industry or "general",
-        "accounting_standard": "IFRS",
-        "market": market,
-        "subscription_tier": "starter",
-        "subscription_status": "trial",
-        "max_invoices_per_month": 100,
-        "max_users": 5,
-        "workspace_id": ws_id,
-    }
+        row: dict[str, Any] = {
+            "name": ws.name,
+            "slug": slug,
+            "industry": ws.industry or "general",
+            "accounting_standard": "IFRS",
+            "market": market,
+            "subscription_tier": "starter",
+            "subscription_status": "trial",
+            "max_invoices_per_month": 100,
+            "max_users": 5,
+            "workspace_id": ws_id,
+        }
 
-    try:
-        inserted = sb.table("companies").insert(row).execute()
-        if inserted.data:
-            company = inserted.data[0]
-            _ensure_company_config(sb, company["id"])
-            return company
-    except Exception as exc:
-        logger.warning("companies insert failed (%s): %s", ws_id, exc)
-        # Race on slug — re-fetch
         try:
-            retry = (
-                sb.table("companies")
-                .select("*")
-                .eq("workspace_id", ws_id)
-                .maybe_single()
-                .execute()
-            )
-            if retry.data:
-                return retry.data
-        except Exception:
-            pass
+            inserted = sb.table("companies").insert(row).execute()
+            if inserted.data:
+                company = inserted.data[0]
+                _ensure_company_config(sb, company["id"])
+        except Exception as exc:
+            logger.warning("companies insert failed (%s): %s", ws_id, exc)
+            try:
+                retry = (
+                    sb.table("companies")
+                    .select("*")
+                    .eq("workspace_id", ws_id)
+                    .maybe_single()
+                    .execute()
+                )
+                if retry.data:
+                    company = retry.data
+            except Exception:
+                pass
 
-    return None
+    if company and supabase_user_id:
+        ensure_company_member(
+            str(company["id"]),
+            supabase_user_id,
+            role="admin",
+            email=user_email,
+            name=user_name,
+        )
 
-
+    return company
 def upsert_ap_company_rds(db: Session, workspace: Workspace, company: dict[str, Any]) -> ApCompany:
     """Mirror Supabase companies row into RDS ap_companies (same id)."""
     cid = str(company["id"])
@@ -182,10 +265,3 @@ def upsert_ap_company_rds(db: Session, workspace: Workspace, company: dict[str, 
     db.commit()
     db.refresh(row)
     return row
-
-
-def _ensure_company_config(sb: Any, company_id: str) -> None:
-    try:
-        sb.table("company_config").upsert({"company_id": company_id}, on_conflict="company_id").execute()
-    except Exception as exc:
-        logger.warning("company_config upsert failed for %s: %s", company_id, exc)

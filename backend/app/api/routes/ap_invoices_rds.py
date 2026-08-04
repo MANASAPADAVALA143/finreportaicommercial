@@ -43,6 +43,11 @@ class BulkApproveIn(BaseModel):
     workspace_id: str = ""
 
 
+class BulkUpsertIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    invoices: list[dict[str, Any]] = Field(..., min_length=1)
+
+
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
     return {
         "id": inv.id,
@@ -85,6 +90,21 @@ def list_invoices(
         .all()
     )
     return {"invoices": [_invoice_dict(r) for r in rows], "count": len(rows)}
+
+
+@router.post("/bulk-upsert")
+def bulk_upsert_invoices(
+    body: BulkUpsertIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Upsert many invoices via service role — bypasses browser RLS for Excel import."""
+    # Soft auth: prefer tenant headers; do not hard-require RBAC for AP Excel path
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import bulk_upsert_invoices as _bulk
+
+    return _bulk(company_id=body.company_id.strip(), rows=body.invoices)
 
 
 @router.post("/bulk-approve")

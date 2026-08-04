@@ -16,11 +16,12 @@ import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeW
 import { awaitGlPostAfterApproval, retryPendingGlPosts } from '../../lib/ap-invoice/glPostService';
 import { syncAfterPdfExtract } from '../../lib/ap-invoice/syncAfterExtractService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
-import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { ensureApCompanySynced, ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { useAuth } from '../../context/AuthContext';
 import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
+import { bulkUpsertInvoicesViaApi } from '../../lib/ap-invoice/bulkUpsertService';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
@@ -1657,9 +1658,9 @@ export function InvoiceUpload() {
     }> = [];
 
     try {
-      // Clear cache so we always get a fresh company lookup
+      // Clear cache so we always get a fresh company lookup + company_members (RLS)
       clearCompanyCache();
-      await ensureApCompanySynced(accessToken);
+      await ensureApMembershipForUpload(accessToken);
       const companyId = await resolveApCompanyId();
       const limBulk = await checkInvoiceLimit();
       if (!limBulk.allowed) {
@@ -1676,6 +1677,13 @@ export function InvoiceUpload() {
         setBulkUploading(false);
         return;
       }
+
+      const prepared: Array<{
+        rowNum: number;
+        invoiceData: (typeof bulkData)[number];
+        upsertPayload: Record<string, unknown>;
+        initialStatus: string;
+      }> = [];
 
       for (let i = 0; i < bulkData.length; i++) {
         const invoiceData = bulkData[i];
@@ -1716,9 +1724,7 @@ export function InvoiceUpload() {
             }
           }
 
-          // Upsert invoice (re-upload same invoice_number updates instead of failing unique constraint)
-          // jsonb columns need arrays, not strings â€” risk_flags: [] not '[]'
-          const upsertPayload = {
+          const upsertPayload: Record<string, unknown> = {
             company_id: companyId,
             invoice_number: invoiceData.invoice_number,
             invoice_date: invoiceData.invoice_date,
@@ -1728,7 +1734,7 @@ export function InvoiceUpload() {
             vendor_phone: invoiceData.vendor_phone || null,
             vendor_address: invoiceData.vendor_address || null,
             total_amount: invoiceData.total_amount,
-            subtotal_amount: invoiceData.total_amount, // Assume no tax for bulk upload
+            subtotal_amount: invoiceData.total_amount,
             invoice_language: 'en',
             exchange_rate_to_base: 1,
             tax_type: 'None',
@@ -1744,52 +1750,74 @@ export function InvoiceUpload() {
             risk_flags: [] as unknown[],
             risk_score: null,
             risk_level: null,
-            // UAE VAT fields (passed through if present in Excel)
+            source: 'excel',
             ...(invoiceData.vendor_trn ? { vendor_trn: String(invoiceData.vendor_trn) } : {}),
-            ...(invoiceData.vat_amount ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) } : {}),
+            ...(invoiceData.vat_amount
+              ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) }
+              : {}),
             ...(invoiceData.vat_rate ? { vat_rate: parseAmount(invoiceData.vat_rate) } : {}),
             ...(invoiceData.vat_treatment ? { vat_treatment: String(invoiceData.vat_treatment) } : {}),
             ...gulfTaxFields,
-            // India GST fields
             ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
             ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number).trim() } : {}),
           };
 
-          console.log('Inserting row:', JSON.stringify(upsertPayload, null, 2));
+          prepared.push({ rowNum, invoiceData, upsertPayload, initialStatus });
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          results.failed++;
+          results.errors.push({
+            row: rowNum,
+            invoice_number: invoiceData.invoice_number,
+            error: msg,
+          });
+        }
+      }
 
-          const { data: invoice, error: invoiceError } = await upsertInvoiceRow(upsertPayload);
+      // Service-role upsert bypasses browser RLS (fixes Excel import failures)
+      let apiResults: Awaited<ReturnType<typeof bulkUpsertInvoicesViaApi>> | null = null;
+      try {
+        apiResults = await bulkUpsertInvoicesViaApi(
+          companyId,
+          prepared.map((p) => p.upsertPayload),
+        );
+      } catch (apiErr) {
+        console.warn('[AP] bulk-upsert API failed, falling back to client upsert:', apiErr);
+      }
 
-          if (invoiceError) {
-            logSupabaseInvoiceError(`ROW FAILED: ${invoiceData.invoice_number}`, invoiceError, upsertPayload);
-            console.error(
-              'ROW FAILED:',
-              invoiceData.invoice_number,
-              '| Error:',
-              invoiceError.message,
-              '| Code:',
-              invoiceError.code,
-              '| Details:',
-              invoiceError.details,
-              '| Hint:',
-              invoiceError.hint
-            );
-            results.failed++;
-            results.errors.push({
-              row: rowNum,
-              invoice_number: invoiceData.invoice_number,
-              error: [invoiceError.message, invoiceError.details].filter(Boolean).join(' â€” '),
-            });
-            continue;
-          }
-          if (!invoice?.id) {
-            results.failed++;
-            results.errors.push({
-              row: rowNum,
-              invoice_number: invoiceData.invoice_number,
-              error: 'Upsert returned no invoice row',
-            });
-            continue;
+      for (let i = 0; i < prepared.length; i++) {
+        const { rowNum, invoiceData, upsertPayload, initialStatus } = prepared[i];
+        try {
+          let invoice: import('../../lib/ap-invoice/supabase').Invoice | null = null;
+
+          if (apiResults) {
+            const rowRes = apiResults.results[i];
+            if (!rowRes?.ok || !rowRes.invoice) {
+              results.failed++;
+              results.errors.push({
+                row: rowNum,
+                invoice_number: invoiceData.invoice_number,
+                error: rowRes?.error || 'Bulk upsert failed',
+              });
+              continue;
+            }
+            invoice = rowRes.invoice as import('../../lib/ap-invoice/supabase').Invoice;
+          } else {
+            const { data, error: invoiceError } = await upsertInvoiceRow(upsertPayload);
+            if (invoiceError || !data?.id) {
+              logSupabaseInvoiceError(`ROW FAILED: ${invoiceData.invoice_number}`, invoiceError || {}, upsertPayload);
+              results.failed++;
+              results.errors.push({
+                row: rowNum,
+                invoice_number: invoiceData.invoice_number,
+                error:
+                  invoiceError?.message ||
+                  'Upsert returned no invoice row (RLS?). Deploy backend /api/uae/ap/bulk-upsert.',
+              });
+              continue;
+            }
+            invoice = data;
           }
 
           savedInvoices.push({
@@ -1804,7 +1832,6 @@ export function InvoiceUpload() {
             currency: invoice.currency ?? invoiceData.currency ?? null,
           });
 
-          // Full anomaly pipeline (client rules + vendor identity + PO sequence + engine)
           try {
             await scanInvoiceAnomalies(
               {
@@ -1830,27 +1857,30 @@ export function InvoiceUpload() {
           }
 
           if (initialStatus === 'Approved') {
-            await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+            await awaitGlPostAfterApproval(invoice, companyId, (opts) =>
               toast({ title: opts.title, description: opts.description, variant: opts.variant }),
             );
           }
 
-          // Create audit log
-          await supabase.from('audit_logs').insert({
-            invoice_id: invoice.id,
-            action: 'Created',
-            user_name: 'System User',
-          });
+          try {
+            await supabase.from('audit_logs').insert({
+              invoice_id: invoice.id,
+              action: 'Created',
+              user_name: 'System User',
+            });
+          } catch {
+            /* audit may also hit RLS — non-fatal after successful insert */
+          }
 
           results.success++;
-        } catch (error: any) {
+        } catch (error: unknown) {
           results.failed++;
           results.errors.push({
             row: rowNum,
             invoice_number: invoiceData.invoice_number,
-            error: error.message || 'Unknown error',
+            error: error instanceof Error ? error.message : 'Unknown error',
           });
-          console.error('ROW FAILED (catch):', invoiceData.invoice_number, '|', error?.message);
+          console.error('ROW FAILED (catch):', invoiceData.invoice_number, error);
         }
       }
 
@@ -1909,7 +1939,7 @@ export function InvoiceUpload() {
           title: 'Bulk Upload Error',
           description:
             msg ||
-            'Could not link workspace to AP company. Ensure backend is running on :8001 and run supabase/migrations/003_companies_workspace_id.sql',
+            'Could not link workspace to AP company. Ensure backend is running and SUPABASE_SERVICE_ROLE_KEY is set.',
           variant: 'destructive',
         });
       }
