@@ -32,20 +32,25 @@ def _category_to_vat_treatment(raw: str | None) -> str:
 
 
 def _box_number(fta_box: str | None, vat_treatment: str, transaction_type: str) -> int | None:
+    """Prefer side+treatment mapping; only trust fta_box when it agrees with side."""
+    from app.services.vat_box_mapping import assign_box_number, normalize_transaction_side
+
+    side = normalize_transaction_side(transaction_type)
+    expected = assign_box_number(side, vat_treatment)
     if fta_box:
         digits = "".join(ch for ch in str(fta_box) if ch.isdigit())
         if digits:
             try:
-                return int(digits)
+                parsed = int(digits)
+                # Never keep AR boxes on purchases (or vice versa) from a stale fta_box
+                if side == "purchase" and parsed in (1, 2, 3, 4, 5):
+                    return expected
+                if side == "sale" and parsed in (6, 7, 9, 10, 11):
+                    return expected
+                return parsed
             except ValueError:
                 pass
-    if transaction_type == "sale":
-        return {"standard_rated": 1, "zero_rated": 3, "exempt": 4, "reverse_charge": 3}.get(
-            vat_treatment, 1
-        )
-    return {"standard_rated": 9, "zero_rated": 10, "exempt": 11, "reverse_charge": 10}.get(
-        vat_treatment, 9
-    )
+    return expected
 
 
 def _ported_session() -> Session:
@@ -332,6 +337,45 @@ def _finreport_ids_from_ported_company(ported_company: Any) -> tuple[str, str]:
 
 
 def sync_classifier_transaction_to_gulftax(
+    db: Session | None,
+    classifier_txn: Any = None,
+    *,
+    ported_company: Any | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Insert one approved VAT Classifier transaction into RDS gulftax_transactions.
+
+    Idempotent via source=vat_classifier_approved + deterministic ap_invoice_id.
+    direction: output for sales, input for purchases.
+
+    ``db`` may be omitted — a short-lived SessionLocal is used (single-approve callers).
+    Also accepts legacy keyword-only call: sync_classifier_transaction_to_gulftax(classifier_txn=...).
+    """
+    # Support legacy keyword call without positional db
+    if classifier_txn is None and db is not None and not isinstance(db, Session):
+        classifier_txn = db
+        db = None
+
+    owns_session = False
+    if db is None:
+        from app.core.database import SessionLocal
+
+        db = SessionLocal()
+        owns_session = True
+
+    try:
+        return _sync_classifier_transaction_to_gulftax_impl(
+            db,
+            classifier_txn,
+            ported_company=ported_company,
+            workspace_id=workspace_id,
+        )
+    finally:
+        if owns_session:
+            db.close()
+
+
+def _sync_classifier_transaction_to_gulftax_impl(
     db: Session,
     classifier_txn: Any,
     *,
@@ -363,7 +407,6 @@ def sync_classifier_transaction_to_gulftax(
     tx_type = (getattr(classifier_txn, "transaction_type", None) or "purchase").lower()
     if tx_type not in ("sale", "purchase"):
         tx_type = "purchase"
-    direction = "output" if tx_type == "sale" else "input"
 
     tx_date = getattr(classifier_txn, "date", None) or date.today()
     if isinstance(tx_date, datetime):
@@ -387,10 +430,16 @@ def sync_classifier_transaction_to_gulftax(
     vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
     gross = round(net + vat, 2) if vat > 0 else net
 
-    # Hard rule for all tenants: purchase→box9, sale→box1
-    fta_box = "box1" if tx_type == "sale" else "box9"
+    # Treatment-aware AP/AR box (never force all purchases to box9 / sales to box1 blindly)
+    from app.services.vat_box_mapping import assign_fta_box, direction_for_side, normalize_transaction_side
+
+    side = normalize_transaction_side(tx_type)
+    direction = direction_for_side(side)
     vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
     vat_category = _norm_treatment(vat_treatment)
+    fta_box = assign_fta_box(side, vat_treatment) or (
+        "box1" if side == "sale" else "box9"
+    )
 
     existing = (
         db.query(GulftaxTransaction)

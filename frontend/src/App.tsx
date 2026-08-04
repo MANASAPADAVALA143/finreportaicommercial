@@ -375,6 +375,7 @@ const UAETrialBalanceViewer  = safeLazy(() => import('./pages/uae-accounting/Tri
 const UAEAccountingOverview  = safeLazy(() => import('./pages/uae-accounting/UAEAccountingOverview'));
 const CompanySetupWizard       = safeLazy(() => import('./pages/company-setup/CompanySetupWizard'));
 const CostCentersSettingsPage  = safeLazy(() => import('./pages/settings/CostCentersSettingsPage'));
+const CoaMappingSettingsPage = safeLazy(() => import('./pages/ap-invoices/settings/CoaMappingSettingsPage'));
 const IndustrySelectorPage     = safeLazy(() => import('./pages/settings/IndustrySelector'));
 const ConsolidationPage        = safeLazy(() => import('./pages/consolidation/ConsolidationPage'));
 const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/ChartOfAccounts'));
@@ -685,6 +686,7 @@ function App() {
                   <Route path="integrations"   element={<APIntegrations />} />
                   <Route path="settings"       element={<APSettings />} />
                   <Route path="settings/cost-centers" element={<CostCentersSettingsPage />} />
+                  <Route path="settings/coa-mapping" element={<CoaMappingSettingsPage />} />
                   <Route path="industry"       element={<IndustrySelectorPage />} />
                   <Route path="cfo"            element={<APCFODashboard />} />
                   <Route path="audit-log"      element={<APAuditLog />} />

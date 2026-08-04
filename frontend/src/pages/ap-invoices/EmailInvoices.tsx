@@ -52,7 +52,20 @@ import {
   Loader2,
   Copy,
   Inbox,
+  Zap,
 } from 'lucide-react';
+import { joinApiUrl } from '../../utils/backendOrigin';
+import { getStoredAccessToken } from '../../utils/authToken';
+
+const SES_INTAKE_ADDRESS = 'invoices@finreportai.com';
+
+type SesIntakeStatus = {
+  status: string;
+  pending_emails: number;
+  bucket: string;
+  error?: string;
+  region?: string;
+};
 
 type EmailStatus = 'pending' | 'processing' | 'imported' | 'skipped';
 
@@ -99,8 +112,90 @@ export function EmailInvoices() {
   const [consentChecked, setConsentChecked] = useState(false);
   const [acceptingConsent, setAcceptingConsent] = useState(false);
   const [erasingData, setErasingData] = useState(false);
+  const [sesStatus, setSesStatus] = useState<SesIntakeStatus | null>(null);
+  const [sesLoading, setSesLoading] = useState(false);
+  const [sesTriggering, setSesTriggering] = useState(false);
 
   const emailIntakeWebhookUrl = import.meta.env.VITE_EMAIL_INTAKE_WEBHOOK_URL ?? '';
+
+  const authHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const token = getStoredAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }, []);
+
+  const loadSesStatus = useCallback(async () => {
+    setSesLoading(true);
+    try {
+      const res = await fetch(joinApiUrl('/api/ap/ses-intake/status'), {
+        headers: authHeaders(),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        setSesStatus((await res.json()) as SesIntakeStatus);
+      } else {
+        setSesStatus({ status: 'error', pending_emails: 0, bucket: 'finreportai-email-intake', error: `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setSesStatus({
+        status: 'error',
+        pending_emails: 0,
+        bucket: 'finreportai-email-intake',
+        error: e instanceof Error ? e.message : 'unreachable',
+      });
+    } finally {
+      setSesLoading(false);
+    }
+  }, [authHeaders]);
+
+  const loadSesLogs = useCallback(async () => {
+    try {
+      const companyId = await requireCompanyId();
+      const res = await fetch(
+        joinApiUrl(`/api/ap/ses-intake/logs?company_id=${encodeURIComponent(companyId)}&limit=50`),
+        { headers: authHeaders(), credentials: 'include' },
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as { logs?: EmailIntakeLog[] };
+      if (body.logs && body.logs.length > 0) {
+        setIntakeLog(body.logs);
+      }
+    } catch {
+      /* keep supabase-loaded logs */
+    }
+  }, [authHeaders]);
+
+  async function triggerSesProcess() {
+    setSesTriggering(true);
+    try {
+      const res = await fetch(joinApiUrl('/api/ap/ses-intake/trigger'), {
+        method: 'POST',
+        headers: authHeaders(),
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: 'Processing started', description: 'SES intake is running in the background.' });
+      setTimeout(() => {
+        void loadSesStatus();
+        void loadInboxMonitoring();
+        void loadSesLogs();
+      }, 2500);
+    } catch (e: unknown) {
+      toast({
+        title: 'Trigger failed',
+        description: e instanceof Error ? e.message : 'Could not start processing',
+        variant: 'destructive',
+      });
+    } finally {
+      setSesTriggering(false);
+    }
+  }
+
+  function copyIntakeAddress() {
+    void navigator.clipboard.writeText(SES_INTAKE_ADDRESS);
+    toast({ title: 'Copied', description: SES_INTAKE_ADDRESS });
+  }
 
   const loadConsentStatus = useCallback(async () => {
     try {
@@ -184,7 +279,15 @@ export function EmailInvoices() {
     loadSettings();
     void loadConsentStatus();
     void loadInboxMonitoring();
-  }, [loadInboxMonitoring, loadConsentStatus]);
+    void loadSesStatus();
+    void loadSesLogs();
+    const id = window.setInterval(() => {
+      void loadSesStatus();
+      void loadSesLogs();
+      void loadInboxMonitoring();
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [loadInboxMonitoring, loadConsentStatus, loadSesStatus, loadSesLogs]);
 
   async function loadSettings() {
     try {
@@ -666,11 +769,13 @@ export function EmailInvoices() {
     }
   }
 
-  function intakeStatusBadge(status: EmailIntakeLog['status']) {
+  function intakeStatusBadge(status: EmailIntakeLog['status'] | string) {
     if (status === 'processed')
       return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Processed</Badge>;
     if (status === 'failed')
       return <Badge variant="destructive">Failed</Badge>;
+    if (status === 'pending')
+      return <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Pending</Badge>;
     return <Badge variant="secondary" className="bg-gray-100 text-gray-700">Skipped</Badge>;
   }
 
@@ -690,6 +795,70 @@ export function EmailInvoices() {
           Fetch and process invoices from email attachments
         </p>
       </div>
+
+      {/* SES Email Intake Status */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Email Intake Status</CardTitle>
+              <CardDescription>
+                AWS SES → S3 bucket <code className="text-xs">{sesStatus?.bucket ?? 'finreportai-email-intake'}</code>
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadSesStatus()} disabled={sesLoading}>
+                {sesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Refresh
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
+                onClick={() => void triggerSesProcess()}
+                disabled={sesTriggering}
+              >
+                {sesTriggering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                Process Now
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            {sesStatus?.status === 'connected' ? (
+              <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Connected</Badge>
+            ) : (
+              <Badge variant="destructive">Not Connected</Badge>
+            )}
+            <span className="text-muted-foreground">
+              Pending emails in S3: <strong className="text-gray-900">{sesStatus?.pending_emails ?? '—'}</strong>
+            </span>
+            <span className="text-muted-foreground">
+              Last processed:{' '}
+              <strong className="text-gray-900">
+                {intakeStats.lastReceived ? new Date(intakeStats.lastReceived).toLocaleString() : '—'}
+              </strong>
+            </span>
+          </div>
+          {sesStatus?.error && (
+            <p className="text-sm text-red-600">{sesStatus.error}</p>
+          )}
+          <div className="rounded-lg border bg-slate-50 p-4">
+            <p className="text-sm font-medium text-gray-900">Your invoice intake email:</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <code className="rounded bg-white px-2 py-1 text-sm border">{SES_INTAKE_ADDRESS}</code>
+              <Button type="button" variant="outline" size="sm" onClick={copyIntakeAddress}>
+                <Copy className="h-4 w-4" />
+                Copy
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Ask vendors to email PDF invoices to this address. New mail is polled every 5 minutes.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Email inbox monitoring â€” stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -937,8 +1106,8 @@ export function EmailInvoices() {
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <CardTitle>Recent email intake</CardTitle>
-              <CardDescription>Last 50 events from email_intake_log</CardDescription>
+              <CardTitle>Email Intake Log</CardTitle>
+              <CardDescription>From, subject, attachments — SES + legacy n8n events</CardDescription>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadInboxMonitoring()}>
               <RefreshCw className="h-4 w-4" />
@@ -970,11 +1139,23 @@ export function EmailInvoices() {
                       <TableCell className="whitespace-nowrap text-sm">
                         {new Date(row.received_at).toLocaleString()}
                       </TableCell>
-                      <TableCell className="max-w-[140px] truncate text-sm">{row.from_address ?? 'â€”'}</TableCell>
-                      <TableCell className="max-w-[200px] truncate text-sm">{row.subject ?? 'â€”'}</TableCell>
-                      <TableCell>{row.attachment_count}</TableCell>
+                      <TableCell className="max-w-[140px] truncate text-sm">
+                        {(row as EmailIntakeLog & { from_email?: string }).from_email
+                          ?? row.from_address
+                          ?? '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate text-sm">{row.subject ?? '—'}</TableCell>
+                      <TableCell>
+                        {(row as EmailIntakeLog & { attachments_count?: number }).attachments_count
+                          ?? row.attachment_count}
+                      </TableCell>
                       <TableCell>{row.invoices_created}</TableCell>
-                      <TableCell>{intakeStatusBadge(row.status)}</TableCell>
+                      <TableCell>
+                        {intakeStatusBadge(
+                          (row as EmailIntakeLog & { processing_status?: string }).processing_status
+                            ?? row.status,
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         {row.status === 'processed' && row.invoices_created > 0 ? (
                           <Link

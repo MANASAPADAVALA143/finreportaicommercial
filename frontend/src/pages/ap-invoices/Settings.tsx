@@ -1701,6 +1701,22 @@ export function Settings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-3 text-sm">
+            <p className="font-medium text-gray-900">VAT / IFRS treatment → GL defaults</p>
+            <p className="text-muted-foreground mt-1">
+              Map <code className="text-xs">standard_rated</code>, <code className="text-xs">zero_rated</code>,{' '}
+              <code className="text-xs">blocked</code>, etc. to your account codes (defaults: 2100 / 1810 / 6500).
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => navigate('/ap-invoices/settings/coa-mapping')}
+            >
+              Open Company COA Mapping
+            </Button>
+          </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={downloadCOATemplate}>
               <Download className="mr-2 h-4 w-4" />

@@ -55,7 +55,9 @@ def _sync_invoice_flow_txns_to_gulftax(
         )
         for t in txns:
             side = (t.transaction_type or "purchase").lower()
-            t.box_number = 1 if side == "sale" else 9
+            from app.services.vat_box_mapping import assign_box_number
+
+            t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 0
         if txns:
             db.commit()
         return sync_approved_classifier_transactions_to_gulftax(

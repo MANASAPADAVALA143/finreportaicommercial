@@ -52,27 +52,29 @@ def _norm_treatment(raw: str | None) -> str:
 
 
 def _direction(invoice_type: str | None) -> str:
-    return "output" if (invoice_type or "purchase").lower() == "sales" else "input"
+    from app.services.vat_box_mapping import direction_for_side, normalize_transaction_side
+
+    side = normalize_transaction_side(None, invoice_type=invoice_type)
+    return direction_for_side(side)
 
 
 def _fta_box(vat_category: str, direction: str) -> str:
-    if direction == "output":
-        if vat_category == "standard":
-            return "box1"
-        if vat_category == "zero":
-            return "box4"  # zero-rated supplies (not reverse charge)
-        if vat_category == "exempt":
-            return "box5"
-        if vat_category == "reverse_charge":
-            return "box3"
-        return "box1"
-    if vat_category == "standard":
-        return "box9"
-    if vat_category in ("zero", "reverse_charge"):
-        return "box10"
-    if vat_category == "exempt":
-        return "box5"
-    return "box9"
+    """Map normalized category + direction → fta_box (empty string = no box)."""
+    from app.services.vat_box_mapping import assign_fta_box
+
+    side = "sale" if (direction or "").lower() == "output" else "purchase"
+    # gulftax_sync uses short categories: standard/zero/exempt/...
+    treatment_map = {
+        "standard": "standard_rated",
+        "zero": "zero_rated",
+        "exempt": "exempt",
+        "out_of_scope": "out_of_scope",
+        "reverse_charge": "reverse_charge",
+        "blocked": "blocked",
+    }
+    treatment = treatment_map.get((vat_category or "standard").lower(), vat_category or "standard_rated")
+    box = assign_fta_box(side, treatment, direction=direction)
+    return box or ""
 
 
 def tax_period_for_date(invoice_date: date, filing_frequency: str) -> str:
@@ -472,6 +474,78 @@ def aggregate_vat_return_summary(company_id: str, tax_period: str) -> dict[str, 
         "transaction_count": len(rows),
         "ap_invoiceflow_count": ap_count,
         **summary,
+    }
+
+
+def sync_ap_invoice_gulftax_after_approve(
+    db: "Session",
+    invoice_id: str,
+    company_id: str,
+    *,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Shared AP approve → gulftax_transactions sync (Supabase + RDS).
+
+    Used by single approve (`post_invoice_to_gl_and_tax`) and bulk approve.
+    Idempotent — skips when a posted row already exists for the invoice.
+    """
+    if not invoice_id or not company_id:
+        return {"ok": False, "synced": False, "skipped": False, "error": "invoice_id and company_id required"}
+
+    ws_id = (workspace_id or "").strip() or None
+    sync_result = sync_approved_invoice_to_gulftax(
+        invoice_id,
+        company_id,
+        workspace_id=ws_id,
+    )
+    if not sync_result.get("ok") and not sync_result.get("skipped"):
+        logger.warning(
+            "Supabase GulfTax sync failed for invoice %s: %s",
+            invoice_id,
+            sync_result.get("error", "unknown"),
+        )
+        try:
+            log_sync_failure(
+                invoice_id=invoice_id,
+                company_id=company_id,
+                error=str(sync_result.get("error", "unknown")),
+                workspace_id=ws_id,
+            )
+        except Exception:
+            pass
+
+    rds_result: dict[str, Any] = {"ok": True, "skipped": True}
+    try:
+        from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
+
+        rds_result = sync_ap_invoice_to_rds_gulftax(
+            db,
+            invoice_id,
+            company_id,
+            workspace_id=ws_id,
+        )
+        if not rds_result.get("ok") and not rds_result.get("skipped"):
+            logger.warning(
+                "RDS GulfTax sync failed for invoice %s: %s",
+                invoice_id,
+                rds_result.get("error", "unknown"),
+            )
+    except Exception as exc:
+        logger.exception("RDS GulfTax sync failed for %s", invoice_id)
+        rds_result = {"ok": False, "error": str(exc)}
+
+    sup_new = bool(sync_result.get("ok")) and not bool(sync_result.get("skipped"))
+    rds_new = bool(rds_result.get("ok")) and not bool(rds_result.get("skipped"))
+    either_ok = bool(sync_result.get("ok")) or bool(rds_result.get("ok"))
+    both_skipped = bool(sync_result.get("skipped")) and bool(rds_result.get("skipped"))
+    return {
+        "ok": either_ok,
+        "synced": sup_new or rds_new,
+        "skipped": both_skipped and either_ok,
+        "supabase": sync_result,
+        "rds": rds_result,
+        "error": sync_result.get("error") or rds_result.get("error"),
+        "fta_box": (rds_result.get("fta_box") or sync_result.get("fta_box")),
     }
 
 

@@ -201,17 +201,17 @@ def coerce_box_number(
     vat_treatment: Optional[str] = None,
     box_number: Optional[int] = None,
 ) -> int:
-    """Hard rule for VAT Classifier UI / FTA mapping by side.
+    """Assign FTA box from AP/AR side + VAT treatment.
 
-    purchase → Box 9, sale → Box 1 (always).
-    ``vat_treatment`` / stored ``box_number`` are ignored for this coercion —
-    side alone determines the box so purchase+Box1 cannot persist.
+    Purchase (AP) → Box 9 (or 6 for RCM); sale (AR) → Box 1/4/5 per treatment.
+    Stored ``box_number`` is ignored when it conflicts with side+treatment.
     """
-    del vat_treatment, box_number  # explicit: side wins
-    side = (transaction_type or "purchase").lower()
-    if side == "sale":
-        return 1
-    return 9
+    from app.services.vat_box_mapping import assign_box_number
+
+    del box_number  # side + treatment win
+    n = assign_box_number(transaction_type, vat_treatment)
+    # Classifier UI expects an int; use 0 for "no box" rows
+    return int(n) if n is not None else 0
 
 
 def build_risk_flags(

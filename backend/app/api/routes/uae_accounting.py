@@ -669,6 +669,59 @@ async def post_approved_invoice(
     return post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
 
 
+class BulkApproveApIn(BaseModel):
+    invoice_ids: list[str] = Field(..., min_length=1)
+    company_id: str = ""
+    workspace_id: str = ""
+
+
+@router.post("/ap/bulk-approve", summary="Bulk approve AP invoices + sync GulfTax")
+async def bulk_approve_ap_invoices_uae(
+    body: BulkApproveApIn,
+    tenant_id: str = Depends(_tenant),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Approve many invoices then sync gulftax_transactions via shared helper."""
+    from app.services.ap_invoice_post_service import bulk_approve_ap_invoices
+
+    ws = (body.workspace_id or tenant_id or "").strip()
+    return bulk_approve_ap_invoices(
+        invoice_ids=body.invoice_ids,
+        tenant_id=ws or tenant_id,
+        db=db,
+        company_id=(body.company_id or "").strip(),
+        workspace_id=ws or tenant_id,
+    )
+
+
+class SyncAfterExtractIn(BaseModel):
+    invoice_id: str = Field(..., min_length=1)
+    company_id: str = ""
+    workspace_id: str = ""
+    confidence: float | None = None
+
+
+@router.post(
+    "/ap/sync-after-extract",
+    summary="After PDF/OCR save: auto-sync GulfTax when confidence >= 85%",
+)
+async def sync_ap_after_pdf_extract(
+    body: SyncAfterExtractIn,
+    tenant_id: str = Depends(_tenant),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Call after PDF extraction saves an invoice. Does not change OCR logic."""
+    from app.services.ap_invoice_post_service import maybe_sync_ap_invoice_after_pdf_extract
+
+    return maybe_sync_ap_invoice_after_pdf_extract(
+        invoice_id=body.invoice_id,
+        company_id=(body.company_id or "").strip(),
+        workspace_id=(body.workspace_id or tenant_id or "").strip(),
+        db=db,
+        confidence_override=body.confidence,
+    )
+
+
 @router.get("/ap/gulftax-status", summary="GulfTax AI health check")
 async def gulftax_status() -> dict[str, Any]:
     """

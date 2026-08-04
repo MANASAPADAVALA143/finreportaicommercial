@@ -2,6 +2,7 @@
 AWS S3 configuration for FinReportAI
 UAE bucket  : finreportaiuaeprivate   (eu-central-1 Frankfurt)
 India bucket: finreportai-india-private (ap-south-2 Hyderabad)
+Email intake: finreportai-email-intake (us-west-1)
 """
 from __future__ import annotations
 
@@ -9,6 +10,13 @@ import os
 
 import boto3
 from botocore.exceptions import ClientError
+
+EMAIL_INTAKE_BUCKET = os.getenv(
+    "AWS_S3_BUCKET_EMAIL_INTAKE",
+    "finreportai-email-intake",
+)
+EMAIL_INTAKE_REGION = os.getenv("AWS_SES_REGION", "us-west-1")
+EMAIL_INTAKE_PREFIX = "email-intake/"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -21,6 +29,21 @@ def get_s3_client(country: str = "UAE"):
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         region_name=region,
     )
+
+
+def get_email_intake_s3_client():
+    """S3 client for the email-intake bucket (us-west-1)."""
+    return boto3.client(
+        "s3",
+        region_name=EMAIL_INTAKE_REGION,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    )
+
+
+def get_email_s3_client():
+    """Alias for SES email-intake S3 client."""
+    return get_email_intake_s3_client()
 
 
 def get_bucket_name(country: str = "UAE") -> str:

@@ -87,6 +87,8 @@ export type Invoice = {
   gl_source?: 'company_coa' | 'ifrs_auto' | string | null;
   department: string | null;
   cost_center: string | null;
+  /** Manual property / project tag (free text). */
+  property_ref?: string | null;
   project_code: string | null;
   company_id?: string | null;
   created_at: string;

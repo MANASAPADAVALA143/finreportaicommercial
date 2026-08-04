@@ -90,6 +90,7 @@ function useNavSections(isUAE: boolean, costCenterLabel: string, apLabel: string
         { to: '/ap-invoices/integrations',   label: 'Integrations',       icon: Link2 },
         { to: '/ap-invoices/industry',       label: 'Industry & Workspace', icon: Settings },
         { to: '/ap-invoices/settings/cost-centers', label: `${costCenterLabel}s`, icon: Building2 },
+        { to: '/ap-invoices/settings/coa-mapping', label: 'Company COA Mapping', icon: BookOpen },
         { to: '/ap-invoices/settings',       label: 'Settings',           icon: Settings },
       ],
     },

@@ -190,7 +190,7 @@ def _save_classification_fields(
 
 
 def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
-    """Enforce purchase→Box 9 / sale→Box 1 for every tenant (incl. AKK Consulting)."""
+    """Enforce treatment-aware AP/AR boxes for every tenant (incl. AKK Consulting)."""
     akk_fixed = 0
     purchase_box_fixed = 0
     fixed_txns: List[Transaction] = []
@@ -204,14 +204,16 @@ def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
         expected = coerce_box_number(side, t.vat_treatment, t.box_number)
         vendor = (t.vendor_or_customer or "").lower()
 
-        if t.box_number != expected:
+        # Normalize "no box" sentinel
+        current = t.box_number if t.box_number is not None else 0
+        if current != expected:
             prev = t.box_number
-            t.box_number = expected
+            t.box_number = expected if expected != 0 else None
             if t not in fixed_txns:
                 fixed_txns.append(t)
             if "akk consulting" in vendor:
                 akk_fixed += 1
-            elif side == "purchase" or prev in (1, 2, 3, 4):
+            elif side == "purchase" or prev in (1, 2, 3, 4, 5):
                 purchase_box_fixed += 1
 
     return {
@@ -1397,7 +1399,7 @@ async def bulk_verify_transactions(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
-    """Mark many transactions as verified."""
+    """Mark many transactions as verified and sync to gulftax_transactions."""
     unique_ids = list(dict.fromkeys(body.transaction_ids))
     # Filter by both IDs and company_id — prevents cross-tenant access
     rows = (
@@ -1408,6 +1410,9 @@ async def bulk_verify_transactions(
     if len(rows) != len(unique_ids):
         raise HTTPException(status_code=404, detail="One or more transaction IDs not found")
     for t in rows:
+        t.box_number = coerce_box_number(
+            t.transaction_type or "purchase", t.vat_treatment, t.box_number
+        )
         t.is_verified = True
         _append_verification_history(
             t,
@@ -1424,7 +1429,42 @@ async def bulk_verify_transactions(
     )
     db.commit()
 
-    return {"verified_count": len(rows)}
+    gulftax_synced = 0
+    gulftax_skipped = 0
+    gulftax_errors = 0
+    try:
+        from app.services.vat_classifier_sync_service import (
+            sync_approved_classifier_transactions_to_gulftax,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        fresh = (
+            db.query(Transaction).filter(Transaction.id.in_(unique_ids)).all()
+            if unique_ids
+            else []
+        )
+        sync_result = sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=fresh,
+            ported_company=company,
+        )
+        gulftax_synced = int(sync_result.get("synced") or 0)
+        gulftax_skipped = int(sync_result.get("skipped") or 0)
+        gulftax_errors = int(sync_result.get("errors") or 0)
+    except Exception:
+        gulftax_errors = 1
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Bulk verify gulftax sync failed for company=%s", company_id
+        )
+
+    return {
+        "verified_count": len(rows),
+        "approved_count": len(rows),
+        "gulftax_synced": gulftax_synced,
+        "gulftax_skipped": gulftax_skipped,
+        "gulftax_errors": gulftax_errors,
+    }
 
 
 @router.post("/reclassify-exempt")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -509,45 +509,14 @@ def post_invoice_to_gl_and_tax(
             )
             if company_id:
                 try:
-                    from app.services.gulftax_sync_service import (
-                        log_sync_failure,
-                        sync_approved_invoice_to_gulftax,
-                    )
+                    from app.services.gulftax_sync_service import sync_ap_invoice_gulftax_after_approve
 
-                    sync_result = sync_approved_invoice_to_gulftax(
+                    sync_ap_invoice_gulftax_after_approve(
+                        db,
                         body.invoice_id,
                         company_id,
                         workspace_id=ws_id,
                     )
-                    if not sync_result.get("ok") and not sync_result.get("skipped"):
-                        logger.warning(
-                            "Supabase GulfTax sync failed for invoice %s: %s",
-                            body.invoice_id,
-                            sync_result.get("error", "unknown"),
-                        )
-                        log_sync_failure(
-                            invoice_id=body.invoice_id,
-                            company_id=company_id,
-                            error=str(sync_result.get("error", "unknown")),
-                            workspace_id=ws_id,
-                        )
-                    try:
-                        from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
-
-                        rds_result = sync_ap_invoice_to_rds_gulftax(
-                            db,
-                            body.invoice_id,
-                            company_id,
-                            workspace_id=ws_id,
-                        )
-                        if not rds_result.get("ok") and not rds_result.get("skipped"):
-                            logger.warning(
-                                "RDS GulfTax sync failed for invoice %s: %s",
-                                body.invoice_id,
-                                rds_result.get("error", "unknown"),
-                            )
-                    except Exception:
-                        logger.exception("RDS GulfTax sync on idempotent skip failed for %s", body.invoice_id)
                 except Exception:
                     logger.exception("GulfTax sync on idempotent skip failed for %s", body.invoice_id)
             return {"ok": True, **prior}
@@ -820,45 +789,14 @@ def post_invoice_to_gl_and_tax(
 
     if body.invoice_id and company_id:
         try:
-            from app.services.gulftax_sync_service import (
-                log_sync_failure,
-                sync_approved_invoice_to_gulftax,
-            )
+            from app.services.gulftax_sync_service import sync_ap_invoice_gulftax_after_approve
 
-            sync_result = sync_approved_invoice_to_gulftax(
+            sync_ap_invoice_gulftax_after_approve(
+                db,
                 body.invoice_id,
                 company_id,
                 workspace_id=ws_id,
             )
-            if not sync_result.get("ok") and not sync_result.get("skipped"):
-                logger.warning(
-                    "Supabase GulfTax sync failed for invoice %s: %s",
-                    body.invoice_id,
-                    sync_result.get("error", "unknown"),
-                )
-                log_sync_failure(
-                    invoice_id=body.invoice_id,
-                    company_id=company_id,
-                    error=str(sync_result.get("error", "unknown")),
-                    workspace_id=ws_id,
-                )
-            try:
-                from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
-
-                rds_result = sync_ap_invoice_to_rds_gulftax(
-                    db,
-                    body.invoice_id,
-                    company_id,
-                    workspace_id=ws_id,
-                )
-                if not rds_result.get("ok") and not rds_result.get("skipped"):
-                    logger.warning(
-                        "RDS GulfTax sync failed for invoice %s: %s",
-                        body.invoice_id,
-                        rds_result.get("error", "unknown"),
-                    )
-            except Exception:
-                logger.exception("RDS GulfTax sync failed for %s", body.invoice_id)
         except Exception as sync_exc:
             logger.exception("GulfTax sync after approve failed for %s", body.invoice_number)
             try:
@@ -927,3 +865,262 @@ def post_invoice_to_gl_and_tax(
         "period_id": period_row.id if period_row else None,
         "message": f"Invoice {body.invoice_number} approved. JE {je_ref} posted to UAE GL.",
     }
+
+
+def _mark_supabase_invoice_approved(invoice_id: str) -> dict[str, Any]:
+    """Set Supabase invoices.status = Approved (idempotent)."""
+    from app.core.supabase import get_supabase
+
+    sb = get_supabase()
+    now = datetime.now(timezone.utc).isoformat()
+    existing = (
+        sb.table("invoices")
+        .select("id, status, gulftax_decision")
+        .eq("id", invoice_id)
+        .limit(1)
+        .execute()
+    )
+    rows = existing.data or []
+    if not rows:
+        return {"ok": False, "error": "invoice_not_found"}
+    inv = rows[0]
+    decision = str(inv.get("gulftax_decision") or "").upper()
+    if decision == "HARD_BLOCK":
+        return {"ok": False, "error": "HARD_BLOCKED", "skipped": True}
+    status = (inv.get("status") or "").strip()
+    if status == "Approved":
+        return {"ok": True, "already_approved": True}
+    res = (
+        sb.table("invoices")
+        .update(
+            {
+                "status": "Approved",
+                "approval_status": "approved",
+                "approved_at": now,
+                "updated_at": now,
+            }
+        )
+        .eq("id", invoice_id)
+        .execute()
+    )
+    if not (res.data or []):
+        # Some schemas omit approval_status — retry without it
+        res = (
+            sb.table("invoices")
+            .update({"status": "Approved", "approved_at": now, "updated_at": now})
+            .eq("id", invoice_id)
+            .execute()
+        )
+    return {"ok": True, "already_approved": False, "updated": bool(res.data)}
+
+
+def bulk_approve_ap_invoices(
+    *,
+    invoice_ids: list[str],
+    tenant_id: str,
+    db: Session,
+    company_id: str = "",
+    workspace_id: str = "",
+) -> dict[str, Any]:
+    """Approve many AP invoices and sync each to gulftax_transactions (shared helper)."""
+    unique_ids = list(dict.fromkeys([i for i in invoice_ids if (i or "").strip()]))
+    ws_id = (workspace_id or "").strip() or tenant_id
+    approved_count = 0
+    gulftax_synced = 0
+    gulftax_skipped = 0
+    gulftax_errors = 0
+    failed: list[dict[str, str]] = []
+
+    for invoice_id in unique_ids:
+        try:
+            mark = _mark_supabase_invoice_approved(invoice_id)
+            if not mark.get("ok"):
+                failed.append({"invoice_id": invoice_id, "error": str(mark.get("error") or "approve_failed")})
+                continue
+            approved_count += 1
+
+            inv = _fetch_supabase_invoice(invoice_id)
+            if not inv:
+                failed.append({"invoice_id": invoice_id, "error": "invoice_not_found_after_approve"})
+                continue
+
+            payload = request_from_supabase_invoice(inv, workspace_id=ws_id)
+            if company_id:
+                payload.company_id = company_id
+            cid = (payload.company_id or company_id or "").strip()
+
+            # GulfTax first via shared helper (same path as single approve) — count accurately
+            if cid:
+                from app.services.gulftax_sync_service import sync_ap_invoice_gulftax_after_approve
+
+                sync_res = sync_ap_invoice_gulftax_after_approve(
+                    db,
+                    invoice_id,
+                    cid,
+                    workspace_id=ws_id,
+                )
+                if sync_res.get("synced"):
+                    gulftax_synced += 1
+                elif sync_res.get("skipped"):
+                    gulftax_skipped += 1
+                elif not sync_res.get("ok"):
+                    gulftax_errors += 1
+            else:
+                gulftax_errors += 1
+
+            # GL post (idempotent; gulftax sync inside is a no-op skip if already done)
+            post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
+        except Exception as exc:
+            logger.exception("Bulk approve failed for invoice %s", invoice_id)
+            failed.append({"invoice_id": invoice_id, "error": str(exc)[:300]})
+
+    return {
+        "ok": len(failed) == 0,
+        "approved_count": approved_count,
+        "requested_count": len(unique_ids),
+        "gulftax_synced": gulftax_synced,
+        "gulftax_skipped": gulftax_skipped,
+        "gulftax_errors": gulftax_errors,
+        "failed": failed[:20],
+    }
+
+
+PDF_AUTO_SYNC_CONFIDENCE = 85.0
+
+
+def _normalize_confidence_0_100(raw: Any) -> float:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 1.0:
+        return round(v * 100.0, 2)
+    return round(v, 2)
+
+
+def _invoice_extraction_confidence(inv: dict[str, Any]) -> float:
+    """Best available OCR / GulfTax / IFRS confidence on a 0–100 scale."""
+    candidates = [
+        inv.get("ocr_confidence"),
+        inv.get("gulftax_confidence"),
+        inv.get("confidence_score"),
+        inv.get("ifrs_confidence"),
+    ]
+    best = 0.0
+    for c in candidates:
+        if c is None or c == "":
+            continue
+        best = max(best, _normalize_confidence_0_100(c))
+    return best
+
+
+def maybe_sync_ap_invoice_after_pdf_extract(
+    *,
+    invoice_id: str,
+    company_id: str,
+    workspace_id: str = "",
+    db: Session | None = None,
+    confidence_override: float | None = None,
+) -> dict[str, Any]:
+    """After PDF/OCR save: auto-sync to gulftax when confidence >= 85% and vat_treatment set.
+
+    Uses the same shared ``sync_ap_invoice_gulftax_after_approve`` as single/bulk approve.
+    Low confidence → status review_required (no sync).
+    """
+    from app.core.database import SessionLocal
+    from app.services.gulftax_sync_service import sync_ap_invoice_gulftax_after_approve
+
+    if not invoice_id:
+        return {"ok": False, "synced": False, "error": "invoice_id required"}
+
+    inv = _fetch_supabase_invoice(invoice_id)
+    if not inv:
+        return {"ok": False, "synced": False, "error": "invoice_not_found"}
+
+    cid = (company_id or inv.get("company_id") or "").strip()
+    ws = (workspace_id or "").strip() or cid
+    conf = (
+        float(confidence_override)
+        if confidence_override is not None
+        else _invoice_extraction_confidence(inv)
+    )
+    treatment = str(inv.get("vat_treatment") or "").strip().lower().replace("-", "_")
+    treatment_ok = bool(treatment) and treatment not in (
+        "review_required",
+        "review",
+        "pending",
+        "none",
+        "null",
+    )
+
+    owns_db = False
+    session = db
+    if session is None:
+        session = SessionLocal()
+        owns_db = True
+
+    try:
+        if conf < PDF_AUTO_SYNC_CONFIDENCE or not treatment_ok:
+            # Hold for manual approval (which already triggers gulftax sync)
+            current_status = str(inv.get("status") or "").strip()
+            if current_status != "Approved":
+                try:
+                    from app.core.supabase import get_supabase
+
+                    sb = get_supabase()
+                    now = datetime.now(timezone.utc).isoformat()
+                    sb.table("invoices").update(
+                        {
+                            "status": "review_required",
+                            "updated_at": now,
+                        }
+                    ).eq("id", invoice_id).execute()
+                    current_status = "review_required"
+                except Exception as exc:
+                    logger.warning(
+                        "Could not set review_required for invoice %s: %s — leaving status unchanged",
+                        invoice_id,
+                        exc,
+                    )
+            return {
+                "ok": True,
+                "synced": False,
+                "skipped": True,
+                "reason": "confidence_or_treatment_below_threshold",
+                "confidence": conf,
+                "vat_treatment": treatment or None,
+                "status": current_status,
+                "threshold": PDF_AUTO_SYNC_CONFIDENCE,
+            }
+
+        # High confidence + treatment → Approved then shared gulftax sync (source=ap_invoiceflow)
+        mark = _mark_supabase_invoice_approved(invoice_id)
+        if not mark.get("ok") and mark.get("error") == "HARD_BLOCKED":
+            return {
+                "ok": False,
+                "synced": False,
+                "skipped": True,
+                "reason": "HARD_BLOCKED",
+                "confidence": conf,
+            }
+
+        sync_res = sync_ap_invoice_gulftax_after_approve(
+            session,
+            invoice_id,
+            cid,
+            workspace_id=ws,
+        )
+        return {
+            "ok": bool(sync_res.get("ok")),
+            "synced": bool(sync_res.get("synced")),
+            "skipped": bool(sync_res.get("skipped")),
+            "reason": "auto_synced_after_pdf_extract",
+            "confidence": conf,
+            "vat_treatment": treatment,
+            "status": "Approved",
+            "fta_box": sync_res.get("fta_box"),
+            "error": sync_res.get("error"),
+        }
+    finally:
+        if owns_db and session is not None:
+            session.close()

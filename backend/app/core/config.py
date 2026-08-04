@@ -50,6 +50,9 @@ class Settings(BaseSettings):
 
     # CFO Command Center — optional morning briefing (APScheduler)
     ENABLE_CFO_SCHEDULER: bool = False
+    # SES email intake — poll S3 every N minutes (independent of CFO scheduler)
+    ENABLE_SES_EMAIL_INTAKE: bool = True
+    SES_EMAIL_INTAKE_INTERVAL_MINUTES: int = 5
     CFO_BRIEFING_HOUR_LOCAL: int = 7
     CFO_BRIEFING_MINUTE: int = 0
     CFO_SCHEDULER_TZ: str = "UTC"

@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
 import { CostCenterSelect } from '@/components/industry/CostCenterSelect';
+import { PropertyCombobox } from '@/components/ap-invoice/PropertyCombobox';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
 import { classifyVATWithGulfTax } from '@/lib/ap-invoice/gulfTaxService';
 import {
@@ -565,6 +566,7 @@ export function InvoiceDetailModal({
             : {}),
           department: editedInvoice.department,
           cost_center: editedInvoice.cost_center,
+          property_ref: editedInvoice.property_ref?.trim() || null,
           project_code: editedInvoice.project_code,
           updated_at: new Date().toISOString(),
         })
@@ -2904,6 +2906,17 @@ export function InvoiceDetailModal({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="property_ref">Property / Project</Label>
+                  <PropertyCombobox
+                    id="property_ref"
+                    value={editedInvoice.property_ref || ''}
+                    onChange={(propertyName) =>
+                      setEditedInvoice({ ...editedInvoice, property_ref: propertyName || null })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">Optional — not required for approval.</p>
                 </div>
                 <div className="space-y-2">
                   <CostCenterSelect

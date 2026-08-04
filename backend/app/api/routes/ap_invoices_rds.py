@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,12 @@ class InvoiceCreateIn(BaseModel):
     vendor_email: Optional[str] = None
     vat_amount: Optional[float] = None
     line_items: list[InvoiceLineIn] = Field(default_factory=list)
+
+
+class BulkApproveIn(BaseModel):
+    invoice_ids: list[str] = Field(..., min_length=1)
+    company_id: str = ""
+    workspace_id: str = ""
 
 
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
@@ -79,6 +85,29 @@ def list_invoices(
         .all()
     )
     return {"invoices": [_invoice_dict(r) for r in rows], "count": len(rows)}
+
+
+@router.post("/bulk-approve")
+def bulk_approve_invoices(
+    body: BulkApproveIn,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+    company_id_hdr: str = Depends(get_company_id),
+) -> dict[str, Any]:
+    """Approve selected AP invoices and sync each to gulftax_transactions.
+
+    Uses the same shared GulfTax sync helper as single-invoice approval.
+    """
+    assert_write_allowed()
+    from app.services.ap_invoice_post_service import bulk_approve_ap_invoices
+
+    return bulk_approve_ap_invoices(
+        invoice_ids=body.invoice_ids,
+        tenant_id=tenant_id,
+        db=db,
+        company_id=(body.company_id or company_id_hdr or "").strip(),
+        workspace_id=(body.workspace_id or tenant_id).strip(),
+    )
 
 
 @router.get("/{invoice_id}")

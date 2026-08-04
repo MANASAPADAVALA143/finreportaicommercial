@@ -362,13 +362,40 @@ def sync_ap_invoice_to_rds_gulftax(
 
     existing = _existing_ap_in_rds(db, invoice_id)
     if existing:
+        from app.services.vat_box_mapping import assign_fta_box
+
+        changed = False
+        if (existing.direction or "").lower() != "input":
+            existing.direction = "input"
+            changed = True
+        expected_box = (
+            assign_fta_box(
+                "purchase",
+                existing.vat_category,
+                source="ap_invoiceflow",
+                direction="input",
+            )
+            or "box9"
+        )
+        if (existing.fta_box or "").lower() != (expected_box or "").lower():
+            existing.fta_box = expected_box
+            changed = True
+        if changed:
+            db.add(existing)
+            try:
+                db.commit()
+                db.refresh(existing)
+            except Exception:
+                db.rollback()
         classifier = _mirror_to_vat_classifier(existing)
         return {
             "ok": True,
-            "skipped": True,
-            "reason": "already_synced",
+            "skipped": not changed,
+            "updated": changed,
+            "reason": "corrected_ap_box" if changed else "already_synced",
             "transaction_id": existing.id,
             "classifier": classifier,
+            "fta_box": existing.fta_box,
         }
 
     from app.services.gulftax_sync_service import _fetch_invoice, build_transaction_row
@@ -408,6 +435,23 @@ def sync_ap_invoice_to_rds_gulftax(
     row = build_transaction_row(invoice, company_id=resolved_company_id, workspace_id=ws)
     row["tenant_id"] = ws
     row["transaction_date"] = date.fromisoformat(str(row["transaction_date"])[:10])
+    # Force AP purchase / input — never land on Box 1 (sales)
+    from app.services.gulftax_sync_service import _fta_box, _norm_treatment
+    from app.services.vat_box_mapping import assign_fta_box
+
+    row["direction"] = "input"
+    vat_cat = _norm_treatment(invoice.get("vat_treatment") or row.get("vat_category"))
+    row["vat_category"] = vat_cat
+    row["fta_box"] = (
+        assign_fta_box(
+            "purchase",
+            invoice.get("vat_treatment") or vat_cat,
+            source="ap_invoiceflow",
+            direction="input",
+        )
+        or _fta_box(vat_cat, "input")
+        or "box9"
+    )
 
     try:
         tx = _insert_rds_row(db, row)

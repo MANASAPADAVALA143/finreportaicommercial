@@ -4,6 +4,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import inspect, text
 
 from app.agents.intelligence import generate_board_pack_content, generate_insight
@@ -14,6 +15,43 @@ from app.core.database import SessionLocal
 from app.notifications import send_email_alert, send_whatsapp_alert
 
 scheduler = AsyncIOScheduler()
+_ses_scheduler_started = False
+
+
+async def run_ses_email_intake_job():
+    """Poll SES S3 bucket for new invoice emails."""
+    try:
+        from app.services.ap_ses_intake_service import process_pending_emails
+
+        result = await process_pending_emails(limit=20)
+        print(
+            f"[{datetime.now()}] SES email intake: "
+            f"processed={result.get('processed')} invoices={result.get('invoices_created')}"
+        )
+    except Exception as exc:
+        print(f"SES email intake job error: {exc}")
+
+
+def setup_ses_intake_scheduler():
+    """Start SES poll every N minutes (independent of CFO scheduler flag)."""
+    global _ses_scheduler_started
+    if not settings.ENABLE_SES_EMAIL_INTAKE:
+        return None
+    minutes = max(1, int(settings.SES_EMAIL_INTAKE_INTERVAL_MINUTES or 5))
+    if not scheduler.running:
+        scheduler.configure(timezone=settings.CFO_SCHEDULER_TZ)
+        scheduler.start()
+    scheduler.add_job(
+        run_ses_email_intake_job,
+        IntervalTrigger(minutes=minutes),
+        id="ses_email_intake",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    _ses_scheduler_started = True
+    print(f"SES email intake scheduler started (every {minutes} min)")
+    return scheduler
 
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -195,10 +233,9 @@ async def run_board_pack_agent():
 
 def setup_scheduler():
     """Configure all scheduled jobs."""
-    if scheduler.running:
-        return scheduler
+    if not scheduler.running:
+        scheduler.configure(timezone=settings.CFO_SCHEDULER_TZ)
 
-    scheduler.configure(timezone=settings.CFO_SCHEDULER_TZ)
     scheduler.add_job(
         run_daily_watchdog,
         CronTrigger(hour=6, minute=0),

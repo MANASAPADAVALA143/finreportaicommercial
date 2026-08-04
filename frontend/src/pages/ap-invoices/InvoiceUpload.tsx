@@ -14,6 +14,7 @@ import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
 import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeWayMatchService';
 import { awaitGlPostAfterApproval, retryPendingGlPosts } from '../../lib/ap-invoice/glPostService';
+import { syncAfterPdfExtract } from '../../lib/ap-invoice/syncAfterExtractService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
 import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
@@ -48,7 +49,7 @@ import { InvoiceExtractionPreviewModal, type PreviewLineItem } from '@/component
 import { uploadInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 import { normalizeExtractedInvoice, type NormalizedExtractedInvoice } from '../../lib/ap-invoice/cameraService';
 import { useToast } from '../../hooks/use-toast';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
+import { Tabs, TabsContent } from '../../components/ui/tabs';
 import * as XLSX from 'xlsx';
 import type { Invoice } from '../../lib/ap-invoice/supabase';
 import { logAction, getInvoiceflowWorkEmail } from '../../lib/ap-invoice/auditService';
@@ -123,6 +124,7 @@ export function InvoiceUpload() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadMethod, setUploadMethod] = useState<'scan' | 'single' | 'bulk' | 'multi-pdf'>('scan');
   const [extracting, setExtracting] = useState(false);
   const [apiEndpoint, setApiEndpoint] = useState<string | null>(null);
   const [apiEndpointClassifyJson, setApiEndpointClassifyJson] = useState<string | null>(null);
@@ -2267,6 +2269,22 @@ export function InvoiceUpload() {
             );
           }
 
+          if (companyIdQ) {
+            try {
+              await syncAfterPdfExtract(
+                {
+                  ...invoice,
+                  ocr_confidence: ocrConfQ,
+                  vat_treatment: invoiceData.vat_treatment || invoice.vat_treatment || null,
+                } as import('../../lib/ap-invoice/supabase').Invoice,
+                companyIdQ,
+                ocrConfQ,
+              );
+            } catch (e) {
+              console.warn('[AP] multi-pdf sync-after-extract failed:', e);
+            }
+          }
+
           // Create audit log
           await supabase.from('audit_logs').insert({
             invoice_id: invoice.id,
@@ -2577,6 +2595,26 @@ export function InvoiceUpload() {
         );
       }
 
+      // High-confidence PDF extract → gulftax_transactions (shared backend helper)
+      if (companyId) {
+        try {
+          const syncRes = await syncAfterPdfExtract(
+            {
+              ...newInvoice,
+              ocr_confidence: ocrConfidenceSaved,
+              vat_treatment: (uaeAdvanceFields.vat_treatment as string) || vatTreatment || null,
+            } as import('../../lib/ap-invoice/supabase').Invoice,
+            companyId,
+            ocrConfidenceSaved,
+          );
+          if (syncRes.synced) {
+            console.log('[AP] PDF extract auto-synced to GulfTax', syncRes.fta_box);
+          }
+        } catch (e) {
+          console.warn('[AP] sync-after-extract failed:', e);
+        }
+      }
+
       // STEP 6: Duplicate detection
       const { data: dupes } = await supabase
         .from('invoices')
@@ -2842,29 +2880,26 @@ export function InvoiceUpload() {
         </div>
       )}
 
-      <Tabs defaultValue="scan" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 h-auto gap-1">
-          <TabsTrigger value="scan" className="text-xs sm:text-sm py-2">
-            <Camera className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Scan</span>
-            <span className="hidden sm:inline">Scan Invoice</span>
-          </TabsTrigger>
-          <TabsTrigger value="single" className="text-xs sm:text-sm py-2">
-            <Upload className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Upload</span>
-            <span className="hidden sm:inline">Single Upload</span>
-          </TabsTrigger>
-          <TabsTrigger value="bulk" className="text-xs sm:text-sm py-2">
-            <FileSpreadsheet className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Excel</span>
-            <span className="hidden sm:inline">Bulk (Excel/CSV)</span>
-          </TabsTrigger>
-          <TabsTrigger value="multi-pdf" className="text-xs sm:text-sm py-2">
-            <FileText className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Multi PDF</span>
-            <span className="hidden sm:inline">Multiple PDFs</span>
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={uploadMethod} onValueChange={(v) => setUploadMethod(v as typeof uploadMethod)} className="w-full">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <label className="text-sm font-medium text-gray-700" htmlFor="upload-method">
+            Upload method
+          </label>
+          <Select
+            value={uploadMethod}
+            onValueChange={(v) => setUploadMethod(v as typeof uploadMethod)}
+          >
+            <SelectTrigger id="upload-method" className="w-full sm:w-[280px] bg-white">
+              <SelectValue placeholder="Choose upload method" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="scan">Scan Invoice</SelectItem>
+              <SelectItem value="single">Single Upload</SelectItem>
+              <SelectItem value="bulk">Bulk (Excel/CSV)</SelectItem>
+              <SelectItem value="multi-pdf">Multiple PDFs</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
         <TabsContent value="scan" className="space-y-6">
           <Card>

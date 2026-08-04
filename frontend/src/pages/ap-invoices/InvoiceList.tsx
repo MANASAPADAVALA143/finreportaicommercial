@@ -21,11 +21,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap } from 'lucide-react';
+import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap, CheckCircle2 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
 import { listInvoiceAnomalies, scanInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { bulkApproveApInvoices } from '@/lib/ap-invoice/bulkApproveService';
 import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
@@ -37,6 +38,12 @@ import { downloadTallyXML } from '@/utils/tallyExport';
 import { downloadQBIIF } from '@/utils/quickbooksExport';
 import { downloadXeroCSV } from '@/utils/xeroExport';
 import * as XLSX from 'xlsx';
+import {
+  invoiceCoaCategoryKey,
+  loadEffectiveCoaMappings,
+  resolveGlFromMappings,
+  type CoaMappingRow,
+} from '@/services/coaVatMapping.service';
 
 /** Keep the same object reference when refresh data is unchanged — prevents InvoiceDetailModal shake. */
 function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | null {
@@ -54,6 +61,7 @@ function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | nu
     'payment_status',
     'ifrs_category',
     'vat_treatment',
+    'property_ref',
     'gulftax_decision',
     'total_amount',
     'vendor_name',
@@ -129,17 +137,19 @@ function sourceIntakeBadge(source: Invoice['source']) {
     vendor_portal: 'bg-purple-100 text-purple-800 border-purple-200',
     manual: 'border-slate-200 bg-slate-50 text-slate-800',
     upload: 'bg-slate-100 text-slate-800 border-slate-200',
+    pdf: 'bg-cyan-100 text-cyan-900 border-cyan-200',
   };
   const labels: Record<string, string> = {
     email: '📧 Email',
     email_n8n: '📧 n8n email',
     whatsapp: '💬 WhatsApp',
     camera: '📷 Camera',
-    excel: '📊 Excel',
+    excel: '📊 Excel Import',
     excel_vba: '📊 Excel VBA',
     vendor_portal: 'Portal',
-    manual: 'Manual',
-    upload: '📤 Upload',
+    manual: '📝 Manual',
+    upload: '📎 PDF Upload',
+    pdf: '📎 PDF Upload',
   };
   return (
     <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${styles[s] ?? styles.upload}`}>
@@ -175,6 +185,25 @@ function invoicePaymentPill(inv: Invoice): { label: string; title?: string; vari
 
 function invoiceGlCode(inv: Invoice): string {
   return String(inv.gl_account_code ?? inv.gl_code ?? '').trim();
+}
+
+function isInvoiceApprovedForGl(inv: Invoice): boolean {
+  const st = String(inv.status || '');
+  if (st === 'Approved' || st === 'Paid') return true;
+  const appr = String(inv.approval_status || '').toLowerCase();
+  return appr === 'approved';
+}
+
+/** Display GL from company/default COA map (approved only); not from stored row fields. */
+function displayGlFromCoaMap(
+  inv: Invoice,
+  mappings: CoaMappingRow[],
+): { code: string; name: string; source: 'company' | 'default' } | null {
+  if (!isInvoiceApprovedForGl(inv)) return null;
+  const key = invoiceCoaCategoryKey(inv);
+  const hit = resolveGlFromMappings(mappings, key);
+  if (!hit) return null;
+  return { code: hit.gl_code, name: hit.gl_name, source: hit.source };
 }
 
 /** Dirham unicode (د.إ) and Latin-1 mojibake (Ø¯.Ø¥) → ISO code for display */
@@ -324,6 +353,7 @@ export function InvoiceList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [costCenterFilter, setCostCenterFilter] = useState<string>('all');
+  const [propertyFilter, setPropertyFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review' | 'anomalies'>('all');
   const [anomalyInvoiceIds, setAnomalyInvoiceIds] = useState<Set<string>>(new Set());
   const [confidenceSort, setConfidenceSort] = useState<'none' | 'high_first' | 'low_first'>('none');
@@ -345,6 +375,7 @@ export function InvoiceList() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewNorm, setPreviewNorm] = useState<NormalizedExtractedInvoice | null>(null);
   const [previewConfidence, setPreviewConfidence] = useState<number | undefined>();
+  const [coaMappings, setCoaMappings] = useState<CoaMappingRow[]>([]);
   const [savingExtract, setSavingExtract] = useState(false);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
@@ -384,6 +415,9 @@ export function InvoiceList() {
     void retryPendingGlPosts();
     fetchInvoices();
     void deleteDebugInvoicesOnce();
+    void loadEffectiveCoaMappings()
+      .then(setCoaMappings)
+      .catch(() => setCoaMappings([]));
     // Check for vendor filter in URL
     const urlParams = new URLSearchParams(window.location.search);
     const vendorFilter = urlParams.get('vendor');
@@ -446,6 +480,7 @@ export function InvoiceList() {
     searchTerm,
     statusFilter,
     costCenterFilter,
+    propertyFilter,
     startDate,
     endDate,
     viewMode,
@@ -633,6 +668,63 @@ export function InvoiceList() {
     }
   }
 
+  async function handleBulkApproveSelected() {
+    const selected = filteredInvoices.filter(
+      (inv) =>
+        selectedIds.includes(inv.id) &&
+        inv.status !== 'Approved' &&
+        inv.status !== 'Paid' &&
+        String(inv.gulftax_decision || '').toUpperCase() !== 'HARD_BLOCK',
+    );
+    if (selected.length === 0) {
+      toast({
+        title: 'Nothing to approve',
+        description: 'Select Processing / On Hold invoices (not already approved or hard-blocked).',
+      });
+      return;
+    }
+    if (
+      !window.confirm(
+        `Approve ${selected.length} selected invoice(s) and sync to GulfTax / VAT Return?`,
+      )
+    ) {
+      return;
+    }
+
+    setBulkProcessing(true);
+    try {
+      let companyId: string | null = null;
+      try {
+        companyId = await resolveApSupabaseCompanyId(accessToken);
+      } catch {
+        companyId = (await getMyCompany())?.id ?? null;
+      }
+      const result = await bulkApproveApInvoices(
+        selected.map((i) => i.id),
+        companyId || selected[0]?.company_id || null,
+      );
+      await fetchInvoices();
+      setSelectedIds([]);
+      toast({
+        title: 'Bulk approve complete',
+        description: `${result.approved_count} approved · ${result.gulftax_synced} synced to GulfTax${
+          result.gulftax_skipped ? ` · ${result.gulftax_skipped} already synced` : ''
+        }${result.gulftax_errors ? ` · ${result.gulftax_errors} sync errors` : ''}${
+          result.failed?.length ? ` · ${result.failed.length} failed` : ''
+        }.`,
+        variant: result.failed?.length ? 'destructive' : 'default',
+      });
+    } catch (e) {
+      toast({
+        title: 'Bulk approve failed',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBulkProcessing(false);
+    }
+  }
+
   async function fetchInvoices(opts?: { quiet?: boolean }) {
     let invoiceList: Invoice[] = [];
     let companyId: string | null = null;
@@ -799,10 +891,12 @@ export function InvoiceList() {
     }
 
     if (searchTerm) {
+      const q = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (inv) =>
-          inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          inv.vendor_name.toLowerCase().includes(searchTerm.toLowerCase())
+          inv.invoice_number.toLowerCase().includes(q) ||
+          inv.vendor_name.toLowerCase().includes(q) ||
+          (inv.property_ref || '').toLowerCase().includes(q)
       );
     }
 
@@ -812,6 +906,10 @@ export function InvoiceList() {
 
     if (costCenterFilter !== 'all') {
       filtered = filtered.filter((inv) => (inv.cost_center || '') === costCenterFilter);
+    }
+
+    if (propertyFilter !== 'all') {
+      filtered = filtered.filter((inv) => (inv.property_ref || '').trim() === propertyFilter);
     }
 
     if (startDate) {
@@ -1169,16 +1267,27 @@ export function InvoiceList() {
                 })`}
           </Button>
           {selectedIds.length > 0 && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                const selected = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
-                void exportExcel(selected);
-              }}
-            >
-              <Download className="mr-2 h-4 w-4" />
-              Export Selected ({selectedIds.length})
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                disabled={bulkProcessing}
+                onClick={() => void handleBulkApproveSelected()}
+                className="border-green-700 text-green-800 hover:bg-green-50"
+              >
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {bulkProcessing ? 'Approving…' : `Bulk Approve (${selectedIds.length})`}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const selected = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
+                  void exportExcel(selected);
+                }}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export Selected ({selectedIds.length})
+              </Button>
+            </>
           )}
           <div className="relative">
             <Button
@@ -1370,19 +1479,9 @@ export function InvoiceList() {
               >
                 AR
               </Button>
-            </div>
-            <div className="flex flex-col gap-4 md:flex-row flex-wrap">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <Input
-                  placeholder="Search by invoice # or vendor name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
+              <span className="mx-1 hidden sm:inline text-gray-300">|</span>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full md:w-[160px]">
+                <SelectTrigger className="h-8 w-[140px] text-sm">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1393,6 +1492,42 @@ export function InvoiceList() {
                   <SelectItem value="Paid">Paid</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={matchStatusFilter} onValueChange={setMatchStatusFilter}>
+                <SelectTrigger className="h-8 w-[150px] text-sm">
+                  <SelectValue placeholder="Match" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Match Status</SelectItem>
+                  <SelectItem value="three_way_matched">✅ 3-Way Matched</SelectItem>
+                  <SelectItem value="matched">✅ PO Matched</SelectItem>
+                  <SelectItem value="partial">⚠️ Partial</SelectItem>
+                  <SelectItem value="mismatch">❌ Mismatch</SelectItem>
+                  <SelectItem value="no_po">— No PO</SelectItem>
+                  <SelectItem value="match_issues">⚠️ Match exceptions</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={riskFilter} onValueChange={setRiskFilter}>
+                <SelectTrigger className="h-8 w-[110px] text-sm">
+                  <SelectValue placeholder="Risk" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Risk</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-4 md:flex-row flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <Input
+                  placeholder="Search by invoice #, vendor, or property..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
               <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
                 <SelectTrigger className="w-full md:w-[180px]">
                   <SelectValue placeholder={costCenterLabel} />
@@ -1410,6 +1545,23 @@ export function InvoiceList() {
                     ))}
                 </SelectContent>
               </Select>
+              <Select value={propertyFilter} onValueChange={setPropertyFilter}>
+                <SelectTrigger className="w-full md:w-[180px]">
+                  <SelectValue placeholder="Property" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Properties</SelectItem>
+                  {Array.from(
+                    new Set(invoices.map((inv) => (inv.property_ref || '').trim()).filter(Boolean)),
+                  )
+                    .sort()
+                    .map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
               <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
                 <SelectTrigger className="w-full md:w-[200px]">
                   <SelectValue placeholder="IFRS Category" />
@@ -1420,31 +1572,6 @@ export function InvoiceList() {
                   {Array.from(new Set(invoices.map((inv) => (inv.ifrs_category || '').trim()).filter(Boolean))).sort().map((cat) => (
                     <SelectItem key={cat} value={cat}>{cat}</SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
-              <Select value={matchStatusFilter} onValueChange={setMatchStatusFilter}>
-                <SelectTrigger className="w-full md:w-[160px]">
-                  <SelectValue placeholder="Match" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Match Status</SelectItem>
-                  <SelectItem value="three_way_matched">✅ 3-Way Matched</SelectItem>
-                  <SelectItem value="matched">✅ PO Matched</SelectItem>
-                  <SelectItem value="partial">⚠️ Partial</SelectItem>
-                  <SelectItem value="mismatch">❌ Mismatch</SelectItem>
-                  <SelectItem value="no_po">— No PO</SelectItem>
-                  <SelectItem value="match_issues">⚠️ Match exceptions</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-full md:w-[120px]">
-                  <SelectValue placeholder="Risk" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Risk</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
                 </SelectContent>
               </Select>
               <Select
@@ -1592,6 +1719,7 @@ export function InvoiceList() {
                   </TableHead>
                   <TableHead>3-Way Match</TableHead>
                   <TableHead>GL Account</TableHead>
+                  <TableHead>Property</TableHead>
                   <TableHead>{costCenterLabel}</TableHead>
                   <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -1713,58 +1841,40 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       {(() => {
-                        const decision = String(invoice.gulftax_decision || '').trim().toUpperCase();
-                        const treatment = String(invoice.vat_treatment || '').trim();
-                        // Prefer GulfTax VAT treatment when classified (historical backfill + new uploads)
-                        if (decision || treatment) {
-                          const label = treatment || decision || 'classified';
-                          const color = !decision
-                            ? '#4b5563'
-                            : decision === 'AUTO_APPROVE'
-                              ? '#059669'
-                              : decision === 'REVIEW_QUEUE'
-                                ? '#d97706'
-                                : decision === 'HARD_BLOCK'
-                                  ? '#dc2626'
-                                  : '#4b5563';
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                              <span style={{ fontSize: '12px', fontWeight: 600, color }}>{label}</span>
-                              {decision ? (
-                                <span style={{ fontSize: '10px', color: '#9ca3af' }}>{decision}</span>
-                              ) : null}
-                            </div>
-                          );
-                        }
-                        if (invoice.ifrs_category) {
+                        const category =
+                          (invoice.ifrs_category || '').trim() ||
+                          (invoice.vat_treatment || '').trim();
+                        if (category) {
+                          const conf = Number(invoice.ifrs_confidence ?? 0);
+                          const showConf = Boolean((invoice.ifrs_category || '').trim()) && conf > 0;
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                               <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
-                                {invoice.ifrs_category}
+                                {category}
                               </span>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                <div
-                                  style={{
-                                    width: '50px',
-                                    height: '4px',
-                                    background: '#e5e7eb',
-                                    borderRadius: '2px',
-                                    overflow: 'hidden',
-                                  }}
-                                >
+                              {showConf ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                   <div
                                     style={{
-                                      width: `${Math.min(100, Math.max(0, Number(invoice.ifrs_confidence ?? 0)))}%`,
-                                      height: '100%',
-                                      background: '#1a56db',
+                                      width: '50px',
+                                      height: '4px',
+                                      background: '#e5e7eb',
                                       borderRadius: '2px',
+                                      overflow: 'hidden',
                                     }}
-                                  />
+                                  >
+                                    <div
+                                      style={{
+                                        width: `${Math.min(100, Math.max(0, conf))}%`,
+                                        height: '100%',
+                                        background: '#1a56db',
+                                        borderRadius: '2px',
+                                      }}
+                                    />
+                                  </div>
+                                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>{conf}%</span>
                                 </div>
-                                <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                                  {Number(invoice.ifrs_confidence ?? 0)}%
-                                </span>
-                              </div>
+                              ) : null}
                             </div>
                           );
                         }
@@ -1819,36 +1929,50 @@ export function InvoiceList() {
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {(invoice.gl_account_code ?? invoice.gl_code) ? (
-                        <div>
-                          <span
-                            style={{
-                              fontFamily: 'monospace',
-                              fontWeight: '700',
-                              color: '#1a56db',
-                              fontSize: '13px',
-                            }}
-                          >
-                            {invoice.gl_account_code ?? invoice.gl_code}
-                          </span>
-                          <br />
-                          <span style={{ fontSize: '11px', color: '#6b7280' }}>
-                            {invoice.gl_account_name ?? invoice.gl_name ?? ''}
-                          </span>
-                          <br />
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              color: invoice.gl_source === 'company_coa' ? '#0e9f6e' : '#6b7280',
-                            }}
-                          >
-                            {invoice.gl_source === 'company_coa' ? '🏢 Your COA' : '🤖 IFRS Auto'}
-                          </span>
-                        </div>
-                      ) : (
-                        <span style={{ color: '#9ca3af' }}>—</span>
-                      )}
+                      {(() => {
+                        const mapped = displayGlFromCoaMap(invoice, coaMappings);
+                        if (!mapped) {
+                          return <span style={{ color: '#9ca3af' }}>—</span>;
+                        }
+                        return (
+                          <div>
+                            <span
+                              style={{
+                                fontFamily: 'monospace',
+                                fontWeight: '700',
+                                color: '#1a56db',
+                                fontSize: '13px',
+                              }}
+                            >
+                              {mapped.code}
+                            </span>
+                            <br />
+                            <span style={{ fontSize: '11px', color: '#6b7280' }}>{mapped.name}</span>
+                            <br />
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                color: mapped.source === 'company' ? '#0e9f6e' : '#6b7280',
+                              }}
+                            >
+                              {mapped.source === 'company' ? '🏢 Your COA' : '🤖 Default COA'}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell
+                      className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
+                      onClick={() => setSelectedInvoice(invoice)}
+                      title={(invoice.property_ref || '').trim() || undefined}
+                    >
+                      {(() => {
+                        const full = (invoice.property_ref || '').trim();
+                        if (!full) return <span className="text-slate-400">—</span>;
+                        const short = full.length > 15 ? `${full.slice(0, 15)}…` : full;
+                        return <span>{short}</span>;
+                      })()}
                     </TableCell>
                     <TableCell
                       className="cursor-pointer text-sm text-slate-700"

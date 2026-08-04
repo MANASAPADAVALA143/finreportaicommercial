@@ -41,6 +41,8 @@ from app.routers import workspaces as workspaces_router
 from app.routers import company_setup as company_setup_router
 from app.routers import ap_settings as ap_settings_router
 from app.routers import ap_email_privacy as ap_email_privacy_router
+from app.routers import ap_ses_intake as ap_ses_intake_router
+from app.routers import ap_whatsapp_intake as ap_whatsapp_intake_router
 from app.api.routes import gulftax_audit_routes
 from app.api.routes import (
     fpa_master_upload,
@@ -130,7 +132,7 @@ from slowapi.util import get_remote_address
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
 from app.board_pack_generator import generate_pdf
-from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler
+from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler, setup_ses_intake_scheduler
 from app.agents.command_center.registry import list_agent_names
 from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
 from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
@@ -174,6 +176,10 @@ async def lifespan(app: FastAPI):
             print("Agentic scheduler started")
             logger.info("Agentic scheduler started")
         asyncio.create_task(run_daily_watchdog())
+    try:
+        setup_ses_intake_scheduler()
+    except Exception as exc:
+        logger.warning("SES email intake scheduler not started: %s", exc)
     yield
 
 
@@ -254,6 +260,8 @@ app.include_router(workspaces_router.router)
 app.include_router(company_setup_router.router)
 app.include_router(ap_settings_router.router)
 app.include_router(ap_email_privacy_router.router)
+app.include_router(ap_ses_intake_router.router)
+app.include_router(ap_whatsapp_intake_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(o2c_routes.router)
 app.include_router(crm_routes.router)
