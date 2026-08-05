@@ -1875,6 +1875,14 @@ export function InvoiceUpload() {
             console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
           }
 
+          if (invoiceData.po_number?.trim() || invoiceData.vendor_name?.trim()) {
+            try {
+              await runAutoMatch(invoice.id);
+            } catch (matchError) {
+              console.warn(`Auto match failed for invoice ${invoiceData.invoice_number}:`, matchError);
+            }
+          }
+
           if (initialStatus === 'Approved') {
             await awaitGlPostAfterApproval(invoice, companyId, (opts) =>
               toast({ title: opts.title, description: opts.description, variant: opts.variant }),

@@ -433,7 +433,10 @@ export async function runAutoMatch(
   let grnAmount = 0;
   let invoiceAmount = netInvoiceAmountForMatch(inv);
 
-  const companyId = company?.id ?? inv.company_id ?? null;
+  // The invoice's own company is authoritative: the list resolves companies from the
+  // active workspace while getMyCompany() resolves from the Supabase session, and the two
+  // diverge for JWT-only sessions — matching on the session company then finds zero POs.
+  const companyId = inv.company_id ?? company?.id ?? null;
 
   // Explicit invoice.po_number is authoritative — never replace it via vendor/amount fallback.
   // Same principle as resolvePoIdForGrn: exact → case-insensitive → needs_review (no silent substitute).

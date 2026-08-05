@@ -1,3 +1,4 @@
+import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { supabase } from './supabase';
 
 export type SubscriptionTier = 'starter' | 'growth' | 'enterprise';
@@ -47,6 +48,7 @@ export const TIER_PRESETS: Record<
 };
 
 let _companyCache: Company | null = null;
+let _companyCacheWorkspaceId: string | null = null;
 let _configCache: CompanyConfigRow | null = null;
 
 function parseApprovalFlow(raw: unknown): string[] {
@@ -58,13 +60,59 @@ function parseApprovalFlow(raw: unknown): string[] {
 
 export function clearCompanyCache() {
   _companyCache = null;
+  _companyCacheWorkspaceId = null;
   _configCache = null;
 }
 
-/** Effective tenant company for the session (membership, JWT active company, or default slug for anon). */
-export async function getMyCompany(): Promise<Company | null> {
-  if (_companyCache) return _companyCache;
+/** Company linked to the active workspace, matching how the invoice list resolves its tenant. */
+async function getWorkspaceCompany(workspaceId: string): Promise<Company | null> {
+  const { data, error } = await supabase
+    .from('companies')
+    .select('*')
+    .eq('workspace_id', workspaceId)
+    .maybeSingle();
+  if (!error && data) return data as Company;
 
+  let linkedId: string | null = null;
+  try {
+    linkedId = localStorage.getItem(`ap_company_${workspaceId}`);
+  } catch {
+    linkedId = null;
+  }
+  if (!linkedId) return null;
+
+  const { data: byId } = await supabase.from('companies').select('*').eq('id', linkedId).maybeSingle();
+  return (byId as Company) ?? null;
+}
+
+/**
+ * Effective tenant company. The active workspace wins over the Supabase session so that
+ * invoices, purchase orders, GRNs and 3-way match all resolve to the same company —
+ * session-only resolution returns a different company once a workspace is selected, which
+ * makes every PO lookup come back empty.
+ */
+export async function getMyCompany(): Promise<Company | null> {
+  const workspaceId = getStoredWorkspaceId() || null;
+  if (_companyCache && _companyCacheWorkspaceId === workspaceId) return _companyCache;
+  if (_companyCacheWorkspaceId !== workspaceId) _configCache = null;
+
+  if (workspaceId) {
+    const wsCompany = await getWorkspaceCompany(workspaceId);
+    if (wsCompany) {
+      _companyCache = wsCompany;
+      _companyCacheWorkspaceId = workspaceId;
+      return wsCompany;
+    }
+  }
+
+  const resolved = await resolveSessionCompany();
+  _companyCache = resolved;
+  _companyCacheWorkspaceId = workspaceId;
+  return resolved;
+}
+
+/** Legacy session-based resolution — only used when no workspace company exists. */
+async function resolveSessionCompany(): Promise<Company | null> {
   const { data: userData } = await supabase.auth.getUser();
   const user = userData?.user;
 

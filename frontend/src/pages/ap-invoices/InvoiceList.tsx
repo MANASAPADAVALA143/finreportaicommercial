@@ -811,8 +811,11 @@ export function InvoiceList() {
       }
 
       // Auto-link PO + run 3-way match when invoice already has a PO number but no po_id (e.g. OCR PO, email ingest, or case mismatch)
+      // `!inv.match_status` also picks up Excel/bulk imports that landed without a match run —
+      // they would otherwise sit on "— No PO" forever. Self-limiting: a run always writes a status.
       const needPoAutoLink = invoiceList.filter(
-        (inv: Invoice) => String(inv.po_number || '').trim() !== '' && !inv.po_id
+        (inv: Invoice) =>
+          (String(inv.po_number || '').trim() !== '' && !inv.po_id) || !inv.match_status
       );
       if (needPoAutoLink.length > 0) {
         let anyUpdated = false;
