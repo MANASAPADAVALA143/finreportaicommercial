@@ -739,6 +739,23 @@ async def bulk_upsert_ap_invoices(
     return bulk_upsert_invoices(company_id=body.company_id.strip(), rows=body.invoices)
 
 
+class ListApInvoicesIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
+@router.post("/ap/list-invoices", summary="List AP invoices (service role, bypasses RLS)")
+async def list_ap_invoices(
+    body: ListApInvoicesIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    """Invoice List path when browser Supabase session is missing (FinReport JWT only)."""
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import list_invoices_for_company
+
+    return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
+
+
 @router.get("/ap/gulftax-status", summary="GulfTax AI health check")
 async def gulftax_status() -> dict[str, Any]:
     """

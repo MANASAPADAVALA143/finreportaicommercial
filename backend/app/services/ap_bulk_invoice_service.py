@@ -243,3 +243,30 @@ def bulk_upsert_invoices(
         "failed": failed,
         "results": results,
     }
+
+
+def list_invoices_for_company(
+    *,
+    company_id: str,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """List invoices via service role so FinReport-JWT sessions (no Supabase auth) can still see rows."""
+    from app.core.supabase import get_supabase
+
+    if not company_id:
+        return {"ok": False, "invoices": [], "count": 0, "error": "company_id required"}
+    sb = get_supabase()
+    try:
+        res = (
+            sb.table("invoices")
+            .select("*")
+            .eq("company_id", company_id.strip())
+            .order("created_at", desc=True)
+            .limit(max(1, min(limit, 2000)))
+            .execute()
+        )
+        rows = res.data if isinstance(res.data, list) else []
+        return {"ok": True, "invoices": rows, "count": len(rows)}
+    except Exception as exc:
+        logger.exception("list invoices failed for company %s", company_id)
+        return {"ok": False, "invoices": [], "count": 0, "error": str(exc)}

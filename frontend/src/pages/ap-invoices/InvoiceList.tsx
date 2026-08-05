@@ -96,6 +96,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -736,22 +737,33 @@ export function InvoiceList() {
         const company = await getMyCompany();
         companyId = company?.id ?? null;
       }
-      let q = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      if (companyId) q = q.eq('company_id', companyId);
-      const { data, error } = await q;
 
-      if (error) throw error;
-      invoiceList = data || [];
+      // Prefer service-role API — FinReport JWT sessions often have no Supabase auth,
+      // so browser RLS returns 0 rows even after a successful Excel import.
+      if (companyId) {
+        try {
+          invoiceList = await listInvoicesViaApi(companyId, 500);
+        } catch (apiErr) {
+          console.warn('[AP] list-invoices API failed, falling back to browser Supabase:', apiErr);
+        }
+      }
 
-      // Workspace/company drift: show invoices even if company_id filter mismatches bulk import
-      if (invoiceList.length === 0 && companyId) {
-        const { data: allRows, error: allErr } = await supabase
-          .from('invoices')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (!allErr && allRows && allRows.length > 0) {
-          console.warn('[AP] No invoices for active company — showing all invoices in database');
-          invoiceList = allRows;
+      if (invoiceList.length === 0) {
+        let q = supabase.from('invoices').select('*').order('created_at', { ascending: false });
+        if (companyId) q = q.eq('company_id', companyId);
+        const { data, error } = await q;
+        if (error) throw error;
+        invoiceList = data || [];
+
+        if (invoiceList.length === 0 && companyId) {
+          const { data: allRows, error: allErr } = await supabase
+            .from('invoices')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (!allErr && allRows && allRows.length > 0) {
+            console.warn('[AP] No invoices for active company — showing all invoices in database');
+            invoiceList = allRows;
+          }
         }
       }
 

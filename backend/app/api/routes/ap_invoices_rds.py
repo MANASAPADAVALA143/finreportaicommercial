@@ -48,6 +48,11 @@ class BulkUpsertIn(BaseModel):
     invoices: list[dict[str, Any]] = Field(..., min_length=1)
 
 
+class ListInvoicesIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
     return {
         "id": inv.id,
@@ -105,6 +110,20 @@ def bulk_upsert_invoices(
     from app.services.ap_bulk_invoice_service import bulk_upsert_invoices as _bulk
 
     return _bulk(company_id=body.company_id.strip(), rows=body.invoices)
+
+
+@router.post("/list")
+def list_invoices_supabase(
+    body: ListInvoicesIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """List invoices via service role — same tenant path as Excel bulk upsert."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import list_invoices_for_company
+
+    return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
 
 
 @router.post("/bulk-approve")
