@@ -50,7 +50,7 @@ import { InvoiceExtractionPreviewModal, type PreviewLineItem } from '@/component
 import { uploadInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 import { normalizeExtractedInvoice, type NormalizedExtractedInvoice } from '../../lib/ap-invoice/cameraService';
 import { useToast } from '../../hooks/use-toast';
-import { Tabs, TabsContent } from '../../components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import * as XLSX from 'xlsx';
 import type { Invoice } from '../../lib/ap-invoice/supabase';
 import { logAction, getInvoiceflowWorkEmail } from '../../lib/ap-invoice/auditService';
@@ -2911,25 +2911,20 @@ export function InvoiceUpload() {
       )}
 
       <Tabs value={uploadMethod} onValueChange={(v) => setUploadMethod(v as typeof uploadMethod)} className="w-full">
-        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <label className="text-sm font-medium text-gray-700" htmlFor="upload-method">
-            Upload method
-          </label>
-          <Select
-            value={uploadMethod}
-            onValueChange={(v) => setUploadMethod(v as typeof uploadMethod)}
-          >
-            <SelectTrigger id="upload-method" className="w-full sm:w-[280px] bg-white">
-              <SelectValue placeholder="Choose upload method" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="scan">Scan Invoice</SelectItem>
-              <SelectItem value="single">Single Upload</SelectItem>
-              <SelectItem value="bulk">Bulk (Excel/CSV)</SelectItem>
-              <SelectItem value="multi-pdf">Multiple PDFs</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <TabsList className="mb-4 grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4">
+          <TabsTrigger value="scan" className="text-sm">
+            Scan Invoice
+          </TabsTrigger>
+          <TabsTrigger value="single" className="text-sm">
+            Single Upload
+          </TabsTrigger>
+          <TabsTrigger value="bulk" className="text-sm">
+            Bulk Excel/CSV
+          </TabsTrigger>
+          <TabsTrigger value="multi-pdf" className="text-sm">
+            Multiple PDFs
+          </TabsTrigger>
+        </TabsList>
 
         <TabsContent value="scan" className="space-y-6">
           <Card>
