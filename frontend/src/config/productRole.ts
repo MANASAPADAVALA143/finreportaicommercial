@@ -33,8 +33,8 @@ const ROLE_PATH_PREFIXES: Record<ProductRole, string[] | null> = {
   uae_client: ['/ap-invoices', '/gulftax', '/ifrs/16', '/uae-select', '/dashboard', '/settings'],
   uae_suite: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/ifrs/16', '/uae-full', '/uae-full/ar', '/dashboard', '/settings'],
   uae_full: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/crm', '/o2c', '/company-setup', '/ifrs/16', '/dashboard', '/fpa', '/settings'],
-  india_client: ['/india-full', '/fpa', '/ca-firm', '/dashboard'],
-  india_full: ['/india-full', '/fpa', '/ca-firm', '/dashboard', '/ifrs-statement'],
+  india_client: ['/india-full', '/ap-invoices', '/fpa', '/ca-firm', '/dashboard', '/settings'],
+  india_full: ['/india-full', '/ap-invoices', '/fpa', '/ca-firm', '/dashboard', '/ifrs-statement', '/settings'],
   fpa_client: ['/fpa', '/dashboard'],
   full_access: null,
 };
@@ -43,6 +43,10 @@ const SETUP_PATHS = ['/company-setup', '/workspaces'];
 
 export function isUaeProductRole(productRole: ProductRole): boolean {
   return productRole === 'uae_client' || productRole === 'uae_suite' || productRole === 'uae_full';
+}
+
+export function isIndiaProductRole(productRole: ProductRole): boolean {
+  return productRole === 'india_client' || productRole === 'india_full';
 }
 
 /** Main FinReport card dashboard — separate UAE Suite, UAE Accounting, FP&A sections. */
@@ -81,6 +85,17 @@ export function pinUaeSuiteMarket(): void {
     localStorage.setItem('gnanova_suite', 'uae');
     localStorage.setItem('finreportai_ap_market', 'uae');
     window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'uae' }));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Pin India suite + AP InvoiceFlow India market (GST / INR). */
+export function pinIndiaSuiteMarket(): void {
+  try {
+    localStorage.setItem('gnanova_suite', 'india');
+    localStorage.setItem('finreportai_ap_market', 'india');
+    window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'india' }));
   } catch {
     /* ignore */
   }

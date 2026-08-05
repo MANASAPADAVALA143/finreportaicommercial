@@ -2,7 +2,15 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 
 import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
 import { clearAllAuthStorage, setMemoryAccessToken } from '../utils/authToken';
-import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, type ProductRole } from '../config/productRole';
+import {
+  loginRedirectFor,
+  normalizeProductRole,
+  pinUaeSuiteMarket,
+  pinIndiaSuiteMarket,
+  isUaeProductRole,
+  isIndiaProductRole,
+  type ProductRole,
+} from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
@@ -158,6 +166,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
     if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
+    if (isIndiaProductRole(loggedIn.product_role)) pinIndiaSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
@@ -212,6 +221,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
     if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
+    if (isIndiaProductRole(loggedIn.product_role)) pinIndiaSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
@@ -325,6 +335,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setAccessToken(storedToken);
             setUser({ ...parsed, product_role: normalizeProductRole(parsed.product_role) });
             if (isUaeProductRole(normalizeProductRole(parsed.product_role))) pinUaeSuiteMarket();
+            if (isIndiaProductRole(normalizeProductRole(parsed.product_role))) pinIndiaSuiteMarket();
             scheduleRefresh(storedToken);
           }
           finish();

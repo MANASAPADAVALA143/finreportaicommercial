@@ -68,6 +68,7 @@ export const INDIA_NAV: NavEntry[] = [
   { label: 'Chart of Accounts',  path: '/india-full/coa',       icon: 'book' },
   { label: 'Journal Entries',    path: '/india-full/journals',  icon: 'file-text' },
   { label: 'Sales Invoices',     path: '/india-full/sales',     icon: 'receipt' },
+  { label: 'AP InvoiceFlow',     path: '/ap-invoices',          icon: 'shopping-cart', badge: 'AP' },
   { label: 'Purchase + ITC',     path: '/india-full/purchases', icon: 'shopping-cart' },
   { label: 'GST Returns',        path: '/india-full/gst',       icon: 'percent' },
   { label: 'TDS Management',     path: '/india-full/tds',       icon: 'calculator' },

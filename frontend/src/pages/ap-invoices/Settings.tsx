@@ -20,7 +20,6 @@ import { useToast } from '@/hooks/use-toast';
 import { Download, Database, User, Building, Key, Mail, ArrowLeft, LayoutDashboard, Upload, FileSpreadsheet, Trash2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { COUNTRIES, STANDARDS, FY_OPTIONS, TIMEZONE_OPTIONS } from '@/constants/companyCountries';
-import { CurrencyCombobox } from '@/components/ap-invoice/CurrencyCombobox';
 import { ApprovalRulesSection } from '@/components/approvals/ApprovalRulesSection';
 import { Checkbox } from '@/components/ui/checkbox';
 import { getMyCompany, requireCompanyId } from '@/lib/ap-invoice/companyService';
@@ -853,10 +852,27 @@ export function Settings() {
             </div>
             <div className="space-y-2">
               <Label>Base currency</Label>
-              <CurrencyCombobox
+              <Select
                 value={companyRow.base_currency}
-                onChange={(code) => setCompanyRow({ ...companyRow, base_currency: code })}
-              />
+                onValueChange={(code) => setCompanyRow({ ...companyRow, base_currency: code })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select currency" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="INR">₹ INR — Indian Rupee</SelectItem>
+                  <SelectItem value="AED">د.إ AED — UAE Dirham</SelectItem>
+                  <SelectItem value="USD">$ USD — US Dollar</SelectItem>
+                  <SelectItem value="GBP">£ GBP — British Pound</SelectItem>
+                  <SelectItem value="AUD">A$ AUD — Australian Dollar</SelectItem>
+                  {!['INR', 'AED', 'USD', 'GBP', 'AUD'].includes(companyRow.base_currency) &&
+                    companyRow.base_currency && (
+                      <SelectItem value={companyRow.base_currency}>
+                        {companyRow.base_currency} (current)
+                      </SelectItem>
+                    )}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>Accounting standard</Label>
