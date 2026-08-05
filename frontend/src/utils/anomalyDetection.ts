@@ -1,8 +1,10 @@
 ﻿// Anomaly Detection System for Invoice Processing
 
-export type RiskScore = 'low' | 'medium' | 'high';
+import { joinApiUrl } from '@/utils/backendOrigin';
+import { getStoredAccessToken } from '@/utils/authToken';
+import { workspaceHeaders } from '@/services/workspaceService';
 
-// â”€â”€â”€ Training-based anomaly check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export type RiskScore = 'low' | 'medium' | 'high';
 
 interface TrainingCheckResult {
   profile_found: boolean;
@@ -36,9 +38,11 @@ export async function checkTrainingAnomaly(params: {
   invoice_date: string;
 }): Promise<TrainingCheckResult | null> {
   try {
-    const resp = await fetch('/api/training/check-anomaly', {
+    const token = getStoredAccessToken();
+    const resp = await fetch(joinApiUrl('/api/training/check-anomaly'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workspaceHeaders(token, { 'Content-Type': 'application/json' }),
+      credentials: 'include',
       body: JSON.stringify(params),
     });
     if (!resp.ok) return null;

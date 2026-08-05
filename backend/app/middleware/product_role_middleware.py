@@ -44,6 +44,7 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_client": (
         "/api/gulftax",
         "/api/ap",
+        "/api/training",
         "/api/ifrs16",
         "/api/vat",
         "/api/invoice",
@@ -59,6 +60,7 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_suite": (
         "/api/gulftax",
         "/api/ap",
+        "/api/training",
         "/api/ifrs16",
         "/api/vat",
         "/api/invoice",
@@ -77,6 +79,7 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_full": (
         "/api/gulftax",
         "/api/ap",
+        "/api/training",
         "/api/uae",
         "/api/crm",
         "/api/o2c",
@@ -92,8 +95,8 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
         "/api/automations",
         "/api/uae-suite",
     ),
-    "india_client": ("/api/india", "/api/bank", "/api/fpa", "/api/reports", "/api/excel", "/api/board-pack", "/api/ca"),
-    "india_full": ("/api/india", "/api/ap", "/api/bank", "/api/fpa", "/api/ifrs"),
+    "india_client": ("/api/india", "/api/ap", "/api/training", "/api/bank", "/api/fpa", "/api/reports", "/api/excel", "/api/board-pack", "/api/ca"),
+    "india_full": ("/api/india", "/api/ap", "/api/training", "/api/bank", "/api/fpa", "/api/ifrs"),
     "fpa_client": ("/api/fpa", "/api/reports", "/api/excel", "/api/board-pack"),
     "full_access": None,
 }

@@ -3,6 +3,8 @@ import type { InvoiceAnomaly } from './supabase';
 import { requireCompanyId } from './companyService';
 import { logApAudit } from './apAuditService';
 import { joinApiUrl } from '@/utils/backendOrigin';
+import { getStoredAccessToken } from '@/utils/authToken';
+import { workspaceHeaders } from '@/services/workspaceService';
 import { detectAnomalies } from '@/utils/anomalyDetection';
 
 export type AnomalyEngineFlag = {
@@ -31,9 +33,11 @@ export async function runAnomalyEngine(payload: {
   approval_threshold?: number;
 }): Promise<AnomalyEngineResult> {
   try {
+    const token = getStoredAccessToken();
     const resp = await fetch(ANOMALY_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workspaceHeaders(token, { 'Content-Type': 'application/json' }),
+      credentials: 'include',
       body: JSON.stringify(payload),
     });
     if (resp.ok) return (await resp.json()) as AnomalyEngineResult;

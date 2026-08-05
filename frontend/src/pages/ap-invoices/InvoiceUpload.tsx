@@ -1786,6 +1786,14 @@ export function InvoiceUpload() {
         console.warn('[AP] bulk-upsert API failed, falling back to client upsert:', apiErr);
       }
 
+      let canWriteAuditLogs = false;
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        canWriteAuditLogs = !!sess?.session?.access_token;
+      } catch {
+        canWriteAuditLogs = false;
+      }
+
       for (let i = 0; i < prepared.length; i++) {
         const { rowNum, invoiceData, upsertPayload, initialStatus } = prepared[i];
         try {
@@ -1863,11 +1871,13 @@ export function InvoiceUpload() {
           }
 
           try {
-            await supabase.from('audit_logs').insert({
-              invoice_id: invoice.id,
-              action: 'Created',
-              user_name: 'System User',
-            });
+            if (canWriteAuditLogs) {
+              await supabase.from('audit_logs').insert({
+                invoice_id: invoice.id,
+                action: 'Created',
+                user_name: 'System User',
+              });
+            }
           } catch {
             /* audit may also hit RLS — non-fatal after successful insert */
           }
