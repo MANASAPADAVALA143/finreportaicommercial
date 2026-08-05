@@ -3372,7 +3372,7 @@ export function InvoiceUpload() {
                 />
                 {vendorTrn && (
                   <p className={`text-xs font-medium ${validateTaxId(vendorTrn, 'uae') ? 'text-green-700' : 'text-red-600'}`}>
-                    {validateTaxId(vendorTrn, 'uae') ? 'âœ“ Valid TRN format' : 'âœ— TRN must be 15 digits starting with 1'}
+                    {validateTaxId(vendorTrn, 'uae') ? 'Valid TRN format' : 'TRN must be 15 digits starting with 1'}
                   </p>
                 )}
               </div>
@@ -3758,7 +3758,7 @@ export function InvoiceUpload() {
                                       {errors.join(', ')}
                                     </div>
                                   ) : (
-                                    <span className="text-xs text-green-600">âœ“ Valid</span>
+                                    <span className="text-xs text-green-600">Valid</span>
                                   )}
                                 </TableCell>
                               </TableRow>
@@ -4032,7 +4032,7 @@ export function InvoiceUpload() {
                                     </div>
                                   </div>
                                   {item.extractedData._saved && (
-                                    <p className="text-xs text-green-600">âœ“ Saved successfully</p>
+                                    <p className="text-xs text-green-600">Saved successfully</p>
                                   )}
                                 </div>
                               )}
