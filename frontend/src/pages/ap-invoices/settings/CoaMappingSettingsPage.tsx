@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, RefreshCw, RotateCcw, Save } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Button } from '../../components/ui/button';
-import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
-import { Badge } from '../../components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -12,14 +12,14 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../components/ui/table';
-import { useToast } from '../../hooks/use-toast';
+} from '@/components/ui/table';
+import { useToast } from '@/hooks/use-toast';
 import {
   loadEffectiveCoaMappings,
   resetCompanyCoaOverride,
   saveCompanyCoaOverride,
   type CoaMappingRow,
-} from '../../services/coaVatMapping.service';
+} from '@/services/coaVatMapping.service';
 
 type Draft = Record<string, { gl_code: string; gl_name: string }>;
 
