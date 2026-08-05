@@ -126,39 +126,6 @@ const statusColors: Record<string, string> = {
   Queried: 'bg-purple-100 text-purple-800 border-purple-200',
 };
 
-function sourceIntakeBadge(source: Invoice['source']) {
-  const s = source ?? 'upload';
-  const styles: Record<string, string> = {
-    email: 'bg-blue-100 text-blue-800 border-blue-200',
-    email_n8n: 'bg-sky-100 text-sky-900 border-sky-200',
-    whatsapp: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-    camera: 'bg-amber-100 text-amber-950 border-amber-200',
-    excel: 'bg-violet-100 text-violet-900 border-violet-200',
-    excel_vba: 'bg-indigo-100 text-indigo-900 border-indigo-200',
-    vendor_portal: 'bg-purple-100 text-purple-800 border-purple-200',
-    manual: 'border-slate-200 bg-slate-50 text-slate-800',
-    upload: 'bg-slate-100 text-slate-800 border-slate-200',
-    pdf: 'bg-cyan-100 text-cyan-900 border-cyan-200',
-  };
-  const labels: Record<string, string> = {
-    email: '📧 Email',
-    email_n8n: '📧 n8n email',
-    whatsapp: '💬 WhatsApp',
-    camera: '📷 Camera',
-    excel: '📊 Excel Import',
-    excel_vba: '📊 Excel VBA',
-    vendor_portal: 'Portal',
-    manual: '📝 Manual',
-    upload: '📎 PDF Upload',
-    pdf: '📎 PDF Upload',
-  };
-  return (
-    <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${styles[s] ?? styles.upload}`}>
-      {labels[s] ?? labels.upload}
-    </Badge>
-  );
-}
-
 function invoicePaymentPill(inv: Invoice): { label: string; title?: string; variant: 'paid' | 'overdue' | 'pending' } {
   const paid = inv.status === 'Paid' || inv.payment_status === 'paid';
   if (paid) {
@@ -1755,7 +1722,6 @@ export function InvoiceList() {
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         {invoice.invoice_number}
-                        {sourceIntakeBadge(invoice.source)}
                         {invoice.invoice_type === 'sales' && (
                           <Badge className="border-teal-200 bg-teal-50 text-teal-900 text-[10px] px-1.5 py-0">AR</Badge>
                         )}
