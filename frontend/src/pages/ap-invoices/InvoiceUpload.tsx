@@ -19,6 +19,7 @@ import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } 
 import { ensureApCompanySynced, ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { useAuth } from '../../context/AuthContext';
+import { getStoredAccessToken } from '../../utils/authToken';
 import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
 import { bulkUpsertInvoicesViaApi } from '../../lib/ap-invoice/bulkUpsertService';
@@ -1685,6 +1686,13 @@ export function InvoiceUpload() {
         initialStatus: string;
       }> = [];
 
+      const authToken = getStoredAccessToken();
+      let gulfTaxWarned = false;
+      if (isUAE && !authToken) {
+        console.warn('[AP] GulfTax classify skipped for bulk import — no bearer token (log out and log in)');
+        gulfTaxWarned = true;
+      }
+
       for (let i = 0; i < bulkData.length; i++) {
         const invoiceData = bulkData[i];
         const rowNum = i + 2; // Excel row number
@@ -1696,7 +1704,7 @@ export function InvoiceUpload() {
 
           // UAE: classify each invoice with embedded GulfTax before insert
           let gulfTaxFields: Record<string, unknown> = {};
-          if (isUAE) {
+          if (isUAE && authToken) {
             try {
               const gt = await classifyAPInvoiceEmbedded({
                 invoice_number: invoiceData.invoice_number,
@@ -1720,7 +1728,10 @@ export function InvoiceUpload() {
               };
               setBulkGulfTaxCount((c) => c + 1);
             } catch (gtErr) {
-              console.warn('GulfTax classify skipped for row', rowNum, gtErr);
+              if (!gulfTaxWarned) {
+                console.warn('GulfTax classify skipped (further rows silent):', gtErr);
+                gulfTaxWarned = true;
+              }
             }
           }
 

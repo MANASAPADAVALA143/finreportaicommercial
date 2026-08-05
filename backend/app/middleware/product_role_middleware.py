@@ -44,6 +44,7 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_client": (
         "/api/gulftax",
         "/api/ap",
+        "/api/uae",
         "/api/training",
         "/api/ifrs16",
         "/api/vat",
@@ -60,6 +61,7 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_suite": (
         "/api/gulftax",
         "/api/ap",
+        "/api/uae",
         "/api/training",
         "/api/ifrs16",
         "/api/vat",
