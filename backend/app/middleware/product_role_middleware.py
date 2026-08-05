@@ -30,6 +30,7 @@ PUBLIC_PREFIXES = (
     "/api/ap/integrations/zoho/callback",
     "/api/ap/integrations/qbo/callback",
     "/api/connections/zoho/callback",
+    "/api/ap/app-settings",
 )
 
 AUTH_ANY_ROLE_PREFIXES = (

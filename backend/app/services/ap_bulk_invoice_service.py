@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import date, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -59,21 +60,137 @@ def _strip_unknown(payload: dict[str, Any], err_msg: str) -> dict[str, Any] | No
         out = dict(payload)
         out.pop(m.group(1), None)
         return out
-    # Also strip keys not in safe set as a fallback
     return None
+
+
+def _ensure_dates(payload: dict[str, Any]) -> dict[str, Any]:
+    """invoices.due_date is NOT NULL — default to invoice_date + 30 days."""
+    inv_date = str(payload.get("invoice_date") or "").strip()[:10]
+    if not inv_date:
+        inv_date = date.today().isoformat()
+        payload["invoice_date"] = inv_date
+    due = str(payload.get("due_date") or "").strip()[:10]
+    if not due:
+        try:
+            y, m, d = (int(x) for x in inv_date.split("-"))
+            payload["due_date"] = (date(y, m, d) + timedelta(days=30)).isoformat()
+        except ValueError:
+            payload["due_date"] = (date.today() + timedelta(days=30)).isoformat()
+    return payload
 
 
 def _sanitize_row(row: dict[str, Any], company_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in row.items():
-        if k in _SAFE_KEYS and v is not None:
+        if k in _SAFE_KEYS and v is not None and v != "":
             out[k] = v
     out["company_id"] = company_id or out.get("company_id")
     if "risk_flags" in out and isinstance(out["risk_flags"], str):
         out["risk_flags"] = []
     if "source" not in out:
         out["source"] = "excel"
-    return out
+    return _ensure_dates(out)
+
+
+def _row_data(res: Any) -> dict[str, Any] | None:
+    data = getattr(res, "data", None)
+    if isinstance(data, list) and data:
+        return data[0] if isinstance(data[0], dict) else None
+    if isinstance(data, dict) and data.get("id"):
+        return data
+    return None
+
+
+def _fetch_invoice(sb: Any, company_id: str, inv_no: str) -> dict[str, Any] | None:
+    """Fetch without chaining .select() twice (postgrest 0.18 SyncSelectRequestBuilder)."""
+    try:
+        res = (
+            sb.table("invoices")
+            .select("*")
+            .eq("invoice_number", inv_no)
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        return _row_data(res)
+    except Exception as exc:
+        logger.warning("fetch invoice %s failed: %s", inv_no, exc)
+        return None
+
+
+def _save_invoice(sb: Any, payload: dict[str, Any], company_id: str, inv_no: str) -> tuple[dict[str, Any] | None, str]:
+    """
+    Insert or update without chaining .select() after upsert.
+
+    supabase-py 2.10 / postgrest 0.18: upsert() returns SyncQueryRequestBuilder
+    which has .execute() but NOT .select() — chaining .select() raises AttributeError.
+    """
+    last_err = ""
+    working = dict(payload)
+
+    for _attempt in range(12):
+        try:
+            existing = _fetch_invoice(sb, company_id, inv_no)
+            if existing and existing.get("id"):
+                update_payload = {k: v for k, v in working.items() if k not in ("created_at",)}
+                res = (
+                    sb.table("invoices")
+                    .update(update_payload)
+                    .eq("id", existing["id"])
+                    .execute()
+                )
+                saved = _row_data(res) or _fetch_invoice(sb, company_id, inv_no)
+            else:
+                # Prefer insert; on unique conflict fall back to upsert without .select()
+                try:
+                    res = sb.table("invoices").insert(working).execute()
+                    saved = _row_data(res) or _fetch_invoice(sb, company_id, inv_no)
+                except Exception as insert_exc:
+                    msg = str(insert_exc)
+                    if "duplicate" in msg.lower() or "23505" in msg:
+                        res = sb.table("invoices").upsert(working, on_conflict="invoice_number").execute()
+                        saved = _row_data(res) or _fetch_invoice(sb, company_id, inv_no)
+                    else:
+                        raise
+
+            if saved and saved.get("id"):
+                return saved, ""
+            last_err = "save returned no row"
+            break
+        except Exception as exc:
+            last_err = str(exc)
+            # Never retry the broken upsert().select() pattern — strip bad columns instead
+            if "has no attribute 'select'" in last_err:
+                last_err = "internal: invalid supabase select chain (fixed) — retrying without select"
+                # fall through to strip/retry once more with insert/update only
+            stripped = _strip_unknown(working, last_err)
+            if stripped is not None:
+                working = _ensure_dates(stripped)
+                continue
+            for drop in (
+                "gulftax_decision",
+                "gulftax_risk_score",
+                "gulftax_confidence",
+                "vendor_trn",
+                "vat_treatment",
+                "vat_rate",
+                "vat_amount",
+                "source",
+                "ifrs_explanation",
+                "exchange_rate_to_base",
+                "subtotal_amount",
+                "invoice_language",
+                "approval_level",
+                "processing_time_seconds",
+            ):
+                if drop in working:
+                    working.pop(drop, None)
+                    working = _ensure_dates(working)
+                    break
+            else:
+                break
+
+    return None, last_err or "upsert failed"
 
 
 def bulk_upsert_invoices(
@@ -97,56 +214,7 @@ def bulk_upsert_invoices(
     for idx, raw in enumerate(rows):
         payload = _sanitize_row(dict(raw or {}), company_id)
         inv_no = str(payload.get("invoice_number") or f"row-{idx + 1}")
-        last_err = ""
-        saved: dict[str, Any] | None = None
-
-        for _attempt in range(12):
-            try:
-                # supabase-py 2.x: do not chain .select() after upsert()
-                res = sb.table("invoices").upsert(payload, on_conflict="invoice_number").execute()
-                data = res.data
-                if isinstance(data, list) and data:
-                    saved = data[0]
-                elif isinstance(data, dict):
-                    saved = data
-                if saved:
-                    break
-                fetch = (
-                    sb.table("invoices")
-                    .select("*")
-                    .eq("invoice_number", inv_no)
-                    .eq("company_id", company_id)
-                    .limit(1)
-                    .execute()
-                )
-                if fetch.data:
-                    saved = fetch.data[0]
-                    break
-                last_err = "upsert returned no row"
-                break
-            except Exception as exc:
-                last_err = str(exc)
-                stripped = _strip_unknown(payload, last_err)
-                if stripped is not None:
-                    payload = stripped
-                    continue
-                for drop in (
-                    "gulftax_decision",
-                    "gulftax_risk_score",
-                    "gulftax_confidence",
-                    "vendor_trn",
-                    "vat_treatment",
-                    "vat_rate",
-                    "vat_amount",
-                    "source",
-                    "ifrs_explanation",
-                    "exchange_rate_to_base",
-                ):
-                    if drop in payload:
-                        payload.pop(drop, None)
-                        break
-                else:
-                    break
+        saved, last_err = _save_invoice(sb, payload, company_id, inv_no)
 
         if saved and saved.get("id"):
             success += 1
