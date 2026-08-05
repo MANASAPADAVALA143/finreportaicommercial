@@ -102,12 +102,8 @@ def bulk_upsert_invoices(
 
         for _attempt in range(12):
             try:
-                res = (
-                    sb.table("invoices")
-                    .upsert(payload, on_conflict="invoice_number")
-                    .select("*")
-                    .execute()
-                )
+                # supabase-py 2.x: do not chain .select() after upsert()
+                res = sb.table("invoices").upsert(payload, on_conflict="invoice_number").execute()
                 data = res.data
                 if isinstance(data, list) and data:
                     saved = data[0]
@@ -115,7 +111,6 @@ def bulk_upsert_invoices(
                     saved = data
                 if saved:
                     break
-                # some clients return empty on upsert — fetch by number
                 fetch = (
                     sb.table("invoices")
                     .select("*")
@@ -135,7 +130,6 @@ def bulk_upsert_invoices(
                 if stripped is not None:
                     payload = stripped
                     continue
-                # Drop optional keys gradually
                 for drop in (
                     "gulftax_decision",
                     "gulftax_risk_score",
