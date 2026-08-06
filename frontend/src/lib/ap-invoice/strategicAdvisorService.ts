@@ -1,5 +1,7 @@
 import { supabase, type Invoice, type PurchaseOrder } from './supabase';
 import { getMyCompany } from './companyService';
+import { listInvoicesViaApi } from './listInvoicesService';
+import { resolveApSupabaseCompanyId } from './workspaceCompanySync';
 import { effectivePaymentDate, normalizedOpenPaymentStatus } from './paymentService';
 import { anonymiseVendor, redactDemoVendorNames } from './vendorDisplay';
 
@@ -160,7 +162,30 @@ export function formatInr(n: number): string {
   return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }
 
+/** Same company resolution as Invoice List (workspace sync → AP Supabase company). */
+async function resolveCfoCompanyId(): Promise<string | undefined> {
+  try {
+    return await resolveApSupabaseCompanyId();
+  } catch {
+    const company = await getMyCompany();
+    return company?.id;
+  }
+}
+
+/**
+ * Prefer service-role list-invoices (FinReport JWT has no Supabase session → browser RLS = 0 rows).
+ * Fall back to browser Supabase only if the API fails.
+ */
 async function loadInvoices(companyId: string | undefined, limit = 800): Promise<Invoice[]> {
+  if (companyId) {
+    try {
+      const viaApi = await listInvoicesViaApi(companyId, limit);
+      if (viaApi.length > 0) return viaApi;
+    } catch (e) {
+      console.warn('[CFO] list-invoices API failed, falling back to browser Supabase:', e);
+    }
+  }
+
   let q = supabase.from('invoices').select('*').order('invoice_date', { ascending: false }).limit(limit);
   if (companyId) q = q.eq('company_id', companyId);
   const { data, error } = await q;
@@ -350,8 +375,7 @@ function riskForVendor(vendor: string, unpaid: Invoice[]): VendorRisk {
 }
 
 export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const invData = await loadInvoices(cid);
   const vendors = await loadVendors(cid);
   const today = new Date();
@@ -563,8 +587,7 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     return kpiCache.data;
   }
 
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const [invData, vendors, pos, payLog] = await Promise.all([
     loadInvoices(cid, 1000),
     loadVendors(cid),
@@ -613,6 +636,10 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
   const highRisk = unpaid.filter((i) => {
     if (i.risk_score === 'high') return true;
     if (i.risk_level && String(i.risk_level).toLowerCase() === 'high') return true;
+    // Invoice List stores numeric risk_score (e.g. 88) — treat ≥60 as high when anomalies RLS is empty.
+    if (typeof i.risk_score === 'number' && i.risk_score >= 60) return true;
+    const n = Number(i.risk_score);
+    if (Number.isFinite(n) && n >= 60) return true;
     return false;
   });
 
@@ -989,8 +1016,7 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
 }
 
 export async function getCFOCashFlowSeries(openingBalance: number, _minFloor: number): Promise<CashFlowDay[]> {
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const invData = await loadInvoices(cid, 600);
   const today = new Date();
   today.setHours(0, 0, 0, 0);

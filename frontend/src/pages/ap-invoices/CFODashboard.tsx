@@ -58,6 +58,8 @@ import {
 } from '../../lib/ap-invoice/strategicAdvisorService';
 import { anonymiseVendor } from '../../lib/ap-invoice/vendorDisplay';
 import { getMyCompany } from '../../lib/ap-invoice/companyService';
+import { resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { useAuth } from '@/context/AuthContext';
 
 const AXIS_TICK = { fontSize: 10, fill: '#94a3b8' };
 const GRID_LIGHT = { strokeDasharray: '3 3', stroke: 'rgba(0,0,0,0.08)' };
@@ -259,7 +261,9 @@ export default function CFODashboard() {
   const taxIdLabel = config?.taxIdLabel ?? (isUAE ? 'TRN' : 'GSTIN');
   const fmtL = fmtMoneyFromMarket;
   const { toast } = useToast();
+  const { accessToken } = useAuth();
   const { activeCompanyId } = useCompany();
+  const [apCompanyId, setApCompanyId] = useState<string | null>(null);
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
     localStorage.getItem('active_workspace_id') ??
@@ -281,13 +285,25 @@ export default function CFODashboard() {
     setLoadError(null);
     setLoading(true);
     try {
+      let resolvedCompanyId: string | null = null;
+      try {
+        resolvedCompanyId = await resolveApSupabaseCompanyId(accessToken);
+        setApCompanyId(resolvedCompanyId);
+      } catch {
+        const company = await getMyCompany();
+        resolvedCompanyId = company?.id ?? null;
+        setApCompanyId(resolvedCompanyId);
+      }
+
       const [k, ins] = await Promise.all([getCFOKPIs(), getStrategicInsightsCached()]);
       setKpis(k);
       setInsights(ins);
       // Load AI training summary
       try {
-        const company = await import('../../lib/ap-invoice/companyService').then((m) => m.getMyCompany());
-        if (company) {
+        const company =
+          (await getMyCompany()) ??
+          (resolvedCompanyId ? { id: resolvedCompanyId } : null);
+        if (company?.id) {
           const [intRes, vpRes] = await Promise.all([
             supabase.from('ap_intelligence').select('*').eq('company_id', company.id).maybeSingle(),
             supabase.from('vendor_profiles').select('is_recurring,is_splitting_vendor,price_trend,historical_rejection_rate').eq('company_id', company.id),
@@ -323,15 +339,21 @@ export default function CFODashboard() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, accessToken]);
 
   useEffect(() => {
     void loadAll();
     void (async () => {
+      try {
+        const id = await resolveApSupabaseCompanyId(accessToken);
+        setApCompanyId(id);
+      } catch {
+        /* ignore */
+      }
       const co = await getMyCompany();
       if (co?.name) setCompanyName(co.name);
     })();
-  }, [loadAll]);
+  }, [loadAll, accessToken]);
 
   const timeGreeting = useMemo(() => {
     const h = new Date().getHours();
@@ -1148,7 +1170,7 @@ export default function CFODashboard() {
           </DialogHeader>
           <APInsightsPanel
             workspaceId={workspaceId}
-            companyId={activeCompanyId}
+            companyId={apCompanyId ?? activeCompanyId}
             embedded
           />
         </DialogContent>
