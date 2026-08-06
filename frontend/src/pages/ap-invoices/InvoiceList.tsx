@@ -1950,6 +1950,37 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       {(() => {
+                        // DB column is gl_account_code (there is no invoices.gl_code in prod).
+                        const code = String(
+                          invoice.gl_account_code ??
+                            (invoice as { gl_code?: string | null }).gl_code ??
+                            '',
+                        ).trim();
+                        const name = String(
+                          invoice.gl_account_name ??
+                            (invoice as { gl_name?: string | null }).gl_name ??
+                            '',
+                        ).trim();
+                        if (code) {
+                          return (
+                            <div>
+                              <span
+                                style={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: '700',
+                                  color: '#1a56db',
+                                  fontSize: '13px',
+                                }}
+                              >
+                                {code}
+                              </span>
+                              <br />
+                              <span style={{ fontSize: '11px', color: '#6b7280' }}>
+                                {name || 'GL Account'}
+                              </span>
+                            </div>
+                          );
+                        }
                         const mapped = displayGlFromCoaMap(invoice, coaMappings);
                         if (!mapped) {
                           return <span style={{ color: '#9ca3af' }}>—</span>;
@@ -1968,25 +1999,6 @@ export function InvoiceList() {
                             </span>
                             <br />
                             <span style={{ fontSize: '11px', color: '#6b7280' }}>{mapped.name}</span>
-                            <br />
-                            <span
-                              style={{
-                                fontSize: '10px',
-                                fontWeight: 600,
-                                color:
-                                  mapped.source === 'company'
-                                    ? '#0e9f6e'
-                                    : mapped.source === 'stored'
-                                      ? '#1d4ed8'
-                                      : '#6b7280',
-                              }}
-                            >
-                              {mapped.source === 'company'
-                                ? '🏢 Your COA'
-                                : mapped.source === 'stored'
-                                  ? '📄 On invoice'
-                                  : '🤖 Default COA'}
-                            </span>
                           </div>
                         );
                       })()}
