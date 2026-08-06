@@ -43,6 +43,7 @@ import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { useAuth } from '@/context/AuthContext';
+import { useCompany } from '@/context/CompanyContext';
 import { resolveApSupabaseCompanyId } from '@/lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '@/services/workspaceService';
 import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
@@ -332,6 +333,7 @@ export function InvoiceList() {
   const { market, isUAE } = useMarket();
   const { costCenterLabel } = useIndustryConfig();
   const { dateFormat } = useCompanySettings();
+  const { activeCompanyId } = useCompany();
   const tallySettings = useErpSettings();
   const [showExport, setShowExport] = useState(false);
   /** Secondary filters (search / property / IFRS / source / dates) — collapsed until needed. */
@@ -462,7 +464,7 @@ export function InvoiceList() {
       setSourceReceivedAtFilter(decodeURIComponent(receivedAt));
       setSourceFilter('email');
     }
-  }, [workspaceId]);
+  }, [workspaceId, activeCompanyId]);
 
   /** Reload open anomaly invoice ids using the same company scope as the list. */
   async function refreshAnomalyInvoiceIds(companyId: string | null, invoiceList: Invoice[]) {
@@ -753,11 +755,17 @@ export function InvoiceList() {
     let companyId: string | null = null;
     try {
       if (!opts?.quiet) setLoading(true);
-      try {
-        companyId = await resolveApSupabaseCompanyId(accessToken);
-      } catch {
-        const company = await getMyCompany();
-        companyId = company?.id ?? null;
+      // Prefer the banner company (Al Noor / Gnanova UAE Test FZE). Workspace-only
+      // resolve can pick the wrong AP company when several share one workspace.
+      if (activeCompanyId) {
+        companyId = activeCompanyId;
+      } else {
+        try {
+          companyId = await resolveApSupabaseCompanyId(accessToken);
+        } catch {
+          const company = await getMyCompany();
+          companyId = company?.id ?? null;
+        }
       }
 
       // Prefer service-role API — FinReport JWT sessions often have no Supabase auth,
@@ -776,17 +784,8 @@ export function InvoiceList() {
         const { data, error } = await q;
         if (error) throw error;
         invoiceList = data || [];
-
-        if (invoiceList.length === 0 && companyId) {
-          const { data: allRows, error: allErr } = await supabase
-            .from('invoices')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (!allErr && allRows && allRows.length > 0) {
-            console.warn('[AP] No invoices for active company — showing all invoices in database');
-            invoiceList = allRows;
-          }
-        }
+        // Do NOT fall back to "all invoices in database" — that made empty
+        // companies (e.g. Gnanova UAE Test FZE) look like they owned Al Noor's data.
       }
 
       setInvoices(invoiceList);

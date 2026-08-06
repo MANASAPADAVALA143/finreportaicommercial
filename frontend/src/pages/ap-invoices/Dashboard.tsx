@@ -124,21 +124,32 @@ export function Dashboard() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [activeCompanyId]);
 
   async function fetchData() {
     try {
-      const dashCompany = await getMyCompany();
-      const invQuery = dashCompany?.id
-        ? supabase.from('invoices').select('*').eq('company_id', dashCompany.id).order('created_at', { ascending: false })
-        : supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      const [invoicesRes, auditRes] = await Promise.all([
-        invQuery,
+      const companyId = activeCompanyId || (await getMyCompany())?.id || null;
+      let invoiceData: Invoice[] = [];
+      if (companyId) {
+        try {
+          const { listInvoicesViaApi } = await import('../../lib/ap-invoice/listInvoicesService');
+          invoiceData = await listInvoicesViaApi(companyId, 500);
+        } catch (apiErr) {
+          console.warn('[AP Dashboard] list-invoices API failed, falling back to Supabase:', apiErr);
+          const invQuery = supabase
+            .from('invoices')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('created_at', { ascending: false });
+          const invoicesRes = await invQuery;
+          if (invoicesRes.error) throw invoicesRes.error;
+          invoiceData = invoicesRes.data || [];
+        }
+      }
+      const [auditRes] = await Promise.all([
         supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(4),
       ]);
 
-      if (invoicesRes.error) throw invoicesRes.error;
-      const invoiceData = invoicesRes.data || [];
       setInvoices(invoiceData);
       setSelectedInvoice((prev) => {
         if (!prev) return null;
@@ -149,14 +160,13 @@ export function Dashboard() {
       if (!auditRes.error) setAuditLogs(auditRes.data || []);
 
       try {
-        const co = await getMyCompany();
-        if (co?.id) {
+        if (companyId) {
           const now = new Date();
           const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
           const { data: mrRows } = await supabase
             .from('match_results')
             .select('match_status')
-            .eq('company_id', co.id)
+            .eq('company_id', companyId)
             .gte('created_at', start);
           const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
           for (const r of mrRows ?? []) {
