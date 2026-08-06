@@ -22,10 +22,12 @@ from services.pdf_invoice_extractor import extract_and_classify_invoice, MAX_FIL
 
 from database import get_db
 from models import Transaction, Company, AuditLog
+import logging
 
 load_dotenv()
 
 router = APIRouter(prefix="/api/vat", tags=["VAT Classification"])
+logger = logging.getLogger(__name__)
 # Classification: POST /classify-transaction (single JSON) and POST /classify-bulk (multipart file) only.
 
 # Temp Excel files from bulk classify (job_id -> absolute path)
@@ -1000,10 +1002,42 @@ async def add_pdf_invoices_to_transactions(
         )
     db.commit()
 
+    # BUG 1 Invoice Flow: PDF → gulftax_transactions immediately (pending)
+    gulftax_pending = 0
+    gulftax_pending_errors = 0
+    if saved:
+        try:
+            from app.core.database import SessionLocal as MainSessionLocal
+            from app.services.vat_classifier_sync_service import sync_pdf_txn_to_gulftax_pending
+
+            ids = [s["id"] for s in saved]
+            fresh = db.query(Transaction).filter(Transaction.id.in_(ids)).all()
+            main_db = MainSessionLocal()
+            try:
+                for txn in fresh:
+                    res = sync_pdf_txn_to_gulftax_pending(
+                        main_db,
+                        txn,
+                        ported_company=company,
+                    )
+                    if res.get("ok") and not res.get("skipped"):
+                        gulftax_pending += 1
+                    elif not res.get("ok"):
+                        gulftax_pending_errors += 1
+            finally:
+                main_db.close()
+        except Exception:
+            gulftax_pending_errors += 1
+            logger.exception(
+                "PDF→gulftax pending sync failed for company=%s", company_id
+            )
+
     return {
         "saved_count": len(saved),
         "skipped_count": skipped,
         "transactions": saved,
+        "gulftax_pending": gulftax_pending,
+        "gulftax_pending_errors": gulftax_pending_errors,
     }
 
 

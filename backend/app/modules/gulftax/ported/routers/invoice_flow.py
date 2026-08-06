@@ -37,33 +37,61 @@ def _sync_invoice_flow_txns_to_gulftax(
     company_id: str,
     invoice_id: int,
 ) -> Dict[str, Any]:
-    """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return)."""
+    """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return).
+
+    1) All lines → gulftax with source=invoice_flow_pdf, status=pending (immediate).
+    2) Verified lines → also sync as vat_classifier_approved / posted for VAT Return.
+    """
     try:
+        from app.core.database import SessionLocal as MainSessionLocal
         from app.services.vat_classifier_sync_service import (
             sync_approved_classifier_transactions_to_gulftax,
+            sync_pdf_txn_to_gulftax_pending,
         )
 
         company = db.query(Company).filter(Company.id == company_id).first()
-        txns = (
+        all_txns = (
             db.query(Transaction)
             .filter(
                 Transaction.company_id == company_id,
                 Transaction.source_invoice_id == invoice_id,
-                Transaction.is_verified == True,  # noqa: E712
             )
             .all()
         )
-        for t in txns:
-            side = (t.transaction_type or "purchase").lower()
-            from app.services.vat_box_mapping import assign_box_number
+        pending_synced = 0
+        pending_errors = 0
+        main_db = MainSessionLocal()
+        try:
+            for t in all_txns:
+                side = (t.transaction_type or "purchase").lower()
+                from app.services.vat_box_mapping import assign_box_number
 
-            t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 0
-        if txns:
-            db.commit()
-        return sync_approved_classifier_transactions_to_gulftax(
-            classifier_txns=txns,
+                t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 9
+                res = sync_pdf_txn_to_gulftax_pending(
+                    main_db, t, ported_company=company
+                )
+                if res.get("ok") and not res.get("skipped"):
+                    pending_synced += 1
+                elif not res.get("ok"):
+                    pending_errors += 1
+            if all_txns:
+                db.commit()
+        finally:
+            main_db.close()
+
+        verified = [t for t in all_txns if getattr(t, "is_verified", False)]
+        approve_res = sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=verified,
             ported_company=company,
         )
+        return {
+            "ok": approve_res.get("ok", True) and pending_errors == 0,
+            "pending_synced": pending_synced,
+            "pending_errors": pending_errors,
+            "synced": approve_res.get("synced", 0),
+            "skipped": approve_res.get("skipped", 0),
+            "errors": approve_res.get("errors", 0),
+        }
     except Exception:
         logger.exception(
             "Invoice Flow gulftax sync failed company=%s invoice=%s",

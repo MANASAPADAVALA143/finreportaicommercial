@@ -324,6 +324,15 @@ def _apply_dz_to_boxes(
         )
 
 
+def _normalize_fta_box_key(fta_box: str | None) -> str:
+    """Accept 'box9' or bare '9' → 'box9' for VAT return aggregation."""
+    raw = (fta_box or "box9").strip().lower()
+    if raw.startswith("box"):
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return f"box{digits}" if digits else "box9"
+
+
 def _default_box_mapping(
     boxes: dict[str, float],
     *,
@@ -333,7 +342,7 @@ def _default_box_mapping(
     direction: str,
     fta_box: str,
 ) -> None:
-    box = (fta_box or "box9").lower()
+    box = _normalize_fta_box_key(fta_box)
     is_output = (direction or "input").lower() == "output"
 
     if is_output:

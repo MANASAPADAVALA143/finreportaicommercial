@@ -317,11 +317,186 @@ def backfill_classifier_from_gulftax(
 
 
 CLASSIFIER_GULFTAX_SOURCE = "vat_classifier_approved"
+INVOICE_FLOW_PDF_SOURCE = "invoice_flow_pdf"
 _CLASSIFIER_TX_NS = uuid.UUID("b8d4f2a0-6c1e-4f9b-8d3a-7e5c4b2a1f09")
 
 
 def _classifier_ap_invoice_id(classifier_txn_id: int | str) -> str:
     return str(uuid.uuid5(_CLASSIFIER_TX_NS, f"vat-classifier-txn:{classifier_txn_id}"))
+
+
+def _simple_fta_box(transaction_type: str | None) -> str:
+    """BUG 3: purchase → '9', sale → '1' (bare FTA box digits)."""
+    side = (transaction_type or "purchase").strip().lower()
+    return "1" if side == "sale" else "9"
+
+
+def _simple_direction(transaction_type: str | None) -> str:
+    side = (transaction_type or "purchase").strip().lower()
+    return "output" if side == "sale" else "input"
+
+
+def _upsert_supabase_gulftax_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Insert into Supabase gulftax_transactions; skip if invoice_number+source+company exists.
+
+    Do not send net_amount — Supabase column is GENERATED.
+    """
+    try:
+        from app.core.supabase import get_supabase
+
+        sb = get_supabase()
+        company_id = row.get("company_id")
+        source = row.get("source")
+        inv = (row.get("invoice_number") or "").strip() or None
+        if company_id and source and inv:
+            existing = (
+                sb.table("gulftax_transactions")
+                .select("id")
+                .eq("company_id", company_id)
+                .eq("source", source)
+                .eq("invoice_number", inv)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                return {"ok": True, "skipped": True, "id": existing.data[0].get("id")}
+
+        payload = {k: v for k, v in row.items() if k != "net_amount" and v is not None}
+        # Prefer workspace_id over tenant_id for Supabase schema
+        if "tenant_id" in payload and "workspace_id" not in payload:
+            payload["workspace_id"] = payload.pop("tenant_id")
+        else:
+            payload.pop("tenant_id", None)
+        res = sb.table("gulftax_transactions").insert(payload).execute()
+        inserted = (res.data or [None])[0]
+        return {"ok": True, "id": (inserted or {}).get("id")}
+    except Exception as exc:
+        logger.exception("Supabase gulftax_transactions upsert failed")
+        return {"ok": False, "error": str(exc)}
+
+
+def _upsert_vat_classifier_transactions_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Mirror into Supabase + RDS vat_classifier_transactions (BUG 1 table)."""
+    result: dict[str, Any] = {"supabase": None, "rds": None}
+    inv_ref = (row.get("invoice_reference") or row.get("invoice_number") or "").strip() or None
+    company_id = row.get("company_id")
+    source = row.get("source") or CLASSIFIER_GULFTAX_SOURCE
+    fta_box = row.get("fta_box") or _simple_fta_box(row.get("transaction_type"))
+    payload = {
+        "company_id": company_id,
+        "workspace_id": row.get("workspace_id") or row.get("tenant_id"),
+        "transaction_type": row.get("transaction_type") or "purchase",
+        "fta_box": fta_box,
+        "net_amount": row.get("net_amount"),
+        "vat_amount": row.get("vat_amount"),
+        "gross_amount": row.get("gross_amount"),
+        "invoice_reference": inv_ref,
+        "vendor_name": row.get("vendor_name"),
+        "source": source,
+        "transaction_date": row.get("transaction_date"),
+        "vat_category": row.get("vat_category"),
+    }
+    # Dates as ISO for Supabase JSON
+    td = payload.get("transaction_date")
+    if hasattr(td, "isoformat"):
+        payload["transaction_date"] = td.isoformat()
+
+    try:
+        from app.core.supabase import get_supabase
+
+        sb = get_supabase()
+        if company_id and source and inv_ref:
+            existing = (
+                sb.table("vat_classifier_transactions")
+                .select("id")
+                .eq("company_id", company_id)
+                .eq("source", source)
+                .eq("invoice_reference", inv_ref)
+                .limit(1)
+                .execute()
+            )
+            if existing.data:
+                result["supabase"] = {"ok": True, "skipped": True}
+            else:
+                clean = {k: v for k, v in payload.items() if v is not None}
+                sb.table("vat_classifier_transactions").insert(clean).execute()
+                result["supabase"] = {"ok": True}
+        else:
+            clean = {k: v for k, v in payload.items() if v is not None}
+            sb.table("vat_classifier_transactions").insert(clean).execute()
+            result["supabase"] = {"ok": True}
+    except Exception as exc:
+        logger.exception("Supabase vat_classifier_transactions upsert failed")
+        result["supabase"] = {"ok": False, "error": str(exc)}
+
+    try:
+        from sqlalchemy import text
+
+        from app.core.database import SessionLocal
+
+        rds = SessionLocal()
+        try:
+            if company_id and source and inv_ref:
+                found = rds.execute(
+                    text(
+                        "SELECT id FROM vat_classifier_transactions "
+                        "WHERE company_id = :cid AND source = :src "
+                        "AND invoice_reference = :inv LIMIT 1"
+                    ),
+                    {"cid": str(company_id), "src": source, "inv": inv_ref},
+                ).fetchone()
+                if found:
+                    result["rds"] = {"ok": True, "skipped": True}
+                    return result
+            new_id = str(uuid.uuid4())
+            rds.execute(
+                text(
+                    """
+                    INSERT INTO vat_classifier_transactions (
+                      id, company_id, workspace_id, transaction_type, fta_box,
+                      net_amount, vat_amount, gross_amount, invoice_reference,
+                      vendor_name, source, transaction_date, vat_category, created_at
+                    ) VALUES (
+                      :id, :company_id, :workspace_id, :transaction_type, :fta_box,
+                      :net_amount, :vat_amount, :gross_amount, :invoice_reference,
+                      :vendor_name, :source, :transaction_date, :vat_category, NOW()
+                    )
+                    """
+                ),
+                {
+                    "id": new_id,
+                    "company_id": str(company_id) if company_id else None,
+                    "workspace_id": payload.get("workspace_id"),
+                    "transaction_type": payload.get("transaction_type"),
+                    "fta_box": fta_box,
+                    "net_amount": payload.get("net_amount"),
+                    "vat_amount": payload.get("vat_amount"),
+                    "gross_amount": payload.get("gross_amount"),
+                    "invoice_reference": inv_ref,
+                    "vendor_name": payload.get("vendor_name"),
+                    "source": source,
+                    "transaction_date": (
+                        None
+                        if td is None
+                        else td
+                        if not isinstance(td, str)
+                        else date.fromisoformat(str(td)[:10])
+                    ),
+                    "vat_category": payload.get("vat_category"),
+                },
+            )
+            rds.commit()
+            result["rds"] = {"ok": True, "id": new_id}
+        except Exception as exc:
+            rds.rollback()
+            logger.exception("RDS vat_classifier_transactions upsert failed")
+            result["rds"] = {"ok": False, "error": str(exc)}
+        finally:
+            rds.close()
+    except Exception as exc:
+        result["rds"] = {"ok": False, "error": str(exc)}
+
+    return result
 
 
 def _finreport_ids_from_ported_company(ported_company: Any) -> tuple[str, str]:
@@ -430,16 +605,82 @@ def _sync_classifier_transaction_to_gulftax_impl(
     vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
     gross = round(net + vat, 2) if vat > 0 else net
 
-    # Treatment-aware AP/AR box (never force all purchases to box9 / sales to box1 blindly)
-    from app.services.vat_box_mapping import assign_fta_box, direction_for_side, normalize_transaction_side
-
-    side = normalize_transaction_side(tx_type)
-    direction = direction_for_side(side)
+    # BUG 3 — simple box map: purchase→9, sale→1 (bare digits; VAT return normalizes)
+    direction = _simple_direction(tx_type)
     vat_treatment = getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
     vat_category = _norm_treatment(vat_treatment)
-    fta_box = assign_fta_box(side, vat_treatment) or (
-        "box1" if side == "sale" else "box9"
-    )
+    fta_box = _simple_fta_box(tx_type)
+
+    # Prefer invoice_number + source + company_id dedupe (user rule)
+    if inv_no and company_id:
+        dup_by_ref = (
+            db.query(GulftaxTransaction)
+            .filter(
+                GulftaxTransaction.company_id == company_id,
+                GulftaxTransaction.invoice_number == inv_no,
+                GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
+            )
+            .first()
+        )
+        if dup_by_ref:
+            changed = False
+            if (dup_by_ref.fta_box or "") != fta_box:
+                dup_by_ref.fta_box = fta_box
+                changed = True
+            if (dup_by_ref.direction or "").lower() != direction:
+                dup_by_ref.direction = direction
+                changed = True
+            if (dup_by_ref.status or "") != "posted":
+                dup_by_ref.status = "posted"
+                changed = True
+            if changed:
+                db.add(dup_by_ref)
+                db.commit()
+                db.refresh(dup_by_ref)
+            _upsert_supabase_gulftax_row(
+                {
+                    "company_id": company_id,
+                    "workspace_id": tenant_id,
+                    "source": CLASSIFIER_GULFTAX_SOURCE,
+                    "invoice_number": inv_no,
+                    "tax_period": dup_by_ref.tax_period,
+                    "transaction_date": dup_by_ref.transaction_date.isoformat()
+                    if hasattr(dup_by_ref.transaction_date, "isoformat")
+                    else dup_by_ref.transaction_date,
+                    "vendor_name": dup_by_ref.vendor_name,
+                    "vendor_trn": dup_by_ref.vendor_trn,
+                    "gross_amount": float(dup_by_ref.gross_amount or 0),
+                    "vat_amount": float(dup_by_ref.vat_amount or 0),
+                    "vat_category": dup_by_ref.vat_category,
+                    "fta_box": fta_box,
+                    "direction": direction,
+                    "status": "posted",
+                }
+            )
+            _upsert_vat_classifier_transactions_row(
+                {
+                    "company_id": company_id,
+                    "workspace_id": tenant_id,
+                    "transaction_type": tx_type,
+                    "fta_box": fta_box,
+                    "net_amount": net,
+                    "vat_amount": vat,
+                    "gross_amount": gross,
+                    "invoice_reference": inv_no,
+                    "vendor_name": getattr(classifier_txn, "vendor_or_customer", None),
+                    "source": CLASSIFIER_GULFTAX_SOURCE,
+                    "transaction_date": tx_date,
+                    "vat_category": vat_category,
+                }
+            )
+            return {
+                "ok": True,
+                "skipped": not changed,
+                "updated": changed,
+                "reason": "duplicate_invoice_reference",
+                "transaction_id": dup_by_ref.id,
+                "fta_box": fta_box,
+            }
 
     existing = (
         db.query(GulftaxTransaction)
@@ -451,7 +692,7 @@ def _sync_classifier_transaction_to_gulftax_impl(
     )
     if existing:
         changed = False
-        if (existing.fta_box or "").lower() != fta_box:
+        if (existing.fta_box or "") != fta_box:
             existing.fta_box = fta_box
             changed = True
         if (existing.direction or "").lower() != direction:
@@ -461,6 +702,26 @@ def _sync_classifier_transaction_to_gulftax_impl(
             db.add(existing)
             db.commit()
             db.refresh(existing)
+            _upsert_supabase_gulftax_row(
+                {
+                    "company_id": company_id,
+                    "workspace_id": tenant_id,
+                    "source": CLASSIFIER_GULFTAX_SOURCE,
+                    "invoice_number": inv_no,
+                    "tax_period": existing.tax_period,
+                    "transaction_date": existing.transaction_date.isoformat()
+                    if hasattr(existing.transaction_date, "isoformat")
+                    else existing.transaction_date,
+                    "vendor_name": existing.vendor_name,
+                    "vendor_trn": existing.vendor_trn,
+                    "gross_amount": float(existing.gross_amount or 0),
+                    "vat_amount": float(existing.vat_amount or 0),
+                    "vat_category": existing.vat_category,
+                    "fta_box": fta_box,
+                    "direction": direction,
+                    "status": "posted",
+                }
+            )
             return {
                 "ok": True,
                 "updated": True,
@@ -474,43 +735,6 @@ def _sync_classifier_transaction_to_gulftax_impl(
             "reason": "already_synced",
             "transaction_id": existing.id,
         }
-
-    # Secondary dedupe: same company + invoice_number + classifier source
-    if inv_no:
-        dup = (
-            db.query(GulftaxTransaction)
-            .filter(
-                GulftaxTransaction.company_id == company_id,
-                GulftaxTransaction.invoice_number == inv_no,
-                GulftaxTransaction.source == CLASSIFIER_GULFTAX_SOURCE,
-            )
-            .first()
-        )
-        if dup:
-            changed = False
-            if (dup.fta_box or "").lower() != fta_box:
-                dup.fta_box = fta_box
-                changed = True
-            if (dup.direction or "").lower() != direction:
-                dup.direction = direction
-                changed = True
-            if changed:
-                db.add(dup)
-                db.commit()
-                db.refresh(dup)
-                return {
-                    "ok": True,
-                    "updated": True,
-                    "reason": "corrected_duplicate_box",
-                    "transaction_id": dup.id,
-                    "fta_box": fta_box,
-                }
-            return {
-                "ok": True,
-                "skipped": True,
-                "reason": "duplicate_invoice_number",
-                "transaction_id": dup.id,
-            }
 
     try:
         gt = GulftaxTransaction(
@@ -537,6 +761,40 @@ def _sync_classifier_transaction_to_gulftax_impl(
         db.add(gt)
         db.commit()
         db.refresh(gt)
+        _upsert_supabase_gulftax_row(
+            {
+                "company_id": company_id,
+                "workspace_id": tenant_id,
+                "source": CLASSIFIER_GULFTAX_SOURCE,
+                "invoice_number": inv_no,
+                "tax_period": tax_period,
+                "transaction_date": tx_date.isoformat(),
+                "vendor_name": gt.vendor_name,
+                "vendor_trn": gt.vendor_trn,
+                "gross_amount": gross,
+                "vat_amount": vat,
+                "vat_category": vat_category,
+                "fta_box": fta_box,
+                "direction": direction,
+                "status": "posted",
+            }
+        )
+        _upsert_vat_classifier_transactions_row(
+            {
+                "company_id": company_id,
+                "workspace_id": tenant_id,
+                "transaction_type": tx_type,
+                "fta_box": fta_box,
+                "net_amount": net,
+                "vat_amount": vat,
+                "gross_amount": gross,
+                "invoice_reference": inv_no,
+                "vendor_name": gt.vendor_name,
+                "source": CLASSIFIER_GULFTAX_SOURCE,
+                "transaction_date": tx_date,
+                "vat_category": vat_category,
+            }
+        )
         return {
             "ok": True,
             "transaction_id": gt.id,
@@ -550,6 +808,154 @@ def _sync_classifier_transaction_to_gulftax_impl(
         logger.exception(
             "Classifier→gulftax sync failed for txn id=%s", txn_id
         )
+        return {"ok": False, "error": str(exc)}
+
+
+def sync_pdf_txn_to_gulftax_pending(
+    db: Session,
+    classifier_txn: Any,
+    *,
+    ported_company: Any | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Invoice Flow PDF → gulftax_transactions immediately (status=pending).
+
+    source='invoice_flow_pdf', purchase → fta_box='9', direction='input'.
+    """
+    from app.models.client_data import GulftaxTransaction
+    from app.services.gulftax_sync_service import (
+        _norm_treatment,
+        tax_period_for_date,
+    )
+
+    txn_id = getattr(classifier_txn, "id", None)
+    if txn_id is None:
+        return {"ok": False, "error": "missing_classifier_txn_id"}
+
+    ap_id = _classifier_ap_invoice_id(f"pdf:{txn_id}")
+    finreport_cid, tenant_from_company = _finreport_ids_from_ported_company(ported_company)
+    company_id = finreport_cid or str(getattr(classifier_txn, "company_id", "") or "")
+    tenant_id = (workspace_id or "").strip() or tenant_from_company or company_id
+    if not company_id or not tenant_id:
+        return {"ok": False, "error": "company_id_or_tenant_missing"}
+
+    tx_type = (getattr(classifier_txn, "transaction_type", None) or "purchase").lower()
+    if tx_type not in ("sale", "purchase"):
+        tx_type = "purchase"
+
+    tx_date = getattr(classifier_txn, "date", None) or date.today()
+    if isinstance(tx_date, datetime):
+        tx_date = tx_date.date()
+    elif isinstance(tx_date, str):
+        tx_date = date.fromisoformat(tx_date[:10])
+
+    filing = "quarterly"
+    try:
+        from app.services.gulftax_sync_service import _fetch_company_config
+
+        cfg = _fetch_company_config(company_id)
+        filing = cfg.get("vat_filing_frequency") or "quarterly"
+    except Exception:
+        pass
+
+    tax_period = tax_period_for_date(tx_date, filing)
+    inv_no = (getattr(classifier_txn, "invoice_number", None) or "").strip() or None
+    net = round(float(getattr(classifier_txn, "amount_aed", 0) or 0), 2)
+    vat = round(float(getattr(classifier_txn, "vat_amount_aed", 0) or 0), 2)
+    gross = round(net + vat, 2) if vat > 0 else net
+    direction = _simple_direction(tx_type)
+    fta_box = _simple_fta_box(tx_type)
+    vat_category = _norm_treatment(
+        getattr(classifier_txn, "vat_treatment", None) or "standard_rated"
+    )
+
+    if inv_no:
+        existing = (
+            db.query(GulftaxTransaction)
+            .filter(
+                GulftaxTransaction.company_id == company_id,
+                GulftaxTransaction.invoice_number == inv_no,
+                GulftaxTransaction.source == INVOICE_FLOW_PDF_SOURCE,
+            )
+            .first()
+        )
+        if existing:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "already_synced",
+                "transaction_id": existing.id,
+            }
+
+    try:
+        gt = GulftaxTransaction(
+            id=str(uuid.uuid4()),
+            tenant_id=tenant_id,
+            company_id=company_id,
+            source=INVOICE_FLOW_PDF_SOURCE,
+            ap_invoice_id=ap_id,
+            tax_period=tax_period,
+            transaction_date=tx_date,
+            vendor_name=getattr(classifier_txn, "vendor_or_customer", None),
+            vendor_trn=getattr(classifier_txn, "vendor_trn", None),
+            invoice_number=inv_no,
+            gross_amount=gross,
+            vat_amount=vat,
+            vat_category=vat_category,
+            fta_box=fta_box,
+            direction=direction,
+            status="pending",
+            designated_zone=False,
+            transaction_kind="goods",
+            created_at=datetime.utcnow(),
+        )
+        db.add(gt)
+        db.commit()
+        db.refresh(gt)
+        _upsert_supabase_gulftax_row(
+            {
+                "company_id": company_id,
+                "workspace_id": tenant_id,
+                "source": INVOICE_FLOW_PDF_SOURCE,
+                "invoice_number": inv_no,
+                "tax_period": tax_period,
+                "transaction_date": tx_date.isoformat(),
+                "vendor_name": gt.vendor_name,
+                "vendor_trn": gt.vendor_trn,
+                "gross_amount": gross,
+                "vat_amount": vat,
+                "vat_category": vat_category,
+                "fta_box": fta_box,
+                "direction": direction,
+                "status": "pending",
+            }
+        )
+        _upsert_vat_classifier_transactions_row(
+            {
+                "company_id": company_id,
+                "workspace_id": tenant_id,
+                "transaction_type": tx_type,
+                "fta_box": fta_box,
+                "net_amount": net,
+                "vat_amount": vat,
+                "gross_amount": gross,
+                "invoice_reference": inv_no,
+                "vendor_name": gt.vendor_name,
+                "source": INVOICE_FLOW_PDF_SOURCE,
+                "transaction_date": tx_date,
+                "vat_category": vat_category,
+            }
+        )
+        return {
+            "ok": True,
+            "transaction_id": gt.id,
+            "tax_period": tax_period,
+            "fta_box": fta_box,
+            "status": "pending",
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.exception("PDF→gulftax pending sync failed for txn id=%s", txn_id)
         return {"ok": False, "error": str(exc)}
 
 
