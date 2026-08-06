@@ -811,6 +811,69 @@ def _sync_classifier_transaction_to_gulftax_impl(
         return {"ok": False, "error": str(exc)}
 
 
+def sync_invoice_record_to_gulftax_pending(
+    db: Session,
+    invoice: Any,
+    *,
+    ported_company: Any | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Write gulftax pending row from Invoice Flow `invoices` row (no classifier txn needed).
+
+    Called after every classify-and-risk — including review/escalated — so
+    source=invoice_flow_pdf appears immediately after PDF extraction.
+    """
+    from app.services.gulftax_sync_service import _norm_treatment, tax_period_for_date
+
+    inv_id = getattr(invoice, "id", None)
+    if inv_id is None:
+        return {"ok": False, "error": "missing_invoice_id"}
+
+    # Synthetic classifier-like object so we reuse the PDF pending writer
+    class _PseudoTxn:
+        pass
+
+    pseudo = _PseudoTxn()
+    pseudo.id = f"invflow:{inv_id}"
+    pseudo.company_id = getattr(invoice, "company_id", None)
+    pseudo.transaction_type = "purchase"
+    pseudo.invoice_number = getattr(invoice, "invoice_number", None)
+    pseudo.vendor_or_customer = getattr(invoice, "vendor_name", None)
+    pseudo.vendor_trn = getattr(invoice, "vendor_trn", None)
+    pseudo.vat_treatment = getattr(invoice, "vat_treatment", None) or "standard_rated"
+    inv_date = getattr(invoice, "invoice_date", None)
+    if isinstance(inv_date, str):
+        try:
+            inv_date = date.fromisoformat(inv_date[:10])
+        except ValueError:
+            inv_date = date.today()
+    elif not inv_date:
+        inv_date = date.today()
+    pseudo.date = inv_date
+
+    gross = round(float(getattr(invoice, "total_aed", 0) or 0), 2)
+    vat = round(float(getattr(invoice, "vat_amount_aed", 0) or 0), 2)
+    if vat > 0 and gross >= vat:
+        net = round(gross - vat, 2)
+    else:
+        # total often stored as net; estimate VAT if standard
+        if (pseudo.vat_treatment or "").startswith("standard") and vat <= 0 and gross > 0:
+            net = round(gross / 1.05, 2)
+            vat = round(gross - net, 2)
+        else:
+            net = gross
+    pseudo.amount_aed = net
+    pseudo.vat_amount_aed = vat
+
+    # If amounts are zero, still attempt insert with zeros so the trail exists
+    return sync_pdf_txn_to_gulftax_pending(
+        db,
+        pseudo,
+        ported_company=ported_company,
+        workspace_id=workspace_id,
+    )
+
+
 def sync_pdf_txn_to_gulftax_pending(
     db: Session,
     classifier_txn: Any,

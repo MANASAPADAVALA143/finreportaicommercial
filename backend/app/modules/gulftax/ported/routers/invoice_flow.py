@@ -1157,12 +1157,48 @@ Return JSON only:
 
     db.commit()
 
+    # Always push pending gulftax row from the Invoice (even review/escalated).
+    # Previously only auto-approve (transactions_created > 0) synced — so most
+    # PDF extracts never produced source=invoice_flow_pdf.
     gulftax_synced = 0
+    gulftax_pending = 0
+    gulftax_pending_error = None
+    try:
+        from app.core.database import SessionLocal as MainSessionLocal
+        from app.services.vat_classifier_sync_service import (
+            sync_invoice_record_to_gulftax_pending,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        main_db = MainSessionLocal()
+        try:
+            pending_res = sync_invoice_record_to_gulftax_pending(
+                main_db, inv, ported_company=company
+            )
+            if pending_res.get("ok") and not pending_res.get("skipped"):
+                gulftax_pending = 1
+            elif not pending_res.get("ok"):
+                gulftax_pending_error = pending_res.get("error")
+                logger.warning(
+                    "invoice_flow_pdf pending sync failed invoice=%s err=%s",
+                    inv.id,
+                    gulftax_pending_error,
+                )
+        finally:
+            main_db.close()
+    except Exception as exc:
+        gulftax_pending_error = str(exc)
+        logger.exception(
+            "invoice_flow_pdf pending sync exception invoice=%s", inv.id
+        )
+
     if transactions_created > 0:
         sync_res = _sync_invoice_flow_txns_to_gulftax(
             db, company_id=company_id, invoice_id=inv.id
         )
-        gulftax_synced = int(sync_res.get("synced") or 0)
+        gulftax_synced = int(sync_res.get("synced") or 0) + int(
+            sync_res.get("pending_synced") or 0
+        )
 
     return {
         "invoice_id": inv.id,
@@ -1174,6 +1210,8 @@ Return JSON only:
         "auto_approved": auto_approved,
         "transactions_created": transactions_created,
         "gulftax_synced": gulftax_synced,
+        "gulftax_pending": gulftax_pending,
+        "gulftax_pending_error": gulftax_pending_error,
     }
 
 
