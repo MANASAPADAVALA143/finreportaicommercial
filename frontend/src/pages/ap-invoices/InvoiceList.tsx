@@ -80,6 +80,7 @@ import { runAutoMatch, markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeW
 import { retryPendingGlPosts } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
+import { glAccountDisplayName } from '@/utils/glAccountLabels';
 import {
   deriveInvoiceRiskDisplayScore,
   invoiceHasRiskSignal,
@@ -164,12 +165,20 @@ function displayGlFromCoaMap(
   const storedCode = invoiceGlCode(inv);
   const storedName = String(inv.gl_account_name ?? inv.gl_name ?? '').trim();
   if (storedCode) {
-    return { code: storedCode, name: storedName || 'GL Account', source: 'stored' };
+    return {
+      code: storedCode,
+      name: glAccountDisplayName(storedCode, storedName),
+      source: 'stored',
+    };
   }
   const key = invoiceCoaCategoryKey(inv);
   const hit = resolveGlFromMappings(mappings, key);
   if (!hit) return null;
-  return { code: hit.gl_code, name: hit.gl_name, source: hit.source };
+  return {
+    code: hit.gl_code,
+    name: glAccountDisplayName(hit.gl_code, hit.gl_name),
+    source: hit.source,
+  };
 }
 
 /** Dirham unicode (د.إ) and Latin-1 mojibake (Ø¯.Ø¥) → ISO code for display */
@@ -1956,12 +1965,13 @@ export function InvoiceList() {
                             (invoice as { gl_code?: string | null }).gl_code ??
                             '',
                         ).trim();
-                        const name = String(
+                        const storedName = String(
                           invoice.gl_account_name ??
                             (invoice as { gl_name?: string | null }).gl_name ??
                             '',
                         ).trim();
                         if (code) {
+                          const name = glAccountDisplayName(code, storedName);
                           return (
                             <div>
                               <span
@@ -1975,9 +1985,7 @@ export function InvoiceList() {
                                 {code}
                               </span>
                               <br />
-                              <span style={{ fontSize: '11px', color: '#6b7280' }}>
-                                {name || 'GL Account'}
-                              </span>
+                              <span style={{ fontSize: '11px', color: '#6b7280' }}>{name}</span>
                             </div>
                           );
                         }
