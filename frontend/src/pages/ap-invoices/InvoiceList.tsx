@@ -381,6 +381,9 @@ export function InvoiceList() {
   /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
   const showCostCenterFilter = costCenterOptions.length > 0;
   const showPropertyFilter = propertyOptions.length > 0;
+  const costCenterIsPropertyLabel = /^propert/i.test(costCenterLabel.trim());
+  /** Don't show a second blank "Property" column when cost centers are empty or label duplicates property_ref. */
+  const showCostCenterColumn = showCostCenterFilter && !costCenterIsPropertyLabel;
   const advancedFiltersActive =
     Boolean(searchTerm.trim()) ||
     costCenterFilter !== 'all' ||
@@ -1806,8 +1809,8 @@ export function InvoiceList() {
                   </TableHead>
                   <TableHead>3-Way Match</TableHead>
                   <TableHead>GL Account</TableHead>
-                  <TableHead>Property</TableHead>
-                  <TableHead>{costCenterLabel}</TableHead>
+                  {showPropertyFilter && <TableHead>Property</TableHead>}
+                  {showCostCenterColumn && <TableHead>{costCenterLabel}</TableHead>}
                   <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -2085,6 +2088,7 @@ export function InvoiceList() {
                         );
                       })()}
                     </TableCell>
+                    {showPropertyFilter && (
                     <TableCell
                       className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
                       onClick={() => setSelectedInvoice(invoice)}
@@ -2092,17 +2096,20 @@ export function InvoiceList() {
                     >
                       {(() => {
                         const full = (invoice.property_ref || '').trim();
-                        if (!full) return <span className="text-slate-400">—</span>;
+                        if (!full) return null;
                         const short = full.length > 15 ? `${full.slice(0, 15)}…` : full;
                         return <span>{short}</span>;
                       })()}
                     </TableCell>
+                    )}
+                    {showCostCenterColumn && (
                     <TableCell
                       className="cursor-pointer text-sm text-slate-700"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {invoice.cost_center || '—'}
+                      {(invoice.cost_center || '').trim() || null}
                     </TableCell>
+                    )}
                     <TableCell
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
