@@ -107,7 +107,7 @@ import {
   getAccountingStandard,
   logGlSuggestionAction,
 } from '@/lib/ap-invoice/accountingStandardService';
-import { getMatchStatusColor } from '@/utils/threeWayMatch';
+import { getMatchStatusColor, resolveDisplayMatchStatus } from '@/utils/threeWayMatch';
 import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
 import { pushToTallyPrime } from '@/utils/tallyExport';
 import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
@@ -314,17 +314,17 @@ export function InvoiceDetailModal({
   useEffect(() => {
     if (!open) return;
     const po = invoice.po_number?.trim();
-    if (!po) return;
+    if (!po && !invoice.po_id) return;
 
     // Once po_id is set, match_status is a cached value written by the last
     // runAutoMatch — trust it when it looks resolved. Only auto re-run when the
-    // cached status still looks unresolved (mismatch/no_po/partial), since the
-    // underlying PO/GRN data (e.g. a vendor_name fix) may have changed since
-    // that value was last computed.
+    // cached status still looks unresolved (including null — seed may set po_id
+    // without writing match_status).
+    const status = String(invoice.match_status || '').toLowerCase() || 'no_po';
     const staleStatuses = ['mismatch', 'no_po', 'partial'];
-    if (invoice.po_id && !staleStatuses.includes(String(invoice.match_status || '').toLowerCase())) return;
+    if (invoice.po_id && !staleStatuses.includes(status)) return;
 
-    const attemptKey = `${invoice.id}|${po}`;
+    const attemptKey = `${invoice.id}|${po || invoice.po_id}`;
     if (autoPoMatchAttemptedKeyRef.current === attemptKey) return;
     autoPoMatchAttemptedKeyRef.current = attemptKey;
 
@@ -332,7 +332,11 @@ export function InvoiceDetailModal({
     setMatchLoading(true);
     void (async () => {
       try {
-        await runAutoMatch(invoice.id, { respectUploadSetting: false });
+        await runAutoMatch(invoice.id, {
+          respectUploadSetting: false,
+          invoice,
+          invoiceNumber: invoice.invoice_number,
+        });
         if (!cancelled) onUpdateRef.current();
       } catch (e) {
         console.error('Auto 3-way match failed:', e);
@@ -2539,30 +2543,30 @@ export function InvoiceDetailModal({
             {/* 3-Way Match */}
             <Card
               className={
-                invoice.match_status === 'three_way_matched'
+                resolveDisplayMatchStatus(invoice) === 'three_way_matched'
                   ? 'border-2 border-green-500 bg-green-50'
-                  : invoice.match_status === 'matched'
+                  : resolveDisplayMatchStatus(invoice) === 'matched'
                     ? 'border-2 border-teal-500 bg-teal-50'
-                    : invoice.match_status === 'mismatch'
+                    : resolveDisplayMatchStatus(invoice) === 'mismatch'
                       ? 'border-2 border-amber-500 bg-amber-50'
-                      : invoice.match_status === 'partial'
+                      : resolveDisplayMatchStatus(invoice) === 'partial'
                         ? 'border-2 border-amber-400 bg-amber-50'
-                        : invoice.match_status === 'no_po' || !invoice.match_status
+                        : resolveDisplayMatchStatus(invoice) === 'no_po'
                           ? 'border-2 border-red-300 bg-white'
                           : 'border border-gray-200 bg-white'
               }
             >
               <CardHeader
                 className={
-                  invoice.match_status === 'three_way_matched'
+                  resolveDisplayMatchStatus(invoice) === 'three_way_matched'
                     ? 'bg-green-100 border-b border-green-200'
-                    : invoice.match_status === 'matched'
+                    : resolveDisplayMatchStatus(invoice) === 'matched'
                       ? 'bg-teal-100 border-b border-teal-200'
-                      : invoice.match_status === 'mismatch'
+                      : resolveDisplayMatchStatus(invoice) === 'mismatch'
                         ? 'bg-amber-100 border-b border-amber-200'
-                        : invoice.match_status === 'partial'
+                        : resolveDisplayMatchStatus(invoice) === 'partial'
                           ? 'bg-amber-50 border-b border-amber-200'
-                          : invoice.match_status === 'no_po' || !invoice.match_status
+                          : resolveDisplayMatchStatus(invoice) === 'no_po'
                             ? 'bg-red-50 border-b border-red-200'
                             : 'bg-white'
                 }
@@ -2575,19 +2579,18 @@ export function InvoiceDetailModal({
                         Score: {Math.round(Number(invoice.match_score))}/100
                       </span>
                     )}
-                    {invoice.match_status ? (
-                      <Badge variant="outline" className={getMatchStatusColor(invoice.match_status)}>
-                        {invoice.match_status === 'three_way_matched' && '3-Way Matched'}
-                        {invoice.match_status === 'matched' && 'PO Matched'}
-                        {invoice.match_status === 'partial' && 'Partial'}
-                        {invoice.match_status === 'mismatch' && 'Variance'}
-                        {invoice.match_status === 'no_po' && 'No PO'}
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="bg-gray-100 text-gray-800 border-gray-200">
-                        No PO
-                      </Badge>
-                    )}
+                    {(() => {
+                      const ms = resolveDisplayMatchStatus(invoice);
+                      return (
+                        <Badge variant="outline" className={getMatchStatusColor(ms)}>
+                          {ms === 'three_way_matched' && '3-Way Matched'}
+                          {ms === 'matched' && 'PO Matched'}
+                          {ms === 'partial' && 'Partial'}
+                          {ms === 'mismatch' && 'Variance'}
+                          {ms === 'no_po' && 'No PO'}
+                        </Badge>
+                      );
+                    })()}
                     <Button
                       type="button"
                       size="sm"
@@ -2776,7 +2779,7 @@ export function InvoiceDetailModal({
                   </div>
                 )}
 
-                {(invoice.match_status === 'no_po' || !invoice.match_status) && (
+                {(resolveDisplayMatchStatus(invoice) === 'no_po') && (
                   <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-gray-900">
                     <p className="mb-2">No purchase order linked to this invoice.</p>
                     <div className="space-y-2">

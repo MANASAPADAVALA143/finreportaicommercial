@@ -5,6 +5,26 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type MatchStatus = 'matched' | 'partial' | 'mismatch' | 'no_po' | 'three_way_matched';
 
+/**
+ * UI / filter status when DB has po_id but match_status was never written
+ * (e.g. seed linked POs without running the match engine).
+ * Never show "No PO" when a PO is already linked.
+ */
+export function resolveDisplayMatchStatus(inv: {
+  match_status?: string | null;
+  po_id?: string | null;
+  grn_id?: string | null;
+  grn_confirmed?: boolean | null;
+}): MatchStatus | string {
+  const raw = String(inv.match_status || '').trim();
+  if (raw && raw !== 'no_po') return raw;
+  if (inv.po_id) {
+    if (inv.grn_id || inv.grn_confirmed) return 'three_way_matched';
+    return 'matched';
+  }
+  return raw || 'no_po';
+}
+
 export type MatchResult = {
   match_status: MatchStatus;
   match_notes: string;

@@ -313,12 +313,30 @@ JOIN _ap_inv_po p ON p.po_id = gr.po_id
 WHERE gr.company_id = 'ae7301ab-38ce-413f-9d76-c254b506d47a'::uuid;
 
 
--- 5) Stamp invoices with po_id / po_number
+-- 5) Stamp invoices with po_id / po_number / match_status / grn_id
 UPDATE public.invoices i
 SET po_id      = p.po_id,
     po_number  = p.po_number,
+    grn_id     = gr.id,
+    match_status = CASE
+      WHEN gr.id IS NOT NULL AND gr.status = 'confirmed' THEN 'three_way_matched'
+      ELSE 'matched'
+    END,
+    auto_matched = true,
+    grn_confirmed = (gr.id IS NOT NULL AND gr.status = 'confirmed'),
+    match_attempted_at = now(),
+    po_amount = p.net_amount,
+    grn_amount = CASE WHEN gr.id IS NOT NULL THEN gr.received_amount ELSE NULL END,
     updated_at = now()
 FROM _ap_inv_po p
+LEFT JOIN LATERAL (
+  SELECT g.id, g.status, g.received_amount
+  FROM public.goods_receipts g
+  WHERE g.po_id = p.po_id
+    AND g.company_id = 'ae7301ab-38ce-413f-9d76-c254b506d47a'::uuid
+  ORDER BY (g.status = 'confirmed') DESC, g.received_date DESC NULLS LAST
+  LIMIT 1
+) gr ON true
 WHERE i.id = p.invoice_id;
 
 

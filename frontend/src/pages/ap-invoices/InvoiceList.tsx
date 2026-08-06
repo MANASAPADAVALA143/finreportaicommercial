@@ -75,6 +75,7 @@ function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | nu
 import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
+import { resolveDisplayMatchStatus } from '@/utils/threeWayMatch';
 import { runAutoMatch, markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
 import { retryPendingGlPosts } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
@@ -823,7 +824,9 @@ export function InvoiceList() {
       // they would otherwise sit on "— No PO" forever. Self-limiting: a run always writes a status.
       const needPoAutoLink = invoiceList.filter(
         (inv: Invoice) =>
-          (String(inv.po_number || '').trim() !== '' && !inv.po_id) || !inv.match_status
+          (String(inv.po_number || '').trim() !== '' && !inv.po_id) ||
+          !inv.match_status ||
+          (inv.po_id && ['no_po', ''].includes(String(inv.match_status || '').toLowerCase()))
       );
       if (needPoAutoLink.length > 0) {
         let anyUpdated = false;
@@ -1902,31 +1905,48 @@ export function InvoiceList() {
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {invoice.match_status === 'three_way_matched' && (
-                        <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>✅ 3-Way Matched</span>
-                      )}
-                      {invoice.match_status === 'matched' && (
-                        <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>✅ PO Matched</span>
-                      )}
-                      {invoice.match_status === 'partial' && (
-                        <div>
-                          <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>⚠️ Partial</span>
-                          <br />
-                          <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                            {formatCurrency(
-                              Number(invoice.match_difference ?? 0),
-                              normalizeCurrencyCode(invoice.currency, market)
-                            )}{' '}
-                            diff
-                          </span>
-                        </div>
-                      )}
-                      {invoice.match_status === 'mismatch' && (
-                        <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>❌ Mismatch</span>
-                      )}
-                      {(!invoice.match_status || invoice.match_status === 'no_po') && (
-                        <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>
-                      )}
+                      {(() => {
+                        const ms = resolveDisplayMatchStatus(invoice);
+                        if (ms === 'three_way_matched') {
+                          return (
+                            <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>
+                              ✅ 3-Way Matched
+                            </span>
+                          );
+                        }
+                        if (ms === 'matched') {
+                          return (
+                            <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>
+                              ✅ PO Matched
+                            </span>
+                          );
+                        }
+                        if (ms === 'partial') {
+                          return (
+                            <div>
+                              <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>
+                                ⚠️ Partial
+                              </span>
+                              <br />
+                              <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                                {formatCurrency(
+                                  Number(invoice.match_difference ?? 0),
+                                  normalizeCurrencyCode(invoice.currency, market)
+                                )}{' '}
+                                diff
+                              </span>
+                            </div>
+                          );
+                        }
+                        if (ms === 'mismatch') {
+                          return (
+                            <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>
+                              ❌ Mismatch
+                            </span>
+                          );
+                        }
+                        return <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>;
+                      })()}
                     </TableCell>
                     <TableCell
                       className="cursor-pointer"
