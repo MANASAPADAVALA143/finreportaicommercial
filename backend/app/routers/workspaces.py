@@ -53,10 +53,16 @@ class MemberAdd(BaseModel):
 
 
 class SyncApCompanyBody(BaseModel):
-    """Optional Supabase auth user — ensures company_members so invoice inserts pass RLS."""
+    """Optional Supabase auth user — ensures company_members so invoice inserts pass RLS.
+
+    When finreport_company_id is set, upserts that exact AP company (1:1 with the
+    banner company). Workspace-only sync is wrong when a workspace has multiple companies.
+    """
     supabase_user_id: str | None = None
     email: str | None = None
     name: str | None = None
+    finreport_company_id: str | None = None
+    company_name: str | None = None
 
 
 @router.get("")
@@ -158,12 +164,25 @@ def sync_ap_company(
         raise HTTPException(status_code=403, detail="Workspace mismatch")
     payload = body or SyncApCompanyBody()
     sb_uid = (payload.supabase_user_id or "").strip() or None
-    company = sync_ap_company_for_workspace(
-        ctx.workspace,
-        supabase_user_id=sb_uid,
-        user_email=(payload.email or user.email or None),
-        user_name=(payload.name or user.name or None),
-    )
+    fin_cid = (payload.finreport_company_id or "").strip() or None
+    if fin_cid:
+        from app.services.ap_company_sync import sync_ap_company_for_profile
+
+        company = sync_ap_company_for_profile(
+            ctx.workspace,
+            company_id=fin_cid,
+            company_name=(payload.company_name or "").strip() or None,
+            supabase_user_id=sb_uid,
+            user_email=(payload.email or user.email or None),
+            user_name=(payload.name or user.name or None),
+        )
+    else:
+        company = sync_ap_company_for_workspace(
+            ctx.workspace,
+            supabase_user_id=sb_uid,
+            user_email=(payload.email or user.email or None),
+            user_name=(payload.name or user.name or None),
+        )
     if not company:
         raise HTTPException(
             status_code=503,

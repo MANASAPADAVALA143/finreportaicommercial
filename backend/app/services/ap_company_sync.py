@@ -242,6 +242,123 @@ def sync_ap_company_for_workspace(
         )
 
     return company
+
+
+def sync_ap_company_for_profile(
+    ws: Workspace,
+    *,
+    company_id: str,
+    company_name: str | None = None,
+    supabase_user_id: str | None = None,
+    user_email: str | None = None,
+    user_name: str | None = None,
+) -> dict[str, Any] | None:
+    """Upsert Supabase AP company with the SAME id as FinReport banner company.
+
+    Multi-company workspaces must not share one AP company via workspace_id alone —
+    each FinReport company (e.g. Gnanova UAE Test FZE) owns its own invoices.
+    """
+    cid = (company_id or "").strip()
+    if not cid:
+        return None
+    try:
+        sb = get_supabase()
+    except RuntimeError as exc:
+        logger.warning("AP profile sync skipped — Supabase not configured: %s", exc)
+        return None
+
+    ws_id = ws.id
+    name = (company_name or "").strip() or (ws.name or "Company")
+    country = (ws.country or "").lower()
+    market = "uae" if country in ("uae", "ae") else "india"
+    company: dict[str, Any] | None = None
+
+    try:
+        existing = (
+            sb.table("companies")
+            .select("*")
+            .eq("id", cid)
+            .maybe_single()
+            .execute()
+        )
+        if existing.data:
+            patch: dict[str, Any] = {
+                "workspace_id": ws_id,
+                "name": name,
+            }
+            if market and existing.data.get("market") != market:
+                patch["market"] = market
+            try:
+                sb.table("companies").update(patch).eq("id", cid).execute()
+            except Exception as exc:
+                logger.warning("companies profile update failed (%s): %s", cid, exc)
+            refreshed = (
+                sb.table("companies")
+                .select("*")
+                .eq("id", cid)
+                .maybe_single()
+                .execute()
+            )
+            company = refreshed.data or {**existing.data, **patch}
+            _ensure_company_config(sb, cid)
+    except Exception as exc:
+        logger.warning("companies lookup by id failed (%s): %s", cid, exc)
+
+    if not company:
+        slug = f"{_slugify(name)}-{cid[:8]}"
+        row: dict[str, Any] = {
+            "id": cid,
+            "name": name,
+            "slug": slug,
+            "industry": ws.industry or "general",
+            "accounting_standard": "IFRS",
+            "market": market,
+            "subscription_tier": "starter",
+            "subscription_status": "trial",
+            "max_invoices_per_month": 100,
+            "max_users": 5,
+            "workspace_id": ws_id,
+        }
+        try:
+            inserted = sb.table("companies").insert(row).execute()
+            if inserted.data:
+                company = inserted.data[0]
+            else:
+                company = row
+            _ensure_company_config(sb, cid)
+            logger.info(
+                "Created AP company %s (%s) for FinReport profile in workspace %s",
+                cid,
+                name,
+                ws_id,
+            )
+        except Exception as exc:
+            logger.warning("companies insert by profile id failed (%s): %s", cid, exc)
+            try:
+                retry = (
+                    sb.table("companies")
+                    .select("*")
+                    .eq("id", cid)
+                    .maybe_single()
+                    .execute()
+                )
+                if retry.data:
+                    company = retry.data
+            except Exception:
+                pass
+
+    if company and supabase_user_id:
+        ensure_company_member(
+            str(company["id"]),
+            supabase_user_id,
+            role="admin",
+            email=user_email,
+            name=user_name,
+        )
+
+    return company
+
+
 def upsert_ap_company_rds(db: Session, workspace: Workspace, company: dict[str, Any]) -> ApCompany:
     """Mirror Supabase companies row into RDS ap_companies (same id)."""
     cid = str(company["id"])

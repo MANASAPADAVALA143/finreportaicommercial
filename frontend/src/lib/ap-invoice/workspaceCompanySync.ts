@@ -93,7 +93,11 @@ async function findCompanyByWorkspaceId(workspaceId: string): Promise<Company | 
   return null;
 }
 
-async function syncViaBackend(workspaceId: string, token: string): Promise<Company | null> {
+async function syncViaBackend(
+  workspaceId: string,
+  token: string,
+  opts?: { finreportCompanyId?: string; companyName?: string },
+): Promise<Company | null> {
   const base = backendOrigin();
   if (!base) {
     console.warn('[AP] VITE_API_URL not set — cannot sync company via backend');
@@ -126,6 +130,8 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
       supabase_user_id: supabaseUserId,
       email,
       name,
+      finreport_company_id: opts?.finreportCompanyId || undefined,
+      company_name: opts?.companyName || undefined,
     }),
   });
   if (!res.ok) {
@@ -135,7 +141,15 @@ async function syncViaBackend(workspaceId: string, token: string): Promise<Compa
   }
   const body = (await res.json()) as { company?: Company };
   if (body.company?.id) {
+    // Cache per profile when multi-company; still keep workspace cache for legacy callers
     cacheCompany(workspaceId, body.company);
+    if (opts?.finreportCompanyId) {
+      try {
+        localStorage.setItem(`ap_company_profile_${opts.finreportCompanyId}`, body.company.id);
+      } catch {
+        /* ignore */
+      }
+    }
     clearCompanyCache();
     // Align JWT active_company_id so get_effective_company_id() matches inserts
     if (supabaseUserId) {
@@ -269,7 +283,16 @@ export async function ensureApMembershipForUpload(
   setSyncStatus('syncing');
   _syncInFlight = (async () => {
     try {
-      return await syncViaBackend(workspaceId, token);
+      const activeId =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) ||
+        undefined;
+      const activeName =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_name')) ||
+        undefined;
+      return await syncViaBackend(workspaceId, token, {
+        finreportCompanyId: activeId || undefined,
+        companyName: activeName || undefined,
+      });
     } catch (e) {
       console.warn('[AP] ensureApMembershipForUpload:', e);
       markSyncFailed(workspaceId, 0, e instanceof Error ? e.message : String(e));
@@ -282,11 +305,38 @@ export async function ensureApMembershipForUpload(
 }
 
 /**
- * Supabase AP `companies.id` for the active workspace — NOT FinReportAI `active_company_id`.
- * Using the wrong ID causes invoice inserts to fail FK checks and list queries to miss rows.
+ * Supabase AP `companies.id` for the **selected banner company**.
+ * Multi-company workspaces must stamp invoices to that company — not the first
+ * company found by workspace_id (that wrongly put Gnanova uploads onto Al Noor).
  */
 export async function resolveApSupabaseCompanyId(accessToken?: string | null): Promise<string> {
   const workspaceId = getStoredWorkspaceId();
+  const activeId =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) ||
+    null;
+  const activeName =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_name')) ||
+    null;
+
+  if (activeId && workspaceId) {
+    const token = accessToken ?? _accessToken;
+    if (token) {
+      try {
+        const synced = await syncViaBackend(workspaceId, token, {
+          finreportCompanyId: activeId,
+          companyName: activeName || undefined,
+        });
+        if (synced?.id) return synced.id;
+      } catch (e) {
+        console.warn('[AP] profile company sync failed, using active_company_id:', e);
+      }
+    }
+    // Direct lookup — profile id is intended to equal AP company id
+    const { data } = await supabase.from('companies').select('id').eq('id', activeId).maybeSingle();
+    if (data?.id) return data.id;
+    return activeId;
+  }
+
   if (workspaceId) {
     const byWorkspace = await findCompanyByWorkspaceId(workspaceId);
     if (byWorkspace?.id) return byWorkspace.id;
