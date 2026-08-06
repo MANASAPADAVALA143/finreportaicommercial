@@ -357,6 +357,44 @@ def sync_ap_company_for_profile(
             name=user_name,
         )
 
+    # New company in a multi-company workspace: copy members from sibling AP companies
+    # so browser RLS inserts (PO / GRN / invoices) work without waiting for re-login.
+    if company:
+        try:
+            siblings = (
+                sb.table("companies")
+                .select("id")
+                .eq("workspace_id", ws_id)
+                .neq("id", str(company["id"]))
+                .limit(20)
+                .execute()
+            )
+            sibling_ids = [str(r["id"]) for r in (siblings.data or []) if r.get("id")]
+            seen_users: set[str] = set()
+            for sid in sibling_ids:
+                mems = (
+                    sb.table("company_members")
+                    .select("user_id,role,email,name")
+                    .eq("company_id", sid)
+                    .eq("is_active", True)
+                    .limit(50)
+                    .execute()
+                )
+                for m in mems.data or []:
+                    uid = str(m.get("user_id") or "")
+                    if not uid or uid in seen_users:
+                        continue
+                    seen_users.add(uid)
+                    ensure_company_member(
+                        str(company["id"]),
+                        uid,
+                        role=str(m.get("role") or "admin"),
+                        email=m.get("email"),
+                        name=m.get("name"),
+                    )
+        except Exception as exc:
+            logger.warning("sibling company_members copy failed for %s: %s", company.get("id"), exc)
+
     return company
 
 

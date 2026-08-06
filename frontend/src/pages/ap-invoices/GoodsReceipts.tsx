@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
-import { requireCompanyId } from '../../lib/ap-invoice/companyService';
+import { resolveApSupabaseCompanyId, ensureApMembershipForUpload } from '../../lib/ap-invoice/workspaceCompanySync';
 import {
   createGRN,
   listGoodsReceiptsForCompany,
@@ -137,7 +137,7 @@ export function GoodsReceipts() {
   async function load() {
     setLoading(true);
     try {
-      const companyId = await requireCompanyId();
+      const companyId = await resolveApSupabaseCompanyId();
       const [poRes, grnList] = await Promise.all([
         supabase
           .from('purchase_orders')
@@ -318,7 +318,7 @@ export function GoodsReceipts() {
       const recvDate = d.invoice_date || format(new Date(), 'yyyy-MM-dd');
 
       // Prefer PO number from OCR; never silently pick the first vendor PO
-      const companyId = await requireCompanyId();
+      const companyId = await resolveApSupabaseCompanyId();
       const extractedPo = String(d.po_number || d.po_no || d.purchase_order || '').trim();
       const resolved = await resolvePoIdForGrn(
         {
@@ -369,7 +369,8 @@ export function GoodsReceipts() {
     setBulkGrnProgress({ done: 0, total: files.length });
     let saved = 0; let failed = 0; let needsReview = 0;
     const reviewNotes: string[] = [];
-    const companyId = await requireCompanyId();
+    await ensureApMembershipForUpload();
+    const companyId = await resolveApSupabaseCompanyId();
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -567,7 +568,7 @@ export function GoodsReceipts() {
     const n = grns.length;
     setDeletingAllGrns(true);
     try {
-      const companyId = await requireCompanyId();
+      const companyId = await resolveApSupabaseCompanyId();
       const { error } = await supabase
         .from('goods_receipts')
         .delete()

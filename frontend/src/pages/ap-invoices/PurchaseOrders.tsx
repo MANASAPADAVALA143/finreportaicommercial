@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
-import { getMyCompany, requireCompanyId } from '../../lib/ap-invoice/companyService';
+import { getMyCompany } from '../../lib/ap-invoice/companyService';
+import { ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import {
   Table,
@@ -310,7 +311,8 @@ export function PurchaseOrders() {
 
         const total = Number(d.total_amount ?? d.subtotal_amount ?? 0);
         const poDate = d.invoice_date || new Date().toISOString().split('T')[0];
-        const companyId = await requireCompanyId();
+        await ensureApMembershipForUpload();
+        const companyId = await resolveApSupabaseCompanyId();
         const year = new Date().getFullYear();
         const { data: lastPO } = await supabase.from('purchase_orders').select('po_number').ilike('po_number', `PO-${year}-%`).order('po_number', { ascending: false }).limit(1);
         const lastNum = lastPO?.[0]?.po_number?.match(/PO-\d{4}-(\d+)/i)?.[1];
@@ -369,7 +371,7 @@ export function PurchaseOrders() {
     try {
       let companyId: string | null = null;
       try {
-        companyId = await requireCompanyId();
+        companyId = await resolveApSupabaseCompanyId();
       } catch {
         companyId = (await getMyCompany())?.id ?? null;
       }
@@ -447,12 +449,12 @@ export function PurchaseOrders() {
     const count = purchaseOrders.length;
     setDeletingAll(true);
     try {
-      const company = await getMyCompany();
+      const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
       let q = supabase
         .from('purchase_orders')
         .delete()
         .gte('created_at', '1970-01-01T00:00:00.000Z');
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       const { error } = await q;
       if (error) throw error;
 
@@ -635,7 +637,8 @@ export function PurchaseOrders() {
     }
     setUploading(true);
     try {
-      const companyId = await requireCompanyId();
+      await ensureApMembershipForUpload();
+      const companyId = await resolveApSupabaseCompanyId();
       const rows = await parsePOFile(file);
       if (rows.length === 0) {
         toast({
@@ -711,9 +714,9 @@ export function PurchaseOrders() {
     setRematching(true);
     try {
       // Get all POs to rematch (specific list or all open POs)
-      const company = await import('../../lib/ap-invoice/companyService').then(m => m.getMyCompany());
+      const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
       let q = supabase.from('purchase_orders').select('id,po_number');
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       if (poNumbers?.length) q = q.in('po_number', poNumbers);
       const { data: pos } = await q;
       if (!pos?.length) return;
@@ -756,7 +759,8 @@ export function PurchaseOrders() {
     const amount = formData.po_amount ? Number(formData.po_amount) : totalFromLines;
 
     try {
-      const companyId = await requireCompanyId();
+      await ensureApMembershipForUpload();
+      const companyId = await resolveApSupabaseCompanyId();
       const payload: Record<string, unknown> = {
         company_id: companyId,
         po_number: formData.po_number.trim(),

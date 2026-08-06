@@ -1024,8 +1024,11 @@ export async function createGRN(params: {
   }>;
   notes?: string;
 }): Promise<string> {
-  const company = await getMyCompany();
-  if (!company?.id) throw new Error('No company');
+  const { ensureApMembershipForUpload, resolveApSupabaseCompanyId } = await import(
+    './workspaceCompanySync'
+  );
+  await ensureApMembershipForUpload();
+  const companyId = await resolveApSupabaseCompanyId();
 
   let grnNum: string | null = null;
   const { data: rpcNum, error: rpcErr } = await supabase.rpc('next_grn_number');
@@ -1043,7 +1046,7 @@ export async function createGRN(params: {
   const { data: grn, error } = await supabase
     .from('goods_receipts')
     .insert({
-      company_id: company.id,
+      company_id: companyId,
       grn_number: grnNum,
       po_id: params.po_id,
       vendor_name: params.vendor_name,
@@ -1124,18 +1127,24 @@ export async function getGRNsForPO(poId: string) {
 }
 
 export async function listGoodsReceiptsForCompany() {
-  const company = await getMyCompany();
-  if (!company?.id) return [];
+  let companyId: string | null = null;
+  try {
+    const { resolveApSupabaseCompanyId } = await import('./workspaceCompanySync');
+    companyId = await resolveApSupabaseCompanyId();
+  } catch {
+    companyId = (await getMyCompany())?.id ?? null;
+  }
+  if (!companyId) return [];
   const nested = await supabase
     .from('goods_receipts')
     .select('*, grn_line_items(*)')
-    .eq('company_id', company.id)
+    .eq('company_id', companyId)
     .order('received_date', { ascending: false });
   if (!nested.error) return nested.data ?? [];
   const flat = await supabase
     .from('goods_receipts')
     .select('*')
-    .eq('company_id', company.id)
+    .eq('company_id', companyId)
     .order('received_date', { ascending: false });
   return flat.data ?? [];
 }
@@ -1724,7 +1733,6 @@ export async function bulkImportGRNs(
   lineItemRows: GRNLineImportRow[],
   onProgress?: (current: number, total: number, detail: string) => void
 ): Promise<BulkImportGRNResult> {
-  const company = await getMyCompany();
   const result: BulkImportGRNResult = {
     total: masterRows.length,
     success: 0,
@@ -1738,13 +1746,23 @@ export async function bulkImportGRNs(
     results: [],
   };
 
-  if (!company?.id) {
+  let companyId: string | null = null;
+  try {
+    const { ensureApMembershipForUpload, resolveApSupabaseCompanyId } = await import(
+      './workspaceCompanySync'
+    );
+    await ensureApMembershipForUpload();
+    companyId = await resolveApSupabaseCompanyId();
+  } catch {
+    const company = await getMyCompany();
+    companyId = company?.id ?? null;
+  }
+
+  if (!companyId) {
     result.errors.push({ grn_number: '—', error: 'No company selected. Set your company in settings.' });
     result.failed = masterRows.length;
     return result;
   }
-
-  const companyId = company.id;
 
   for (let i = 0; i < masterRows.length; i++) {
     const grn = masterRows[i];
