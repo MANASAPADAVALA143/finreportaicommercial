@@ -756,6 +756,85 @@ async def list_ap_invoices(
     return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
 
 
+class GetApInvoiceIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    invoice_id: str = ""
+    invoice_number: str = ""
+
+
+@router.post("/ap/get-invoice", summary="Get one AP invoice by id or invoice_number (service role)")
+async def get_ap_invoice(
+    body: GetApInvoiceIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import get_invoice_for_match
+
+    return get_invoice_for_match(
+        company_id=body.company_id.strip(),
+        invoice_id=(body.invoice_id or "").strip() or None,
+        invoice_number=(body.invoice_number or "").strip() or None,
+    )
+
+
+class PatchApInvoiceIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    invoice_id: str = Field(..., min_length=1)
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/ap/patch-invoice", summary="Patch AP invoice match fields (service role)")
+async def patch_ap_invoice(
+    body: PatchApInvoiceIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import patch_invoice_for_match
+
+    return patch_invoice_for_match(
+        company_id=body.company_id.strip(),
+        invoice_id=body.invoice_id.strip(),
+        fields=body.fields or {},
+    )
+
+
+class ListApPosIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
+@router.post("/ap/list-purchase-orders", summary="List purchase orders (service role)")
+async def list_ap_purchase_orders(
+    body: ListApPosIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import list_purchase_orders_for_company
+
+    return list_purchase_orders_for_company(company_id=body.company_id.strip(), limit=body.limit)
+
+
+class ListApGrnsIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    po_id: str = ""
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
+@router.post("/ap/list-goods-receipts", summary="List goods receipts (service role)")
+async def list_ap_goods_receipts(
+    body: ListApGrnsIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import list_goods_receipts_for_company
+
+    return list_goods_receipts_for_company(
+        company_id=body.company_id.strip(),
+        po_id=(body.po_id or "").strip() or None,
+        limit=body.limit,
+    )
+
+
 @router.get("/ap/gulftax-status", summary="GulfTax AI health check")
 async def gulftax_status() -> dict[str, Any]:
     """

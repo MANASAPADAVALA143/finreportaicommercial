@@ -363,6 +363,10 @@ function mapEngineToInvoiceStatus(
 export type RunAutoMatchOptions = {
   /** When true (default), honour `auto_match_on_upload` = false and exit without DB writes. */
   respectUploadSetting?: boolean;
+  /** Invoice already loaded (e.g. via service-role list) — skip browser RLS re-fetch. */
+  invoice?: Invoice;
+  /** Fallback when id lookup fails under RLS — match by invoice_number + company. */
+  invoiceNumber?: string;
 };
 
 /**
@@ -370,9 +374,10 @@ export type RunAutoMatchOptions = {
  * Does not throw on missing tables — logs and rethrows only for unexpected errors.
  */
 export async function runAutoMatch(
-  invoiceId: string,
+  invoiceIdArg: string,
   options: RunAutoMatchOptions = {}
 ): Promise<AutoMatchRunResult> {
+  let invoiceId = invoiceIdArg;
   const respectUploadSetting = options.respectUploadSetting !== false;
   const tolerance = await getMatchTolerance();
   const company = await getMyCompany();
@@ -404,14 +409,64 @@ export async function runAutoMatch(
     };
   }
 
-  const { data: invoice, error: invErr } = await supabase
-    .from('invoices')
-    .select('*')
-    .eq('id', invoiceId)
-    .single();
+  // Prefer the preloaded row from Invoice List (service-role). Browser `.single()`
+  // returns 406 / "Invoice not found" when FinReport JWT has no company_members RLS path.
+  let invoice: Invoice | null =
+    options.invoice && String(options.invoice.id) === String(invoiceId)
+      ? options.invoice
+      : null;
 
-  if (invErr || !invoice) {
-    throw new Error('Invoice not found');
+  if (!invoice) {
+    const { data: byId } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .maybeSingle();
+    invoice = (byId as Invoice) ?? null;
+  }
+
+  const companyHint =
+    invoice?.company_id ?? company?.id ?? null;
+  const invoiceNumberHint =
+    options.invoiceNumber?.trim() ||
+    options.invoice?.invoice_number?.trim() ||
+    invoice?.invoice_number?.trim() ||
+    '';
+
+  if (!invoice && invoiceNumberHint && companyHint) {
+    const { data: byNo } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('company_id', companyHint)
+      .ilike('invoice_number', invoiceNumberHint)
+      .limit(1)
+      .maybeSingle();
+    invoice = (byNo as Invoice) ?? null;
+  }
+
+  if (!invoice && companyHint) {
+    try {
+      const { getInvoiceViaApi } = await import('./matchApiService');
+      invoice = await getInvoiceViaApi(companyHint, {
+        invoiceId,
+        invoiceNumber: invoiceNumberHint || undefined,
+      });
+    } catch (e) {
+      console.warn('[threeWayMatchService] service-role invoice fetch failed:', e);
+    }
+  }
+
+  if (!invoice) {
+    throw new Error(
+      invoiceNumberHint
+        ? `Invoice not found (${invoiceNumberHint})`
+        : 'Invoice not found',
+    );
+  }
+
+  // Keep the caller's invoiceId in sync if we resolved via invoice_number
+  if (invoice.id && String(invoice.id) !== String(invoiceId)) {
+    invoiceId = String(invoice.id);
   }
 
   const inv = invoice as Invoice;
@@ -490,6 +545,46 @@ export async function runAutoMatch(
     }
   }
 
+  // Service-role PO lookup when browser RLS returns nothing (same path as Excel-imported invoices).
+  if (!po && companyId) {
+    try {
+      const { listPurchaseOrdersViaApi } = await import('./matchApiService');
+      const allPos = await listPurchaseOrdersViaApi(companyId);
+      if (trimmedPo) {
+        const needle = trimmedPo.toLowerCase();
+        po =
+          allPos.find((r) => String(r.po_number || '').toLowerCase() === needle) ??
+          allPos.find((r) => String(r.po_number || '').toLowerCase().includes(needle)) ??
+          null;
+      } else if (inv.vendor_name) {
+        const vv = String(inv.vendor_name).trim().toLowerCase();
+        const candidates = allPos.filter((r) => {
+          const status = String(r.status || '');
+          if (!MATCHABLE_PO_STATUSES.includes(status)) return false;
+          const vn = String(r.vendor_name || '').toLowerCase();
+          return vn.includes(vv) || vv.includes(vn) || vendorTokensMatch(vv, vn);
+        });
+        if (candidates.length) {
+          po = candidates.reduce<Record<string, unknown> | null>((best, curr) => {
+            const cAmt = Number(curr.po_amount ?? 0);
+            const bAmt = best ? Number(best.po_amount ?? 0) : NaN;
+            const currDiff = Math.abs(cAmt - invoiceAmount);
+            const bestDiff = best != null && !Number.isNaN(bAmt) ? Math.abs(bAmt - invoiceAmount) : Infinity;
+            return currDiff < bestDiff ? curr : best;
+          }, null);
+          if (po) {
+            poResolvedViaVendorFallback = true;
+            exceptions.push(
+              `Matched by vendor/amount to ${String(po.po_number ?? '')} — no PO number on invoice, verify manually`
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[threeWayMatchService] service-role PO list failed:', e);
+    }
+  }
+
   if (po) {
     checks.po_exists = true;
     poAmount = Number(po.po_amount ?? 0);
@@ -560,6 +655,39 @@ export async function runAutoMatch(
               .then(() => null, () => null);
           }
         }
+      }
+    }
+
+    if ((!grnRows || grnRows.length === 0) && companyId) {
+      try {
+        const { listGoodsReceiptsViaApi } = await import('./matchApiService');
+        const apiGrns = await listGoodsReceiptsViaApi(companyId, poId);
+        if (apiGrns.length) {
+          grnRows = apiGrns as typeof grnRows;
+        } else if (inv.vendor_name) {
+          const allGrns = await listGoodsReceiptsViaApi(companyId);
+          const vv = String(inv.vendor_name).trim().toLowerCase();
+          const targetAmt = poAmount > 0 ? poAmount : invoiceAmount;
+          const scored = allGrns
+            .filter((g) => {
+              const vn = String(g.vendor_name || '').toLowerCase();
+              return vn.includes(vv) || vv.includes(vn) || vendorTokensMatch(vv, vn);
+            })
+            .sort(
+              (a, b) =>
+                Math.abs(Number(a.received_amount ?? 0) - targetAmt) -
+                Math.abs(Number(b.received_amount ?? 0) - targetAmt),
+            );
+          const best = scored[0];
+          if (best) {
+            const bestAmt = Number(best.received_amount ?? 0);
+            if (targetAmt <= 0 || pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct) {
+              grnRows = [best] as typeof grnRows;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[threeWayMatchService] service-role GRN list failed:', e);
       }
     }
 
@@ -779,6 +907,19 @@ export async function runAutoMatch(
 
   if (upErr) {
     console.warn('[threeWayMatchService] invoice update:', upErr.message);
+  }
+
+  // Always persist via service role when we have a company — browser RLS often
+  // reports success with 0 rows for FinReport-JWT sessions (Excel-imported invoices).
+  if (companyId) {
+    try {
+      const { patchInvoiceViaApi } = await import('./matchApiService');
+      await patchInvoiceViaApi(companyId, invoiceId, updatePayload);
+    } catch (e) {
+      if (upErr) {
+        console.warn('[threeWayMatchService] service-role invoice patch failed:', e);
+      }
+    }
   }
 
   // invoiceId is always in scope here — no need for invRow fields for WhatsApp.

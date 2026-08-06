@@ -270,3 +270,193 @@ def list_invoices_for_company(
     except Exception as exc:
         logger.exception("list invoices failed for company %s", company_id)
         return {"ok": False, "invoices": [], "count": 0, "error": str(exc)}
+
+
+def get_invoice_for_match(
+    *,
+    company_id: str,
+    invoice_id: str | None = None,
+    invoice_number: str | None = None,
+) -> dict[str, Any]:
+    """Fetch one invoice by id, then by invoice_number — service role (bypasses RLS)."""
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    iid = (invoice_id or "").strip()
+    ino = (invoice_number or "").strip()
+    if not cid:
+        return {"ok": False, "invoice": None, "error": "company_id required"}
+    if not iid and not ino:
+        return {"ok": False, "invoice": None, "error": "invoice_id or invoice_number required"}
+
+    sb = get_supabase()
+    try:
+        if iid:
+            res = (
+                sb.table("invoices")
+                .select("*")
+                .eq("company_id", cid)
+                .eq("id", iid)
+                .limit(1)
+                .execute()
+            )
+            rows = res.data if isinstance(res.data, list) else []
+            if rows:
+                return {"ok": True, "invoice": rows[0]}
+
+        if ino:
+            res = (
+                sb.table("invoices")
+                .select("*")
+                .eq("company_id", cid)
+                .ilike("invoice_number", ino)
+                .limit(1)
+                .execute()
+            )
+            rows = res.data if isinstance(res.data, list) else []
+            if rows:
+                return {"ok": True, "invoice": rows[0]}
+
+        return {"ok": False, "invoice": None, "error": "Invoice not found"}
+    except Exception as exc:
+        logger.exception("get_invoice_for_match failed company=%s id=%s no=%s", cid, iid, ino)
+        return {"ok": False, "invoice": None, "error": str(exc)}
+
+
+_PATCH_SAFE_KEYS = {
+    "po_id",
+    "grn_id",
+    "po_number",
+    "match_status",
+    "match_score",
+    "match_notes",
+    "match_result_id",
+    "auto_matched",
+    "match_attempted_at",
+    "grn_confirmed",
+    "match_difference",
+    "match_percentage",
+    "po_amount",
+    "grn_amount",
+    "approval_status",
+    "status",
+    "approved_at",
+    "approved_by",
+    "updated_at",
+}
+
+
+def patch_invoice_for_match(
+    *,
+    company_id: str,
+    invoice_id: str,
+    fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Update match fields on an invoice via service role."""
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    iid = (invoice_id or "").strip()
+    if not cid or not iid:
+        return {"ok": False, "error": "company_id and invoice_id required"}
+
+    payload = {k: v for k, v in (fields or {}).items() if k in _PATCH_SAFE_KEYS}
+    if not payload:
+        return {"ok": False, "error": "no patchable fields"}
+    payload["updated_at"] = payload.get("updated_at") or (
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+    )
+
+    sb = get_supabase()
+    try:
+        res = (
+            sb.table("invoices")
+            .update(payload)
+            .eq("company_id", cid)
+            .eq("id", iid)
+            .execute()
+        )
+        rows = res.data if isinstance(res.data, list) else []
+        return {"ok": True, "invoice": rows[0] if rows else None}
+    except Exception as exc:
+        logger.exception("patch_invoice_for_match failed %s", iid)
+        return {"ok": False, "error": str(exc)}
+
+
+def list_purchase_orders_for_company(
+    *,
+    company_id: str,
+    limit: int = 500,
+) -> dict[str, Any]:
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {"ok": False, "purchase_orders": [], "error": "company_id required"}
+    sb = get_supabase()
+    try:
+        res = (
+            sb.table("purchase_orders")
+            .select("*")
+            .eq("company_id", cid)
+            .order("created_at", desc=True)
+            .limit(max(1, min(limit, 2000)))
+            .execute()
+        )
+        rows = res.data if isinstance(res.data, list) else []
+        return {"ok": True, "purchase_orders": rows, "count": len(rows)}
+    except Exception as exc:
+        logger.exception("list_purchase_orders failed for %s", cid)
+        return {"ok": False, "purchase_orders": [], "error": str(exc)}
+
+
+def list_goods_receipts_for_company(
+    *,
+    company_id: str,
+    po_id: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {"ok": False, "goods_receipts": [], "error": "company_id required"}
+    sb = get_supabase()
+    try:
+        q = (
+            sb.table("goods_receipts")
+            .select("*, grn_line_items(*)")
+            .eq("company_id", cid)
+            .order("received_date", desc=True)
+            .limit(max(1, min(limit, 2000)))
+        )
+        if (po_id or "").strip():
+            q = q.eq("po_id", po_id.strip())
+        res = q.execute()
+        rows = res.data if isinstance(res.data, list) else []
+        return {"ok": True, "goods_receipts": rows, "count": len(rows)}
+    except Exception as exc:
+        # Fallback without nested line items if relation name differs
+        try:
+            q2 = sb.table("goods_receipts").select("*").eq("company_id", cid).limit(max(1, min(limit, 2000)))
+            if (po_id or "").strip():
+                q2 = q2.eq("po_id", po_id.strip())
+            res2 = q2.execute()
+            rows2 = res2.data if isinstance(res2.data, list) else []
+            return {"ok": True, "goods_receipts": rows2, "count": len(rows2)}
+        except Exception as exc2:
+            logger.exception("list_goods_receipts failed for %s", cid)
+            return {"ok": False, "goods_receipts": [], "error": str(exc2) or str(exc)}
+
+
+def insert_match_result(row: dict[str, Any]) -> dict[str, Any]:
+    from app.core.supabase import get_supabase
+
+    sb = get_supabase()
+    try:
+        res = sb.table("match_results").insert(row).execute()
+        rows = res.data if isinstance(res.data, list) else []
+        return {"ok": True, "id": (rows[0] or {}).get("id") if rows else None}
+    except Exception as exc:
+        logger.warning("match_results insert failed: %s", exc)
+        return {"ok": False, "error": str(exc)}

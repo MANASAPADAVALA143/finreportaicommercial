@@ -550,7 +550,11 @@ export function InvoiceList() {
           const didClassify = await classifyInvoiceFromGl(inv, companyId);
           if (didClassify) classified += 1;
 
-          const matchResult = await runAutoMatch(inv.id, { respectUploadSetting: false });
+          const matchResult = await runAutoMatch(inv.id, {
+            respectUploadSetting: false,
+            invoice: inv,
+            invoiceNumber: inv.invoice_number,
+          });
           if (
             matchResult.invoice_match_status === 'matched' ||
             matchResult.invoice_match_status === 'three_way_matched' ||
@@ -605,7 +609,11 @@ export function InvoiceList() {
     try {
       for (const inv of targets) {
         try {
-          const matchResult = await runAutoMatch(inv.id, { respectUploadSetting: false });
+          const matchResult = await runAutoMatch(inv.id, {
+            respectUploadSetting: false,
+            invoice: inv,
+            invoiceNumber: inv.invoice_number,
+          });
           if (
             matchResult.invoice_match_status === 'matched' ||
             matchResult.invoice_match_status === 'three_way_matched' ||
@@ -821,7 +829,11 @@ export function InvoiceList() {
         let anyUpdated = false;
         for (const inv of needPoAutoLink.slice(0, 60)) {
           try {
-            await runAutoMatch(inv.id, { respectUploadSetting: false });
+            await runAutoMatch(inv.id, {
+              respectUploadSetting: false,
+              invoice: inv,
+              invoiceNumber: inv.invoice_number,
+            });
             anyUpdated = true;
           } catch (e) {
             console.warn('Auto PO link / 3-way match failed for', inv.invoice_number, e);
@@ -836,12 +848,22 @@ export function InvoiceList() {
               refreshCompanyId = (await getMyCompany())?.id ?? null;
             }
           }
-          let rq = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-          if (refreshCompanyId) rq = rq.eq('company_id', refreshCompanyId);
-          const { data: refreshed } = await rq;
-          if (refreshed) {
-            setInvoices(refreshed);
-            setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
+          if (refreshCompanyId) {
+            try {
+              const refreshed = await listInvoicesViaApi(refreshCompanyId, 500);
+              if (refreshed.length > 0) {
+                setInvoices(refreshed);
+                setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
+              }
+            } catch {
+              let rq = supabase.from('invoices').select('*').order('created_at', { ascending: false });
+              rq = rq.eq('company_id', refreshCompanyId);
+              const { data: refreshed } = await rq;
+              if (refreshed) {
+                setInvoices(refreshed);
+                setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
+              }
+            }
           }
         }
       }
