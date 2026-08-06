@@ -1281,7 +1281,7 @@ export function InvoiceList() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Invoice List</h1>
@@ -1383,7 +1383,7 @@ export function InvoiceList() {
 
       {/* AP Process Stepper */}
       <Card className="border border-gray-200">
-        <CardContent className="pt-6 pb-6">
+        <CardContent className="py-3">
           <div className="flex items-center justify-between gap-1 overflow-x-auto">
             {STEPPER_LABELS.map((label, index) => {
               const step = index + 1;
@@ -1424,10 +1424,13 @@ export function InvoiceList() {
 
       {/* Filters */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-4">
-              <Button
+        <CardContent className={filtersExpanded ? 'py-3' : 'py-2'}>
+          <div className={filtersExpanded ? 'space-y-3' : 'space-y-0'}>
+            <div
+              className={`flex flex-wrap gap-2 ${
+                filtersExpanded ? 'border-b border-gray-100 pb-3' : 'pb-0'
+              }`}
+            >              <Button
                 type="button"
                 size="sm"
                 variant={viewMode === 'all' ? 'default' : 'outline'}
@@ -1750,7 +1753,7 @@ export function InvoiceList() {
 
       {/* Invoice Table */}
       <Card>
-        <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader className="flex flex-col gap-2 space-y-0 py-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>
             {filteredInvoices.length} Invoice{filteredInvoices.length !== 1 ? 's' : ''}
           </CardTitle>
@@ -1758,6 +1761,7 @@ export function InvoiceList() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               className="shrink-0 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
               onClick={() => setDeleteAllDialogOpen(true)}
             >
@@ -1766,8 +1770,7 @@ export function InvoiceList() {
             </Button>
           )}
         </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
+        <CardContent className="pt-0">          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
