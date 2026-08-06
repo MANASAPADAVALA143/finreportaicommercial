@@ -156,19 +156,16 @@ function invoiceGlCode(inv: Invoice): string {
   return String(inv.gl_account_code ?? inv.gl_code ?? '').trim();
 }
 
-function isInvoiceApprovedForGl(inv: Invoice): boolean {
-  const st = String(inv.status || '');
-  if (st === 'Approved' || st === 'Paid') return true;
-  const appr = String(inv.approval_status || '').toLowerCase();
-  return appr === 'approved';
-}
-
-/** Display GL from company/default COA map (approved only); not from stored row fields. */
+/** Prefer stored invoice GL; fall back to company/default COA map for any status. */
 function displayGlFromCoaMap(
   inv: Invoice,
   mappings: CoaMappingRow[],
-): { code: string; name: string; source: 'company' | 'default' } | null {
-  if (!isInvoiceApprovedForGl(inv)) return null;
+): { code: string; name: string; source: 'stored' | 'company' | 'default' } | null {
+  const storedCode = invoiceGlCode(inv);
+  const storedName = String(inv.gl_account_name ?? inv.gl_name ?? '').trim();
+  if (storedCode) {
+    return { code: storedCode, name: storedName || 'GL Account', source: 'stored' };
+  }
   const key = invoiceCoaCategoryKey(inv);
   const hit = resolveGlFromMappings(mappings, key);
   if (!hit) return null;
@@ -1976,10 +1973,19 @@ export function InvoiceList() {
                               style={{
                                 fontSize: '10px',
                                 fontWeight: 600,
-                                color: mapped.source === 'company' ? '#0e9f6e' : '#6b7280',
+                                color:
+                                  mapped.source === 'company'
+                                    ? '#0e9f6e'
+                                    : mapped.source === 'stored'
+                                      ? '#1d4ed8'
+                                      : '#6b7280',
                               }}
                             >
-                              {mapped.source === 'company' ? '🏢 Your COA' : '🤖 Default COA'}
+                              {mapped.source === 'company'
+                                ? '🏢 Your COA'
+                                : mapped.source === 'stored'
+                                  ? '📄 On invoice'
+                                  : '🤖 Default COA'}
                             </span>
                           </div>
                         );

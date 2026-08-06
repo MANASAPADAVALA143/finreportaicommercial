@@ -1550,6 +1550,9 @@ export function InvoiceUpload() {
             currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : defaultCurrency,
             description: rowNorm.description ? String(rowNorm.description).trim() : '',
             gl_code: rowNorm.gl_code ? String(rowNorm.gl_code).trim() : null,
+            gl_name: rowNorm.gl_name ? String(rowNorm.gl_name).trim() : null,
+            property_ref: rowNorm.property_ref ? String(rowNorm.property_ref).trim() : null,
+            cost_center: rowNorm.cost_center ? String(rowNorm.cost_center).trim() : null,
             reference: rowNorm.reference ? String(rowNorm.reference).trim() : null,
             // 3-way match fields
             po_number: rowNorm.po_number ? String(rowNorm.po_number).trim() : null,
@@ -1772,6 +1775,24 @@ export function InvoiceUpload() {
             ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
             ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number).trim() } : {}),
+            ...(invoiceData.gl_code
+              ? {
+                  gl_code: String(invoiceData.gl_code).trim(),
+                  gl_account_code: String(invoiceData.gl_code).trim(),
+                }
+              : {}),
+            ...(invoiceData.gl_name
+              ? {
+                  gl_name: String(invoiceData.gl_name).trim(),
+                  gl_account_name: String(invoiceData.gl_name).trim(),
+                }
+              : {}),
+            ...(invoiceData.property_ref
+              ? { property_ref: String(invoiceData.property_ref).trim() }
+              : {}),
+            ...(invoiceData.cost_center
+              ? { cost_center: String(invoiceData.cost_center).trim() }
+              : {}),
           };
 
           prepared.push({ rowNum, invoiceData, upsertPayload, initialStatus });
