@@ -77,20 +77,34 @@ async function findCompanyByWorkspaceId(workspaceId: string): Promise<Company | 
   const cached = getCachedSyncedCompany(workspaceId);
   if (cached) return cached;
 
+  const activeId =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) || null;
+  if (activeId) {
+    const byId = await supabase.from('companies').select('*').eq('id', activeId).limit(1).maybeSingle();
+    if (byId.data) {
+      cacheCompany(workspaceId, byId.data as Company);
+      return byId.data as Company;
+    }
+  }
+
+  // Multiple companies can share a workspace — never use maybeSingle on workspace_id alone.
   const { data, error } = await supabase
     .from('companies')
     .select('*')
     .eq('workspace_id', workspaceId)
-    .maybeSingle();
+    .order('created_at', { ascending: true })
+    .limit(20);
   if (error) {
     console.warn('[AP] companies lookup by workspace_id:', error.message);
     return null;
   }
-  if (data) {
-    cacheCompany(workspaceId, data as Company);
-    return data as Company;
-  }
-  return null;
+  const rows = (data || []) as Company[];
+  if (!rows.length) return null;
+  const picked =
+    (activeId && rows.find((r) => r.id === activeId)) ||
+    rows[0]!;
+  cacheCompany(workspaceId, picked);
+  return picked;
 }
 
 async function syncViaBackend(

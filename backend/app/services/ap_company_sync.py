@@ -278,15 +278,16 @@ def sync_ap_company_for_profile(
             sb.table("companies")
             .select("*")
             .eq("id", cid)
-            .maybe_single()
+            .limit(1)
             .execute()
         )
-        if existing.data:
+        rows = list(existing.data or [])
+        if rows:
             patch: dict[str, Any] = {
                 "workspace_id": ws_id,
                 "name": name,
             }
-            if market and existing.data.get("market") != market:
+            if market and rows[0].get("market") != market:
                 patch["market"] = market
             try:
                 sb.table("companies").update(patch).eq("id", cid).execute()
@@ -296,10 +297,10 @@ def sync_ap_company_for_profile(
                 sb.table("companies")
                 .select("*")
                 .eq("id", cid)
-                .maybe_single()
+                .limit(1)
                 .execute()
             )
-            company = refreshed.data or {**existing.data, **patch}
+            company = (refreshed.data or [None])[0] or {**rows[0], **patch}
             _ensure_company_config(sb, cid)
     except Exception as exc:
         logger.warning("companies lookup by id failed (%s): %s", cid, exc)
@@ -339,11 +340,11 @@ def sync_ap_company_for_profile(
                     sb.table("companies")
                     .select("*")
                     .eq("id", cid)
-                    .maybe_single()
+                    .limit(1)
                     .execute()
                 )
                 if retry.data:
-                    company = retry.data
+                    company = retry.data[0]
             except Exception:
                 pass
 
