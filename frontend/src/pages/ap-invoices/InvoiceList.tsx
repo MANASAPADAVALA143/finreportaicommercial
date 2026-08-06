@@ -21,7 +21,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap, CheckCircle2 } from 'lucide-react';
+import {
+  Search,
+  Download,
+  Eye,
+  Calendar,
+  FileSpreadsheet,
+  Trash2,
+  Zap,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
@@ -322,6 +334,8 @@ export function InvoiceList() {
   const { dateFormat } = useCompanySettings();
   const tallySettings = useErpSettings();
   const [showExport, setShowExport] = useState(false);
+  /** Secondary filters (search / property / IFRS / source / dates) — collapsed until needed. */
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [filteredInvoices, setFilteredInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -357,6 +371,29 @@ export function InvoiceList() {
   const [advanceFilter, setAdvanceFilter] = useState(false);
   const [pintAeInvoice, setPintAeInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 20;
+
+  const costCenterOptions = Array.from(
+    new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
+  ).sort();
+  const propertyOptions = Array.from(
+    new Set(invoices.map((inv) => (inv.property_ref || '').trim()).filter(Boolean)),
+  ).sort();
+  /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
+  const showCostCenterFilter = costCenterOptions.length > 0;
+  const showPropertyFilter = propertyOptions.length > 0;
+  const advancedFiltersActive =
+    Boolean(searchTerm.trim()) ||
+    costCenterFilter !== 'all' ||
+    propertyFilter !== 'all' ||
+    ifrsFilter !== 'all' ||
+    sourceFilter !== 'all' ||
+    Boolean(startDate) ||
+    Boolean(endDate) ||
+    Boolean(sourceReceivedAtFilter);
+  const filtersExpanded = showAdvancedFilters || advancedFiltersActive;
+  const costCenterAllLabel = /y$/i.test(costCenterLabel)
+    ? `All ${costCenterLabel.replace(/y$/i, 'ies')}`
+    : `All ${costCenterLabel}s`;
 
   const STEPPER_LABELS = [
     'Uploaded',
@@ -1530,7 +1567,46 @@ export function InvoiceList() {
                   <SelectItem value="low">Low</SelectItem>
                 </SelectContent>
               </Select>
+              <Button
+                type="button"
+                size="sm"
+                variant={filtersExpanded ? 'default' : 'outline'}
+                className={filtersExpanded ? 'bg-[#0A4B8F]' : ''}
+                onClick={() => {
+                  if (filtersExpanded) {
+                    setShowAdvancedFilters(false);
+                    setSearchTerm('');
+                    setCostCenterFilter('all');
+                    setPropertyFilter('all');
+                    setIfrsFilter('all');
+                    setSourceFilter('all');
+                    setStartDate('');
+                    setEndDate('');
+                    if (sourceReceivedAtFilter) {
+                      setSourceReceivedAtFilter(null);
+                      navigate('/ap-invoices/list', { replace: true });
+                    }
+                  } else {
+                    setShowAdvancedFilters(true);
+                  }
+                }}
+                title={
+                  filtersExpanded
+                    ? 'Hide extra filters and clear them'
+                    : 'Show search, property, IFRS, source, dates'
+                }
+              >
+                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                {filtersExpanded ? 'Hide filters' : 'Show filters'}
+                {filtersExpanded ? (
+                  <ChevronUp className="ml-1 h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="ml-1 h-3.5 w-3.5" />
+                )}
+              </Button>
             </div>
+            {filtersExpanded && (
+            <>
             <div className="flex flex-col gap-4 md:flex-row flex-wrap">
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -1541,40 +1617,36 @@ export function InvoiceList() {
                   className="pl-9"
                 />
               </div>
+              {showCostCenterFilter && (
               <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
                 <SelectTrigger className="w-full md:w-[180px]">
                   <SelectValue placeholder={costCenterLabel} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All {costCenterLabel}s</SelectItem>
-                  {Array.from(
-                    new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
-                  )
-                    .sort()
-                    .map((cc) => (
+                  <SelectItem value="all">{costCenterAllLabel}</SelectItem>
+                  {costCenterOptions.map((cc) => (
                       <SelectItem key={cc} value={cc}>
                         {cc}
                       </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
+              )}
+              {showPropertyFilter && (
               <Select value={propertyFilter} onValueChange={setPropertyFilter}>
                 <SelectTrigger className="w-full md:w-[180px]">
                   <SelectValue placeholder="Property" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Properties</SelectItem>
-                  {Array.from(
-                    new Set(invoices.map((inv) => (inv.property_ref || '').trim()).filter(Boolean)),
-                  )
-                    .sort()
-                    .map((p) => (
+                  {propertyOptions.map((p) => (
                       <SelectItem key={p} value={p}>
                         {p}
                       </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
+              )}
               <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
                 <SelectTrigger className="w-full md:w-[200px]">
                   <SelectValue placeholder="IFRS Category" />
@@ -1667,6 +1739,8 @@ export function InvoiceList() {
                 )}
               </div>
             </div>
+            </>
+            )}
           </div>
         </CardContent>
       </Card>
