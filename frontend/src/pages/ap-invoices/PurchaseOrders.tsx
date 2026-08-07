@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
 import { getMyCompany } from '../../lib/ap-invoice/companyService';
 import { ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { bulkUpsertPurchaseOrdersViaApi } from '../../lib/ap-invoice/bulkUpsertPurchaseOrdersService';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import {
   Table,
@@ -649,38 +650,23 @@ export function PurchaseOrders() {
         setUploading(false);
         return;
       }
-      let inserted = 0;
-      let failed = 0;
-      let firstError: string | null = null;
-      for (const row of rows) {
-        const payload: Record<string, unknown> = {
-          company_id: companyId,
-          po_number: row.po_number.trim(),
-          vendor_name: row.vendor_name.trim(),
-          po_amount: parsePoAmount(row.po_amount),
-          po_date: row.po_date || null,
-          delivery_date: row.delivery_date || null,
-          description: row.description || null,
-          notes: row.notes || null,
-          status: row.status || 'Open',
-          currency: baseCurrency,
-          updated_at: new Date().toISOString(),
-        };
-        const { error } = await supabase
-          .from('purchase_orders')
-          .upsert(payload, { onConflict: 'po_number' });
-        if (error) {
-          failed++;
-          if (error.code === '23505') {
-            firstError = firstError || 'Duplicate PO number (already exists).';
-          } else {
-            firstError = firstError || error.message;
-          }
-          console.error('PO insert error:', error.code, error.message, row.po_number);
-        } else {
-          inserted++;
-        }
-      }
+      const payloads = rows.map((row) => ({
+        company_id: companyId,
+        po_number: row.po_number.trim(),
+        vendor_name: row.vendor_name.trim(),
+        po_amount: parsePoAmount(row.po_amount),
+        po_date: row.po_date || null,
+        delivery_date: row.delivery_date || null,
+        description: row.description || null,
+        notes: row.notes || null,
+        status: row.status || 'Open',
+        currency: baseCurrency,
+      }));
+      const result = await bulkUpsertPurchaseOrdersViaApi(companyId, payloads);
+      const inserted = result.success;
+      const failed = result.failed;
+      const firstError =
+        result.results.find((r) => !r.ok)?.error || result.error || null;
       fetchPurchaseOrders();
       const desc = inserted
         ? `${inserted} purchase order(s) added.${failed > 0 ? ` ${failed} skipped.` : ''}`
@@ -695,7 +681,7 @@ export function PurchaseOrders() {
 
       // Auto re-run match for all uploaded POs against existing invoices
       if (inserted > 0) {
-        toast({ title: 'ðŸ”„ Running 3-way matchâ€¦', description: 'Matching invoices to new POs and GRNs.' });
+        toast({ title: 'Running 3-way match…', description: 'Matching invoices to new POs and GRNs.' });
         void handleRematchAll(rows.map(r => r.po_number));
       }
     } catch (err) {

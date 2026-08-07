@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -393,6 +393,117 @@ def patch_invoice_for_match(
     except Exception as exc:
         logger.exception("patch_invoice_for_match failed %s", iid)
         return {"ok": False, "error": str(exc)}
+
+
+_PO_ALLOWED = {
+    "po_number",
+    "vendor_name",
+    "po_amount",
+    "po_date",
+    "delivery_date",
+    "description",
+    "notes",
+    "status",
+    "currency",
+    "line_items",
+}
+
+
+def _sanitize_po_row(raw: dict[str, Any], company_id: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"company_id": company_id}
+    for k, v in (raw or {}).items():
+        if k in _PO_ALLOWED:
+            out[k] = v
+    po_no = str(out.get("po_number") or "").strip()
+    out["po_number"] = po_no
+    if "vendor_name" in out and out["vendor_name"] is not None:
+        out["vendor_name"] = str(out["vendor_name"]).strip()
+    if "status" in out and out["status"]:
+        out["status"] = str(out["status"]).strip() or "Open"
+    else:
+        out.setdefault("status", "Open")
+    out["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return out
+
+
+def bulk_upsert_purchase_orders(
+    *,
+    company_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Upsert many PO rows with service role — bypasses browser RLS for Excel import."""
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {
+            "ok": False,
+            "success": 0,
+            "failed": len(rows),
+            "error": "company_id required",
+            "results": [],
+        }
+    if not rows:
+        return {"ok": True, "success": 0, "failed": 0, "results": []}
+
+    sb = get_supabase()
+    success = 0
+    failed = 0
+    results: list[dict[str, Any]] = []
+
+    for idx, raw in enumerate(rows):
+        payload = _sanitize_po_row(dict(raw or {}), cid)
+        po_no = payload.get("po_number") or f"row-{idx + 1}"
+        if not str(payload.get("po_number") or "").strip():
+            failed += 1
+            results.append({"ok": False, "po_number": po_no, "error": "Missing po_number"})
+            continue
+        if not str(payload.get("vendor_name") or "").strip():
+            failed += 1
+            results.append({"ok": False, "po_number": po_no, "error": "Missing vendor_name"})
+            continue
+
+        try:
+            existing = (
+                sb.table("purchase_orders")
+                .select("id")
+                .eq("company_id", cid)
+                .eq("po_number", payload["po_number"])
+                .limit(1)
+                .execute()
+            )
+            existing_rows = existing.data if isinstance(existing.data, list) else []
+            if existing_rows:
+                po_id = existing_rows[0].get("id")
+                res = (
+                    sb.table("purchase_orders")
+                    .update(payload)
+                    .eq("id", po_id)
+                    .eq("company_id", cid)
+                    .execute()
+                )
+            else:
+                res = sb.table("purchase_orders").insert(payload).execute()
+            saved = (res.data or [None])[0] if isinstance(res.data, list) else None
+            success += 1
+            results.append(
+                {
+                    "ok": True,
+                    "po_number": payload["po_number"],
+                    "id": (saved or {}).get("id") if isinstance(saved, dict) else existing_rows[0].get("id") if existing_rows else None,
+                }
+            )
+        except Exception as exc:
+            failed += 1
+            results.append({"ok": False, "po_number": po_no, "error": str(exc)})
+            logger.warning("bulk PO upsert failed for %s: %s", po_no, exc)
+
+    return {
+        "ok": failed == 0,
+        "success": success,
+        "failed": failed,
+        "results": results,
+    }
 
 
 def list_purchase_orders_for_company(
