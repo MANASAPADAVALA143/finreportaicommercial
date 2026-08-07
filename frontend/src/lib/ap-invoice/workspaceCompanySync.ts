@@ -171,6 +171,7 @@ async function syncViaBackend(
         await supabase.auth.updateUser({
           data: { active_company_id: body.company.id },
         });
+        await supabase.auth.refreshSession();
       } catch (e) {
         console.warn('[AP] could not set active_company_id metadata:', e);
       }

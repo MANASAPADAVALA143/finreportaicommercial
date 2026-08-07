@@ -71,6 +71,16 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     } else {
       localStorage.removeItem('active_company_name');
     }
+    // Align Supabase JWT so get_effective_company_id() matches PO/GRN inserts
+    void (async () => {
+      try {
+        const { supabase } = await import('../lib/ap-invoice/supabase');
+        await supabase.auth.updateUser({ data: { active_company_id: id } });
+        await supabase.auth.refreshSession();
+      } catch (e) {
+        console.warn('[CompanyContext] could not sync active_company_id to JWT:', e);
+      }
+    })();
   }, [companiesList]);
 
   const activeCompany = useMemo(
