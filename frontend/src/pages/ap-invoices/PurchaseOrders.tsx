@@ -376,16 +376,36 @@ export function PurchaseOrders() {
       } catch {
         companyId = (await getMyCompany())?.id ?? null;
       }
-      let q = supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
-      if (companyId) q = q.eq('company_id', companyId);
-      const { data, error } = await q;
+      if (!companyId) {
+        setPurchaseOrders([]);
+        setPoMeta({});
+        return;
+      }
 
-      if (error) throw error;
-      const rows = data ?? [];
+      let rows: PurchaseOrder[] = [];
+      try {
+        const { listPurchaseOrdersViaApi } = await import(
+          '../../lib/ap-invoice/bulkUpsertGoodsReceiptsService'
+        );
+        const viaApi = await listPurchaseOrdersViaApi(companyId);
+        if (viaApi.ok && Array.isArray(viaApi.purchase_orders)) {
+          rows = viaApi.purchase_orders as PurchaseOrder[];
+        } else {
+          throw new Error(viaApi.error || 'API list failed');
+        }
+      } catch {
+        const { data, error } = await supabase
+          .from('purchase_orders')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        rows = data ?? [];
+      }
       setPurchaseOrders(rows);
 
       const meta: Record<string, { grn?: string; invLabel: string }> = {};
-      if (companyId && rows.length > 0) {
+      if (rows.length > 0) {
         const ids = rows.map((r) => r.id);
         const [grnRes, invRes] = await Promise.all([
           supabase

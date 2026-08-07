@@ -583,3 +583,230 @@ def insert_match_result(row: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("match_results insert failed: %s", exc)
         return {"ok": False, "error": str(exc)}
+
+
+_GRN_ALLOWED = {
+    "grn_number",
+    "po_number",
+    "vendor_name",
+    "received_amount",
+    "received_date",
+    "status",
+    "received_by",
+    "notes",
+    "invoice_number",
+    "line_items",
+}
+
+
+def _resolve_po_id_for_company(sb: Any, company_id: str, po_number: str) -> tuple[str | None, str | None]:
+    """Return (po_id, reason_if_missing). Scoped to company — never cross-tenant match."""
+    po_no = (po_number or "").strip()
+    if not po_no:
+        return None, "No PO number"
+    try:
+        exact = (
+            sb.table("purchase_orders")
+            .select("id, po_number")
+            .eq("company_id", company_id)
+            .eq("po_number", po_no)
+            .limit(1)
+            .execute()
+        )
+        rows = exact.data if isinstance(exact.data, list) else []
+        if rows:
+            return str(rows[0]["id"]), None
+        # case-insensitive fallback within same company only
+        ci = (
+            sb.table("purchase_orders")
+            .select("id, po_number")
+            .eq("company_id", company_id)
+            .ilike("po_number", po_no)
+            .limit(1)
+            .execute()
+        )
+        rows2 = ci.data if isinstance(ci.data, list) else []
+        if rows2:
+            return str(rows2[0]["id"]), None
+    except Exception as exc:
+        return None, str(exc)
+    return None, f'PO number "{po_no}" not found'
+
+
+def bulk_upsert_goods_receipts(
+    *,
+    company_id: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Insert/update GRNs + line items via service role for any company (bypasses browser RLS)."""
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {
+            "ok": False,
+            "success": 0,
+            "failed": len(rows),
+            "skipped": 0,
+            "unlinked_po": 0,
+            "needs_review": 0,
+            "error": "company_id required",
+            "results": [],
+        }
+    if not rows:
+        return {
+            "ok": True,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+            "unlinked_po": 0,
+            "needs_review": 0,
+            "results": [],
+        }
+
+    sb = get_supabase()
+    success = failed = skipped = unlinked = needs_review = 0
+    results: list[dict[str, Any]] = []
+
+    for idx, raw in enumerate(rows):
+        raw = dict(raw or {})
+        grn_num = str(raw.get("grn_number") or "").strip()
+        if not grn_num:
+            failed += 1
+            results.append({"ok": False, "grn_number": f"row-{idx + 1}", "error": "Missing grn_number"})
+            continue
+
+        try:
+            dup = (
+                sb.table("goods_receipts")
+                .select("id")
+                .eq("company_id", cid)
+                .eq("grn_number", grn_num)
+                .limit(1)
+                .execute()
+            )
+            if isinstance(dup.data, list) and dup.data:
+                skipped += 1
+                results.append(
+                    {
+                        "ok": False,
+                        "grn_number": grn_num,
+                        "skipped": True,
+                        "error": "Skipped — GRN number already exists",
+                    }
+                )
+                continue
+
+            po_number = str(raw.get("po_number") or "").strip()
+            po_id, po_reason = _resolve_po_id_for_company(sb, cid, po_number)
+            warning = None
+            if po_number and not po_id:
+                needs_review += 1
+                unlinked += 1
+                warning = po_reason or f'PO number "{po_number}" not found'
+            elif not po_id:
+                unlinked += 1
+                warning = "GRN saved without PO link"
+
+            line_items = raw.get("line_items")
+            if not isinstance(line_items, list):
+                line_items = []
+
+            status_raw = str(raw.get("status") or "confirmed").strip().lower()
+            status_db = "draft" if status_raw == "draft" else "confirmed"
+            received_amount = raw.get("received_amount")
+            try:
+                received_amount = float(received_amount) if received_amount is not None else 0.0
+            except (TypeError, ValueError):
+                received_amount = 0.0
+
+            if received_amount == 0 and line_items:
+                try:
+                    received_amount = sum(
+                        float(li.get("received_qty") or 0) * float(li.get("unit_price") or 0)
+                        for li in line_items
+                        if isinstance(li, dict)
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            payload = {
+                "company_id": cid,
+                "grn_number": grn_num,
+                "po_id": po_id,
+                "vendor_name": str(raw.get("vendor_name") or "Unknown vendor").strip() or "Unknown vendor",
+                "received_amount": received_amount,
+                "received_date": raw.get("received_date") or raw.get("grn_date") or None,
+                "status": status_db,
+                "received_by": str(raw.get("received_by") or "Bulk import").strip() or "Bulk import",
+                "notes": str(raw.get("notes") or "").strip(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            inv_no = str(raw.get("invoice_number") or "").strip()
+            if inv_no:
+                payload["invoice_number"] = inv_no
+
+            res = sb.table("goods_receipts").insert(payload).select("id").execute()
+            saved = (res.data or [None])[0] if isinstance(res.data, list) else None
+            grn_id = (saved or {}).get("id") if isinstance(saved, dict) else None
+            if not grn_id:
+                raise RuntimeError("GRN insert returned no id")
+
+            li_rows = []
+            for li in line_items:
+                if not isinstance(li, dict):
+                    continue
+                cond = str(li.get("condition") or "good").strip().lower()
+                if cond not in ("good", "damaged", "partial", "rejected"):
+                    cond = "good"
+                li_rows.append(
+                    {
+                        "grn_id": grn_id,
+                        "description": str(li.get("description") or "Line item").strip() or "Line item",
+                        "ordered_qty": float(li.get("ordered_qty") or 1),
+                        "received_qty": float(li.get("received_qty") or 1),
+                        "unit_price": float(li.get("unit_price") or 0),
+                        "condition": cond,
+                    }
+                )
+            if not li_rows:
+                li_rows = [
+                    {
+                        "grn_id": grn_id,
+                        "description": payload["notes"] or f"{payload['vendor_name']} — receipt",
+                        "ordered_qty": 1,
+                        "received_qty": 1,
+                        "unit_price": received_amount or 0,
+                        "condition": "good",
+                    }
+                ]
+            try:
+                sb.table("grn_line_items").insert(li_rows).execute()
+            except Exception as li_exc:
+                logger.warning("grn_line_items insert for %s: %s", grn_num, li_exc)
+
+            success += 1
+            results.append(
+                {
+                    "ok": True,
+                    "grn_number": grn_num,
+                    "id": grn_id,
+                    "po_id": po_id,
+                    "needs_review": bool(warning),
+                    "warning": warning,
+                }
+            )
+        except Exception as exc:
+            failed += 1
+            results.append({"ok": False, "grn_number": grn_num, "error": str(exc)})
+            logger.warning("bulk GRN upsert failed for %s: %s", grn_num, exc)
+
+    return {
+        "ok": failed == 0,
+        "success": success,
+        "failed": failed,
+        "skipped": skipped,
+        "unlinked_po": unlinked,
+        "needs_review": needs_review,
+        "results": results,
+    }

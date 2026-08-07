@@ -1135,6 +1135,13 @@ export async function listGoodsReceiptsForCompany() {
     companyId = (await getMyCompany())?.id ?? null;
   }
   if (!companyId) return [];
+  try {
+    const { listGoodsReceiptsViaApi } = await import('./bulkUpsertGoodsReceiptsService');
+    const viaApi = await listGoodsReceiptsViaApi(companyId);
+    if (viaApi.ok && Array.isArray(viaApi.goods_receipts)) return viaApi.goods_receipts;
+  } catch {
+    /* fall through to browser client */
+  }
   const nested = await supabase
     .from('goods_receipts')
     .select('*, grn_line_items(*)')
@@ -1725,8 +1732,10 @@ function normalizeLineCondition(c: string): 'good' | 'damaged' | 'partial' | 're
 }
 
 /**
- * Inserts GRNs + line items for the current company. Skips existing `grn_number`.
- * Runs `runAutoMatch` on `invoice_number` when present; otherwise `rerunAutoMatchForPo` when `po_id` resolves.
+ * Inserts GRNs + line items for the **active banner company** via backend service role
+ * (same pattern as invoice / PO Excel upload — works for any company; bypasses browser RLS).
+ * Skips existing `grn_number` within that company. Resolves PO only within the same company.
+ * Runs `runAutoMatch` / `rerunAutoMatchForPo` after successful inserts when possible.
  */
 export async function bulkImportGRNs(
   masterRows: GRNImportRow[],
@@ -1764,140 +1773,108 @@ export async function bulkImportGRNs(
     return result;
   }
 
-  for (let i = 0; i < masterRows.length; i++) {
-    const grn = masterRows[i];
-    const label = `${grn.grn_number} — ${grn.vendor_name || 'GRN'}`;
-    onProgress?.(i + 1, masterRows.length, `Processing ${label}…`);
+  onProgress?.(0, masterRows.length, 'Uploading GRNs via API…');
 
-    let warning: string | undefined;
+  const { bulkUpsertGoodsReceiptsViaApi } = await import('./bulkUpsertGoodsReceiptsService');
 
-    try {
-      const grnNum = grn.grn_number.trim();
-      if (!grnNum) {
-        result.failed++;
-        result.errors.push({ grn_number: '(empty)', error: 'Missing grn_number' });
-        continue;
-      }
+  const payloads: Record<string, unknown>[] = masterRows.map((grn) => {
+    const grnNum = grn.grn_number.trim();
+    let lines = lineItemRows
+      .filter((l) => l.grn_number.trim() === grnNum)
+      .map((l) => ({
+        description: l.description.trim() || 'Line item',
+        ordered_qty: Number(l.ordered_qty) || 1,
+        received_qty: Number(l.received_qty) || 1,
+        unit_price: Number(l.unit_price) || 0,
+        condition: normalizeLineCondition(l.condition),
+      }));
 
-      const { data: dup } = await supabase
-        .from('goods_receipts')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('grn_number', grnNum)
-        .maybeSingle();
-
-      if (dup) {
-        result.skipped++;
-        result.errors.push({ grn_number: grnNum, error: 'Skipped — GRN number already exists' });
-        result.results.push({
-          grn_number: grnNum,
-          invoice_number: grn.invoice_number,
-          match_status: 'skipped_duplicate',
-          auto_approved: false,
-          warning: 'GRN already in database',
-        });
-        continue;
-      }
-
-      const resolved = await resolvePoIdForGrn(grn, companyId);
-      const poId = resolved.po_id;
-      let resolvedPoNumber = resolved.po_number?.trim() || grn.po_number.trim();
-
-      if (resolved.needs_review) {
-        result.needsReview++;
-        const reason = resolved.reason || 'PO link needs manual review';
-        warning = reason;
-        result.reviewFlags.push({ grn_number: grnNum, reason });
-        result.errors.push({ grn_number: grnNum, error: reason });
-      }
-      if (!poId) {
-        result.unlinkedPo++;
-        if (!warning) {
-          warning = resolved.reason || 'GRN saved without PO link';
-        }
-      }
-
-      let lines = lineItemRows
-        .filter((l) => l.grn_number.trim() === grnNum)
-        .map((l) => ({
-          description: l.description.trim() || 'Line item',
-          ordered_qty: Number(l.ordered_qty) || 1,
-          received_qty: Number(l.received_qty) || 1,
-          unit_price: Number(l.unit_price) || 0,
-          condition: normalizeLineCondition(l.condition),
-        }));
-
-      if (lines.length === 0) {
-        lines = [
-          {
+    if (lines.length === 0) {
+      lines = [
+        {
           description: grn.notes.trim() || `${grn.vendor_name || 'Vendor'} — receipt`,
           ordered_qty: 1,
           received_qty: 1,
           unit_price: 0,
           condition: 'good' as const,
-          },
-        ];
+        },
+      ];
+    }
+
+    let lineSum = lines.reduce((s, li) => s + Number(li.received_qty) * Number(li.unit_price), 0);
+    const headerTotal = Number(grn.received_total) || 0;
+    if (lineSum === 0 && headerTotal > 0) {
+      const qtySum = lines.reduce((s, li) => s + Number(li.received_qty), 0);
+      if (qtySum > 0) {
+        const up = headerTotal / qtySum;
+        lines = lines.map((li) => ({ ...li, unit_price: up }));
+        lineSum = headerTotal;
       }
+    }
 
-      let lineSum = lines.reduce((s, li) => s + Number(li.received_qty) * Number(li.unit_price), 0);
-      const headerTotal = Number(grn.received_total) || 0;
-      if (lineSum === 0 && headerTotal > 0) {
-        const qtySum = lines.reduce((s, li) => s + Number(li.received_qty), 0);
-        if (qtySum > 0) {
-          const up = headerTotal / qtySum;
-          lines = lines.map((li) => ({ ...li, unit_price: up }));
-          lineSum = headerTotal;
-        }
-      }
+    return {
+      grn_number: grnNum,
+      po_number: grn.po_number.trim(),
+      vendor_name: grn.vendor_name.trim() || 'Unknown vendor',
+      received_amount: lineSum,
+      received_date: normalizeGrnDate(grn.grn_date),
+      grn_date: grn.grn_date || null,
+      status: grn.status.trim() || 'confirmed',
+      received_by: grn.received_by.trim() || 'Bulk import',
+      notes: grn.notes?.trim() ?? '',
+      invoice_number: grn.invoice_number?.trim() || null,
+      line_items: lines,
+    };
+  });
 
-      const receivedBy = grn.received_by.trim() || 'Bulk import';
-      const vendorName = grn.vendor_name.trim() || 'Unknown vendor';
-      const statusLower = grn.status.trim().toLowerCase();
-      const statusDb = statusLower === 'draft' ? 'draft' : 'confirmed';
+  let apiResult;
+  try {
+    apiResult = await bulkUpsertGoodsReceiptsViaApi(companyId, payloads);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'GRN bulk API failed';
+    result.failed = masterRows.length;
+    result.errors.push({ grn_number: '—', error: msg });
+    return result;
+  }
 
-      const invNumTrim = grn.invoice_number?.trim() ?? '';
+  result.success = apiResult.success;
+  result.failed = apiResult.failed;
+  result.skipped = apiResult.skipped;
+  result.unlinkedPo = apiResult.unlinked_po;
+  result.needsReview = apiResult.needs_review;
 
-      const { data: inserted, error: grnError } = await supabase
-        .from('goods_receipts')
-        .insert({
-          company_id: companyId,
-          grn_number: grnNum,
-          po_id: poId,
-          vendor_name: vendorName,
-          received_amount: lineSum,
-          received_date: normalizeGrnDate(grn.grn_date),
-          status: statusDb,
-          received_by: receivedBy,
-          notes: grn.notes?.trim() ?? '',
-          ...(invNumTrim ? { invoice_number: invNumTrim } : {}),
-          updated_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single();
+  for (const row of apiResult.results) {
+    const grnNum = row.grn_number || '—';
+    if (row.skipped) {
+      result.errors.push({ grn_number: grnNum, error: row.error || 'Skipped — duplicate' });
+      continue;
+    }
+    if (!row.ok) {
+      result.errors.push({ grn_number: grnNum, error: row.error || 'Failed' });
+      continue;
+    }
+    if (row.warning) {
+      result.errors.push({ grn_number: grnNum, error: row.warning });
+      result.reviewFlags.push({ grn_number: grnNum, reason: row.warning });
+    }
+    result.results.push({
+      grn_number: grnNum,
+      invoice_number: masterRows.find((m) => m.grn_number.trim() === grnNum)?.invoice_number || '',
+      match_status: row.po_id ? 'imported' : 'unlinked_po',
+      auto_approved: false,
+      needs_review: !!row.needs_review,
+      warning: row.warning,
+    });
+  }
 
-      if (grnError) throw new Error(grnError.message);
-      const grnId = inserted?.id as string;
+  onProgress?.(masterRows.length, masterRows.length, 'Running 3-way match…');
 
-      const liRows = lines.map((li) => ({
-        grn_id: grnId,
-        description: li.description,
-        ordered_qty: li.ordered_qty,
-        received_qty: li.received_qty,
-        unit_price: li.unit_price,
-        condition: li.condition,
-      }));
-
-      if (liRows.length > 0) {
-        const { error: liErr } = await supabase.from('grn_line_items').insert(liRows);
-        if (liErr) console.warn('[bulkImportGRNs] line items:', liErr.message);
-      }
-
-      result.success++;
-
-      let matchStatus = 'no_invoice';
-      let autoApproved = false;
-
-      const invNum = grn.invoice_number.trim();
+  // Best-effort rematch for rows that linked to a PO (browser may fail — inserts already saved)
+  for (const row of apiResult.results) {
+    if (!row.ok || !row.po_id || !row.grn_number) continue;
+    const master = masterRows.find((m) => m.grn_number.trim() === row.grn_number);
+    const invNum = master?.invoice_number?.trim() || '';
+    try {
       if (invNum) {
         const { data: invRows } = await supabase
           .from('invoices')
@@ -1907,45 +1884,15 @@ export async function bulkImportGRNs(
           .limit(1);
         const invId = invRows?.[0]?.id as string | undefined;
         if (invId) {
-          try {
-            const matchResult = await runAutoMatch(invId, { respectUploadSetting: false });
-            matchStatus = matchResult.engine_status;
-            autoApproved = matchResult.auto_approved;
-            if (matchResult.within_tolerance && !matchResult.skipped) result.matched++;
-          } catch {
-            matchStatus = 'match_error';
-          }
-        } else {
-          matchStatus = 'invoice_not_found';
+          const matchResult = await runAutoMatch(invId, { respectUploadSetting: false });
+          if (matchResult.within_tolerance && !matchResult.skipped) result.matched++;
         }
-      } else if (poId && resolvedPoNumber) {
-        try {
-          const rematch = await rerunAutoMatchForPo(poId, resolvedPoNumber);
-          if (rematch.length > 0) {
-            const first = rematch[0].result;
-            matchStatus = first.engine_status;
-            autoApproved = first.auto_approved;
-            if (first.within_tolerance && !first.skipped) result.matched++;
-          } else {
-            matchStatus = 'no_invoice_on_po';
-          }
-        } catch {
-          matchStatus = 'match_error';
-        }
+      } else {
+        const rematch = await rerunAutoMatchForPo(row.po_id, master?.po_number || '');
+        if (rematch.some((r) => r.result.within_tolerance && !r.result.skipped)) result.matched++;
       }
-
-      result.results.push({
-        grn_number: grnNum,
-        invoice_number: grn.invoice_number,
-        match_status: matchStatus,
-        auto_approved: autoApproved,
-        needs_review: resolved.needs_review,
-        warning,
-      });
-    } catch (e: unknown) {
-      result.failed++;
-      const msg = e instanceof Error ? e.message : 'Unknown error';
-      result.errors.push({ grn_number: grn.grn_number, error: msg });
+    } catch {
+      /* rematch is best-effort */
     }
   }
 

@@ -117,6 +117,7 @@ from app.api.routes import (
     analytics,
     ap_invoices_rds,
     ap_purchase_orders,
+    ap_goods_receipts,
     ap_companies_rds,
     vat_advanced_rds,
     system_routes,
@@ -305,6 +306,7 @@ app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
 app.include_router(ap_invoices_rds.router)
 app.include_router(ap_purchase_orders.router)
+app.include_router(ap_goods_receipts.router)
 app.include_router(ap_payment_run_routes.router)
 app.include_router(ap_payment_runs_alias.router)
 app.include_router(industry_config_routes.router)

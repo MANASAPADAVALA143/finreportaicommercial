@@ -833,6 +833,25 @@ async def bulk_upsert_ap_purchase_orders(
     )
 
 
+class BulkUpsertGrnsIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    goods_receipts: list[dict[str, Any]] = Field(..., min_length=1)
+
+
+@router.post("/ap/bulk-upsert-goods-receipts", summary="Bulk upsert GRNs (service role, bypasses RLS)")
+async def bulk_upsert_ap_goods_receipts(
+    body: BulkUpsertGrnsIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import bulk_upsert_goods_receipts
+
+    return bulk_upsert_goods_receipts(
+        company_id=body.company_id.strip(),
+        rows=body.goods_receipts,
+    )
+
+
 class ListApGrnsIn(BaseModel):
     company_id: str = Field(..., min_length=1)
     po_id: str = ""
