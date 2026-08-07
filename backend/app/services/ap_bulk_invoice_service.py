@@ -746,9 +746,21 @@ def bulk_upsert_goods_receipts(
             if inv_no:
                 payload["invoice_number"] = inv_no
 
-            res = sb.table("goods_receipts").insert(payload).select("id").execute()
+            res = sb.table("goods_receipts").insert(payload).execute()
             saved = (res.data or [None])[0] if isinstance(res.data, list) else None
             grn_id = (saved or {}).get("id") if isinstance(saved, dict) else None
+            if not grn_id:
+                # Some supabase-py versions omit returning rows — look up by company + number
+                lookup = (
+                    sb.table("goods_receipts")
+                    .select("id")
+                    .eq("company_id", cid)
+                    .eq("grn_number", grn_num)
+                    .limit(1)
+                    .execute()
+                )
+                lookup_rows = lookup.data if isinstance(lookup.data, list) else []
+                grn_id = lookup_rows[0].get("id") if lookup_rows else None
             if not grn_id:
                 raise RuntimeError("GRN insert returned no id")
 
