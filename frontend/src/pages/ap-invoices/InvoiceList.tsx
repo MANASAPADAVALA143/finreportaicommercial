@@ -1381,35 +1381,39 @@ export function InvoiceList() {
       </div>
 
       {/* AP Process Stepper */}
-      <Card className="border border-gray-200">
-        <CardContent className="py-3">
-          <div className="flex items-center justify-between gap-1 overflow-x-auto">
+      <Card className="border border-gray-200 overflow-visible">
+        <CardContent className="py-4 px-4 overflow-visible">
+          <div className="flex items-start justify-between gap-1 overflow-x-auto overflow-y-visible pb-1">
             {STEPPER_LABELS.map((label, index) => {
               const step = index + 1;
               const currentStep = getCurrentStepperStep(filteredInvoices);
               const isCompleted = step < currentStep;
               const isCurrent = step === currentStep;
               return (
-                <div key={label} className="flex flex-1 min-w-0 items-center">
+                <div key={label} className="flex flex-1 min-w-[4.5rem] items-start">
                   <div className="flex flex-col items-center flex-1 min-w-0">
                     <div
-                      className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                      className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 border-2 ${
                         isCompleted
-                          ? 'bg-green-500 text-white'
+                          ? 'bg-green-500 border-green-600 text-white'
                           : isCurrent
-                            ? 'bg-[#1a56db] text-white'
-                            : 'bg-gray-200 text-gray-500'
+                            ? 'bg-[#1a56db] border-[#1a56db] text-white'
+                            : 'bg-white border-gray-300 text-gray-700'
                       }`}
                     >
                       {step}
                     </div>
-                    <span className={`mt-1 text-xs truncate w-full text-center ${isCurrent ? 'text-[#1a56db] font-medium' : 'text-gray-600'}`}>
+                    <span
+                      className={`mt-1.5 text-[11px] leading-tight truncate w-full text-center ${
+                        isCurrent ? 'text-[#1a56db] font-medium' : isCompleted ? 'text-green-700' : 'text-gray-600'
+                      }`}
+                    >
                       {label}
                     </span>
                   </div>
                   {index < STEPPER_LABELS.length - 1 && (
                     <div
-                      className={`flex-1 h-0.5 mx-0.5 min-w-[8px] ${
+                      className={`flex-1 h-0.5 mt-4 mx-0.5 min-w-[8px] self-start ${
                         step < currentStep ? 'bg-green-500' : 'bg-gray-200'
                       }`}
                     />
