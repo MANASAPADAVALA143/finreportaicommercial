@@ -44,6 +44,7 @@ from app.routers import ap_email_privacy as ap_email_privacy_router
 from app.routers import ap_ses_intake as ap_ses_intake_router
 from app.routers import ap_whatsapp_intake as ap_whatsapp_intake_router
 from app.api.routes import gulftax_audit_routes
+from app.api.routes.ar_collections_routes import router as ar_collections_router
 from app.api.routes import (
     fpa_master_upload,
     upload_routes,
@@ -280,6 +281,7 @@ app.include_router(uae_accounting.router)
 app.include_router(uae_full_routes.router)
 app.include_router(uae_full_routes.fx_router)
 app.include_router(uae_ar_routes.router)
+app.include_router(ar_collections_router)
 app.include_router(uae_controls_routes.router)
 app.include_router(india_routes.router)
 app.include_router(pipeline_router.router)
