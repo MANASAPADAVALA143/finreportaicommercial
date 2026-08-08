@@ -811,15 +811,182 @@ def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
             except Exception as exc:
                 logger.warning("property fill %s failed: %s", inv.get("id"), exc)
 
+        rematch = rematch_invoices_by_po_number(company_id=cid, tolerance_pct=5.0)
         return {
             "ok": True,
             "copied_pos": copied,
             "relinked_grns": relinked,
             "properties": props,
+            "rematched": rematch.get("three_way_matched", 0),
+            "rematch": rematch,
         }
     except Exception as exc:
         logger.exception("ensure_workspace_pos_and_relink_grns failed for %s", cid)
         return {"ok": False, "error": str(exc), "copied_pos": copied, "relinked_grns": relinked, "properties": props}
+
+
+def _pct_diff_vat_aware(a: float, b: float) -> float:
+    if a == b:
+        return 0.0
+    lo, hi = min(abs(a), abs(b)), max(abs(a), abs(b))
+    if lo > 0 and abs(hi / lo - 1.05) < 0.01:
+        return 0.0
+    if hi <= 0:
+        return 100.0
+    return abs(a - b) / hi * 100.0
+
+
+def _best_amount_pct(inv_amt: float, other_amt: float, vat: float) -> float:
+    candidates = [inv_amt]
+    if vat > 0 and inv_amt > vat:
+        candidates.append(inv_amt - vat)
+    return min(_pct_diff_vat_aware(c, other_amt) for c in candidates)
+
+
+def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0) -> dict[str, Any]:
+    """Exact po_number → PO → GRN. Amounts within tolerance (VAT-aware) → three_way_matched."""
+    from datetime import datetime, timezone
+
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    out = {
+        "ok": False,
+        "three_way_matched": 0,
+        "matched": 0,
+        "mismatch": 0,
+        "no_po": 0,
+        "no_grn": 0,
+        "error": None,
+    }
+    if not cid:
+        out["error"] = "company_id required"
+        return out
+
+    sb = get_supabase()
+    try:
+        invs = (
+            sb.table("invoices")
+            .select("id,invoice_number,po_number,total_amount,tax_amount,vat_amount,match_status")
+            .eq("company_id", cid)
+            .limit(2000)
+            .execute()
+        )
+        pos = (
+            sb.table("purchase_orders")
+            .select("id,po_number,po_amount")
+            .eq("company_id", cid)
+            .limit(2000)
+            .execute()
+        )
+        grns = (
+            sb.table("goods_receipts")
+            .select("id,po_id,received_amount,status")
+            .eq("company_id", cid)
+            .limit(2000)
+            .execute()
+        )
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+
+    po_by_num = {
+        str(p.get("po_number") or "").strip().lower(): p
+        for p in (pos.data or [])
+        if str(p.get("po_number") or "").strip()
+    }
+    grn_by_po: dict[str, dict[str, Any]] = {}
+    for g in grns.data or []:
+        pid = str(g.get("po_id") or "").strip()
+        if not pid:
+            continue
+        prev = grn_by_po.get(pid)
+        if prev is None or str(g.get("status") or "") == "confirmed":
+            grn_by_po[pid] = g
+
+    now = datetime.now(timezone.utc).isoformat()
+    for inv in invs.data or []:
+        iid = inv.get("id")
+        po_no = str(inv.get("po_number") or "").strip()
+        if not iid:
+            continue
+        if not po_no:
+            out["no_po"] += 1
+            continue
+        po = po_by_num.get(po_no.lower())
+        if not po:
+            out["no_po"] += 1
+            try:
+                sb.table("invoices").update(
+                    {
+                        "match_status": "no_po",
+                        "po_id": None,
+                        "grn_id": None,
+                        "auto_matched": True,
+                        "grn_confirmed": False,
+                        "match_attempted_at": now,
+                        "match_notes": f'No PO found for "{po_no}"',
+                    }
+                ).eq("id", iid).eq("company_id", cid).execute()
+            except Exception as exc:
+                logger.warning("rematch no_po patch failed %s: %s", iid, exc)
+            continue
+
+        po_id = str(po["id"])
+        grn = grn_by_po.get(po_id)
+        inv_amt = float(inv.get("total_amount") or 0)
+        vat = float(inv.get("vat_amount") or inv.get("tax_amount") or 0)
+        po_amt = float(po.get("po_amount") or 0)
+        grn_amt = float((grn or {}).get("received_amount") or 0)
+        inv_po_pct = _best_amount_pct(inv_amt, po_amt, vat) if po_amt else 100.0
+        inv_grn_pct = _best_amount_pct(inv_amt, grn_amt, vat) if grn and grn_amt else None
+        within = inv_po_pct <= tolerance_pct and (inv_grn_pct is None or inv_grn_pct <= tolerance_pct)
+
+        if grn and within:
+            status = "three_way_matched"
+            notes = f"Full 3-way match: PO {po_no} · GRN · within {tolerance_pct:g}%"
+            score = 95
+            out["three_way_matched"] += 1
+        elif within:
+            status = "matched"
+            notes = f"2-way match: PO {po_no} · no GRN · within {tolerance_pct:g}%"
+            score = 85
+            out["matched"] += 1
+            out["no_grn"] += 1
+        elif not grn:
+            status = "partial"
+            notes = f"PO {po_no} found — waiting for goods receipt"
+            score = 60
+            out["no_grn"] += 1
+        else:
+            status = "mismatch"
+            notes = f"Amount variance inv/PO {inv_po_pct:.1f}% (limit {tolerance_pct:g}%)"
+            score = 45
+            out["mismatch"] += 1
+
+        payload = {
+            "po_id": po_id,
+            "grn_id": (grn or {}).get("id") if grn else None,
+            "match_status": status,
+            "match_score": score,
+            "match_notes": notes,
+            "auto_matched": True,
+            "grn_confirmed": status == "three_way_matched",
+            "match_attempted_at": now,
+        }
+        try:
+            sb.table("invoices").update(payload).eq("id", iid).eq("company_id", cid).execute()
+        except Exception as exc:
+            logger.warning("rematch patch failed %s: %s", iid, exc)
+            stripped = _strip_unknown(payload, str(exc))
+            if stripped:
+                try:
+                    sb.table("invoices").update(stripped).eq("id", iid).eq("company_id", cid).execute()
+                except Exception as exc2:
+                    logger.warning("rematch retry failed %s: %s", iid, exc2)
+
+    out["ok"] = True
+    return out
 
 
 def insert_match_result(row: dict[str, Any]) -> dict[str, Any]:
