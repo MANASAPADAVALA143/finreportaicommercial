@@ -90,3 +90,21 @@ export async function listGoodsReceiptsViaApi(
   });
   return Array.isArray(data.goods_receipts) ? data.goods_receipts : [];
 }
+
+export async function ensureWorkspaceMatchesViaApi(companyId: string): Promise<{
+  ok?: boolean;
+  copied_pos?: number;
+  relinked_grns?: number;
+  properties?: number;
+  error?: string;
+}> {
+  try {
+    return await postJson('/api/ap/purchase-orders/ensure-workspace-matches', {
+      company_id: companyId,
+    });
+  } catch {
+    return postJson('/api/uae/ap/ensure-workspace-matches', {
+      company_id: companyId,
+    });
+  }
+}

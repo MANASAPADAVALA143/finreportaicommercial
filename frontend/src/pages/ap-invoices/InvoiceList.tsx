@@ -111,6 +111,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { effectivePropertyRef } from '@/lib/ap-invoice/propertyFromGl';
 import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
@@ -378,7 +379,11 @@ export function InvoiceList() {
     new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
   ).sort();
   const propertyOptions = Array.from(
-    new Set(invoices.map((inv) => (inv.property_ref || '').trim()).filter(Boolean)),
+    new Set(
+      invoices
+        .map((inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)))
+        .filter(Boolean),
+    ),
   ).sort();
   /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
   const showCostCenterFilter = costCenterOptions.length > 0;
@@ -584,6 +589,15 @@ export function InvoiceList() {
         companyId = (await getMyCompany())?.id ?? null;
       }
 
+      if (companyId) {
+        try {
+          const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+          await ensureWorkspaceMatchesViaApi(companyId);
+        } catch (e) {
+          console.warn('[AP] ensure workspace POs/GRNs:', e);
+        }
+      }
+
       for (const invRaw of targets) {
         let inv = invRaw;
         try {
@@ -656,6 +670,15 @@ export function InvoiceList() {
     let failed = 0;
 
     try {
+      try {
+        const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
+        if (companyId) {
+          const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+          await ensureWorkspaceMatchesViaApi(companyId);
+        }
+      } catch (e) {
+        console.warn('[AP] ensure workspace POs/GRNs:', e);
+      }
       for (const inv of targets) {
         try {
           const matchResult = await runAutoMatch(inv.id, {
@@ -874,6 +897,14 @@ export function InvoiceList() {
           (inv.po_id && ['no_po', ''].includes(String(inv.match_status || '').toLowerCase()))
       );
       if (needPoAutoLink.length > 0) {
+        try {
+          if (companyId) {
+            const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+            await ensureWorkspaceMatchesViaApi(companyId);
+          }
+        } catch (e) {
+          console.warn('[AP] ensure workspace POs before auto-link:', e);
+        }
         let anyUpdated = false;
         for (const inv of needPoAutoLink.slice(0, 60)) {
           try {
@@ -961,7 +992,9 @@ export function InvoiceList() {
     }
 
     if (propertyFilter !== 'all') {
-      filtered = filtered.filter((inv) => (inv.property_ref || '').trim() === propertyFilter);
+      filtered = filtered.filter(
+        (inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) === propertyFilter,
+      );
     }
 
     if (startDate) {
@@ -2098,10 +2131,12 @@ export function InvoiceList() {
                     <TableCell
                       className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
                       onClick={() => setSelectedInvoice(invoice)}
-                      title={(invoice.property_ref || '').trim() || undefined}
+                      title={
+                        effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice)) || undefined
+                      }
                     >
                       {(() => {
-                        const full = (invoice.property_ref || '').trim();
+                        const full = effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice));
                         if (!full) return null;
                         const short = full.length > 15 ? `${full.slice(0, 15)}…` : full;
                         return <span>{short}</span>;

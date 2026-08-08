@@ -91,6 +91,30 @@ def _ensure_dates(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+_GL_PROPERTY_MAP = {
+    "6800": "Emaar Business Bay Office",
+    "6400": "All Properties",
+    "6200": "Head Office",
+    "6600": "Operations",
+    "6500": "Corporate",
+    "6300": "Head Office",
+    "6100": "Corporate",
+    "1500": "IT Infrastructure",
+    "1510": "IT Infrastructure",
+}
+
+
+def property_from_gl_code(gl_code: Any) -> str | None:
+    digits = "".join(ch for ch in str(gl_code or "") if ch.isdigit())
+    if not digits:
+        return None
+    if digits in _GL_PROPERTY_MAP:
+        return _GL_PROPERTY_MAP[digits]
+    if len(digits) >= 4 and digits[:4] in _GL_PROPERTY_MAP:
+        return _GL_PROPERTY_MAP[digits[:4]]
+    return None
+
+
 def _sanitize_row(row: dict[str, Any], company_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in row.items():
@@ -101,6 +125,11 @@ def _sanitize_row(row: dict[str, Any], company_id: str) -> dict[str, Any]:
         out["risk_flags"] = []
     if "source" not in out:
         out["source"] = "excel"
+    existing_prop = str(out.get("property_ref") or "").strip()
+    if not existing_prop:
+        derived = property_from_gl_code(out.get("gl_account_code") or out.get("gl_code"))
+        if derived:
+            out["property_ref"] = derived
     return _ensure_dates(out)
 
 
@@ -570,6 +599,158 @@ def list_goods_receipts_for_company(
         except Exception as exc2:
             logger.exception("list_goods_receipts failed for %s", cid)
             return {"ok": False, "goods_receipts": [], "error": str(exc2) or str(exc)}
+
+
+def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
+    """Copy missing POs from sibling companies in the same workspace, then relink GRNs.
+
+    Multi-company workspaces previously shared a global UNIQUE(po_number), so POs
+    landed on the first company only. Invoices on company B still carry po_number
+    but 3-way match looks up POs scoped to company B → no_po.
+    """
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {"ok": False, "error": "company_id required", "copied_pos": 0, "relinked_grns": 0, "properties": 0}
+
+    sb = get_supabase()
+    copied = relinked = props = 0
+
+    try:
+        co = sb.table("companies").select("id,workspace_id").eq("id", cid).limit(1).execute()
+        ws_id = None
+        if isinstance(co.data, list) and co.data:
+            ws_id = co.data[0].get("workspace_id")
+        sibling_ids: list[str] = []
+        if ws_id:
+            sibs = sb.table("companies").select("id").eq("workspace_id", ws_id).execute()
+            sibling_ids = [str(r["id"]) for r in (sibs.data or []) if r.get("id") and str(r["id"]) != cid]
+
+        invs = (
+            sb.table("invoices")
+            .select("id,po_number,gl_account_code,property_ref")
+            .eq("company_id", cid)
+            .limit(2000)
+            .execute()
+        )
+        needed = {
+            str(r.get("po_number") or "").strip()
+            for r in (invs.data or [])
+            if str(r.get("po_number") or "").strip()
+        }
+        local = sb.table("purchase_orders").select("id,po_number").eq("company_id", cid).limit(2000).execute()
+        local_by_num = {
+            str(r.get("po_number") or "").strip(): str(r["id"])
+            for r in (local.data or [])
+            if r.get("id") and str(r.get("po_number") or "").strip()
+        }
+
+        for po_no in needed:
+            if po_no in local_by_num:
+                continue
+            src = None
+            for sid in sibling_ids:
+                found = (
+                    sb.table("purchase_orders")
+                    .select("*")
+                    .eq("company_id", sid)
+                    .eq("po_number", po_no)
+                    .limit(1)
+                    .execute()
+                )
+                rows = found.data if isinstance(found.data, list) else []
+                if rows:
+                    src = rows[0]
+                    break
+            if not src:
+                continue
+            payload = {
+                k: src.get(k)
+                for k in (
+                    "po_number",
+                    "vendor_name",
+                    "po_amount",
+                    "po_date",
+                    "delivery_date",
+                    "description",
+                    "notes",
+                    "status",
+                    "currency",
+                    "line_items",
+                )
+                if src.get(k) is not None
+            }
+            payload["company_id"] = cid
+            payload["po_number"] = po_no
+            payload.setdefault("vendor_name", "Unknown vendor")
+            payload.setdefault("status", "Open")
+            try:
+                ins = sb.table("purchase_orders").insert(payload).execute()
+                new_row = (ins.data or [None])[0] if isinstance(ins.data, list) else None
+                new_id = (new_row or {}).get("id") if isinstance(new_row, dict) else None
+                if not new_id:
+                    lookup = (
+                        sb.table("purchase_orders")
+                        .select("id")
+                        .eq("company_id", cid)
+                        .eq("po_number", po_no)
+                        .limit(1)
+                        .execute()
+                    )
+                    lr = lookup.data if isinstance(lookup.data, list) else []
+                    new_id = lr[0].get("id") if lr else None
+                if new_id:
+                    local_by_num[po_no] = str(new_id)
+                    copied += 1
+            except Exception as exc:
+                logger.warning("copy PO %s to company %s failed: %s", po_no, cid, exc)
+
+        # Relink GRNs whose po_id points at a sibling PO with the same po_number
+        id_to_num: dict[str, str] = {}
+        for sid in [cid, *sibling_ids]:
+            pos = sb.table("purchase_orders").select("id,po_number").eq("company_id", sid).limit(2000).execute()
+            for r in pos.data or []:
+                if r.get("id") and r.get("po_number"):
+                    id_to_num[str(r["id"])] = str(r["po_number"]).strip()
+
+        grns = sb.table("goods_receipts").select("id,po_id").eq("company_id", cid).limit(2000).execute()
+        for g in grns.data or []:
+            gid = g.get("id")
+            old_pid = str(g.get("po_id") or "").strip()
+            po_no = id_to_num.get(old_pid) if old_pid else None
+            if not po_no or po_no not in local_by_num:
+                continue
+            new_pid = local_by_num[po_no]
+            if old_pid == new_pid:
+                continue
+            try:
+                sb.table("goods_receipts").update({"po_id": new_pid}).eq("id", gid).eq("company_id", cid).execute()
+                relinked += 1
+            except Exception as exc:
+                logger.warning("relink GRN %s failed: %s", gid, exc)
+
+        for inv in invs.data or []:
+            if str(inv.get("property_ref") or "").strip():
+                continue
+            derived = property_from_gl_code(inv.get("gl_account_code"))
+            if not derived or not inv.get("id"):
+                continue
+            try:
+                sb.table("invoices").update({"property_ref": derived}).eq("id", inv["id"]).eq("company_id", cid).execute()
+                props += 1
+            except Exception as exc:
+                logger.warning("property fill %s failed: %s", inv.get("id"), exc)
+
+        return {
+            "ok": True,
+            "copied_pos": copied,
+            "relinked_grns": relinked,
+            "properties": props,
+        }
+    except Exception as exc:
+        logger.exception("ensure_workspace_pos_and_relink_grns failed for %s", cid)
+        return {"ok": False, "error": str(exc), "copied_pos": copied, "relinked_grns": relinked, "properties": props}
 
 
 def insert_match_result(row: dict[str, Any]) -> dict[str, Any]:

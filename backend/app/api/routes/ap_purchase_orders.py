@@ -30,3 +30,21 @@ def bulk_upsert_purchase_orders(
     from app.services.ap_bulk_invoice_service import bulk_upsert_purchase_orders as _bulk
 
     return _bulk(company_id=body.company_id.strip(), rows=body.purchase_orders)
+
+
+class EnsureWorkspacePosIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+
+
+@router.post("/ensure-workspace-matches")
+def ensure_workspace_matches(
+    body: EnsureWorkspacePosIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Copy missing POs from sibling workspace companies and relink GRNs + fill property_ref."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import ensure_workspace_pos_and_relink_grns
+
+    return ensure_workspace_pos_and_relink_grns(company_id=body.company_id.strip())

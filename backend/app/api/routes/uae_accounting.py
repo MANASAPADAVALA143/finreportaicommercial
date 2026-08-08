@@ -833,6 +833,21 @@ async def bulk_upsert_ap_purchase_orders(
     )
 
 
+class EnsureWorkspacePosIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+
+
+@router.post("/ap/ensure-workspace-matches", summary="Copy sibling-workspace POs and relink GRNs")
+async def ensure_workspace_ap_matches(
+    body: EnsureWorkspacePosIn,
+    tenant_id: str = Depends(_tenant),
+) -> dict[str, Any]:
+    _ = tenant_id
+    from app.services.ap_bulk_invoice_service import ensure_workspace_pos_and_relink_grns
+
+    return ensure_workspace_pos_and_relink_grns(company_id=body.company_id.strip())
+
+
 class BulkUpsertGrnsIn(BaseModel):
     company_id: str = Field(..., min_length=1)
     goods_receipts: list[dict[str, Any]] = Field(..., min_length=1)
