@@ -1200,7 +1200,7 @@ export function InvoiceList() {
     const headers = [
       'Invoice #', 'Vendor', 'Date', 'Due Date', 'Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
-      'Department', costCenterLabel, 'Project Code', 'Match Status', 'Risk Score',
+      'Department', 'Property', 'Project Code', 'Match Status', 'Risk Score',
       'Approval Level', 'Approved By', 'Payment Status',
     ];
     const rows = invList.map((inv) => [
@@ -1217,7 +1217,7 @@ export function InvoiceList() {
       inv.tax_type || '',
       inv.tax_amount || 0,
       inv.department || '',
-      inv.cost_center || '',
+      effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) || inv.cost_center || '',
       inv.project_code || '',
       inv.match_status || '',
       inv.risk_score || '',

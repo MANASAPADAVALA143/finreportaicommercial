@@ -25,7 +25,7 @@ export function effectivePropertyRef(
   propertyRef: string | null | undefined,
   glCode: string | null | undefined,
 ): string {
-  const existing = String(propertyRef || '').trim();
-  if (existing) return existing;
-  return propertyFromGlCode(glCode) || '';
+  const fromGl = propertyFromGlCode(glCode);
+  if (fromGl) return fromGl;
+  return String(propertyRef || '').trim();
 }
