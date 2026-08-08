@@ -629,7 +629,7 @@ def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
 
         invs = (
             sb.table("invoices")
-            .select("id,po_number,gl_account_code,gl_code,property_ref")
+            .select("id,po_number,gl_account_code,property_ref")
             .eq("company_id", cid)
             .limit(2000)
             .execute()
