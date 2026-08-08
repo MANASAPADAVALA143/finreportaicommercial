@@ -279,10 +279,6 @@ const IFRS16Audit = safeLazy(() => import('./pages/ifrs16/IFRS16Audit'));
 const IFRS15ComingSoon = safeLazy(() => import('./pages/ifrs/IFRS15ComingSoon'));
 const IFRS9ComingSoon = safeLazy(() => import('./pages/ifrs/IFRS9ComingSoon'));
 const ContractPortfolio = safeLazy(() => import('./pages/ifrs15/ContractPortfolio'));
-const Ifrs15BillingRecon = safeLazy(() => import('./pages/ifrs15/BillingGlRecon'));
-const Ifrs15Modifications = safeLazy(() => import('./pages/ifrs15/ModificationsList'));
-const Ifrs15ModificationDetail = safeLazy(() => import('./pages/ifrs15/ModificationDetail'));
-const Ifrs15RpoDashboard = safeLazy(() => import('./pages/ifrs15/RpoDashboard'));
 const IFRS9Dashboard = safeLazy(() => import('./pages/ifrs9/IFRS9Dashboard'));
 const ECLCalculator = safeLazy(() => import('./pages/ifrs9/ECLCalculator'));
 const AssetStaging = safeLazy(() => import('./pages/ifrs9/AssetStaging'));
@@ -615,10 +611,6 @@ function App() {
                   <Route path="/r2r/history" element={<JournalPageWithHistoricalTabs />} />
                   <Route path="/r2r/rev-rec" element={<RevRecReconciliationPage />} />
                   <Route path="/r2r/rev-rec/contracts" element={<ContractPortfolio />} />
-                  <Route path="/r2r/rev-rec/billing-recon" element={<Ifrs15BillingRecon />} />
-                  <Route path="/r2r/rev-rec/modifications" element={<Ifrs15Modifications />} />
-                  <Route path="/r2r/rev-rec/modifications/:id" element={<Ifrs15ModificationDetail />} />
-                  <Route path="/r2r/rev-rec/rpo" element={<Ifrs15RpoDashboard />} />
                   <Route path="/close" element={<MonthEndClose />} />
                   <Route path="/earnings" element={<EarningsReviewer />} />
                   <Route path="/recon/gl" element={<GLReconciler />} />

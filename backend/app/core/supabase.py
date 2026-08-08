@@ -25,11 +25,3 @@ def get_supabase() -> Client:
             )
         _client = create_client(url, key)
     return _client
-
-
-def is_supabase_configured() -> bool:
-    try:
-        get_supabase()
-        return True
-    except RuntimeError:
-        return False
