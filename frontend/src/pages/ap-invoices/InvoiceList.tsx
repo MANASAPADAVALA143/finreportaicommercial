@@ -388,6 +388,7 @@ export function InvoiceList() {
   /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
   const showCostCenterFilter = costCenterOptions.length > 0;
   const showPropertyFilter = propertyOptions.length > 0;
+  const showPropertyColumn = true;
   const costCenterIsPropertyLabel = /^propert/i.test(costCenterLabel.trim());
   /** Don't show a second blank "Property" column when cost centers are empty or label duplicates property_ref. */
   const showCostCenterColumn = showCostCenterFilter && !costCenterIsPropertyLabel;
@@ -569,9 +570,18 @@ export function InvoiceList() {
   }
 
   async function handleBulkClassifyAndMatch() {
-    const targets = invoices.filter((inv) => inv.status === 'Processing');
+    const stale = new Set(['mismatch', 'no_po', 'partial', 'unmatched', '']);
+    const seen = new Set<string>();
+    const targets = invoices.filter((inv) => {
+      if (seen.has(inv.id)) return false;
+      const processing = inv.status === 'Processing';
+      const needsMatch = stale.has(String(inv.match_status || '').toLowerCase());
+      if (!processing && !needsMatch) return false;
+      seen.add(inv.id);
+      return true;
+    });
     if (targets.length === 0) {
-      toast({ title: 'Nothing to process', description: 'No invoices with status Processing.' });
+      toast({ title: 'Nothing to process', description: 'No invoices waiting for classify or 3-way match.' });
       return;
     }
 
@@ -1324,14 +1334,31 @@ export function InvoiceList() {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            disabled={bulkProcessing || invoices.filter((i) => i.status === 'Processing').length === 0}
+            disabled={
+              bulkProcessing ||
+              invoices.filter((i) => {
+                const processing = i.status === 'Processing';
+                const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
+                  String(i.match_status || '').toLowerCase(),
+                );
+                return processing || needsMatch;
+              }).length === 0
+            }
             onClick={() => void handleBulkClassifyAndMatch()}
             className="border-[#0A4B8F] text-[#0A4B8F] hover:bg-blue-50"
           >
             <Zap className="mr-2 h-4 w-4" />
             {bulkProcessing
               ? 'Processing…'
-              : `Run 3-Way Match & Classify (${invoices.filter((i) => i.status === 'Processing').length})`}
+              : `Run 3-Way Match & Classify (${
+                  invoices.filter((i) => {
+                    const processing = i.status === 'Processing';
+                    const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
+                      String(i.match_status || '').toLowerCase(),
+                    );
+                    return processing || needsMatch;
+                  }).length
+                })`}
           </Button>
           <Button
             variant="outline"
@@ -1848,7 +1875,7 @@ export function InvoiceList() {
                   </TableHead>
                   <TableHead>3-Way Match</TableHead>
                   <TableHead>GL Account</TableHead>
-                  {showPropertyFilter && <TableHead>Property</TableHead>}
+                  {showPropertyColumn && <TableHead>Property</TableHead>}
                   {showCostCenterColumn && <TableHead>{costCenterLabel}</TableHead>}
                   <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -2127,7 +2154,7 @@ export function InvoiceList() {
                         );
                       })()}
                     </TableCell>
-                    {showPropertyFilter && (
+                    {showPropertyColumn && (
                     <TableCell
                       className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
                       onClick={() => setSelectedInvoice(invoice)}

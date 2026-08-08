@@ -629,7 +629,7 @@ def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
 
         invs = (
             sb.table("invoices")
-            .select("id,po_number,gl_account_code,property_ref")
+            .select("id,po_number,gl_account_code,gl_code,property_ref")
             .eq("company_id", cid)
             .limit(2000)
             .execute()
@@ -714,14 +714,18 @@ def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
                 if r.get("id") and r.get("po_number"):
                     id_to_num[str(r["id"])] = str(r["po_number"]).strip()
 
-        grns = sb.table("goods_receipts").select("id,po_id").eq("company_id", cid).limit(2000).execute()
+        grns = sb.table("goods_receipts").select("id,po_id,grn_number").eq("company_id", cid).limit(2000).execute()
+        local_grn_po_ids: set[str] = set()
         for g in grns.data or []:
             gid = g.get("id")
             old_pid = str(g.get("po_id") or "").strip()
             po_no = id_to_num.get(old_pid) if old_pid else None
             if not po_no or po_no not in local_by_num:
+                if old_pid:
+                    local_grn_po_ids.add(old_pid)
                 continue
             new_pid = local_by_num[po_no]
+            local_grn_po_ids.add(new_pid)
             if old_pid == new_pid:
                 continue
             try:
@@ -730,10 +734,75 @@ def ensure_workspace_pos_and_relink_grns(*, company_id: str) -> dict[str, Any]:
             except Exception as exc:
                 logger.warning("relink GRN %s failed: %s", gid, exc)
 
+        local_grn_nums = {
+            str(r.get("grn_number") or "").strip()
+            for r in (grns.data or [])
+            if str(r.get("grn_number") or "").strip()
+        }
+        for po_no in needed:
+            local_pid = local_by_num.get(po_no)
+            if not local_pid or local_pid in local_grn_po_ids:
+                continue
+            src_grn = None
+            for sid in sibling_ids:
+                sib_pos = (
+                    sb.table("purchase_orders")
+                    .select("id")
+                    .eq("company_id", sid)
+                    .eq("po_number", po_no)
+                    .limit(1)
+                    .execute()
+                )
+                sib_po_rows = sib_pos.data if isinstance(sib_pos.data, list) else []
+                if not sib_po_rows:
+                    continue
+                sib_pid = str(sib_po_rows[0]["id"])
+                found_g = (
+                    sb.table("goods_receipts")
+                    .select("*")
+                    .eq("company_id", sid)
+                    .eq("po_id", sib_pid)
+                    .limit(1)
+                    .execute()
+                )
+                grow = found_g.data if isinstance(found_g.data, list) else []
+                if grow:
+                    src_grn = grow[0]
+                    break
+            if not src_grn:
+                continue
+            gnum = str(src_grn.get("grn_number") or "").strip() or f"GRN-{po_no}"
+            if gnum in local_grn_nums:
+                gnum = f"{gnum}-{cid[:8]}"
+            gpayload = {
+                k: src_grn.get(k)
+                for k in (
+                    "vendor_name",
+                    "received_amount",
+                    "received_date",
+                    "status",
+                    "received_by",
+                    "notes",
+                    "invoice_number",
+                )
+                if src_grn.get(k) is not None
+            }
+            gpayload["company_id"] = cid
+            gpayload["grn_number"] = gnum
+            gpayload["po_id"] = local_pid
+            gpayload.setdefault("status", "confirmed")
+            try:
+                sb.table("goods_receipts").insert(gpayload).execute()
+                local_grn_nums.add(gnum)
+                local_grn_po_ids.add(local_pid)
+                relinked += 1
+            except Exception as exc:
+                logger.warning("copy GRN for PO %s to company %s failed: %s", po_no, cid, exc)
+
         for inv in invs.data or []:
             if str(inv.get("property_ref") or "").strip():
                 continue
-            derived = property_from_gl_code(inv.get("gl_account_code"))
+            derived = property_from_gl_code(inv.get("gl_account_code") or inv.get("gl_code"))
             if not derived or not inv.get("id"):
                 continue
             try:
