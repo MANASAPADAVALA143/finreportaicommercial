@@ -164,6 +164,9 @@ export const UAE_NAV: NavEntry[] = [
     items: [
       { label: 'Rev Rec Recon',       path: '/r2r/rev-rec',              icon: 'bar-chart-2' },
       { label: 'Contract Portfolio',  path: '/r2r/rev-rec/contracts',    icon: 'file-text', badge: 'IFRS 15' },
+      { label: 'Billing-to-GL Recon', path: '/r2r/rev-rec/billing-recon', icon: 'landmark', badge: 'IFRS 15' },
+      { label: 'Modifications',       path: '/r2r/rev-rec/modifications', icon: 'git-merge', badge: 'IFRS 15' },
+      { label: 'RPO Dashboard',       path: '/r2r/rev-rec/rpo',           icon: 'layers', badge: '§120' },
     ],
   },
   {
