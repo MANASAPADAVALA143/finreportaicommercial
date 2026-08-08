@@ -114,12 +114,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_ca_mapping_history_updated_at ON ca_mapping_history;
 CREATE TRIGGER trg_ca_mapping_history_updated_at
     BEFORE UPDATE ON ca_mapping_history
     FOR EACH ROW EXECUTE FUNCTION update_ca_mapping_history_updated_at();
 
 ALTER TABLE ca_mapping_history ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS ca_mapping_history_tenant_isolation ON ca_mapping_history;
 CREATE POLICY ca_mapping_history_tenant_isolation ON ca_mapping_history
     USING (tenant_id = auth.uid())
     WITH CHECK (tenant_id = auth.uid());
