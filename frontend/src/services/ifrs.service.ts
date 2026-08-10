@@ -34,6 +34,35 @@ export type IfrsModuleAdjustmentSummary = {
   skipped?: string[];
 };
 
+export type BalanceCheck = {
+  balanced: boolean;
+  difference: number;
+  total_assets: number;
+  total_liabilities: number;
+  total_equity: number;
+  gap_section?: string | null;
+};
+
+export type CashFlowRecon = {
+  closing_cash: number;
+  balance_sheet_cash: number;
+  difference: number;
+  ties: boolean;
+  opening_cash?: number;
+  net_movement?: number;
+  has_prior_period?: boolean;
+  note?: string | null;
+};
+
+export type SoceCheck = {
+  closing_equity: number;
+  balance_sheet_equity: number;
+  difference: number;
+  ties: boolean;
+  has_prior_period?: boolean;
+  opening_note?: string | null;
+};
+
 export type HarnessTier = "blocked" | "needs_review" | "auto_confirmed" | "confirmed" | "auto_fixed";
 
 export type HarnessSummary = {
@@ -116,17 +145,30 @@ export type GeneratedStatementPayload = {
 };
 
 export const ifrsService = {
-  async uploadTrialBalance(file: File, companyName = "Uploaded Entity") {
+  async uploadTrialBalance(
+    file: File,
+    companyName = "Uploaded Entity",
+    opts?: { linkAsPriorFor?: number; autoMap?: boolean }
+  ) {
     const form = new FormData();
     form.append("file", file);
     form.append("company_name", companyName);
-    form.append("auto_map", "true");
+    form.append("auto_map", opts?.autoMap === false || opts?.linkAsPriorFor ? "false" : "true");
+    if (opts?.linkAsPriorFor) {
+      form.append("link_as_prior_for", String(opts.linkAsPriorFor));
+    }
     // Do not set Content-Type: axios sets multipart boundary automatically; a bare
     // "multipart/form-data" breaks parsing and causes 400 / flaky CORS errors.
     const { data } = await axios.post(`${BASE_URL}/trial-balance/upload`, form, {
       headers: headers(),
     });
-    return data as { trial_balance_id: number; lines_count: number; status: string; message?: string };
+    return data as {
+      trial_balance_id: number;
+      lines_count: number;
+      status: string;
+      message?: string;
+      linked_as_prior_for?: number | null;
+    };
   },
 
   async getTrialBalance(tbId: number) {
@@ -231,7 +273,12 @@ export const ifrsService = {
 
   async generateStatements(
     tbId: number,
-    flags?: { apply_ifrs16?: boolean; apply_ifrs15?: boolean; apply_ifrs9?: boolean }
+    flags?: {
+      apply_ifrs16?: boolean;
+      apply_ifrs15?: boolean;
+      apply_ifrs9?: boolean;
+      prior_trial_balance_id?: number | null;
+    }
   ) {
     const { data } = await axios.post(
       `${BASE_URL}/trial-balance/${tbId}/generate-statements`,
@@ -239,6 +286,7 @@ export const ifrsService = {
         apply_ifrs16: flags?.apply_ifrs16 ?? true,
         apply_ifrs15: flags?.apply_ifrs15 ?? true,
         apply_ifrs9: flags?.apply_ifrs9 ?? true,
+        prior_trial_balance_id: flags?.prior_trial_balance_id ?? undefined,
       },
       { headers: headers() }
     );
@@ -247,6 +295,10 @@ export const ifrsService = {
       statements: Record<string, { section: string; line_item: string; amount: number; is_subtotal: boolean; is_total: boolean; indent_level: number }[]>;
       generated_at: string;
       ifrs_module_adjustments?: IfrsModuleAdjustmentSummary;
+      balance_check?: BalanceCheck;
+      cash_flow_reconciliation?: CashFlowRecon;
+      soce_check?: SoceCheck;
+      prior_trial_balance_id?: number | null;
     };
   },
 
@@ -262,6 +314,10 @@ export const ifrsService = {
     return data as {
       trial_balance_id: number;
       statements: Record<string, GeneratedStatementPayload>;
+      balance_check?: BalanceCheck;
+      cash_flow_reconciliation?: CashFlowRecon;
+      soce_check?: SoceCheck;
+      prior_trial_balance_id?: number | null;
     };
   },
 

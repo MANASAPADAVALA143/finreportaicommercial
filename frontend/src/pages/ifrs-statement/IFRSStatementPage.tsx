@@ -11,6 +11,9 @@ import {
   IFRSMapping,
   HarnessSummary,
   IfrsModulePreview,
+  BalanceCheck,
+  CashFlowRecon,
+  SoceCheck,
 } from "../../services/ifrs.service";
 import { formatApiError } from "../../utils/apiError";
 import { validateFS, type FSValidationResult } from "../../services/fsValidation.service";
@@ -50,6 +53,10 @@ export default function IFRSStatementPage() {
   const [applyIfrs15, setApplyIfrs15] = useState(true);
   const [applyIfrs9, setApplyIfrs9] = useState(true);
   const [ifrsAdjBanner, setIfrsAdjBanner] = useState<string | null>(null);
+  const [priorTbId, setPriorTbId] = useState<number | null>(null);
+  const [balanceCheck, setBalanceCheck] = useState<BalanceCheck | null>(null);
+  const [cashRecon, setCashRecon] = useState<CashFlowRecon | null>(null);
+  const [soceCheck, setSoceCheck] = useState<SoceCheck | null>(null);
   /** Require an explicit harness payload with ready_to_generate true (null harness = not loaded / not ready). */
   const harnessAllowsGenerate = harness?.ready_to_generate === true;
   const canGenerateStatements =
@@ -104,6 +111,10 @@ export default function IFRSStatementPage() {
     try {
       const data = await ifrsService.getStatements(tbId);
       setStatements(data.statements || {});
+      if (data.balance_check) setBalanceCheck(data.balance_check);
+      if (data.cash_flow_reconciliation) setCashRecon(data.cash_flow_reconciliation);
+      if (data.soce_check) setSoceCheck(data.soce_check);
+      if (data.prior_trial_balance_id) setPriorTbId(data.prior_trial_balance_id);
     } catch (e: unknown) {
       toast.error(formatApiError(e) || "Failed to load statements");
     }
@@ -155,7 +166,11 @@ export default function IFRSStatementPage() {
         apply_ifrs16: applyIfrs16,
         apply_ifrs15: applyIfrs15,
         apply_ifrs9: applyIfrs9,
+        prior_trial_balance_id: priorTbId,
       });
+      if (result.balance_check) setBalanceCheck(result.balance_check);
+      if (result.cash_flow_reconciliation) setCashRecon(result.cash_flow_reconciliation);
+      if (result.soce_check) setSoceCheck(result.soce_check);
       const adj = result.ifrs_module_adjustments;
       if (adj?.applied_count) {
         toast.success(adj.message);
@@ -312,6 +327,29 @@ export default function IFRSStatementPage() {
                 setStep("Map GL");
               }}
             />
+            {tbId && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-4">
+                <p className="text-sm font-semibold text-amber-950">Upload prior period TB (for Cash Flow + SOCE)</p>
+                <p className="mt-1 text-xs text-amber-900">
+                  Optional. Same GL codes as the current TB. If skipped, Cash Flow notes that opening balances are unavailable
+                  and SOCE shows “Opening as per prior TB — not uploaded”.
+                </p>
+                {priorTbId ? (
+                  <p className="mt-2 text-sm text-emerald-800">Prior period TB linked: #{priorTbId}</p>
+                ) : (
+                  <div className="mt-3">
+                    <TrialBalanceUpload
+                      linkAsPriorFor={tbId}
+                      title="Prior period trial balance"
+                      onUploaded={(id) => {
+                        setPriorTbId(id);
+                        toast.success(`Prior period TB #${id} linked`);
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -391,6 +429,38 @@ export default function IFRSStatementPage() {
             {ifrsAdjBanner && (
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">
                 {ifrsAdjBanner}
+              </div>
+            )}
+            {balanceCheck && (
+              <div
+                className={`rounded-lg border px-4 py-3 text-sm font-semibold ${
+                  balanceCheck.balanced
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : "border-red-200 bg-red-50 text-red-900"
+                }`}
+              >
+                {balanceCheck.balanced
+                  ? `✅ IAS 1 Compliant — Assets = Liabilities + Equity (AED ${balanceCheck.difference.toLocaleString(undefined, { minimumFractionDigits: 2 })} difference)`
+                  : `❌ Out of balance — Difference: AED ${balanceCheck.difference.toLocaleString(undefined, { minimumFractionDigits: 2 })} — Review GL mapping${
+                      balanceCheck.gap_section ? ` (${balanceCheck.gap_section})` : ""
+                    }`}
+              </div>
+            )}
+            {cashRecon && (
+              <div
+                className={`rounded-lg border px-4 py-3 text-sm ${
+                  cashRecon.ties ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-950"
+                }`}
+              >
+                {cashRecon.ties
+                  ? `Closing cash AED ${cashRecon.closing_cash.toLocaleString(undefined, { minimumFractionDigits: 2 })} ties to Balance Sheet cash AED ${cashRecon.balance_sheet_cash.toLocaleString(undefined, { minimumFractionDigits: 2 })} ✅`
+                  : `Closing cash AED ${cashRecon.closing_cash.toLocaleString(undefined, { minimumFractionDigits: 2 })} — Balance Sheet shows AED ${cashRecon.balance_sheet_cash.toLocaleString(undefined, { minimumFractionDigits: 2 })} — Difference AED ${cashRecon.difference.toLocaleString(undefined, { minimumFractionDigits: 2 })} ⚠️`}
+                {cashRecon.note && <p className="mt-1 text-xs font-normal">{cashRecon.note}</p>}
+              </div>
+            )}
+            {soceCheck?.opening_note && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
+                SOCE: {soceCheck.opening_note}
               </div>
             )}
             <div className="rounded-lg border bg-white p-4 space-y-3">

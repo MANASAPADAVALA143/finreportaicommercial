@@ -100,6 +100,7 @@ class TrialBalance(Base):
     status = Column(_enum_str(TBStatus), nullable=False, default=TBStatus.uploaded)
     file_name = Column(String(512), nullable=False)
     file_path = Column(String(1024), nullable=True)
+    prior_trial_balance_id = Column(Integer, nullable=True, index=True)
 
     lines = relationship("TrialBalanceLine", back_populates="trial_balance", cascade="all, delete-orphan")
     gl_mappings = relationship("GLMapping", back_populates="trial_balance", viewonly=True)

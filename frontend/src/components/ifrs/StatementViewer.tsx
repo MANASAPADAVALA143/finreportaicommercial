@@ -103,6 +103,31 @@ function kpiMoney(v: number): string {
   return v.toFixed(0);
 }
 
+function exactLine(items: StatementLineItem[], name: string): number {
+  for (const li of items) {
+    if (li.ifrs_line_item === name) return Number(li.amount || 0);
+  }
+  return 0;
+}
+
+function CashFlowFooter({ items }: { items: StatementLineItem[] }) {
+  const closing = exactLine(items, "Closing cash and cash equivalents");
+  const bs = exactLine(items, "Balance sheet cash and cash equivalents");
+  const diff = Math.abs(closing - bs);
+  const ties = diff < 1;
+  return (
+    <div
+      className={`rounded-lg border px-4 py-2 text-sm ${
+        ties ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-950"
+      }`}
+    >
+      {ties
+        ? `Closing cash AED ${closing.toLocaleString(undefined, { minimumFractionDigits: 2 })} ties to Balance Sheet cash AED ${bs.toLocaleString(undefined, { minimumFractionDigits: 2 })} ✅`
+        : `Closing cash AED ${closing.toLocaleString(undefined, { minimumFractionDigits: 2 })} — Balance Sheet shows AED ${bs.toLocaleString(undefined, { minimumFractionDigits: 2 })} — Difference AED ${diff.toLocaleString(undefined, { minimumFractionDigits: 2 })} ⚠️`}
+    </div>
+  );
+}
+
 function findLine(
   items: StatementLineItem[],
   ...keywords: string[]
@@ -891,6 +916,9 @@ export default function StatementViewer({ statements, tbId }: Props) {
             </h2>
           </div>
           <StatementTable payload={currentPayload} tbId={tbId} />
+          {activeTab === "cash_flows" && (
+            <CashFlowFooter items={currentPayload.line_items || []} />
+          )}
         </div>
       ) : (
         <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-400">
