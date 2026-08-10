@@ -79,6 +79,16 @@ def _load_ct_bridge(trial_balance_id: int, db: Session) -> dict[str, Any] | None
         return None
 
 
+def _load_ifrs_module_adjustments(trial_balance_id: int, db: Session) -> list[dict[str, Any]]:
+    try:
+        from app.services.ifrs_module_bridge import list_injected_adjustments
+
+        return list_injected_adjustments(db, trial_balance_id)
+    except Exception:
+        logger.exception("Failed to load IFRS module adjustments for export tb=%s", trial_balance_id)
+        return []
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # EXCEL EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -277,6 +287,37 @@ def export_to_excel(trial_balance_id: int, db: Session) -> bytes:
         ws_ct.cell(row=row + 1, column=1, value=notes_text).font = Font(
             name="Calibri", size=9, italic=True, color="808080"
         )
+
+    # ── IFRS module adjustment disclosure ──────────────────────────────────────
+    ifrs_adjs = _load_ifrs_module_adjustments(trial_balance_id, db)
+    if ifrs_adjs:
+        ws_adj = wb.create_sheet(title="IFRS Module Adjustments")
+        ws_adj.column_dimensions["A"].width = 18
+        ws_adj.column_dimensions["B"].width = 18
+        ws_adj.column_dimensions["C"].width = 48
+        ws_adj.column_dimensions["D"].width = 36
+        ws_adj.column_dimensions["E"].width = 18
+        ws_adj.merge_cells("A1:E1")
+        ws_adj["A1"] = f"{company} — IFRS 16 / 15 / 9 module adjustments"
+        ws_adj["A1"].font = _title_font()
+        ws_adj.merge_cells("A2:E2")
+        ws_adj["A2"] = (
+            f"Statements include IFRS 16/15/9 module adjustments "
+            f"({len(ifrs_adjs)} tagged ifrs_module_adjustment lines)."
+        )
+        ws_adj["A2"].font = Font(name="Calibri", size=9, italic=True, color="808080")
+        for col, label in enumerate(["Module", "Source tag", "Description", "IFRS line", f"Amount ({currency})"], 1):
+            cell = ws_adj.cell(row=4, column=col, value=label)
+            cell.font = _header_font()
+            cell.fill = NAVY
+        for i, adj in enumerate(ifrs_adjs, 5):
+            ws_adj.cell(row=i, column=1, value=adj.get("module"))
+            ws_adj.cell(row=i, column=2, value=adj.get("source_tag") or "ifrs_module_adjustment")
+            ws_adj.cell(row=i, column=3, value=adj.get("gl_description"))
+            ws_adj.cell(row=i, column=4, value=adj.get("ifrs_line_item"))
+            ac = ws_adj.cell(row=i, column=5, value=float(adj.get("net_amount") or 0))
+            ac.number_format = '#,##0.00_);(#,##0.00)'
+            ac.font = _mono_font()
 
     # ── Disclosure Notes sheet ────────────────────────────────────────────────
     notes = _load_notes(trial_balance_id, db)
@@ -481,6 +522,48 @@ def export_to_pdf(trial_balance_id: int, db: Session) -> bytes:
         story.append(Paragraph(ct.get("rate_note", ""), s_note_body))
         story.append(PageBreak())
 
+    # ── IFRS module adjustment disclosure ──────────────────────────────────────
+    ifrs_adjs = _load_ifrs_module_adjustments(trial_balance_id, db)
+    if ifrs_adjs:
+        story.append(Paragraph("IFRS MODULE ADJUSTMENT DISCLOSURE", s_stmt_title))
+        story.append(
+            Paragraph(
+                f"Statements include IFRS 16/15/9 module adjustments. "
+                f"{len(ifrs_adjs)} tagged <b>ifrs_module_adjustment</b> line(s) were injected "
+                f"from live IFRS 16 leases, IFRS 15 contracts and IFRS 9 ECL portfolios "
+                f"before these statements were generated.",
+                s_note_body,
+            )
+        )
+        adj_data = [["Module", "Source tag", "IFRS line item", f"Amount ({currency})"]]
+        for adj in ifrs_adjs:
+            adj_data.append(
+                [
+                    str(adj.get("module") or ""),
+                    str(adj.get("source_tag") or "ifrs_module_adjustment"),
+                    str(adj.get("ifrs_line_item") or adj.get("gl_description") or ""),
+                    _fmt(adj.get("net_amount", 0)),
+                ]
+            )
+        adj_t = Table(adj_data, colWidths=[3 * cm, 4.2 * cm, 5.8 * cm, 3 * cm])
+        adj_t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+                    ("GRID", (0, 0), (-1, -1), 0.4, DARK_GRAY),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, GRAY]),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        story.append(adj_t)
+        story.append(PageBreak())
+
     # ── Disclosure Notes ──────────────────────────────────────────────────────
     notes = _load_notes(trial_balance_id, db)
     if notes:
@@ -668,6 +751,32 @@ def export_to_word(trial_balance_id: int, db: Session) -> bytes:
         note_p = doc.add_paragraph(ct.get("rate_note", ""))
         note_p.runs[0].font.italic = True
         note_p.runs[0].font.size = Pt(9)
+        doc.add_page_break()
+
+    ifrs_adjs = _load_ifrs_module_adjustments(trial_balance_id, db)
+    if ifrs_adjs:
+        h = doc.add_heading("IFRS Module Adjustment Disclosure", level=2)
+        h.runs[0].font.color.rgb = NAVY_RGB
+        doc.add_paragraph(
+            f"Statements include IFRS 16/15/9 module adjustments. "
+            f"{len(ifrs_adjs)} tagged ifrs_module_adjustment line(s) were injected "
+            f"from live IFRS 16/15/9 modules before these statements were generated."
+        )
+        tbl = doc.add_table(rows=1, cols=4)
+        tbl.style = "Table Grid"
+        hdr = tbl.rows[0].cells
+        hdr[0].text = "Module"
+        hdr[1].text = "Source tag"
+        hdr[2].text = "IFRS line item"
+        hdr[3].text = f"Amount ({currency})"
+        for cell in hdr:
+            cell.paragraphs[0].runs[0].font.bold = True
+        for adj in ifrs_adjs:
+            r = tbl.add_row().cells
+            r[0].text = str(adj.get("module") or "")
+            r[1].text = str(adj.get("source_tag") or "ifrs_module_adjustment")
+            r[2].text = str(adj.get("ifrs_line_item") or adj.get("gl_description") or "")
+            r[3].text = _fmt(adj.get("net_amount", 0))
         doc.add_page_break()
 
     # ── Disclosure Notes ──────────────────────────────────────────────────────

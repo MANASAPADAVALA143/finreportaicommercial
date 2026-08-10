@@ -5,9 +5,15 @@ import TrialBalanceUpload from "../../components/ifrs/TrialBalanceUpload";
 import GLMappingReview from "../../components/ifrs/GLMappingReview";
 import StatementViewer from "../../components/ifrs/StatementViewer";
 import DisclosureNotesPage from "../../components/ifrs/DisclosureNotesPage";
-import { GeneratedStatementPayload, ifrsService, IFRSMapping, HarnessSummary } from "../../services/ifrs.service";
+import {
+  GeneratedStatementPayload,
+  ifrsService,
+  IFRSMapping,
+  HarnessSummary,
+  IfrsModulePreview,
+} from "../../services/ifrs.service";
 import { formatApiError } from "../../utils/apiError";
-import { validateFS, exportFSExcel, type FSValidationResult } from "../../services/fsValidation.service";
+import { validateFS, type FSValidationResult } from "../../services/fsValidation.service";
 import { useSyncIfrsTenant } from "../../hooks/useSyncIfrsTenant";
 
 const steps = ["Upload", "Map GL", "Review", "Generate", "Disclosures"] as const;
@@ -39,6 +45,11 @@ export default function IFRSStatementPage() {
   } | null>(null);
   const [fsValidation, setFsValidation] = useState<FSValidationResult | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [modulePreview, setModulePreview] = useState<IfrsModulePreview | null>(null);
+  const [applyIfrs16, setApplyIfrs16] = useState(true);
+  const [applyIfrs15, setApplyIfrs15] = useState(true);
+  const [applyIfrs9, setApplyIfrs9] = useState(true);
+  const [ifrsAdjBanner, setIfrsAdjBanner] = useState<string | null>(null);
   /** Require an explicit harness payload with ready_to_generate true (null harness = not loaded / not ready). */
   const harnessAllowsGenerate = harness?.ready_to_generate === true;
   const canGenerateStatements =
@@ -70,6 +81,22 @@ export default function IFRSStatementPage() {
     void refreshMappings();
     const id = window.setInterval(() => void refreshMappings(), 4000);
     return () => window.clearInterval(id);
+  }, [tbId]);
+
+  useEffect(() => {
+    if (!tbId) return;
+    void ifrsService
+      .getIfrsModulePreview(tbId)
+      .then((p) => {
+        setModulePreview(p);
+        if (p.ifrs16.skip_recommended) setApplyIfrs16(false);
+        if (p.ifrs15.skip_recommended) setApplyIfrs15(false);
+        if (p.ifrs9.skip_recommended) setApplyIfrs9(false);
+        if (p.already_injected_count > 0) {
+          setIfrsAdjBanner("Statements include IFRS 16/15/9 module adjustments");
+        }
+      })
+      .catch(() => setModulePreview(null));
   }, [tbId]);
 
   const refreshStatements = async () => {
@@ -105,18 +132,13 @@ export default function IFRSStatementPage() {
   }, [statements]);
 
   const handleExportExcel = async () => {
-    const now = new Date();
-    const periodStart = `${now.getFullYear()}-01-01`;
-    const periodEnd = now.toISOString().slice(0, 10);
+    if (!tbId) {
+      toast.error("Generate statements before exporting");
+      return;
+    }
     setExporting(true);
     try {
-      const blob = await exportFSExcel(periodStart, periodEnd);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `financial_statements_${periodEnd.slice(0, 7)}.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await ifrsService.downloadExport(tbId, "excel");
       toast.success("Excel exported");
     } catch (e: unknown) {
       toast.error(formatApiError(e) || "Export failed");
@@ -124,6 +146,71 @@ export default function IFRSStatementPage() {
       setExporting(false);
     }
   };
+
+  const runGenerate = async () => {
+    if (!tbId) return;
+    setGenerating(true);
+    try {
+      const result = await ifrsService.generateStatements(tbId, {
+        apply_ifrs16: applyIfrs16,
+        apply_ifrs15: applyIfrs15,
+        apply_ifrs9: applyIfrs9,
+      });
+      const adj = result.ifrs_module_adjustments;
+      if (adj?.applied_count) {
+        toast.success(adj.message);
+        setIfrsAdjBanner("Statements include IFRS 16/15/9 module adjustments");
+      } else {
+        toast.success("IFRS statements generated");
+        setIfrsAdjBanner(null);
+      }
+      await refreshStatements();
+      try {
+        const p = await ifrsService.getIfrsModulePreview(tbId);
+        setModulePreview(p);
+      } catch {
+        /* preview refresh is optional */
+      }
+      setStep("Generate");
+    } catch (e: unknown) {
+      toast.error(formatApiError(e) || "Statement generation failed");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const moduleToggles = (
+    <div className="rounded-lg border border-indigo-100 bg-indigo-50/70 p-3 space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">IFRS module adjustments</p>
+      <label className="flex items-start gap-2 text-sm text-slate-800">
+        <input type="checkbox" className="mt-0.5" checked={applyIfrs16} onChange={(e) => setApplyIfrs16(e.target.checked)} />
+        <span>
+          Apply IFRS 16 lease adjustments ({modulePreview?.ifrs16.count ?? 0} leases found)
+          {modulePreview?.ifrs16.skip_reason && (
+            <span className="block text-xs text-amber-800">{modulePreview.ifrs16.skip_reason} — deselect if already in TB</span>
+          )}
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-sm text-slate-800">
+        <input type="checkbox" className="mt-0.5" checked={applyIfrs15} onChange={(e) => setApplyIfrs15(e.target.checked)} />
+        <span>
+          Apply IFRS 15 revenue adjustments ({modulePreview?.ifrs15.count ?? 0} contracts found)
+          {modulePreview?.ifrs15.skip_reason && (
+            <span className="block text-xs text-amber-800">{modulePreview.ifrs15.skip_reason} — deselect if already in TB</span>
+          )}
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-sm text-slate-800">
+        <input type="checkbox" className="mt-0.5" checked={applyIfrs9} onChange={(e) => setApplyIfrs9(e.target.checked)} />
+        <span>
+          Apply IFRS 9 ECL adjustments ({modulePreview?.ifrs9.count ?? 0} portfolios found)
+          {modulePreview?.ifrs9.skip_reason && (
+            <span className="block text-xs text-amber-800">{modulePreview.ifrs9.skip_reason} — deselect if already in TB</span>
+          )}
+        </span>
+      </label>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 p-6 relative">
@@ -278,23 +365,11 @@ export default function IFRSStatementPage() {
 
         {step === "Review" && (
           <div className="space-y-4">
-            <div className="rounded-lg border bg-white p-4">
+            <div className="rounded-lg border bg-white p-4 space-y-3">
+              {moduleToggles}
               <button
                 disabled={!tbId || !canGenerateStatements || generating}
-                onClick={async () => {
-                  if (!tbId) return;
-                  setGenerating(true);
-                  try {
-                    await ifrsService.generateStatements(tbId);
-                    toast.success("IFRS statements generated");
-                    await refreshStatements();
-                    setStep("Generate");
-                  } catch (e: unknown) {
-                    toast.error(formatApiError(e) || "Statement generation failed");
-                  } finally {
-                    setGenerating(false);
-                  }
-                }}
+                onClick={() => void runGenerate()}
                 className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
                 title={
                   !harnessAllowsGenerate
@@ -313,23 +388,17 @@ export default function IFRSStatementPage() {
 
         {step === "Generate" && (
           <div className="space-y-4">
-            <div className="rounded-lg border bg-white p-4">
+            {ifrsAdjBanner && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900">
+                {ifrsAdjBanner}
+              </div>
+            )}
+            <div className="rounded-lg border bg-white p-4 space-y-3">
+              {moduleToggles}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   disabled={!tbId || generating}
-                  onClick={async () => {
-                    if (!tbId) return;
-                    setGenerating(true);
-                    try {
-                      await ifrsService.generateStatements(tbId);
-                      toast.success("IFRS statements generated");
-                      await refreshStatements();
-                    } catch (e: unknown) {
-                      toast.error(formatApiError(e) || "Statement generation failed");
-                    } finally {
-                      setGenerating(false);
-                    }
-                  }}
+                  onClick={() => void runGenerate()}
                   className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
                 >
                   {generating ? "Generating 4 IFRS statements..." : "🏛️ Generate IFRS Statements"}

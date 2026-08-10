@@ -5,9 +5,34 @@ const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_AP
 const BASE_URL = `${API_BASE.replace(/\/$/, "")}/api/ifrs`;
 const BOARD_PACK_BASE = `${API_BASE.replace(/\/$/, "")}/api/board-pack`;
 
-const headers = (tenantId?: string) => ({
-  "X-Tenant-ID": (tenantId && tenantId.trim()) || getIfrsTenantId(),
-});
+const headers = (tenantId?: string) => {
+  const tid = (tenantId && tenantId.trim()) || getIfrsTenantId();
+  const h: Record<string, string> = { "X-Tenant-ID": tid };
+  try {
+    const cid = localStorage.getItem("active_company_id");
+    if (cid) h["X-Company-Id"] = cid;
+    const ws = localStorage.getItem("gnanova_workspace_id");
+    if (ws) h["X-Workspace-Id"] = ws;
+  } catch {
+    /* ignore */
+  }
+  return h;
+};
+
+export type IfrsModulePreview = {
+  trial_balance_id: number;
+  ifrs16: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  ifrs15: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  ifrs9: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  already_injected_count: number;
+};
+
+export type IfrsModuleAdjustmentSummary = {
+  applied_count: number;
+  message: string;
+  adjustments?: { gl_code: string; module: string; net_amount: number; ifrs_line_item?: string }[];
+  skipped?: string[];
+};
 
 export type HarnessTier = "blocked" | "needs_review" | "auto_confirmed" | "confirmed" | "auto_fixed";
 
@@ -204,13 +229,32 @@ export const ifrsService = {
     };
   },
 
-  async generateStatements(tbId: number) {
-    const { data } = await axios.post(`${BASE_URL}/trial-balance/${tbId}/generate-statements`, {}, { headers: headers() });
+  async generateStatements(
+    tbId: number,
+    flags?: { apply_ifrs16?: boolean; apply_ifrs15?: boolean; apply_ifrs9?: boolean }
+  ) {
+    const { data } = await axios.post(
+      `${BASE_URL}/trial-balance/${tbId}/generate-statements`,
+      {
+        apply_ifrs16: flags?.apply_ifrs16 ?? true,
+        apply_ifrs15: flags?.apply_ifrs15 ?? true,
+        apply_ifrs9: flags?.apply_ifrs9 ?? true,
+      },
+      { headers: headers() }
+    );
     return data as {
       trial_balance_id: number;
       statements: Record<string, { section: string; line_item: string; amount: number; is_subtotal: boolean; is_total: boolean; indent_level: number }[]>;
       generated_at: string;
+      ifrs_module_adjustments?: IfrsModuleAdjustmentSummary;
     };
+  },
+
+  async getIfrsModulePreview(tbId: number) {
+    const { data } = await axios.get(`${BASE_URL}/trial-balance/${tbId}/ifrs-module-preview`, {
+      headers: headers(),
+    });
+    return data as IfrsModulePreview;
   },
 
   async getStatements(tbId: number) {
@@ -415,16 +459,27 @@ export const ifrsService = {
 
   // ── Export Downloads ───────────────────────────────────────────────────────
 
-  downloadExport(tbId: number, format: "excel" | "pdf" | "word"): void {
+  async downloadExport(tbId: number, format: "excel" | "pdf" | "word"): Promise<void> {
     const ext = format === "excel" ? "excel" : format;
-    const url = `${BASE_URL}/trial-balance/${tbId}/export/${ext}`;
-    // Create a hidden anchor and click it — preserves auth headers via same-origin
+    const res = await axios.get(`${BASE_URL}/trial-balance/${tbId}/export/${ext}`, {
+      headers: headers(),
+      responseType: "blob",
+    });
+    const mime =
+      format === "pdf"
+        ? "application/pdf"
+        : format === "word"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const blob = new Blob([res.data], { type: mime });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.setAttribute("download", "");
+    a.download = `IFRS_Statements_${tbId}.${format === "excel" ? "xlsx" : format === "word" ? "docx" : "pdf"}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 
   async finalizeBoardPack(boardPackId: number, reviewedBy = "board") {

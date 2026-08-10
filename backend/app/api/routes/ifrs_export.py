@@ -40,6 +40,7 @@ def _tenant(x_tenant_id: Annotated[str | None, Header()] = None) -> str:
 )
 async def export_excel(
     trial_balance_id: int,
+    tenant_id: str = Depends(_tenant),
     db: Session = Depends(get_db),
 ):
     """
@@ -72,6 +73,7 @@ async def export_excel(
 )
 async def export_pdf(
     trial_balance_id: int,
+    tenant_id: str = Depends(_tenant),
     db: Session = Depends(get_db),
 ):
     """
@@ -104,6 +106,7 @@ async def export_pdf(
 )
 async def export_word(
     trial_balance_id: int,
+    tenant_id: str = Depends(_tenant),
     db: Session = Depends(get_db),
 ):
     """

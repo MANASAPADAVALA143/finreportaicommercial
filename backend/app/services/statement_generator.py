@@ -317,10 +317,71 @@ def _derived_amount(
     return Decimal("0.00")
 
 
-def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any]:
+def inject_ifrs_module_adjustments(
+    company_id: str,
+    period: str,
+    tb_id: str,
+    db: Session,
+    *,
+    apply_ifrs16: bool = True,
+    apply_ifrs15: bool = True,
+    apply_ifrs9: bool = True,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Before generating statements, pull IFRS 16/15/9
+    calculated balances and inject as adjustment lines
+    into trial_balance_lines so statement generator
+    picks them up automatically.
+    """
+    from app.services.ifrs_module_bridge import inject_ifrs_module_adjustments as _inject
+
+    return _inject(
+        company_id,
+        period,
+        tb_id,
+        db,
+        apply_ifrs16=apply_ifrs16,
+        apply_ifrs15=apply_ifrs15,
+        apply_ifrs9=apply_ifrs9,
+        workspace_id=workspace_id,
+    )
+
+
+def generate_all_statements(
+    trial_balance_id: int,
+    db: Session,
+    *,
+    apply_ifrs16: bool = True,
+    apply_ifrs15: bool = True,
+    apply_ifrs9: bool = True,
+    company_id: str | None = None,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
     tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
     if not tb:
         raise ValueError("Trial balance not found")
+
+    ifrs_adj_summary: dict[str, Any] = {
+        "applied_count": 0,
+        "message": "No IFRS module adjustments applied",
+        "adjustments": [],
+        "skipped": [],
+    }
+    try:
+        period = str(tb.period_end or tb.period_start or "")
+        ifrs_adj_summary = inject_ifrs_module_adjustments(
+            company_id or tb.tenant_id,
+            period,
+            str(trial_balance_id),
+            db,
+            apply_ifrs16=apply_ifrs16,
+            apply_ifrs15=apply_ifrs15,
+            apply_ifrs9=apply_ifrs9,
+            workspace_id=workspace_id or tb.tenant_id,
+        )
+    except Exception:
+        logger.exception("IFRS module adjustment injection failed for tb=%s", trial_balance_id)
 
     from app.services.mapping_validator import assert_ready_for_statement_generation
 
@@ -624,6 +685,7 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
         "trial_balance_id": trial_balance_id,
         "statements": generated,
         "generated_at": datetime.utcnow().isoformat(),
+        "ifrs_module_adjustments": ifrs_adj_summary,
     }
 
 
@@ -820,5 +882,12 @@ def build_tb_data_from_db(
             else:
                 out[key] = v
         out["has_comparative"] = True
+
+    try:
+        from app.services.ifrs_module_bridge import enrich_tb_data_from_ifrs_modules
+
+        out = enrich_tb_data_from_ifrs_modules(out, db, trial_balance_id)
+    except Exception:
+        logger.exception("IFRS module note enrichment failed for tb=%s", trial_balance_id)
 
     return out

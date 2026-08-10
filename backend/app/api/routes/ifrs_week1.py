@@ -71,6 +71,7 @@ from app.services.board_pack_seed import (
 )
 from app.services.mapping_validator import human_mapping_signoff, validate_mappings
 from app.services.statement_generator import build_tb_data_from_db, generate_all_statements
+from app.services.ifrs_module_bridge import preview_ifrs_module_adjustments
 from app.services.tb_column_mapper import (
     load_trial_balance_dataframe,
     load_trial_balance_dataframe_no_header,
@@ -966,10 +967,46 @@ def _line_item_to_dict(li: StatementLineItem) -> dict[str, Any]:
     }
 
 
+class GenerateStatementsBody(BaseModel):
+    apply_ifrs16: bool = True
+    apply_ifrs15: bool = True
+    apply_ifrs9: bool = True
+    company_id: str | None = None
+
+
+@router.get("/trial-balance/{trial_balance_id}/ifrs-module-preview")
+def ifrs_module_preview(
+    trial_balance_id: int,
+    tenant_id: str = Depends(tenant_id_header),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    tb = (
+        db.query(TrialBalance)
+        .filter(TrialBalance.id == trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    )
+    if not tb:
+        raise HTTPException(status_code=404, detail="Trial balance not found")
+    try:
+        return preview_ifrs_module_adjustments(
+            db,
+            trial_balance_id,
+            company_id=x_company_id or tenant_id,
+            workspace_id=x_workspace_id or tenant_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post("/trial-balance/{trial_balance_id}/generate-statements")
 def generate_statements(
     trial_balance_id: int,
+    body: Optional[GenerateStatementsBody] = Body(default=None),
     tenant_id: str = Depends(tenant_id_header),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     tb = (
@@ -980,8 +1017,17 @@ def generate_statements(
     if not tb:
         raise HTTPException(status_code=404, detail="Trial balance not found")
 
+    opts = body or GenerateStatementsBody()
     try:
-        result = generate_all_statements(trial_balance_id, db)
+        result = generate_all_statements(
+            trial_balance_id,
+            db,
+            apply_ifrs16=opts.apply_ifrs16,
+            apply_ifrs15=opts.apply_ifrs15,
+            apply_ifrs9=opts.apply_ifrs9,
+            company_id=opts.company_id or x_company_id or tenant_id,
+            workspace_id=x_workspace_id or tenant_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     tb.status = TBStatus.statements_generated

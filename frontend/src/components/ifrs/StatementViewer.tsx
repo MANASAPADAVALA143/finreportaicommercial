@@ -724,15 +724,15 @@ function CompliancePanel({ tbId }: { tbId: number }) {
 function ExportBar({ tbId }: { tbId: number }) {
   const [loading, setLoading] = useState<string | null>(null);
 
-  const handleExport = (format: "excel" | "pdf" | "word") => {
+  const handleExport = async (format: "excel" | "pdf" | "word") => {
     setLoading(format);
     try {
-      ifrsService.downloadExport(tbId, format);
+      await ifrsService.downloadExport(tbId, format);
       toast.success(`${format.toUpperCase()} download started`);
     } catch (e) {
       toast.error(formatApiError(e) || "Export failed");
     } finally {
-      setTimeout(() => setLoading(null), 1500);
+      setLoading(null);
     }
   };
 

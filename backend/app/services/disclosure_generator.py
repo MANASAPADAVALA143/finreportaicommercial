@@ -132,69 +132,127 @@ Reference IAS 16 paragraphs 73-79.
 
 
 def generate_n3_leases(tb_data: dict) -> str:
-    if not tb_data.get("has_leases"):
+    if not tb_data.get("has_leases") and not tb_data.get("ifrs16_leases"):
         return "Note 3: The Company has no lease arrangements that give rise to recognition under IFRS 16."
 
     rou_asset = tb_data.get("rou_asset", 0)
+    movement = tb_data.get("ifrs16_rou_movement") or {}
+    maturity = tb_data.get("ifrs16_maturity") or {}
+    leases = tb_data.get("ifrs16_leases") or []
+    source = tb_data.get("ifrs16_source") or "trial_balance"
+    lease_table = ""
+    if leases:
+        lease_table = "Lease register (from IFRS 16 module):\n"
+        for row in leases:
+            lease_table += (
+                f"- {row.get('lease_name')}: ROU {row.get('rou_asset', 0):,.2f}; "
+                f"LL current {row.get('lease_liability_current', 0):,.2f}; "
+                f"LL non-current {row.get('lease_liability_non_current', 0):,.2f}; "
+                f"Dep YTD {row.get('depreciation_ytd', 0):,.2f}; "
+                f"Interest YTD {row.get('interest_ytd', 0):,.2f}\n"
+            )
 
     prompt = f"""
 Generate Note 3 — Leases (IFRS 16)
 for {tb_data.get('company_name')} period ended {tb_data.get('period_end')}.
 
+Data source: {source} (use these figures exactly — do not invent or scale from TB heuristics).
+
 Numbers ({tb_data.get('currency', 'USD')}):
-- Right-of-use assets: {rou_asset:,.2f}
+- Right-of-use assets closing: {rou_asset:,.2f}
+- ROU opening: {movement.get('opening', rou_asset):,.2f}
+- ROU additions: {movement.get('additions', 0):,.2f}
+- ROU depreciation for period: {movement.get('depreciation', tb_data.get('rou_depreciation', 0)):,.2f}
+- ROU closing: {movement.get('closing', rou_asset):,.2f}
 - Lease liability current: {tb_data.get('lease_liability_current', 0):,.2f}
 - Lease liability non-current: {tb_data.get('lease_liability_non_current', 0):,.2f}
 - Depreciation on ROU assets: {tb_data.get('rou_depreciation', 0):,.2f}
 - Interest on lease liabilities: {tb_data.get('lease_interest', 0):,.2f}
+- Cash outflows / lease payments for period: {tb_data.get('lease_payments_period', 0):,.2f}
+- Maturity within 1 year: {maturity.get('within_1y', tb_data.get('lease_liability_current', 0)):,.2f}
+- Maturity 1-5 years: {maturity.get('y1_5', tb_data.get('lease_liability_non_current', 0)):,.2f}
+- Maturity over 5 years: {maturity.get('over_5', 0):,.2f}
+
+{lease_table}
 
 Generate:
 3.1 Right-of-Use Assets movement table
-    (opening, additions, depreciation, closing)
+    (opening, additions, depreciation, closing) using the movement numbers above.
 
 3.2 Lease Liabilities:
     - Current / Non-current split table
     - Maturity analysis table:
       Within 1 year | 1-5 years | Over 5 years | Total
+      Use the maturity figures provided (from the IFRS 16 lease register).
 
 3.3 Amounts recognised in P&L:
     - Depreciation: {tb_data.get('rou_depreciation', 0):,.2f}
     - Interest expense: {tb_data.get('lease_interest', 0):,.2f}
 
-3.4 Cash outflows for leases
+3.4 Cash outflows for leases: {tb_data.get('lease_payments_period', 0):,.2f}
 
 Reference IFRS 16.53, 16.58, 16.94.
 """
-    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=700)
+    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=900)
 
 
 def generate_n4_financial_instruments(tb_data: dict) -> str:
     receivables = tb_data.get("trade_receivables", 0)
     ecl_provision = tb_data.get("ecl_provision", receivables * 0.03)
+    stage = tb_data.get("ifrs9_ecl_by_stage") or {}
+    buckets = tb_data.get("ifrs9_ecl_by_bucket") or {}
+    gross_b = buckets.get("gross") or {}
+    ecl_b = buckets.get("ecl") or {}
+    source = tb_data.get("ifrs9_source") or "trial_balance"
+    portfolios = tb_data.get("ifrs9_portfolios") or []
+    port_txt = ""
+    if portfolios:
+        port_txt = "ECL by portfolio (IFRS 9 module):\n"
+        for p in portfolios:
+            port_txt += (
+                f"- {p.get('portfolio_name')}: exposure {p.get('exposure', 0):,.2f}; "
+                f"S1 {p.get('ecl_stage1', 0):,.2f}; S2 {p.get('ecl_stage2', 0):,.2f}; "
+                f"S3 {p.get('ecl_stage3', 0):,.2f}; total ECL {p.get('total_ecl', 0):,.2f}\n"
+            )
 
     prompt = f"""
 Generate Note 4 — Financial Instruments and Credit Risk (IFRS 9)
 for {tb_data.get('company_name')} period ended {tb_data.get('period_end')}.
 
+Data source: {source} (use these ECL figures exactly — do not apply a default 3% heuristic).
+
 Numbers ({tb_data.get('currency', 'USD')}):
-- Gross trade receivables: {receivables:,.2f}
-- ECL provision: {ecl_provision:,.2f}
+- Gross trade receivables / exposure: {receivables:,.2f}
+- ECL provision (closing): {ecl_provision:,.2f}
+- ECL charge for period: {tb_data.get('ifrs9_ecl_charge', ecl_provision):,.2f}
 - Net trade receivables: {receivables - ecl_provision:,.2f}
+- Stage 1 ECL: {stage.get('stage1', 0):,.2f}
+- Stage 2 ECL: {stage.get('stage2', 0):,.2f}
+- Stage 3 ECL: {stage.get('stage3', 0):,.2f}
 - Cash and equivalents: {tb_data.get('cash', 0):,.2f}
 - Short-term borrowings: {tb_data.get('short_term_borrowings', 0):,.2f}
 - Long-term borrowings: {tb_data.get('long_term_borrowings', 0):,.2f}
+
+Ageing / provision matrix (gross | ECL):
+- Current: {gross_b.get('current', 0):,.2f} | {ecl_b.get('current', 0):,.2f}
+- 1-30 days: {gross_b.get('1-30', 0):,.2f} | {ecl_b.get('1-30', 0):,.2f}
+- 31-60 days: {gross_b.get('31-60', 0):,.2f} | {ecl_b.get('31-60', 0):,.2f}
+- 61-90 days: {gross_b.get('61-90', 0):,.2f} | {ecl_b.get('61-90', 0):,.2f}
+- 90+ days: {gross_b.get('90+', 0):,.2f} | {ecl_b.get('90+', 0):,.2f}
+
+{port_txt}
 
 Generate:
 4.1 Classification of financial instruments table
     (AC / FVOCI / FVTPL for each category)
 
 4.2 Credit Risk — Trade Receivables:
-    - Provision matrix table:
-      Current | 1-30 days | 31-60 | 61-90 | 90+ | Total
-      Gross amount | ECL rate | Provision
+    - Provision matrix table using the ageing buckets above
+    - ECL by IFRS 9 stage (Stage 1 / 2 / 3)
 
 4.3 Movement in ECL provision:
     Opening | Charge for period | Write-offs | Closing
+    (If opening is unknown, state closing = charge for period from the IFRS 9 module.)
 
 4.4 Liquidity Risk:
     - Maturity of financial liabilities table
@@ -204,34 +262,65 @@ Generate:
 
 Reference IFRS 9 para 35H-35N, IFRS 7.
 """
-    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=900)
+    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=1000)
 
 
 def generate_n5_revenue(tb_data: dict) -> str:
     revenue = tb_data.get("revenue", 0)
     other_income = tb_data.get("other_income", 0)
+    source = tb_data.get("ifrs15_source") or "trial_balance"
+    contracts = tb_data.get("ifrs15_contracts") or []
+    pobs = tb_data.get("ifrs15_pob") or []
+    contract_txt = ""
+    if contracts:
+        contract_txt = "IFRS 15 contract register:\n"
+        for c in contracts:
+            contract_txt += (
+                f"- {c.get('contract_number')} / {c.get('customer_name')}: "
+                f"value {c.get('contract_value', 0):,.2f}; recognised {c.get('recognised', 0):,.2f}; "
+                f"remaining {c.get('remaining', 0):,.2f}; "
+                f"contract asset {c.get('contract_asset', 0):,.2f}; "
+                f"contract liability {c.get('contract_liability', 0):,.2f}\n"
+            )
+    pob_txt = ""
+    if pobs:
+        pob_txt = "Performance obligation breakdown:\n"
+        for p in pobs[:40]:
+            pob_txt += (
+                f"- {p.get('contract_number', '')} {p.get('name')}: "
+                f"TP {p.get('transaction_price', 0):,.2f}; recognised {p.get('recognised', 0):,.2f}; "
+                f"remaining {p.get('remaining', 0):,.2f}; method {p.get('method') or 'n/a'}\n"
+            )
 
     prompt = f"""
 Generate Note 5 — Revenue (IFRS 15)
 for {tb_data.get('company_name')} period ended {tb_data.get('period_end')}.
 
+Data source: {source} (use contract / POB figures exactly when provided).
+
 Numbers ({tb_data.get('currency', 'USD')}):
 - Revenue from contracts: {revenue:,.2f}
 - Other income: {other_income:,.2f}
 - Total: {revenue + other_income:,.2f}
+- Contract assets: {tb_data.get('contract_assets', 0):,.2f}
+- Contract liabilities / deferred revenue: {tb_data.get('contract_liabilities', tb_data.get('deferred_revenue', 0)):,.2f}
+
+{contract_txt}
+{pob_txt}
 
 Generate:
 5.1 Disaggregation of Revenue table:
     - By type: Goods | Services | Other
     - By timing: Point in time | Over time
+    Use POB methods when provided.
 
 5.2 Contract Balances:
-    - Contract assets (if any)
-    - Contract liabilities / deferred revenue
+    - Contract assets: {tb_data.get('contract_assets', 0):,.2f}
+    - Contract liabilities / deferred revenue: {tb_data.get('contract_liabilities', tb_data.get('deferred_revenue', 0)):,.2f}
 
 5.3 Performance Obligations:
-    - Description of remaining obligations
-    - When expected to be satisfied
+    - Breakdown by POB from the register above (do not invent POB names)
+    - Remaining obligations and when expected to be satisfied
 
 5.4 Significant Judgements:
     - Timing of satisfaction
@@ -239,7 +328,7 @@ Generate:
 
 Reference IFRS 15.114-115, 15.120.
 """
-    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=600)
+    return invoke(prompt=prompt, system=DISCLOSURE_SYSTEM, max_tokens=900)
 
 
 def generate_n6_borrowings(tb_data: dict) -> str:
