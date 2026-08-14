@@ -68,6 +68,9 @@ supabase==2.10.0
 resend>=2.0.0,<3
 twilio>=8.0.0,<10
 
+# --- Google Drive export (service-account auth) ---
+google-auth==2.35.0
+
 # --- RAG (ChromaDB only — no local embedding models) ---
 # Excluded intentionally: sentence-transformers, torch, transformers, huggingface-hub, nvidia-*, cuda-*
 chromadb>=0.5.0,<0.6

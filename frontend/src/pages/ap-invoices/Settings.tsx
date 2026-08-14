@@ -51,6 +51,7 @@ export function Settings() {
   const [ftaRegistration, setFtaRegistration] = useState('');
   const [vatFilingFrequency, setVatFilingFrequency] = useState<'monthly' | 'quarterly'>('monthly');
   const [emirate, setEmirate] = useState('');
+  const [driveFolderUrl, setDriveFolderUrl] = useState('');
   const [indiaGstin, setIndiaGstin] = useState(() => {
     try {
       return localStorage.getItem('invoiceflow_company_tax_id') || '';
@@ -183,7 +184,7 @@ export function Settings() {
       let data: Record<string, unknown> | null = null;
       const full = await supabase
         .from('companies')
-        .select('fta_registration, vat_filing_frequency, emirate')
+        .select('fta_registration, vat_filing_frequency, emirate, drive_folder_url')
         .eq('id', cid)
         .maybeSingle();
       if (full.error) {
@@ -192,6 +193,7 @@ export function Settings() {
           msg.includes('fta_registration') ||
           msg.includes('vat_filing_frequency') ||
           msg.includes('emirate') ||
+          msg.includes('drive_folder_url') ||
           msg.includes('schema cache') ||
           full.error.code === '42703' ||
           full.error.code === 'PGRST204';
@@ -200,7 +202,7 @@ export function Settings() {
           return;
         }
         console.warn(
-          'companies.fta_registration / vat_filing_frequency / emirate missing — run UAE companies migration on Supabase. Skipping market fields.',
+          'companies.fta_registration / vat_filing_frequency / emirate / drive_folder_url missing — run the companies migrations on Supabase. Skipping market fields.',
         );
         return;
       }
@@ -211,6 +213,7 @@ export function Settings() {
         setVatFilingFrequency(data.vat_filing_frequency as 'monthly' | 'quarterly');
       }
       if (data.emirate) setEmirate(String(data.emirate));
+      if (data.drive_folder_url) setDriveFolderUrl(String(data.drive_folder_url));
     } catch (e) {
       console.warn('companies market fields:', e);
     }
@@ -330,6 +333,7 @@ export function Settings() {
           fta_registration: ftaRegistration.trim() || null,
           vat_filing_frequency: vatFilingFrequency,
           emirate: emirate || null,
+          drive_folder_url: driveFolderUrl.trim() || null,
         })
         .eq('id', company_id);
       if (marketErr) {
@@ -338,11 +342,12 @@ export function Settings() {
           msg.includes('fta_registration') ||
           msg.includes('vat_filing_frequency') ||
           msg.includes('emirate') ||
+          msg.includes('drive_folder_url') ||
           msg.includes('schema cache') ||
           marketErr.code === '42703' ||
           marketErr.code === 'PGRST204';
         if (missingCol) {
-          // Retry without UAE-only columns so Company Settings still save.
+          // Retry without UAE-only / optional columns so Company Settings still save.
           const { error: fallbackErr } = await supabase
             .from('companies')
             .update({
@@ -354,7 +359,7 @@ export function Settings() {
           toast({
             title: 'Saved (partial)',
             description:
-              'Company settings saved. FTA / VAT filing / emirate columns are missing on Supabase — run the UAE companies migration to enable them.',
+              'Company settings saved. FTA / VAT filing / emirate / Drive folder columns are missing on Supabase — run the companies migrations to enable them.',
           });
         } else {
           throw marketErr;
@@ -833,6 +838,19 @@ export function Settings() {
               />
               <p className="text-[11px] text-muted-foreground">
                 EC2 cron sends the daily AP briefing here automatically — no per-client server setup.
+              </p>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="co-drive-folder">Google Drive Folder Link (optional)</Label>
+              <Input
+                id="co-drive-folder"
+                value={driveFolderUrl}
+                onChange={(e) => setDriveFolderUrl(e.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+              />
+              <p className="text-[11px] text-muted-foreground">
+                When set, Excel exports from the invoice list are automatically saved here too. Share the folder
+                with the FinReportAI service account first.
               </p>
             </div>
             <div className="space-y-2">

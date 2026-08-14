@@ -116,6 +116,7 @@ from app.api.routes import (
     journal_entries,
     analytics,
     ap_invoices_rds,
+    ap_drive_export,
     ap_purchase_orders,
     ap_goods_receipts,
     ap_companies_rds,
@@ -305,6 +306,7 @@ app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
 app.include_router(ap_invoices_rds.router)
+app.include_router(ap_drive_export.router)
 app.include_router(ap_purchase_orders.router)
 app.include_router(ap_goods_receipts.router)
 app.include_router(ap_payment_run_routes.router)

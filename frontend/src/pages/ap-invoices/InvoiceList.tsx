@@ -111,6 +111,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { invoiceFlowAgentUrl } from '@/lib/ap-invoice/apiBase';
 import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
@@ -368,6 +369,7 @@ export function InvoiceList() {
   const [previewConfidence, setPreviewConfidence] = useState<number | undefined>();
   const [coaMappings, setCoaMappings] = useState<CoaMappingRow[]>([]);
   const [savingExtract, setSavingExtract] = useState(false);
+  const [driveExportStatus, setDriveExportStatus] = useState<{ url: string } | 'checking' | 'not_configured' | null>(null);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [advanceFilter, setAdvanceFilter] = useState(false);
@@ -1226,7 +1228,36 @@ export function InvoiceList() {
       console.warn('Could not fetch line items for export:', e);
     }
 
-    XLSX.writeFile(wb, `InvoiceFlow-Export-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    const exportFilename = `InvoiceFlow-Export-${format(new Date(), 'yyyy-MM-dd')}.xlsx`;
+    XLSX.writeFile(wb, exportFilename);
+
+    // Optional: also save this export to the company's Google Drive folder, if configured.
+    // The download above is unaffected either way.
+    try {
+      const companyId = (await getMyCompany())?.id;
+      if (!companyId) return;
+      setDriveExportStatus('checking');
+      const xlsxArrayBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+      const xlsxBlob = new Blob([xlsxArrayBuffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const form = new FormData();
+      form.append('file', xlsxBlob, exportFilename);
+      const res = await fetch(invoiceFlowAgentUrl(`/api/ap/companies/${companyId}/export-to-drive`), {
+        method: 'POST',
+        body: form,
+      });
+      const result = await res.json().catch(() => null);
+      if (result?.saved) {
+        setDriveExportStatus({ url: result.drive_url });
+        toast({ title: 'Saved to Drive ✓', description: exportFilename });
+      } else {
+        setDriveExportStatus(result?.reason === 'no_folder_configured' ? null : 'not_configured');
+      }
+    } catch (e) {
+      console.warn('Drive export skipped:', e);
+      setDriveExportStatus(null);
+    }
   }
 
   function exportZohoCSV(invList: Invoice[]) {
@@ -1377,6 +1408,19 @@ export function InvoiceList() {
               </>
             )}
           </div>
+          {driveExportStatus && driveExportStatus !== 'checking' && driveExportStatus !== 'not_configured' && (
+            <span className="flex items-center gap-2 text-sm text-green-700">
+              Saved to Drive ✓
+              <a
+                href={driveExportStatus.url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-green-900"
+              >
+                Open in Drive
+              </a>
+            </span>
+          )}
         </div>
       </div>
 
