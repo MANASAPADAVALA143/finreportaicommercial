@@ -119,6 +119,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: boolean;
     showIfrs16: boolean;
     showRera: boolean;
+    showEjari: boolean;
   }
 > = {
   real_estate: {
@@ -128,6 +129,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: true,
     showIfrs16: true,
     showRera: true,
+    showEjari: true,
   },
   construction: {
     costCenterLabel: 'Site / Project',
@@ -136,6 +138,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: false,
     showIfrs16: false,
     showRera: false,
+    showEjari: false,
   },
   manufacturing: {
     costCenterLabel: 'Plant / Division',
@@ -144,6 +147,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: false,
     showIfrs16: false,
     showRera: false,
+    showEjari: false,
   },
   healthcare: {
     costCenterLabel: 'Branch / Clinic',
@@ -152,6 +156,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: false,
     showIfrs16: true,
     showRera: false,
+    showEjari: false,
   },
   retail: {
     costCenterLabel: 'Store / Outlet',
@@ -160,6 +165,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: false,
     showIfrs16: true,
     showRera: false,
+    showEjari: false,
   },
   ca_firm: {
     costCenterLabel: 'Client',
@@ -168,6 +174,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: true,
     showIfrs16: true,
     showRera: false,
+    showEjari: false,
   },
   general: {
     costCenterLabel: 'Cost Center',
@@ -176,6 +183,7 @@ export const INDUSTRY_PREVIEW: Record<
     showIfrs15: false,
     showIfrs16: false,
     showRera: false,
+    showEjari: false,
   },
 };
 
@@ -239,7 +247,7 @@ export async function setTenantIndustry(industry: string): Promise<IndustryConfi
       show_ifrs15: preview.showIfrs15,
       show_ifrs16: preview.showIfrs16,
       show_rera: preview.showRera,
-      show_ejari: preview.showRera,
+      show_ejari: preview.showEjari,
       show_property_tagging: true,
       show_site_tagging: key === 'construction',
       workspace_industry: key,

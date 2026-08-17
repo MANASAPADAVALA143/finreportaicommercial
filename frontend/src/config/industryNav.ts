@@ -96,7 +96,7 @@ export function withIndustryNavLabels(nav: NavEntry[], cfg: IndustryConfig): Nav
     }
   }
 
-  // Inject RERA compliance link for real estate when enabled (no dedicated page yet → VAT returns hub)
+  // Inject RERA compliance link for real estate when enabled
   if (cfg.show_rera) {
     const hasRera = out.some(
       (e) =>
@@ -108,7 +108,7 @@ export function withIndustryNavLabels(nav: NavEntry[], cfg: IndustryConfig): Nav
         section: 'COMPLIANCE',
         items: [
           { label: 'VAT Return', path: '/gulftax/vat-return', icon: 'percent' },
-          { label: 'RERA Compliance', path: '/uae-accounting', icon: 'shield', badge: 'RERA' },
+          { label: 'RERA Compliance', path: '/real-estate', icon: 'shield', badge: 'RERA' },
         ],
       });
     }
