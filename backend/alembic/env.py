@@ -10,6 +10,7 @@ from app.core.database import Base, get_engine_connect_args
 import app.db.models  # noqa: E402, F401
 import app.models.ifrs_statement  # noqa: E402, F401
 import app.models.bank_recon  # noqa: E402, F401
+import app.models.rera  # noqa: E402, F401
 
 config = context.config
 if config.config_file_name is not None:
