@@ -2,7 +2,7 @@
  * India Purchase Invoices — ITC (Input Tax Credit), TDS on purchase
  */
 import { useEffect, useState } from 'react';
-import { IndianRupee, RefreshCw } from 'lucide-react';
+import { Download, FileText, RefreshCw } from 'lucide-react';
 import * as svc from '../../services/indiaAccounting.service';
 import type { IndiaPurchaseInvoice } from '../../services/indiaAccounting.service';
 
@@ -19,6 +19,7 @@ export default function IndiaPurchaseInvoices() {
   const [posting, setPosting]   = useState('');
   const [error, setError]       = useState('');
   const [msg, setMsg]           = useState('');
+  const [exporting, setExporting] = useState<'excel' | 'pdf' | ''>('');
 
   const load = () => {
     setLoading(true);
@@ -48,6 +49,26 @@ export default function IndiaPurchaseInvoices() {
   const totalTDS      = invoices.reduce((s, i) => s + i.tds_deducted, 0);
   const totalAP       = invoices.reduce((s, i) => s + i.outstanding, 0);
 
+  const totalCGST   = invoices.reduce((s, i) => s + i.cgst_amount, 0);
+  const totalSGST   = invoices.reduce((s, i) => s + i.sgst_amount, 0);
+  const totalIGST   = invoices.reduce((s, i) => s + i.igst_amount, 0);
+  const totalGST    = totalCGST + totalSGST + totalIGST;
+  const totalTaxable = invoices.reduce((s, i) => s + i.subtotal, 0);
+  const totalValue   = invoices.reduce((s, i) => s + i.total_amount, 0);
+
+  const handleExport = async (format: 'excel' | 'pdf') => {
+    setExporting(format);
+    setError('');
+    try {
+      if (format === 'excel') await svc.downloadPurchaseInvoicesExcel();
+      else await svc.downloadPurchaseInvoicesPdf();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setExporting('');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
       <div className="flex items-center justify-between mb-6">
@@ -55,7 +76,23 @@ export default function IndiaPurchaseInvoices() {
           <h1 className="text-2xl font-bold text-white">Purchase Invoices</h1>
           <p className="text-gray-400 text-sm mt-1">ITC (Input Tax Credit) · TDS on vendor payments</p>
         </div>
-        <button onClick={load} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"><RefreshCw size={14} /></button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleExport('excel')}
+            disabled={exporting !== ''}
+            className="flex items-center gap-1.5 text-xs px-3 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 rounded-lg text-white"
+          >
+            <Download size={14} /> {exporting === 'excel' ? 'Exporting…' : 'Download Excel'}
+          </button>
+          <button
+            onClick={() => handleExport('pdf')}
+            disabled={exporting !== ''}
+            className="flex items-center gap-1.5 text-xs px-3 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded-lg text-white"
+          >
+            <FileText size={14} /> {exporting === 'pdf' ? 'Exporting…' : 'Download PDF'}
+          </button>
+          <button onClick={load} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg"><RefreshCw size={14} /></button>
+        </div>
       </div>
 
       {(error || msg) && (
@@ -99,7 +136,10 @@ export default function IndiaPurchaseInvoices() {
               <th className="px-4 py-3 text-left text-xs text-gray-400 font-semibold">Date</th>
               <th className="px-4 py-3 text-left text-xs text-gray-400 font-semibold">Supply</th>
               <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">Taxable</th>
-              <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">GST Input</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">CGST</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">SGST</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">IGST</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">GST Total</th>
               <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">ITC Eligible</th>
               <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">TDS</th>
               <th className="px-4 py-3 text-right text-xs text-gray-400 font-semibold">Total</th>
@@ -111,14 +151,14 @@ export default function IndiaPurchaseInvoices() {
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i} className="border-b border-gray-700/50">
-                  {Array.from({ length: 10 }).map((_, j) => (
+                  {Array.from({ length: 13 }).map((_, j) => (
                     <td key={j} className="px-4 py-3"><div className="h-3 bg-gray-700 rounded animate-pulse" /></td>
                   ))}
                 </tr>
               ))
             ) : invoices.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-12 text-center text-gray-500">
+                <td colSpan={13} className="px-4 py-12 text-center text-gray-500">
                   No purchase invoices yet.
                 </td>
               </tr>
@@ -133,7 +173,10 @@ export default function IndiaPurchaseInvoices() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right text-white text-xs">{INR(inv.subtotal)}</td>
-                  <td className="px-4 py-3 text-right text-purple-300 text-xs">
+                  <td className="px-4 py-3 text-right text-purple-300 text-xs">{INR(inv.cgst_amount)}</td>
+                  <td className="px-4 py-3 text-right text-purple-300 text-xs">{INR(inv.sgst_amount)}</td>
+                  <td className="px-4 py-3 text-right text-blue-300 text-xs">{INR(inv.igst_amount)}</td>
+                  <td className="px-4 py-3 text-right text-purple-200 text-xs font-medium">
                     {INR(inv.cgst_amount + inv.sgst_amount + inv.igst_amount)}
                   </td>
                   <td className="px-4 py-3 text-right text-xs">
@@ -165,6 +208,22 @@ export default function IndiaPurchaseInvoices() {
               ))
             )}
           </tbody>
+          {!loading && invoices.length > 0 && (
+            <tfoot>
+              <tr className="border-t-2 border-gray-600 bg-gray-800/80 font-semibold">
+                <td className="px-4 py-3 text-xs text-gray-300" colSpan={3}>TOTAL</td>
+                <td className="px-4 py-3 text-right text-white text-xs">{INR(totalTaxable)}</td>
+                <td className="px-4 py-3 text-right text-purple-300 text-xs">{INR(totalCGST)}</td>
+                <td className="px-4 py-3 text-right text-purple-300 text-xs">{INR(totalSGST)}</td>
+                <td className="px-4 py-3 text-right text-blue-300 text-xs">{INR(totalIGST)}</td>
+                <td className="px-4 py-3 text-right text-purple-200 text-xs">{INR(totalGST)}</td>
+                <td className="px-4 py-3 text-right text-emerald-400 text-xs">{INR(totalITC)}</td>
+                <td className="px-4 py-3 text-right text-red-400 text-xs">{INR(totalTDS)}</td>
+                <td className="px-4 py-3 text-right text-white text-xs">{INR(totalValue)}</td>
+                <td className="px-4 py-3" colSpan={2} />
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>
