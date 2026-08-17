@@ -23,6 +23,7 @@ import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
 import { LandingPage } from './components/landing/LandingPage';
 import GulfTaxLayout from './pages/gulftax/GulfTaxLayout';
+import RERALayout from './pages/real-estate/RERALayout';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
 
@@ -465,6 +466,18 @@ const IndiaPeriodClose        = safeLazy(() => import('./pages/india-accounting/
 const IndiaManagementAccounts = safeLazy(() => import('./pages/india-accounting/IndiaManagementAccounts'));
 
 // GulfTax AI (embedded from uaetax)
+const RealEstateDashboard = safeLazy(() => import('./pages/real-estate/RealEstateDashboard'));
+const RERAProjects        = safeLazy(() => import('./pages/real-estate/RERAProjects'));
+const RERAProjectDetail   = safeLazy(() => import('./pages/real-estate/RERAProjectDetail'));
+const RERABookings        = safeLazy(() => import('./pages/real-estate/RERABookings'));
+const RERAPayments        = safeLazy(() => import('./pages/real-estate/RERAPayments'));
+const RERAEscrow          = safeLazy(() => import('./pages/real-estate/RERAEscrow'));
+const RERAQPR             = safeLazy(() => import('./pages/real-estate/RERAQPR'));
+const RERALeakage         = safeLazy(() => import('./pages/real-estate/RERALeakage'));
+const RERAIFRS16          = safeLazy(() => import('./pages/real-estate/RERAIFRS16'));
+const RERAFlags           = safeLazy(() => import('./pages/real-estate/RERAFlags'));
+const RERAWebhooks        = safeLazy(() => import('./pages/real-estate/RERAWebhooks'));
+
 const GulfTaxDashboard    = safeLazy(() => import('./pages/gulftax/GulfTaxDashboard'));
 const GulfTaxVATClassifier = safeLazy(() => import('./pages/gulftax/VATClassifier'));
 const GulfTaxVATReturn    = safeLazy(() => import('./pages/gulftax/VATReturn'));
@@ -645,6 +658,27 @@ function App() {
                   <Route path="missing-receipts" element={<BookkeepingMissingReceiptsPage />} />
                   <Route path="reconciliation" element={<BookkeepingReconPage />} />
                   <Route path="monthly" element={<BookkeepingMonthlyPage />} />
+                </Route>
+                {/* Real Estate OS — own sidebar. Nested under the same literal "/real-estate"
+                    path as the public RealEstateLanding route declared near /login above;
+                    that route is a childless leaf so it alone matches the bare path, while
+                    these children only match the longer /real-estate/<page> paths — no
+                    collision in practice (verified in-browser), but flagging the shared
+                    path prefix here since it's non-obvious from either file alone. */}
+                <Route element={<AutoSwitchOnly />}>
+                  <Route path="/real-estate" element={<ErrorBoundary><RERALayout /></ErrorBoundary>}>
+                    <Route path="dashboard" element={<RealEstateDashboard />} />
+                    <Route path="projects" element={<RERAProjects />} />
+                    <Route path="projects/:id" element={<RERAProjectDetail />} />
+                    <Route path="bookings" element={<RERABookings />} />
+                    <Route path="payments" element={<RERAPayments />} />
+                    <Route path="escrow" element={<RERAEscrow />} />
+                    <Route path="qpr" element={<RERAQPR />} />
+                    <Route path="leakage" element={<RERALeakage />} />
+                    <Route path="ifrs16" element={<RERAIFRS16 />} />
+                    <Route path="risk-flags" element={<RERAFlags />} />
+                    <Route path="webhooks" element={<RERAWebhooks />} />
+                  </Route>
                 </Route>
                 {/* GulfTax AI — own sidebar, workspace-scoped */}
                 <Route element={<AutoSwitchOnly />}>

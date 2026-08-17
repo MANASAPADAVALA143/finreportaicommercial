@@ -108,7 +108,7 @@ export function withIndustryNavLabels(nav: NavEntry[], cfg: IndustryConfig): Nav
         section: 'COMPLIANCE',
         items: [
           { label: 'VAT Return', path: '/gulftax/vat-return', icon: 'percent' },
-          { label: 'RERA Compliance', path: '/real-estate', icon: 'shield', badge: 'RERA' },
+          { label: 'RERA Compliance', path: '/real-estate/dashboard', icon: 'shield', badge: 'RERA' },
         ],
       });
     }
