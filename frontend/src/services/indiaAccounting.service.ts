@@ -305,3 +305,84 @@ export const generateIndiaManagementAccounts = (period: string) =>
 
 export const getIndiaDashboard = (period: string) =>
   get<IndiaDashboard>('/dashboard', { period });
+
+// ── Excel Export ──────────────────────────────────────────────────────────
+
+export interface ExtractedInvoicePayload {
+  invoice_number?: string;
+  vendor_name?: string;
+  vendor_gstin?: string;
+  invoice_date?: string;
+  due_date?: string;
+  hsn_sac?: string;
+  supply_type?: string;
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+  itc_eligible?: boolean;
+  status?: string;
+}
+
+/** Download extracted invoice as Excel — returns a Blob the caller can save. */
+export async function downloadExtractedInvoiceExcel(payload: ExtractedInvoicePayload): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/india/invoice/extract-to-excel`, {
+    method: 'POST',
+    headers: hdrs(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.blob();
+}
+
+/** Download all purchase invoices as Excel register. */
+export async function downloadPurchaseInvoicesExcel(period?: string): Promise<{ blob: Blob; filename: string }> {
+  const url = period
+    ? `${API_BASE}/api/india/full/purchase-invoices/export-excel?period=${period}`
+    : `${API_BASE}/api/india/full/purchase-invoices/export-excel`;
+  const res = await fetch(url, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? 'GST_Invoice_Register.xlsx';
+  return { blob: await res.blob(), filename };
+}
+
+/** Trigger browser file download from a Blob. */
+export function saveBlobAs(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Google Sheets Settings ────────────────────────────────────────────────
+
+export interface GoogleSheetsConfig {
+  sheet_url: string;
+  enabled: boolean;
+  sheet_name?: string;
+}
+
+export const getGoogleSheetsConfig = () =>
+  fetch(`${API_BASE}/api/india/settings/google-sheets`, { headers: hdrs() })
+    .then(r => r.json() as Promise<GoogleSheetsConfig>);
+
+export const saveGoogleSheetsConfig = (cfg: GoogleSheetsConfig) =>
+  fetch(`${API_BASE}/api/india/settings/google-sheets`, {
+    method: 'POST', headers: hdrs(), body: JSON.stringify(cfg),
+  }).then(r => r.json());
+
+export const syncInvoiceToSheets = (payload: ExtractedInvoicePayload) =>
+  fetch(`${API_BASE}/api/india/invoice/sync-to-sheets`, {
+    method: 'POST', headers: hdrs(), body: JSON.stringify(payload),
+  }).then(r => r.json() as Promise<{ synced: boolean; message?: string; sheet_url?: string }>);
+
+// ── Demo Data ─────────────────────────────────────────────────────────────
+
+export const seedDemoInvoices = () =>
+  fetch(`${API_BASE}/api/india/demo/seed`, { method: 'POST', headers: hdrs() })
+    .then(r => r.json() as Promise<{ seeded: number; message: string; invoices?: string[] }>);
