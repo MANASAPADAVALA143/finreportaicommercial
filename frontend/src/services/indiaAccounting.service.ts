@@ -7,8 +7,14 @@ const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:800
 const BASE = `${API_BASE}/api/india/full`;
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId');
-  return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, ...extra };
+  const tenantId = localStorage.getItem('tenantId') || 'demo';
+  const accessToken = localStorage.getItem('access_token');
+  return {
+    'Content-Type': 'application/json',
+    'X-Tenant-ID': tenantId,
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...extra,
+  };
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {

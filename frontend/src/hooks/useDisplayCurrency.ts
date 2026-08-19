@@ -8,8 +8,14 @@ export function useDisplayCurrency() {
   const { isUAE, isIndia, config } = useMarket();
   const { baseCurrency: settingsCurrency } = useCompanySettings();
 
+  // The market toggle decides the suite's currency for both regions —
+  // it must not be overridden by the active company's stored baseCurrency.
+  // Previously India deferred to settingsCurrency first, which meant a UAE
+  // company (baseCurrency 'AED', the only kind currently creatable) leaked
+  // AED into every India-mode dashboard, since there's no India company
+  // option in the setup wizard yet.
   const currency = useMemo(
-    () => (isUAE ? 'AED' : settingsCurrency || config.currency || 'INR'),
+    () => (isUAE ? 'AED' : config.currency || settingsCurrency || 'INR'),
     [isUAE, settingsCurrency, config.currency],
   );
 
