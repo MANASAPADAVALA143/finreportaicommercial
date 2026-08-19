@@ -3,6 +3,7 @@ import { type Market, type MarketConfig, getMarketConfig } from '../lib/ap-invoi
 import { getMyCompany } from '../lib/ap-invoice/companyService';
 import { supabase } from '../lib/ap-invoice/supabase';
 import { getStoredWorkspaceId } from '../services/workspaceService';
+import { markMarketAsUserChosen } from '../config/productRole';
 
 interface MarketContextType {
   market: Market;
@@ -132,6 +133,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   async function setMarket(newMarket: Market) {
     setMarketState(newMarket);
     persistMarketSelection(newMarket);
+    markMarketAsUserChosen();
     try {
       const companyId = await resolveCompanyIdForMarket();
       if (!companyId) return;

@@ -46,11 +46,14 @@ export default function Login() {
     setError(null);
     setLoading(true);
     try {
-      const loggedIn = await login(email, password);
-      // Persist the login-screen choice after a successful sign-in so the
-      // company-sync lookup inside setMarket has an authenticated session
-      // to work with.
+      // Persist the login-screen choice BEFORE calling login(): login()
+      // internally pins a market based on the account's product_role
+      // (pinUaeSuiteMarket / pinIndiaSuiteMarket in AuthContext), and that
+      // pin logic checks whether the user has already made an explicit
+      // choice this session — so the flag has to be set first, or the
+      // login-time auto-pin fires and silently reverts this selection.
       await setMarket(country);
+      const loggedIn = await login(email, password);
       const from = (location.state as { from?: string } | null)?.from;
       const role = normalizeProductRole(loggedIn.product_role);
       nav(resolvePostLoginPath(from, role, country === 'uae'), { replace: true });

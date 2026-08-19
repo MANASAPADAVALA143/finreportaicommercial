@@ -10,6 +10,7 @@ import {
 import * as svc from '../../services/indiaAccounting.service';
 import type { IndiaPurchaseInvoice } from '../../services/indiaAccounting.service';
 import { seedDemoGstr2bEntries } from '../../lib/ap-invoice/indiaAccountingReconService';
+import { getStoredAccessToken } from '../../utils/authToken';
 
 const TAX_ID_STORAGE = 'invoiceflow_company_tax_id';
 const FALLBACK_DEMO_GSTIN = '27AAAAA0000A1Z5';
@@ -68,7 +69,7 @@ function InvoiceUploadPanel({
       form.append('file', file);
       const apiBase = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
       const tenantId = localStorage.getItem('tenantId') || 'demo';
-      const accessToken = localStorage.getItem('access_token');
+      const accessToken = getStoredAccessToken();
       const res = await fetch(`${apiBase}/api/india/invoice/ocr-extract`, {
         method: 'POST',
         headers: {
