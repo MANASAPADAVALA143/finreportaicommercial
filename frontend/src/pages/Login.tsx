@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
+import type { Market } from '../lib/ap-invoice/marketConfig';
 import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
 
 /** Never resume the old module-picker after login. */
@@ -30,12 +31,15 @@ export default function Login() {
   const nav = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
-  const { isUAE } = useMarket();
+  const { isUAE, setMarket } = useMarket();
   const [email, setEmail] = useState('admin@gnanova.com');
   const [password, setPassword] = useState('Admin@123');
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Pre-select whatever the last session used, so returning users aren't
+  // reset to UAE every time.
+  const [country, setCountry] = useState<Market>(isUAE ? 'uae' : 'india');
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -43,9 +47,13 @@ export default function Login() {
     setLoading(true);
     try {
       const loggedIn = await login(email, password);
+      // Persist the login-screen choice after a successful sign-in so the
+      // company-sync lookup inside setMarket has an authenticated session
+      // to work with.
+      await setMarket(country);
       const from = (location.state as { from?: string } | null)?.from;
       const role = normalizeProductRole(loggedIn.product_role);
-      nav(resolvePostLoginPath(from, role, isUAE), { replace: true });
+      nav(resolvePostLoginPath(from, role, country === 'uae'), { replace: true });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       try {
@@ -65,6 +73,35 @@ export default function Login() {
         <div className="text-center">
           <h1 className="text-2xl font-bold text-white">FinReportAI</h1>
           <p className="text-slate-400 text-sm mt-1">Sign in to your workspace</p>
+        </div>
+
+        <div>
+          <span className="block text-sm text-slate-300 mb-1.5">Country</span>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setCountry('uae')}
+              className={`flex items-center justify-center gap-2 rounded border py-2 text-sm font-medium transition-colors ${
+                country === 'uae'
+                  ? 'border-blue-500 bg-blue-500/10 text-white'
+                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
+              }`}
+            >
+              🇦🇪 UAE
+            </button>
+            <button
+              type="button"
+              onClick={() => setCountry('india')}
+              className={`flex items-center justify-center gap-2 rounded border py-2 text-sm font-medium transition-colors ${
+                country === 'india'
+                  ? 'border-orange-500 bg-orange-500/10 text-white'
+                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
+              }`}
+            >
+              🇮🇳 India
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mt-1.5">You can switch this anytime from the header after signing in.</p>
         </div>
 
         <label className="block text-sm text-slate-300">
