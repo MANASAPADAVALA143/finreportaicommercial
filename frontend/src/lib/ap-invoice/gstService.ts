@@ -351,3 +351,91 @@ export async function listVendorsFromTable(): Promise<
     bank_verification_status?: string | null;
   }>;
 }
+
+// ── Demo GST invoices (AP InvoiceFlow "Invoice List") ─────────────────────
+//
+// The India Accounting module's own Purchase/Sales Invoices pages have
+// their own demo seed (POST /api/india/demo/seed, FastAPI backend). This
+// seeds the SAME five vendors/amounts/GSTINs directly into AP InvoiceFlow's
+// `invoices` table (Supabase) so this list also shows GST-flavored records
+// during the demo — these are two genuinely separate data stores, so each
+// needs its own seed.
+
+const DEMO_GST_VENDORS = [
+  { name: 'Tata Consultancy Services Ltd', gstin: '27AAACT2727Q1ZW', hsn: '998314', desc: 'IT Consulting Services' },
+  { name: 'Reliance Industries Ltd',        gstin: '27AAACR5055K1Z4', hsn: '271000', desc: 'Petroleum Products Supply' },
+  { name: 'Infosys Ltd',                    gstin: '29AABCI1681B1ZN', hsn: '998313', desc: 'Software Development Services' },
+  { name: 'Amazon India',                   gstin: '29AAGCS8989F1Z9', hsn: '996111', desc: 'Cloud Hosting & Marketplace' },
+  { name: 'HDFC Bank Ltd',                  gstin: '27AAACH2702H1ZC', hsn: '997120', desc: 'Banking & Processing Fees' },
+];
+
+const DEMO_GST_AMOUNTS: Array<{ supply: 'intra' | 'inter'; taxable: number; cgst: number; sgst: number; igst: number }> = [
+  { supply: 'intra', taxable: 100000, cgst: 9000, sgst: 9000, igst: 0 },
+  { supply: 'inter', taxable: 200000, cgst: 0,    sgst: 0,    igst: 36000 },
+  { supply: 'intra', taxable: 50000,  cgst: 4500, sgst: 4500, igst: 0 },
+  { supply: 'inter', taxable: 40000,  cgst: 0,    sgst: 0,    igst: 7200 },
+  { supply: 'intra', taxable: 20000,  cgst: 1800, sgst: 1800, igst: 0 },
+];
+
+/** Seed 5 GST purchase invoices into AP InvoiceFlow's own invoice list (idempotent). */
+export async function seedDemoGstInvoices(): Promise<{ seeded: number; message: string }> {
+  const company_id = await requireCompanyId();
+
+  const { count: existing } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', company_id)
+    .like('invoice_number', 'GST-INV-%');
+  if ((existing ?? 0) >= DEMO_GST_VENDORS.length) {
+    return { seeded: 0, message: 'GST demo invoices already present' };
+  }
+
+  const today = new Date();
+  const yyyymm = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const rows = DEMO_GST_VENDORS.map((v, i) => {
+    const amt = DEMO_GST_AMOUNTS[i];
+    const totalGst = amt.cgst + amt.sgst + amt.igst;
+    const total = amt.taxable + totalGst;
+    const invDate = new Date(today);
+    invDate.setDate(Math.max(1, invDate.getDate() - (i * 5 + 3)));
+    const dueDate = new Date(invDate);
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    return {
+      invoice_number: `GST-INV-${yyyymm}-${String(i + 1).padStart(3, '0')}`,
+      invoice_date: invDate.toISOString().slice(0, 10),
+      due_date: dueDate.toISOString().slice(0, 10),
+      vendor_name: v.name,
+      vendor_email: null,
+      vendor_phone: null,
+      vendor_address: null,
+      total_amount: total,
+      currency: 'INR',
+      gstin: v.gstin,
+      gst_amount: totalGst,
+      cgst: amt.cgst,
+      sgst: amt.sgst,
+      igst: amt.igst,
+      tax_type: 'GST' as const,
+      tax_amount: totalGst,
+      subtotal_amount: amt.taxable,
+      hsn_sac_code: v.hsn,
+      description: v.desc,
+      ifrs_category: 'operating_expense',
+      status: 'Approved' as const,
+      source: 'manual' as const,
+      invoice_type: 'purchase' as const,
+      payment_received: false,
+      company_id,
+      file_type: 'seed-demo',
+      file_url: null,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  const { error } = await supabase.from('invoices').insert(rows);
+  if (error) throw error;
+
+  logAction('invoice.created', 'invoices', null, getInvoiceflowWorkEmail(), { seeded_gst_demo: true, count: rows.length });
+  return { seeded: rows.length, message: `Seeded ${rows.length} GST demo invoices` };
+}

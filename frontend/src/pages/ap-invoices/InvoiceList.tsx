@@ -122,6 +122,7 @@ import {
   type NormalizedExtractedInvoice,
 } from '@/lib/ap-invoice/cameraService';
 import { useMarket } from '@/contexts/MarketContext';
+import { seedDemoGstInvoices } from '@/lib/ap-invoice/gstService';
 import { useIndustryConfig } from '@/context/IndustryConfigContext';
 import { spendByTitle } from '@/services/industryConfig.service';
 import { PintAeValidateModal } from '@/components/gulftax/PintAeValidateModal';
@@ -371,6 +372,7 @@ export function InvoiceList() {
   const [savingExtract, setSavingExtract] = useState(false);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [seedingGst, setSeedingGst] = useState(false);
   const [advanceFilter, setAdvanceFilter] = useState(false);
   const [pintAeInvoice, setPintAeInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 20;
@@ -656,6 +658,19 @@ export function InvoiceList() {
       });
     } finally {
       setBulkProcessing(false);
+    }
+  }
+
+  async function handleSeedGstDemo() {
+    setSeedingGst(true);
+    try {
+      const r = await seedDemoGstInvoices();
+      toast({ title: r.seeded > 0 ? 'GST demo invoices seeded' : 'Already seeded', description: r.message });
+      await fetchInvoices();
+    } catch (e) {
+      toast({ title: 'Seed failed', description: e instanceof Error ? e.message : String(e), variant: 'destructive' });
+    } finally {
+      setSeedingGst(false);
     }
   }
 
@@ -1378,6 +1393,17 @@ export function InvoiceList() {
                     .length
                 })`}
           </Button>
+          {!isUAE && (
+            <Button
+              variant="outline"
+              disabled={seedingGst}
+              onClick={() => void handleSeedGstDemo()}
+              title="Seed 5 GST invoices (TCS, Reliance, Infosys, Amazon India, HDFC Bank) into this list"
+              className="border-orange-600 text-orange-800 hover:bg-orange-50"
+            >
+              {seedingGst ? 'Seeding…' : '🎯 Seed GST Demo Invoices'}
+            </Button>
+          )}
           {selectedIds.length > 0 && (
             <>
               <Button
