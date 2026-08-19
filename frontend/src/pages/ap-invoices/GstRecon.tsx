@@ -30,6 +30,12 @@ import {
   uploadGstr2bEntries,
 } from '../../lib/ap-invoice/gstService';
 import {
+  getIndiaAccountingReconInvoices,
+  getIndiaAccountingReconSummary,
+  ignoreIndiaAccountingMismatch,
+  runIndiaAccountingReconciliation,
+} from '../../lib/ap-invoice/indiaAccountingReconService';
+import {
   classifyInvoiceToBox,
   computeBoxSummaries,
   FTA_BOX_LABELS,
@@ -132,9 +138,27 @@ export function GstRecon() {
           setRows(inv);
           setBoxSummary(computeBoxSummaries(p, companyGstin.trim(), inv));
         } else {
-          const [s, inv] = await Promise.all([getGstReconSummary(p), getGstReconInvoices(p)]);
-          setSummary(s);
-          setRows(inv);
+          // India: merge AP InvoiceFlow invoices (Supabase `invoices` table)
+          // with India Accounting purchase invoices (FastAPI `india_purchase_invoices`
+          // table) — the two live in separate stores, so both need reading.
+          const [apSummary, apInv, iaInv] = await Promise.all([
+            getGstReconSummary(p),
+            getGstReconInvoices(p),
+            getIndiaAccountingReconInvoices(p, companyGstin.trim()).catch(() => [] as Invoice[]),
+          ]);
+          const iaSummary = await getIndiaAccountingReconSummary(p, companyGstin.trim()).catch(() => null);
+          setSummary({
+            matched: apSummary.matched + (iaSummary?.matched ?? 0),
+            mismatch: apSummary.mismatch + (iaSummary?.mismatch ?? 0),
+            unmatched: apSummary.unmatched + (iaSummary?.unmatched ?? 0),
+            ignored: apSummary.ignored + (iaSummary?.ignored ?? 0),
+            total: apSummary.total + (iaSummary?.total ?? 0),
+            missing_gstin: apSummary.missing_gstin + (iaSummary?.missing_gstin ?? 0),
+            itc_eligible: apSummary.itc_eligible,
+            itc_blocked: apSummary.itc_blocked,
+            tds_payable: apSummary.tds_payable,
+          });
+          setRows([...apInv, ...iaInv]);
           setBoxSummary([]);
         }
       } catch (e) {
@@ -168,13 +192,22 @@ export function GstRecon() {
     }
     setBusy(true);
     try {
-      const r = isUAE
-        ? await runUaeVatReconciliation(period, companyGstin.trim())
-        : await runGstReconciliation(period, companyGstin.trim());
-      toast({
-        title: 'Reconciliation complete',
-        description: `Matched ${r.matched}, mismatch ${r.mismatch}, unmatched ${r.unmatched}`,
-      });
+      if (isUAE) {
+        const r = await runUaeVatReconciliation(period, companyGstin.trim());
+        toast({
+          title: 'Reconciliation complete',
+          description: `Matched ${r.matched}, mismatch ${r.mismatch}, unmatched ${r.unmatched}`,
+        });
+      } else {
+        const [apR, iaR] = await Promise.all([
+          runGstReconciliation(period, companyGstin.trim()),
+          runIndiaAccountingReconciliation(period, companyGstin.trim()).catch(() => ({ matched: 0, mismatch: 0, unmatched: 0, period })),
+        ]);
+        toast({
+          title: 'Reconciliation complete',
+          description: `Matched ${apR.matched + iaR.matched}, mismatch ${apR.mismatch + iaR.mismatch}, unmatched ${apR.unmatched + iaR.unmatched}`,
+        });
+      }
       await load();
     } catch (e) {
       toast({
@@ -187,9 +220,10 @@ export function GstRecon() {
     }
   }
 
-  async function handleIgnore(id: string) {
+  async function handleIgnore(id: string, source?: string) {
     try {
       if (isUAE) await ignoreUaeVatMismatch(id);
+      else if (source === 'india_accounting') await ignoreIndiaAccountingMismatch(id);
       else await ignoreGstMismatch(id);
       toast({ title: 'Marked ignored' });
       await load();
@@ -565,7 +599,12 @@ export function GstRecon() {
                           </TableCell>
                           <TableCell className="text-right">
                             {(st === 'mismatch' || st === 'unmatched') && (
-                              <Button type="button" size="sm" variant="ghost" onClick={() => void handleIgnore(inv.id)}>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => void handleIgnore(inv.id, (inv as unknown as { _source?: string })._source)}
+                              >
                                 Ignore
                               </Button>
                             )}

@@ -94,6 +94,7 @@ from app.api.routes import (
     uae_ar_routes,
     uae_controls_routes,
     india_routes,
+    india_excel_routes,
     pipeline as pipeline_router,
     o2c_routes,
     crm_routes,
@@ -284,6 +285,7 @@ app.include_router(uae_ar_routes.router)
 app.include_router(ar_collections_router)
 app.include_router(uae_controls_routes.router)
 app.include_router(india_routes.router)
+app.include_router(india_excel_routes.router)
 app.include_router(pipeline_router.router)
 app.include_router(agent_extract.router)
 app.include_router(ap_anomaly.router)

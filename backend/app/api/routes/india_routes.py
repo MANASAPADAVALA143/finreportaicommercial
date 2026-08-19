@@ -886,6 +886,8 @@ def list_gst_returns(
     return {
         "returns": [
             {"id": r.id, "return_type": r.return_type, "period": r.period,
+             "b2b_taxable": float(r.b2b_taxable or 0),
+             "b2c_taxable": float(r.b2c_taxable or 0),
              "total_taxable": float(r.total_taxable or 0),
              "total_cgst": float(r.total_cgst or 0),
              "total_sgst": float(r.total_sgst or 0),
@@ -933,6 +935,8 @@ def compile_gst_return(
 
     return {
         "id": rec.id, "return_type": rec.return_type, "period": rec.period,
+        "b2b_taxable": float(rec.b2b_taxable or 0),
+        "b2c_taxable": float(rec.b2c_taxable or 0),
         "total_taxable": float(rec.total_taxable or 0),
         "total_cgst": float(rec.total_cgst or 0),
         "total_sgst": float(rec.total_sgst or 0),
