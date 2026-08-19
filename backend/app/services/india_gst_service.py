@@ -19,6 +19,7 @@ from app.models.india_accounting import (
     IndiaAccount, IndiaGSTReturn,
     IndiaSalesInvoice, IndiaPurchaseInvoice,
     IndiaJournalEntry, IndiaJournalLine,
+    IndiaCustomer,
 )
 
 # GST rates in use
@@ -73,7 +74,8 @@ def calc_gst(
 def compile_gstr1(db: Session, tenant_id: str, period: str) -> dict[str, Any]:
     """Aggregate all posted sales invoices for the period → GSTR-1 data."""
     invoices = (
-        db.query(IndiaSalesInvoice)
+        db.query(IndiaSalesInvoice, IndiaCustomer)
+        .outerjoin(IndiaCustomer, IndiaSalesInvoice.customer_id == IndiaCustomer.id)
         .filter(
             IndiaSalesInvoice.tenant_id == tenant_id,
             IndiaSalesInvoice.period == period if hasattr(IndiaSalesInvoice, "period")
@@ -86,12 +88,15 @@ def compile_gstr1(db: Session, tenant_id: str, period: str) -> dict[str, Any]:
     b2b_taxable = b2c_taxable = 0.0
     total_cgst = total_sgst = total_igst = total_cess = 0.0
 
-    for inv in invoices:
+    for inv, customer in invoices:
         subtotal = float(inv.subtotal or 0)
-        if inv.supply_type == "inter":
-            b2b_taxable += subtotal
+        # B2B/B2C is determined by whether the buyer is GST-registered
+        # (has a valid 15-char GSTIN), not by intra/inter-state supply type.
+        customer_gstin = (customer.gstin or "").strip() if customer else ""
+        if customer_gstin and len(customer_gstin) == 15:
+            b2b_taxable += subtotal   # Registered buyer = B2B
         else:
-            b2c_taxable += subtotal
+            b2c_taxable += subtotal   # Unregistered buyer = B2C
         total_cgst += float(inv.cgst_amount or 0)
         total_sgst += float(inv.sgst_amount or 0)
         total_igst += float(inv.igst_amount or 0)

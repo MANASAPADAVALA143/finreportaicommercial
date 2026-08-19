@@ -2,7 +2,7 @@
  * India GST Returns — GSTR-1 (outward) + GSTR-3B (net liability)
  */
 import { useEffect, useState } from 'react';
-import { Landmark, Zap, CheckCircle2, RefreshCw } from 'lucide-react';
+import { FileSpreadsheet, FileJson, Landmark, Zap, CheckCircle2, RefreshCw } from 'lucide-react';
 import * as svc from '../../services/indiaAccounting.service';
 import type { IndiaGSTReturn } from '../../services/indiaAccounting.service';
 
@@ -17,6 +17,7 @@ export default function IndiaGSTReturns() {
   const [filing, setFiling]     = useState('');
   const [error, setError]       = useState('');
   const [msg, setMsg]           = useState('');
+  const [downloadingExcel, setDownloadingExcel] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -51,6 +52,24 @@ export default function IndiaGSTReturns() {
       setError(e.message);
     } finally {
       setFiling('');
+    }
+  };
+
+  const handleDownloadJson = (ret: IndiaGSTReturn) => {
+    svc.downloadGstReturnJson(ret);
+    setMsg(`Downloaded GSTR3B_${ret.period}.json ✓`);
+  };
+
+  const handleDownloadSummaryExcel = async (ret: IndiaGSTReturn) => {
+    setDownloadingExcel(ret.id); setError('');
+    try {
+      const { blob, filename } = await svc.downloadGstReturnExcel(ret.id);
+      svc.saveBlobAs(blob, filename);
+      setMsg(`Downloaded ${filename} ✓`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setDownloadingExcel('');
     }
   };
 
@@ -130,8 +149,8 @@ export default function IndiaGSTReturns() {
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'B2B Taxable',    value: INR(gstr1.total_taxable * 0.6) },
-                  { label: 'B2C Taxable',    value: INR(gstr1.total_taxable * 0.4) },
+                  { label: 'B2B Taxable (registered buyer)',   value: INR(gstr1.b2b_taxable) },
+                  { label: 'B2C Taxable (unregistered buyer)', value: INR(gstr1.b2c_taxable) },
                   { label: 'Total Taxable',  value: INR(gstr1.total_taxable) },
                   { label: 'Total GST',      value: INR(gstr1.total_cgst + gstr1.total_sgst + gstr1.total_igst) },
                 ].map(s => (
@@ -209,6 +228,24 @@ export default function IndiaGSTReturns() {
                 </div>
               )}
               {gstr3b.arn && <p className="text-xs text-gray-500">ARN: {gstr3b.arn}</p>}
+
+              {/* Download actions */}
+              <div className="flex gap-2 pt-2 border-t border-gray-700">
+                <button
+                  onClick={() => handleDownloadJson(gstr3b)}
+                  className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg text-white transition-colors"
+                >
+                  <FileJson size={12} /> Download JSON
+                </button>
+                <button
+                  onClick={() => handleDownloadSummaryExcel(gstr3b)}
+                  disabled={downloadingExcel === gstr3b.id}
+                  className="flex-1 flex items-center justify-center gap-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-3 py-2 rounded-lg text-white transition-colors"
+                >
+                  <FileSpreadsheet size={12} />
+                  {downloadingExcel === gstr3b.id ? 'Generating…' : 'Download Summary Excel'}
+                </button>
+              </div>
             </div>
           ) : (
             <p className="text-gray-500 text-sm py-6 text-center">Click "Compile" to generate GSTR-3B for {period}</p>

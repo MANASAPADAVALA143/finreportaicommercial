@@ -4,11 +4,15 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
-  Download, FileSpreadsheet, IndianRupee, RefreshCw,
+  Download, FileSpreadsheet, FileText, IndianRupee, RefreshCw,
   Settings, Sheet, Sparkles, Upload, X,
 } from 'lucide-react';
 import * as svc from '../../services/indiaAccounting.service';
 import type { IndiaPurchaseInvoice } from '../../services/indiaAccounting.service';
+import { seedDemoGstr2bEntries } from '../../lib/ap-invoice/indiaAccountingReconService';
+
+const TAX_ID_STORAGE = 'invoiceflow_company_tax_id';
+const FALLBACK_DEMO_GSTIN = '27AAAAA0000A1Z5';
 
 const INR = (v: number) => `₹${v.toLocaleString('en-IN')}`;
 
@@ -193,7 +197,7 @@ function InvoiceUploadPanel({
           {extracted && (
             <>
               <div className="bg-purple-900/20 border border-purple-800/40 rounded-xl p-3 text-xs text-purple-300 flex items-center gap-2">
-                <Sparkles size=12 />
+                <Sparkles size={12} />
                 Claude extracted the fields below — review and edit before saving.
               </div>
 
@@ -405,6 +409,7 @@ export default function IndiaPurchaseInvoices() {
   const [showUpload, setShowUpload] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
   const [exporting, setExporting]   = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [seeding, setSeeding]       = useState(false);
   const [period, setPeriod]         = useState('');
 
@@ -444,11 +449,34 @@ export default function IndiaPurchaseInvoices() {
     }
   };
 
+  const handleExportPdf = async () => {
+    setExportingPdf(true); setError('');
+    try {
+      const { blob, filename } = await svc.downloadPurchaseInvoicesPdf(period || undefined);
+      svc.saveBlobAs(blob, filename);
+      setMsg(`Downloaded ${filename} ✓`);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   const handleSeedDemo = async () => {
     setSeeding(true); setError('');
     try {
       const r = await svc.seedDemoInvoices();
-      setMsg(r.message);
+      let msg2b = '';
+      if (r.seeded > 0 && r.period && r.detail) {
+        try {
+          const companyGstin = (localStorage.getItem(TAX_ID_STORAGE) || FALLBACK_DEMO_GSTIN).trim();
+          const { count } = await seedDemoGstr2bEntries(r.period, companyGstin, r.detail);
+          if (count > 0) msg2b = ` — GSTR-2B sample seeded (${count} entries: 3 matched, 1 mismatched)`;
+        } catch (e2b: any) {
+          msg2b = ` — GSTR-2B seed skipped: ${e2b.message}`;
+        }
+      }
+      setMsg(r.message + msg2b);
       load();
     } catch (e: any) {
       setError(e.message);
@@ -503,7 +531,17 @@ export default function IndiaPurchaseInvoices() {
               className="flex items-center gap-1.5 px-3 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <FileSpreadsheet size={14} />
-              {exporting ? 'Exporting…' : 'Export All to Excel'}
+              {exporting ? 'Exporting…' : 'Download Excel'}
+            </button>
+
+            {/* Export All PDF */}
+            <button
+              onClick={handleExportPdf}
+              disabled={exportingPdf}
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <FileText size={14} />
+              {exportingPdf ? 'Generating…' : 'Download PDF'}
             </button>
 
             {/* Google Sheets */}

@@ -97,6 +97,7 @@ export interface IndiaTDSEntry {
 
 export interface IndiaGSTReturn {
   id: string; return_type: string; period: string;
+  b2b_taxable: number; b2c_taxable: number;
   total_taxable: number; total_cgst: number; total_sgst: number;
   total_igst: number; total_payable: number;
   itc_cgst: number; itc_sgst: number; itc_igst: number;
@@ -336,17 +337,51 @@ export async function downloadExtractedInvoiceExcel(payload: ExtractedInvoicePay
   return res.blob();
 }
 
+function filenameFromResponse(res: Response, fallback: string): string {
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  return match?.[1] ?? fallback;
+}
+
 /** Download all purchase invoices as Excel register. */
 export async function downloadPurchaseInvoicesExcel(period?: string): Promise<{ blob: Blob; filename: string }> {
   const url = period
-    ? `${API_BASE}/api/india/full/purchase-invoices/export-excel?period=${period}`
-    : `${API_BASE}/api/india/full/purchase-invoices/export-excel`;
+    ? `${API_BASE}/api/india/full/purchase-invoices/export/excel?period=${period}`
+    : `${API_BASE}/api/india/full/purchase-invoices/export/excel`;
   const res = await fetch(url, { headers: hdrs() });
   if (!res.ok) throw new Error(await res.text());
-  const cd = res.headers.get('Content-Disposition') ?? '';
-  const match = cd.match(/filename="([^"]+)"/);
-  const filename = match?.[1] ?? 'GST_Invoice_Register.xlsx';
-  return { blob: await res.blob(), filename };
+  return { blob: await res.blob(), filename: filenameFromResponse(res, 'GST_Purchase_Register.xlsx') };
+}
+
+/** Download all purchase invoices as a branded PDF register. */
+export async function downloadPurchaseInvoicesPdf(
+  period?: string,
+  companyName?: string,
+  companyGstin?: string
+): Promise<{ blob: Blob; filename: string }> {
+  const params = new URLSearchParams();
+  if (period) params.set('period', period);
+  if (companyName) params.set('company_name', companyName);
+  if (companyGstin) params.set('company_gstin', companyGstin);
+  const qs = params.toString();
+  const url = `${API_BASE}/api/india/full/purchase-invoices/export/pdf${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  return { blob: await res.blob(), filename: filenameFromResponse(res, 'GST_Purchase_Register.pdf') };
+}
+
+/** Download a GSTR-3B return's underlying data as a JSON file (client-side, no network). */
+export function downloadGstReturnJson(gstReturn: IndiaGSTReturn): void {
+  const json = JSON.stringify(gstReturn, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  saveBlobAs(blob, `GSTR3B_${gstReturn.period}.json`);
+}
+
+/** Download a two-sheet Excel summary (GSTR-3B totals + underlying invoices). */
+export async function downloadGstReturnExcel(returnId: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${API_BASE}/api/india/full/gst-returns/${returnId}/export/excel`, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  return { blob: await res.blob(), filename: filenameFromResponse(res, `GSTR3B_Summary.xlsx`) };
 }
 
 /** Trigger browser file download from a Blob. */
@@ -383,6 +418,21 @@ export const syncInvoiceToSheets = (payload: ExtractedInvoicePayload) =>
 
 // ── Demo Data ─────────────────────────────────────────────────────────────
 
+export interface DemoInvoiceDetail {
+  invoice_number: string;
+  vendor_name: string;
+  vendor_gstin: string;
+  supply_type: string;
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+}
+
 export const seedDemoInvoices = () =>
   fetch(`${API_BASE}/api/india/demo/seed`, { method: 'POST', headers: hdrs() })
-    .then(r => r.json() as Promise<{ seeded: number; message: string; invoices?: string[] }>);
+    .then(r => r.json() as Promise<{
+      seeded: number; message: string; period?: string;
+      invoices?: string[]; detail?: DemoInvoiceDetail[];
+    }>);
