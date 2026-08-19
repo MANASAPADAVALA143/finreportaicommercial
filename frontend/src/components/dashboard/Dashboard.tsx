@@ -150,6 +150,17 @@ const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
   },
 ];
 
+/**
+ * AP InvoiceFlow and Industry & Workspace are market-agnostic (they branch
+ * internally on the market toggle — see GstRecon.tsx). GulfTax and Peppol
+ * e-invoicing are UAE-only (VAT/CT, FTA), so they're dropped from this
+ * quick-access strip when India is active — showing them there was what
+ * made the banner read as "UAE" even after switching to India.
+ */
+const INDIA_QUICK_ACCESS_MODULES: DashboardModule[] = UAE_FINANCE_SUITE_MODULES.filter(
+  (m) => m.link !== '/gulftax' && m.link !== '/gulftax/e-invoicing'
+);
+
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
   { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
   { id: 'ifrs', name: 'IFRS Reporting Agent', route: '/ifrs-statement', description: 'Uploads trial balance, runs GL→IFRS AI mapping, and supports mapping review workflow' },
@@ -317,18 +328,20 @@ export const Dashboard: React.FC = () => {
         </p>
       </nav>
 
-      {/* UAE Finance Suite — India view only (UAE merges these into the main grid below) */}
+      {/* Quick access strip — India view only (UAE merges these into the main grid below).
+          Shows only market-agnostic modules (AP InvoiceFlow, Industry & Workspace) so it
+          doesn't read as a UAE-only section while India is toggled on. */}
       {!isUAE && (
         <div className="border-b border-teal-800/40 bg-teal-950/30">
           <div className="container mx-auto px-6 py-8">
             <div className="text-center mb-6">
-              <h2 className="text-2xl font-bold text-white">🇦🇪 UAE Finance Suite</h2>
+              <h2 className="text-2xl font-bold text-white">⚡ Quick Access</h2>
               <p className="text-sm text-teal-200/80 mt-1">
-                AP invoices, GulfTax VAT/CT, and Peppol e-invoicing for UAE entities
+                AP invoices, approvals, GST recon, and Zoho/QBO integrations
               </p>
             </div>
-            <div className="grid md:grid-cols-3 gap-4 max-w-5xl mx-auto">
-              {UAE_FINANCE_SUITE_MODULES.map((mod) => (
+            <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto">
+              {INDIA_QUICK_ACCESS_MODULES.map((mod) => (
                 <Link
                   key={mod.link}
                   to={mod.link}
