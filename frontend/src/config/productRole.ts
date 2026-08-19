@@ -80,7 +80,36 @@ export function isWorkspaceOptionalPath(pathname: string): boolean {
   ) || pathname.startsWith('/workspaces/');
 }
 
+const USER_SET_MARKET_KEY = 'finreportai_market_user_set';
+
+/**
+ * Once the user has explicitly picked a market this session (login screen
+ * selector, header toggle, AP InvoiceFlow sidebar toggle — all funnel
+ * through MarketContext.setMarket), role-based auto-pinning below must not
+ * silently override it. Without this, a UAE-flagged account's own login
+ * plumbing (or a stale company.market row synced later) could revert an
+ * explicit India selection back to UAE moments after landing on the
+ * dashboard, with no visible error — exactly what made toggling India feel
+ * broken.
+ */
+export function markMarketAsUserChosen(): void {
+  try {
+    localStorage.setItem(USER_SET_MARKET_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+function isMarketUserChosen(): boolean {
+  try {
+    return localStorage.getItem(USER_SET_MARKET_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function pinUaeSuiteMarket(): void {
+  if (isMarketUserChosen()) return;
   try {
     localStorage.setItem('gnanova_suite', 'uae');
     localStorage.setItem('finreportai_ap_market', 'uae');
@@ -92,6 +121,7 @@ export function pinUaeSuiteMarket(): void {
 
 /** Pin India suite + AP InvoiceFlow India market (GST / INR). */
 export function pinIndiaSuiteMarket(): void {
+  if (isMarketUserChosen()) return;
   try {
     localStorage.setItem('gnanova_suite', 'india');
     localStorage.setItem('finreportai_ap_market', 'india');

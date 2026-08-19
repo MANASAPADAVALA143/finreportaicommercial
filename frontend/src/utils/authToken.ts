@@ -54,6 +54,7 @@ export function clearAllAuthStorage(): void {
   localStorage.removeItem('user');
   localStorage.removeItem('accessToken');
   localStorage.removeItem('access_token');
+  localStorage.removeItem('finreportai_market_user_set');
   for (const key of Object.keys(localStorage)) {
     if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
       localStorage.removeItem(key);
