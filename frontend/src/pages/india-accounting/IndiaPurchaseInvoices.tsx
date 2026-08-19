@@ -67,10 +67,14 @@ function InvoiceUploadPanel({
       const form = new FormData();
       form.append('file', file);
       const apiBase = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
-      const tenantId = localStorage.getItem('tenantId') ?? 'demo';
+      const tenantId = localStorage.getItem('tenantId') || 'demo';
+      const accessToken = localStorage.getItem('access_token');
       const res = await fetch(`${apiBase}/api/india/invoice/ocr-extract`, {
         method: 'POST',
-        headers: { 'X-Tenant-ID': tenantId },
+        headers: {
+          'X-Tenant-ID': tenantId,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: form,
       });
       if (!res.ok) throw new Error(await res.text());
