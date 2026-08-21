@@ -31,6 +31,8 @@ PUBLIC_PREFIXES = (
     "/api/ap/integrations/qbo/callback",
     "/api/connections/zoho/callback",
     "/api/ap/app-settings",
+    # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
+    "/api/agent/extract-image",
 )
 
 AUTH_ANY_ROLE_PREFIXES = (

@@ -238,7 +238,17 @@ export async function extractInvoiceFromImageFile(
   const uploadFile = await prepareImageForExtract(file);
   const fd = buildExtractImageFormData(uploadFile, market);
   const url = invoiceFlowAgentUrl('/api/agent/extract-image');
-  const res = await fetch(url, { method: 'POST', body: fd });
+  const headers: Record<string, string> = {};
+  try {
+    const token =
+      localStorage.getItem('token')
+      || localStorage.getItem('accessToken')
+      || localStorage.getItem('access_token');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* ignore */
+  }
+  const res = await fetch(url, { method: 'POST', headers, body: fd });
   const text = await res.text();
 
   let parsed: Record<string, unknown> | null = null;

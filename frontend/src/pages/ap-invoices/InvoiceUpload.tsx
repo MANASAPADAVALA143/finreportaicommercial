@@ -474,7 +474,10 @@ export function InvoiceUpload() {
       formPayload.append('market', isUAE ? 'uae' : 'india');
 
       console.log('ðŸ“¤ Calling Anthropic proxy:', proxyUrl);
-      const response = await fetch(proxyUrl, { method: 'POST', body: formPayload });
+      const headers: Record<string, string> = {};
+      const token = getStoredAccessToken() || accessToken;
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(proxyUrl, { method: 'POST', headers, body: formPayload });
 
       if (!response.ok) {
         const errText = await response.text();
@@ -2157,8 +2160,13 @@ export function InvoiceUpload() {
     const url = invoiceFlowAgentUrl('/api/agent/extract-image');
     const payload = new FormData();
     payload.append('file', file, file.name);
+    payload.append('market', isUAE ? 'uae' : 'india');
 
-    const response = await fetch(url, { method: 'POST', body: payload });
+    const headers: Record<string, string> = {};
+    const token = getStoredAccessToken() || accessToken;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetch(url, { method: 'POST', headers, body: payload });
 
     if (!response.ok) {
       const errorText = await response.text();
