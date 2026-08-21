@@ -161,7 +161,11 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         if not auth or not auth.startswith("Bearer "):
-            return _json_error(request, 401, "Missing bearer token")
+            # Temporary guest mode — frontend login is disabled; restore auth gate later.
+            request.state.user_id = "guest"
+            request.state.user_role = "guest"
+            request.state.product_role = "full_access"
+            return await call_next(request)
 
         token = auth.replace("Bearer ", "", 1).strip()
         internal_role = ""
