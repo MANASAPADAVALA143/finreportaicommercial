@@ -2150,7 +2150,15 @@ export function InvoiceUpload() {
     const payload = new FormData();
     payload.append('file', file, file.name);
 
-    const response = await fetch(url, { method: 'POST', body: payload });
+    const _token = getStoredAccessToken();
+    // Pass market so backend uses GST prompt for India invoices
+    const _storedMarket = (() => { try { return localStorage.getItem('finreportai_ap_market') || 'uae'; } catch { return 'uae'; } })();
+    payload.append('market', _storedMarket);
+    const response = await fetch(url, {
+      method: 'POST',
+      body: payload,
+      headers: _token ? { Authorization: `Bearer ${_token}` } : undefined,
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
