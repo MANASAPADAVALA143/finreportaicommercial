@@ -214,6 +214,43 @@ export const createPurchaseInvoice = (body: {
 export const postPurchaseInvoice = (invId: string) =>
   post<{ id: string; status: string; je_id: string; itc_claimed: number }>(`/purchase-invoices/${invId}/post`);
 
+export const createPurchaseInvoiceFromOcr = (body: {
+  vendor_name: string; vendor_gstin?: string | null; buyer_gstin?: string | null;
+  invoice_number: string; invoice_date: string; due_date?: string | null;
+  taxable_amount: number;
+  cgst_amount?: number | null; sgst_amount?: number | null; igst_amount?: number | null;
+  tax_amount?: number | null; total_amount?: number | null;
+  hsn_sac?: string | null; payment_terms?: string | null;
+}) => post<{
+  id: string; invoice_number: string; vendor_id: string; supply_type: string;
+  subtotal: number; cgst_amount: number; sgst_amount: number; igst_amount: number; total_amount: number;
+}>('/purchase-invoices/from-ocr', body);
+
+async function downloadBlob(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export const downloadPurchaseInvoicesExcel = () =>
+  downloadBlob('/purchase-invoices/export/excel', 'india_ap_invoices.xlsx');
+
+export const downloadPurchaseInvoicesPdf = (companyName?: string, period?: string) => {
+  const params = new URLSearchParams();
+  if (companyName) params.set('company_name', companyName);
+  if (period) params.set('period', period);
+  const q = params.toString();
+  return downloadBlob(`/purchase-invoices/export/pdf${q ? `?${q}` : ''}`, 'india_ap_invoices.pdf');
+};
+
 // ── TDS ───────────────────────────────────────────────────────────────────
 
 export const listTDS = (params?: { period?: string; section?: string }) =>

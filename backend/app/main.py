@@ -129,6 +129,7 @@ from app.api.routes import (
 )
 from app.modules.ifrs9.router import router as ifrs9_router
 from app.modules.ifrs15.router import router as ifrs15_router
+from app.modules.rera.router import router as rera_router
 from app.middleware.request_logging import RequestLoggingMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -308,6 +309,7 @@ app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
+app.include_router(rera_router)
 app.include_router(ap_invoices_rds.router)
 app.include_router(ap_purchase_orders.router)
 app.include_router(ap_goods_receipts.router)

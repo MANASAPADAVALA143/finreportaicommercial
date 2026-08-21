@@ -31,6 +31,11 @@ function GnanovaBanner() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { productRole, user, isAuthenticated, logout } = useAuth();
+
+  // Public real-estate marketing page owns its own nav — the cross-app workspace
+  // banner must not bleed through onto it.
+  if (pathname === '/real-estate') return null;
+
   const showWorkspaceControls = !PUBLIC_PATHS.has(pathname);
 
   const showAp = !isAuthenticated || canAccessPath(productRole, '/ap-invoices', user?.role);
@@ -47,6 +52,7 @@ function GnanovaBanner() {
 
   return (
     <div
+      data-gnanova-banner
       style={{
         height: 36,
         background: '#0f2d5e',
@@ -251,6 +257,7 @@ const EarningsReviewer = safeLazy(() => import('./pages/EarningsReviewer'));
 const GLReconciler = safeLazy(() => import('./pages/GLReconciler'));
 const ModelBuilder = safeLazy(() => import('./pages/ModelBuilder'));
 const Login = safeLazy(() => import('./pages/Login'));
+const RealEstateLanding = safeLazy(() => import('./pages/RealEstateLanding'));
 const Register = safeLazy(() => import('./pages/Register'));
 const ForgotPassword = safeLazy(() => import('./pages/ForgotPassword'));
 const ResetPassword = safeLazy(() => import('./pages/ResetPassword'));
@@ -583,6 +590,7 @@ function App() {
               <Route path="/" element={<RootRedirect />} />
               <Route path="/get-demo" element={<GetDemoPage />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/real-estate" element={<RealEstateLanding />} />
               <Route path="/register" element={<Register />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/reset-password" element={<ResetPassword />} />

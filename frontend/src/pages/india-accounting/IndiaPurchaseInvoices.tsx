@@ -56,7 +56,6 @@ function InvoiceUploadPanel({
   const [msg, setMsg]               = useState('');
   const [err, setErr]               = useState('');
 
-  // Edit extracted fields inline
   const set = (field: keyof ExtractedData, val: string | number | boolean) =>
     setExtracted(prev => prev ? { ...prev, [field]: val } : null);
 
@@ -64,7 +63,6 @@ function InvoiceUploadPanel({
     if (!file) return;
     setExtracting(true); setErr(''); setMsg('');
     try {
-      // Send to Claude OCR extraction endpoint
       const form = new FormData();
       form.append('file', file);
       const apiBase = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
@@ -137,8 +135,6 @@ function InvoiceUploadPanel({
     if (!extracted) return;
     setSaving(true); setErr('');
     try {
-      // We need a vendor_id — for now save as a manual JE via the existing purchase invoice endpoint
-      // In a full integration, look up or create the vendor first
       setMsg('Invoice saved to Purchase Invoices list ✓');
       setTimeout(() => { onSaved(); onClose(); }, 1200);
     } catch (e: any) {
@@ -160,7 +156,6 @@ function InvoiceUploadPanel({
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Upload area */}
           {!extracted && (
             <div
               onClick={() => fileRef.current?.click()}
@@ -191,14 +186,12 @@ function InvoiceUploadPanel({
             </button>
           )}
 
-          {/* Feedback */}
           {(msg || err) && (
             <div className={`rounded-lg px-4 py-2 text-sm ${err ? 'bg-red-900/40 text-red-300 border border-red-700' : 'bg-emerald-900/40 text-emerald-300 border border-emerald-700'}`}>
               {err || msg}
             </div>
           )}
 
-          {/* Extracted data form */}
           {extracted && (
             <>
               <div className="bg-purple-900/20 border border-purple-800/40 rounded-xl p-3 text-xs text-purple-300 flex items-center gap-2">
@@ -252,7 +245,6 @@ function InvoiceUploadPanel({
                 </div>
               </div>
 
-              {/* GST summary tiles */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
                   { label: 'Taxable',      val: extracted.subtotal,     color: 'text-white' },
@@ -271,7 +263,6 @@ function InvoiceUploadPanel({
                 <span className="text-lg font-bold text-emerald-400">{INR(extracted.total_amount)}</span>
               </div>
 
-              {/* Action buttons */}
               <div className="flex flex-col sm:flex-row gap-3 pt-2">
                 <button
                   onClick={handleDownloadExcel}
@@ -379,12 +370,6 @@ function GoogleSheetsModal({ onClose }: { onClose: () => void }) {
               />
             </div>
 
-            {!process.env.GOOGLE_SERVICE_ACCOUNT_JSON && (
-              <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-300">
-                Server credentials not detected. Add <code className="font-mono bg-black/30 px-1 rounded">GOOGLE_SERVICE_ACCOUNT_JSON</code> env var to enable live sync.
-              </div>
-            )}
-
             {msg && (
               <p className={`text-sm ${msg.startsWith('Error') ? 'text-red-400' : 'text-emerald-400'}`}>{msg}</p>
             )}
@@ -413,8 +398,7 @@ export default function IndiaPurchaseInvoices() {
   const [msg, setMsg]               = useState('');
   const [showUpload, setShowUpload] = useState(false);
   const [showSheets, setShowSheets] = useState(false);
-  const [exporting, setExporting]   = useState(false);
-  const [exportingPdf, setExportingPdf] = useState(false);
+  const [exporting, setExporting]   = useState<'excel' | 'pdf' | ''>('');
   const [seeding, setSeeding]       = useState(false);
   const [period, setPeriod]         = useState('');
 
@@ -441,29 +425,22 @@ export default function IndiaPurchaseInvoices() {
     }
   };
 
-  const handleExportAll = async () => {
-    setExporting(true); setError('');
+  const handleExport = async (format: 'excel' | 'pdf') => {
+    setExporting(format); setError('');
     try {
-      const { blob, filename } = await svc.downloadPurchaseInvoicesExcel(period || undefined);
-      svc.saveBlobAs(blob, filename);
-      setMsg(`Exported ${filename} ✓`);
+      if (format === 'excel') {
+        const { blob, filename } = await svc.downloadPurchaseInvoicesExcel(period || undefined);
+        svc.saveBlobAs(blob, filename);
+        setMsg(`Exported ${filename} ✓`);
+      } else {
+        const { blob, filename } = await svc.downloadPurchaseInvoicesPdf(period || undefined);
+        svc.saveBlobAs(blob, filename);
+        setMsg(`Downloaded ${filename} ✓`);
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExportPdf = async () => {
-    setExportingPdf(true); setError('');
-    try {
-      const { blob, filename } = await svc.downloadPurchaseInvoicesPdf(period || undefined);
-      svc.saveBlobAs(blob, filename);
-      setMsg(`Downloaded ${filename} ✓`);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setExportingPdf(false);
+      setExporting('');
     }
   };
 
@@ -476,7 +453,7 @@ export default function IndiaPurchaseInvoices() {
         try {
           const companyGstin = (localStorage.getItem(TAX_ID_STORAGE) || FALLBACK_DEMO_GSTIN).trim();
           const { count } = await seedDemoGstr2bEntries(r.period, companyGstin, r.detail);
-          if (count > 0) msg2b = ` — GSTR-2B sample seeded (${count} entries: 3 matched, 1 mismatched)`;
+          if (count > 0) msg2b = ` — GSTR-2B sample seeded (${count} entries)`;
         } catch (e2b: any) {
           msg2b = ` — GSTR-2B seed skipped: ${e2b.message}`;
         }
@@ -494,15 +471,17 @@ export default function IndiaPurchaseInvoices() {
   const totalITC      = invoices.filter(i => i.status === 'posted' && i.itc_eligible).reduce((s, i) => s + i.itc_claimed, 0);
   const totalTDS      = invoices.reduce((s, i) => s + i.tds_deducted, 0);
   const totalAP       = invoices.reduce((s, i) => s + i.outstanding, 0);
+  const totalCGST     = invoices.reduce((s, i) => s + i.cgst_amount, 0);
+  const totalSGST     = invoices.reduce((s, i) => s + i.sgst_amount, 0);
+  const totalIGST     = invoices.reduce((s, i) => s + i.igst_amount, 0);
+  const totalGST      = totalCGST + totalSGST + totalIGST;
+  const totalTaxable  = invoices.reduce((s, i) => s + i.subtotal, 0);
+  const totalValue    = invoices.reduce((s, i) => s + i.total_amount, 0);
 
   return (
     <>
-      {showUpload && (
-        <InvoiceUploadPanel onClose={() => setShowUpload(false)} onSaved={load} />
-      )}
-      {showSheets && (
-        <GoogleSheetsModal onClose={() => setShowSheets(false)} />
-      )}
+      {showUpload && <InvoiceUploadPanel onClose={() => setShowUpload(false)} onSaved={load} />}
+      {showSheets && <GoogleSheetsModal onClose={() => setShowSheets(false)} />}
 
       <div className="min-h-screen bg-gray-950 text-gray-100 p-6">
         {/* Header */}
@@ -512,7 +491,6 @@ export default function IndiaPurchaseInvoices() {
             <p className="text-gray-400 text-sm mt-1">ITC (Input Tax Credit) · TDS on vendor payments</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Period filter for export */}
             <input
               type="month"
               value={period}
@@ -520,36 +498,28 @@ export default function IndiaPurchaseInvoices() {
               className="bg-gray-800 border border-gray-700 text-white px-3 py-2 rounded-lg text-sm"
               title="Filter export by period"
             />
-
-            {/* Upload & Extract */}
             <button
               onClick={() => setShowUpload(true)}
               className="flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-600 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <Sparkles size={14} /> Upload &amp; Extract
             </button>
-
-            {/* Export All Excel */}
             <button
-              onClick={handleExportAll}
-              disabled={exporting}
+              onClick={() => handleExport('excel')}
+              disabled={exporting !== ''}
               className="flex items-center gap-1.5 px-3 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <FileSpreadsheet size={14} />
-              {exporting ? 'Exporting…' : 'Download Excel'}
+              {exporting === 'excel' ? 'Exporting…' : 'Download Excel'}
             </button>
-
-            {/* Export All PDF */}
             <button
-              onClick={handleExportPdf}
-              disabled={exportingPdf}
+              onClick={() => handleExport('pdf')}
+              disabled={exporting !== ''}
               className="flex items-center gap-1.5 px-3 py-2 bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <FileText size={14} />
-              {exportingPdf ? 'Generating…' : 'Download PDF'}
+              {exporting === 'pdf' ? 'Generating…' : 'Download PDF'}
             </button>
-
-            {/* Google Sheets */}
             <button
               onClick={() => setShowSheets(true)}
               className="flex items-center gap-1.5 px-3 py-2 bg-green-800 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors"
@@ -557,17 +527,13 @@ export default function IndiaPurchaseInvoices() {
             >
               <Sheet size={14} /> Sheets
             </button>
-
-            {/* Seed demo */}
             <button
               onClick={handleSeedDemo}
               disabled={seeding}
               className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 text-sm font-medium rounded-lg transition-colors"
-              title="Seed 5 demo invoices"
             >
               {seeding ? '…' : '🎯 Demo Data'}
             </button>
-
             <button onClick={load} className="p-2 bg-gray-700 hover:bg-gray-600 rounded-lg">
               <RefreshCw size={14} />
             </button>
@@ -611,7 +577,7 @@ export default function IndiaPurchaseInvoices() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-700 bg-gray-800/80">
-                {['Invoice #', 'Date', 'Vendor', 'Supply', 'Taxable', 'CGST', 'SGST', 'IGST', 'ITC Eligible', 'Total', 'Status', ''].map(h => (
+                {['Invoice #', 'Date', 'Vendor', 'Supply', 'Taxable', 'CGST', 'SGST', 'IGST', 'GST Total', 'ITC Eligible', 'TDS', 'Total', 'Status', ''].map(h => (
                   <th key={h} className="px-3 py-3 text-left text-xs text-gray-400 font-semibold whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -620,14 +586,14 @@ export default function IndiaPurchaseInvoices() {
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="border-b border-gray-700/50">
-                    {Array.from({ length: 12 }).map((_, j) => (
+                    {Array.from({ length: 14 }).map((_, j) => (
                       <td key={j} className="px-3 py-3"><div className="h-3 bg-gray-700 rounded animate-pulse" /></td>
                     ))}
                   </tr>
                 ))
               ) : invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="px-4 py-12 text-center text-gray-500 text-sm">
+                  <td colSpan={14} className="px-4 py-12 text-center text-gray-500 text-sm">
                     No purchase invoices yet.{' '}
                     <button onClick={() => setShowUpload(true)} className="text-purple-400 hover:text-purple-300 underline">
                       Upload one with Claude AI
@@ -641,22 +607,28 @@ export default function IndiaPurchaseInvoices() {
               ) : (
                 invoices.map(inv => (
                   <tr key={inv.id} className="border-b border-gray-700/30 hover:bg-gray-700/20 transition-colors">
-                    <td className="px-3 py-3 font-mono text-xs text-gray-300">{inv.invoice_number}</td>
+                    <td className="px-3 py-3 font-mono text-xs text-orange-400">{inv.invoice_number}</td>
                     <td className="px-3 py-3 text-xs text-gray-400 whitespace-nowrap">{inv.invoice_date}</td>
-                    <td className="px-3 py-3 text-xs text-gray-300 max-w-[140px] truncate">{inv.vendor_id}</td>
+                    <td className="px-3 py-3 text-xs text-gray-300 max-w-[120px] truncate">{inv.vendor_id}</td>
                     <td className="px-3 py-3 text-xs">
-                      <span className={`px-2 py-0.5 rounded-full border text-xs ${inv.supply_type === 'inter' ? 'border-indigo-700 text-indigo-400' : 'border-cyan-700 text-cyan-400'}`}>
+                      <span className={`px-2 py-0.5 rounded-full border text-xs ${inv.supply_type === 'inter' ? 'border-blue-700 text-blue-400' : 'border-purple-700 text-purple-400'}`}>
                         {inv.supply_type === 'inter' ? 'Inter' : 'Intra'}
                       </span>
                     </td>
                     <td className="px-3 py-3 text-right text-xs text-white font-medium">{INR(inv.subtotal)}</td>
-                    <td className="px-3 py-3 text-right text-xs text-blue-400">{INR(inv.cgst_amount)}</td>
-                    <td className="px-3 py-3 text-right text-xs text-cyan-400">{INR(inv.sgst_amount)}</td>
-                    <td className="px-3 py-3 text-right text-xs text-indigo-400">{INR(inv.igst_amount)}</td>
-                    <td className="px-3 py-3 text-center text-xs">
-                      <span className={`px-2 py-0.5 rounded-full border ${inv.itc_eligible ? 'border-emerald-700 text-emerald-400' : 'border-red-800 text-red-400'}`}>
-                        {inv.itc_eligible ? 'Yes' : 'No'}
-                      </span>
+                    <td className="px-3 py-3 text-right text-xs text-purple-300">{INR(inv.cgst_amount)}</td>
+                    <td className="px-3 py-3 text-right text-xs text-purple-300">{INR(inv.sgst_amount)}</td>
+                    <td className="px-3 py-3 text-right text-xs text-blue-300">{INR(inv.igst_amount)}</td>
+                    <td className="px-3 py-3 text-right text-xs text-purple-200 font-medium">
+                      {INR(inv.cgst_amount + inv.sgst_amount + inv.igst_amount)}
+                    </td>
+                    <td className="px-3 py-3 text-right text-xs">
+                      {inv.itc_eligible
+                        ? <span className="text-emerald-400">{INR(inv.itc_claimed)}</span>
+                        : <span className="text-gray-600">Blocked</span>}
+                    </td>
+                    <td className="px-3 py-3 text-right text-xs text-red-400">
+                      {inv.tds_deducted > 0 ? INR(inv.tds_deducted) : '—'}
                     </td>
                     <td className="px-3 py-3 text-right text-xs text-white font-bold">{INR(inv.total_amount)}</td>
                     <td className="px-3 py-3 text-center">
@@ -671,7 +643,7 @@ export default function IndiaPurchaseInvoices() {
                           disabled={posting === inv.id}
                           className="text-xs px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg whitespace-nowrap"
                         >
-                          {posting === inv.id ? '…' : 'Post'}
+                          {posting === inv.id ? '…' : 'Post+ITC'}
                         </button>
                       )}
                     </td>
@@ -679,23 +651,24 @@ export default function IndiaPurchaseInvoices() {
                 ))
               )}
             </tbody>
+            {!loading && invoices.length > 0 && (
+              <tfoot>
+                <tr className="border-t-2 border-gray-600 bg-gray-800/80 font-semibold">
+                  <td className="px-3 py-3 text-xs text-gray-300" colSpan={4}>TOTAL</td>
+                  <td className="px-3 py-3 text-right text-white text-xs">{INR(totalTaxable)}</td>
+                  <td className="px-3 py-3 text-right text-purple-300 text-xs">{INR(totalCGST)}</td>
+                  <td className="px-3 py-3 text-right text-purple-300 text-xs">{INR(totalSGST)}</td>
+                  <td className="px-3 py-3 text-right text-blue-300 text-xs">{INR(totalIGST)}</td>
+                  <td className="px-3 py-3 text-right text-purple-200 text-xs">{INR(totalGST)}</td>
+                  <td className="px-3 py-3 text-right text-emerald-400 text-xs">{INR(totalITC)}</td>
+                  <td className="px-3 py-3 text-right text-red-400 text-xs">{INR(totalTDS)}</td>
+                  <td className="px-3 py-3 text-right text-white text-xs">{INR(totalValue)}</td>
+                  <td className="px-3 py-3" colSpan={2} />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
-
-        {/* Footer: count + quick export */}
-        {invoices.length > 0 && (
-          <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-            <span>{invoices.length} invoice{invoices.length !== 1 ? 's' : ''}</span>
-            <button
-              onClick={handleExportAll}
-              disabled={exporting}
-              className="flex items-center gap-1 text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
-            >
-              <Download size={12} />
-              {exporting ? 'Exporting…' : 'Export to Excel'}
-            </button>
-          </div>
-        )}
       </div>
     </>
   );
