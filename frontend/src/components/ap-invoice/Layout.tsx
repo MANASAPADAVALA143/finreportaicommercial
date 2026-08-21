@@ -57,6 +57,7 @@ import {
 import { signOut } from '@/lib/ap-invoice/authService';
 import { clearInsightCache, countCriticalStrategicInsights } from '@/lib/ap-invoice/strategicAdvisorService';
 import { useMarket } from '@/contexts/MarketContext';
+import { pinIndiaSuiteMarket, pinUaeSuiteMarket } from '@/config/productRole';
 
 type NavItem = {
   name: string;
@@ -139,7 +140,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       // ignore — navigate regardless
     }
     clearCompanyCache();
-    navigate('/login', { replace: true });
+    navigate('/', { replace: true });
   };
 
   return (
@@ -341,7 +342,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex shrink-0 items-center gap-0.5 rounded-lg border p-0.5">
             <button
               type="button"
-              onClick={() => void setMarket('india')}
+              onClick={() => {
+                pinIndiaSuiteMarket();
+                void setMarket('india');
+              }}
               className={cn(
                 'rounded-md px-2 py-1 text-[10px] font-semibold transition-colors',
                 market === 'india' ? 'bg-[#1D9E75] text-white' : 'text-gray-600',
@@ -351,7 +355,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </button>
             <button
               type="button"
-              onClick={() => void setMarket('uae')}
+              onClick={() => {
+                pinUaeSuiteMarket();
+                void setMarket('uae');
+              }}
               className={cn(
                 'rounded-md px-2 py-1 text-[10px] font-semibold transition-colors',
                 market === 'uae' ? 'bg-[#378ADD] text-white' : 'text-gray-600',
@@ -407,7 +414,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-1 rounded-lg border p-0.5">
             <button
               type="button"
-              onClick={() => void setMarket('india')}
+              onClick={() => {
+                pinIndiaSuiteMarket();
+                void setMarket('india');
+              }}
               title="India mode — GST, GSTIN, INR"
               className={cn(
                 'rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
@@ -418,7 +428,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </button>
             <button
               type="button"
-              onClick={() => void setMarket('uae')}
+              onClick={() => {
+                pinUaeSuiteMarket();
+                void setMarket('uae');
+              }}
               title="UAE mode — VAT, TRN, AED"
               className={cn(
                 'rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',

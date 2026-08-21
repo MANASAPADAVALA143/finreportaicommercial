@@ -178,14 +178,14 @@ function findPOHeaderRowIndex(sheet: XLSX.WorkSheet): number {
 
 export function PurchaseOrders() {
   const { toast } = useToast();
-  const { baseCurrency: settingsCurrency, settings } = useCompanySettings();
+  const { baseCurrency: settingsCurrency } = useCompanySettings();
   const { config, isUAE, market } = useMarket();
   const baseCurrency = useMemo(() => {
+    // Market toggle wins — India always INR, UAE always AED
     if (isUAE || market === 'uae') return 'AED';
-    const country = (settings?.country ?? '').toUpperCase();
-    if (country === 'AE' || country === 'UAE' || settingsCurrency === 'AED') return 'AED';
-    return settingsCurrency ?? config.currency ?? 'AED';
-  }, [isUAE, market, settings?.country, settingsCurrency, config.currency]);
+    if (market === 'india') return 'INR';
+    return settingsCurrency ?? config.currency ?? 'INR';
+  }, [isUAE, market, settingsCurrency, config.currency]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [filteredPOs, setFilteredPOs] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
