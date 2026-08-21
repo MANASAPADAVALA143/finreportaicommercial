@@ -57,7 +57,6 @@ import {
 import { signOut } from '@/lib/ap-invoice/authService';
 import { clearInsightCache, countCriticalStrategicInsights } from '@/lib/ap-invoice/strategicAdvisorService';
 import { useMarket } from '@/contexts/MarketContext';
-import { pinIndiaSuiteMarket, pinUaeSuiteMarket } from '@/config/productRole';
 
 type NavItem = {
   name: string;
@@ -343,7 +342,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => {
-                pinIndiaSuiteMarket();
                 void setMarket('india');
               }}
               className={cn(
@@ -356,7 +354,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => {
-                pinUaeSuiteMarket();
                 void setMarket('uae');
               }}
               className={cn(
@@ -415,7 +412,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => {
-                pinIndiaSuiteMarket();
                 void setMarket('india');
               }}
               title="India mode — GST, GSTIN, INR"
@@ -429,7 +425,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={() => {
-                pinUaeSuiteMarket();
                 void setMarket('uae');
               }}
               title="UAE mode — VAT, TRN, AED"

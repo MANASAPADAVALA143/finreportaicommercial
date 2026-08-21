@@ -17,11 +17,10 @@ import PrivateRoute from './components/PrivateRoute';
 import WorkspaceGuard from './components/WorkspaceGuard';
 import RoleRoute from './components/RoleRoute';
 import { useAuth } from './context/AuthContext';
-import { canAccessPath, homePathForRole } from './config/productRole';
+import { canAccessPath } from './config/productRole';
 import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
-import { LandingPage } from './components/landing/LandingPage';
 import GulfTaxLayout from './pages/gulftax/GulfTaxLayout';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
@@ -552,21 +551,19 @@ function AutoSwitchOnly() {
 }
 
 function RootRedirect() {
-  const { isAuthenticated, accessToken, bootstrapping, productRole, user } = useAuth();
-
-  if (bootstrapping) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <p className="text-slate-400 text-sm">Loading session…</p>
-      </div>
-    );
+  // Login temporarily disabled — open AP directly (India if no market saved yet)
+  try {
+    const saved = localStorage.getItem('finreportai_ap_market');
+    if (saved !== 'uae' && saved !== 'india') {
+      localStorage.setItem('finreportai_ap_market', 'india');
+      localStorage.setItem('gnanova_suite', 'india');
+      localStorage.setItem('finreportai_market_user_set', '1');
+      window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'india' }));
+    }
+  } catch {
+    /* ignore */
   }
-
-  if (!isAuthenticated || !accessToken) {
-    return <LandingPage />;
-  }
-
-  return <Navigate to={homePathForRole(productRole, user?.role)} replace />;
+  return <Navigate to="/ap-invoices" replace />;
 }
 
 function App() {

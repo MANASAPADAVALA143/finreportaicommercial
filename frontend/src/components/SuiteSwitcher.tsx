@@ -1,6 +1,7 @@
 import { useSuite } from '../context/SuiteContext';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useMarket } from '../contexts/MarketContext';
 import { visibleSuiteIds } from '../config/productRole';
 import {
   Tooltip,
@@ -15,7 +16,7 @@ const SUITES = [
     flag: '🇮🇳',
     color: '#FF9933',
     subtitle: 'GST · TDS · Payroll · Ind AS',
-    defaultPath: '/india-full',
+    defaultPath: '/ap-invoices',
   },
   {
     id: 'uae' as const,
@@ -23,7 +24,7 @@ const SUITES = [
     flag: '🇦🇪',
     color: '#0D9488',
     subtitle: 'VAT · CT · EOSB · IFRS',
-    defaultPath: '/dashboard',
+    defaultPath: '/ap-invoices',
   },
   {
     id: 'fpa' as const,
@@ -37,6 +38,7 @@ const SUITES = [
 
 export function SuiteSwitcher({ collapsed = false }: { collapsed?: boolean }) {
   const { activeSuite, setSuite } = useSuite();
+  const { setMarket } = useMarket();
   const { productRole } = useAuth();
   const navigate = useNavigate();
 
@@ -45,6 +47,9 @@ export function SuiteSwitcher({ collapsed = false }: { collapsed?: boolean }) {
 
   const handleSwitch = (suite: (typeof SUITES)[0]) => {
     setSuite(suite.id);
+    if (suite.id === 'india' || suite.id === 'uae') {
+      void setMarket(suite.id);
+    }
     navigate(suite.defaultPath);
   };
 

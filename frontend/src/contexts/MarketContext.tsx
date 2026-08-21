@@ -132,8 +132,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
   async function setMarket(newMarket: Market) {
     setMarketState(newMarket);
-    if (newMarket === 'india') pinIndiaSuiteMarket();
-    else pinUaeSuiteMarket();
+    // force=true so toggling India↔UAE always wins over a prior choice
+    if (newMarket === 'india') pinIndiaSuiteMarket(true);
+    else pinUaeSuiteMarket(true);
     persistMarketSelection(newMarket);
     markMarketAsUserChosen();
     try {

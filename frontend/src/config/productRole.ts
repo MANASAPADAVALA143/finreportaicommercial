@@ -100,7 +100,7 @@ export function markMarketAsUserChosen(): void {
   }
 }
 
-function isMarketUserChosen(): boolean {
+export function isMarketUserChosen(): boolean {
   try {
     return localStorage.getItem(USER_SET_MARKET_KEY) === '1';
   } catch {
@@ -108,8 +108,9 @@ function isMarketUserChosen(): boolean {
   }
 }
 
-export function pinUaeSuiteMarket(): void {
-  if (isMarketUserChosen()) return;
+/** @param force — user toggle / setMarket must pass true so a prior choice can switch India↔UAE */
+export function pinUaeSuiteMarket(force = false): void {
+  if (!force && isMarketUserChosen()) return;
   try {
     localStorage.setItem('gnanova_suite', 'uae');
     localStorage.setItem('finreportai_ap_market', 'uae');
@@ -120,8 +121,8 @@ export function pinUaeSuiteMarket(): void {
 }
 
 /** Pin India suite + AP InvoiceFlow India market (GST / INR). */
-export function pinIndiaSuiteMarket(): void {
-  if (isMarketUserChosen()) return;
+export function pinIndiaSuiteMarket(force = false): void {
+  if (!force && isMarketUserChosen()) return;
   try {
     localStorage.setItem('gnanova_suite', 'india');
     localStorage.setItem('finreportai_ap_market', 'india');

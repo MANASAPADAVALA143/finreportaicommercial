@@ -1,6 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useMarket } from '@/contexts/MarketContext';
-import { pinIndiaSuiteMarket, pinUaeSuiteMarket } from '@/config/productRole';
 
 /** Global India / UAE market toggle — opens AP InvoiceFlow in that market (INR+GST / AED+VAT). */
 export function MarketToggle({ compact = false }: { compact?: boolean }) {
@@ -9,11 +8,9 @@ export function MarketToggle({ compact = false }: { compact?: boolean }) {
   const location = useLocation();
 
   const pick = (next: 'india' | 'uae') => {
-    if (next === 'india') pinIndiaSuiteMarket();
-    else pinUaeSuiteMarket();
+    // setMarket force-pins + marks user-chosen so /dashboard cannot snap back to UAE
     void setMarket(next);
 
-    // Open AP for the selected market (same entry for India and UAE)
     const onAp = location.pathname === '/ap-invoices' || location.pathname.startsWith('/ap-invoices/');
     const onAuthOrLanding =
       location.pathname === '/' ||
