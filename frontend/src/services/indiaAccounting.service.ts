@@ -240,17 +240,6 @@ async function downloadBlob(path: string, filename: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-export const downloadPurchaseInvoicesExcel = () =>
-  downloadBlob('/purchase-invoices/export/excel', 'india_ap_invoices.xlsx');
-
-export const downloadPurchaseInvoicesPdf = (companyName?: string, period?: string) => {
-  const params = new URLSearchParams();
-  if (companyName) params.set('company_name', companyName);
-  if (period) params.set('period', period);
-  const q = params.toString();
-  return downloadBlob(`/purchase-invoices/export/pdf${q ? `?${q}` : ''}`, 'india_ap_invoices.pdf');
-};
-
 // ── TDS ───────────────────────────────────────────────────────────────────
 
 export const listTDS = (params?: { period?: string; section?: string }) =>
