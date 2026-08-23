@@ -2,7 +2,6 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/ap-invoice/supabase';
 import { useMarket } from '../../contexts/MarketContext';
-import { createPurchaseInvoiceFromOcr } from '../../services/indiaAccounting.service';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
 import { calculateAdvanceVat } from '../../lib/ap-invoice/uaeVatService';
 import { scanInvoiceAnomalies } from '../../lib/ap-invoice/anomalyService';
@@ -713,57 +712,11 @@ export function InvoiceUpload() {
   };
 
   /**
-   * India GST purchase invoices go to the dedicated india_purchase_invoices table
-   * (with a real CGST/SGST/IGST split) instead of the generic Supabase `invoices`
-   * table used by UAE VAT AP InvoiceFlow. Kept as an early return so the UAE path
-   * below is completely untouched.
+   * Called when user clicks "Save to invoice list" in the scan review modal.
+   * All markets (UAE and India) save to the same Invoice List — one consolidated
+   * list per entity, regardless of upload method (Scan, Single, Bulk, Multiple PDFs).
    */
-  const handleSaveIndiaGstInvoice = async (values: NormalizedExtractedInvoice) => {
-    setSavingFromScan(true);
-    try {
-      const taxableAmount =
-        values.taxable_amount ?? values.net_amount ?? Math.max(0, values.total_amount - (values.tax_amount || 0));
-      const result = await createPurchaseInvoiceFromOcr({
-        vendor_name: values.vendor_name.trim() || 'Unknown Vendor',
-        vendor_gstin: values.gstin || null,
-        buyer_gstin: values.customer_gstin || null,
-        invoice_number: values.invoice_number.trim() || `SCAN-${Date.now()}`,
-        invoice_date: values.invoice_date.slice(0, 10),
-        due_date: values.due_date ? values.due_date.slice(0, 10) : null,
-        taxable_amount: taxableAmount,
-        cgst_amount: values.cgst_amount,
-        sgst_amount: values.sgst_amount,
-        igst_amount: values.igst_amount,
-        tax_amount: values.tax_amount,
-        total_amount: values.total_amount || null,
-        hsn_sac: values.hsn_sac || null,
-        payment_terms: values.payment_terms || null,
-      });
-      toast({
-        title: 'âœ… GST invoice saved',
-        description: `${result.invoice_number} saved to India Purchase Invoices (${result.supply_type === 'intra' ? 'CGST+SGST' : 'IGST'}).`,
-      });
-      setScanPreviewOpen(false);
-      setScanPreviewData(null);
-      setScanPreviewLineItems([]);
-      setScanPreviewFile(null);
-      setScanVatTreatment('review_required');
-    } catch (err) {
-      toast({
-        title: 'Save failed',
-        description: err instanceof Error ? err.message : String(err),
-        variant: 'destructive',
-      });
-    } finally {
-      setSavingFromScan(false);
-    }
-  };
-
-  /** Called when user clicks "Save to invoice list" in the scan review modal */
   const handleSaveFromScanPreview = async (values: NormalizedExtractedInvoice, vatTreatment?: string) => {
-    if (!isUAE) {
-      return handleSaveIndiaGstInvoice(values);
-    }
     setSavingFromScan(true);
     try {
       const companyId = await resolveApCompanyId();
