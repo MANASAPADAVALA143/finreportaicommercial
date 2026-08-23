@@ -2229,9 +2229,27 @@ export function InvoiceUpload() {
 
           const taxRate = invoiceData.tax_rate ? Number(invoiceData.tax_rate) : 0;
           const taxType = invoiceData.tax_type || 'None';
-          const subtotalAmount = lineItemsTotal;
-          const taxAmount = taxType !== 'None' && taxRate > 0 ? (subtotalAmount * taxRate) / 100 : 0;
-          const totalAmount = subtotalAmount + taxAmount;
+          // India GST OCR returns cgst_amount/sgst_amount/igst_amount + tax_amount/total_amount
+          // directly (no tax_rate/tax_type) — prefer those extracted values over recomputing
+          // from a rate that the GST prompt never sets, which previously zeroed out GST entirely.
+          const cgstAmount = Number(invoiceData.cgst_amount) || 0;
+          const sgstAmount = Number(invoiceData.sgst_amount) || 0;
+          const igstAmount = Number(invoiceData.igst_amount) || 0;
+          const extractedTaxAmount = Number(invoiceData.tax_amount) || (cgstAmount + sgstAmount + igstAmount);
+          const extractedTotalAmount = Number(invoiceData.total_amount) || 0;
+          const hasGstSplit = cgstAmount > 0 || sgstAmount > 0 || igstAmount > 0;
+
+          const subtotalAmount =
+            hasGstSplit || extractedTaxAmount > 0
+              ? Number(invoiceData.taxable_amount) || Math.max(0, extractedTotalAmount - extractedTaxAmount) || lineItemsTotal
+              : lineItemsTotal;
+          const taxAmount =
+            hasGstSplit || extractedTaxAmount > 0
+              ? extractedTaxAmount
+              : taxType !== 'None' && taxRate > 0
+                ? (subtotalAmount * taxRate) / 100
+                : 0;
+          const totalAmount = extractedTotalAmount > 0 ? extractedTotalAmount : subtotalAmount + taxAmount;
 
           const approvalLevel = getRequiredApprovalLevel(totalAmount);
           const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
@@ -2264,11 +2282,17 @@ export function InvoiceUpload() {
             vendor_phone: invoiceData.vendor_phone || null,
             vendor_address: invoiceData.vendor_address || null,
             subtotal_amount: subtotalAmount,
+            taxable_amount: subtotalAmount,
             tax_type: taxType,
             tax_rate: taxType !== 'None' ? taxRate : 0,
             tax_amount: taxAmount,
+            cgst_amount: cgstAmount || null,
+            sgst_amount: sgstAmount || null,
+            igst_amount: igstAmount || null,
+            vendor_gstin: invoiceData.vendor_gstin || invoiceData.gstin || null,
+            hsn_sac: invoiceData.hsn_sac || null,
             total_amount: totalAmount,
-            currency: invoiceData.currency || 'USD',
+            currency: invoiceData.currency || 'INR',
             status: initialStatus,
             file_url: `queue-${item.file.name}`,
             file_type: item.file.type,
