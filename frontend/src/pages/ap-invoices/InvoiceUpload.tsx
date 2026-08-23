@@ -1579,6 +1579,13 @@ export function InvoiceUpload() {
             vat_treatment: rowNorm.vat_treatment ? String(rowNorm.vat_treatment).trim() : null,
             // India GST fields
             gstin: rowNorm.gstin ? String(rowNorm.gstin).trim() : null,
+            buyer_gstin: rowNorm.buyer_gstin ? String(rowNorm.buyer_gstin).trim() : null,
+            hsn_sac: rowNorm.hsn_sac ? String(rowNorm.hsn_sac).trim() : null,
+            taxable_value: rowNorm.taxable_value ? parseAmount(rowNorm.taxable_value) : null,
+            cgst_amount: rowNorm.cgst_amount ? parseAmount(rowNorm.cgst_amount) : null,
+            sgst_amount: rowNorm.sgst_amount ? parseAmount(rowNorm.sgst_amount) : null,
+            igst_amount: rowNorm.igst_amount ? parseAmount(rowNorm.igst_amount) : null,
+            total_tax: rowNorm.total_tax ? parseAmount(rowNorm.total_tax) : null,
           };
           parsedData.push(parsedRow);
         }
@@ -1788,7 +1795,15 @@ export function InvoiceUpload() {
             ...(invoiceData.vat_rate ? { vat_rate: parseAmount(invoiceData.vat_rate) } : {}),
             ...(invoiceData.vat_treatment ? { vat_treatment: String(invoiceData.vat_treatment) } : {}),
             ...gulfTaxFields,
-            ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
+            ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin), vendor_gstin: String(invoiceData.gstin) } : {}),
+            ...(invoiceData.hsn_sac ? { hsn_sac: String(invoiceData.hsn_sac) } : {}),
+            ...(invoiceData.taxable_value ? { taxable_amount: invoiceData.taxable_value } : {}),
+            ...(invoiceData.cgst_amount ? { cgst_amount: invoiceData.cgst_amount } : {}),
+            ...(invoiceData.sgst_amount ? { sgst_amount: invoiceData.sgst_amount } : {}),
+            ...(invoiceData.igst_amount ? { igst_amount: invoiceData.igst_amount } : {}),
+            ...(invoiceData.total_tax
+              ? { tax_amount: invoiceData.total_tax, tax_type: 'GST' }
+              : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
             ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number).trim() } : {}),
             ...(invoiceData.gl_code
