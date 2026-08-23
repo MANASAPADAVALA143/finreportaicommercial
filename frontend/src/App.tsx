@@ -553,7 +553,11 @@ function AutoSwitchOnly() {
 }
 
 function RootRedirect() {
-  // Login temporarily disabled — open AP directly (India if no market saved yet)
+  const { isAuthenticated, bootstrapping } = useAuth();
+
+  if (bootstrapping) return <RouteFallback />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+
   try {
     const saved = localStorage.getItem('finreportai_ap_market');
     if (saved !== 'uae' && saved !== 'india') {
