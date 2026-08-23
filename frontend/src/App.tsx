@@ -236,6 +236,8 @@ function namedLazy<T extends ComponentType<object>>(
 const Dashboard = safeLazy(() =>
   import('./components/dashboard/Dashboard').then((m) => ({ default: m.Dashboard }))
 );
+const LoginPage = safeLazy(() => import('./pages/Login'));
+const RegisterPage = safeLazy(() => import('./pages/Register'));
 const R2RModule = safeLazy(() =>
   import('./components/r2r/R2RModule').then((m) => ({ default: m.R2RModule }))
 );
@@ -587,12 +589,11 @@ function App() {
             <Routes>
               <Route path="/" element={<RootRedirect />} />
               <Route path="/get-demo" element={<GetDemoPage />} />
-              {/* Login temporarily disabled — reopen these routes later */}
-              <Route path="/login" element={<Navigate to="/ap-invoices" replace />} />
+              <Route path="/login" element={<LoginPage />} />
               <Route path="/real-estate" element={<RealEstateLanding />} />
-              <Route path="/register" element={<Navigate to="/ap-invoices" replace />} />
-              <Route path="/forgot-password" element={<Navigate to="/ap-invoices" replace />} />
-              <Route path="/reset-password" element={<Navigate to="/ap-invoices" replace />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route path="/forgot-password" element={<Navigate to="/login" replace />} />
+              <Route path="/reset-password" element={<Navigate to="/login" replace />} />
               <Route element={<PrivateRoute />}>
                 <Route element={<WorkspaceGuard />}>
                 <Route element={<RoleRoute />}>
