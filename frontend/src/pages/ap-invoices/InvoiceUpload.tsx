@@ -109,6 +109,7 @@ export function InvoiceUpload() {
   const { toast } = useToast();
   const { baseCurrency } = useCompanySettings();
   const { isUAE, config } = useMarket();
+  const marketCurrency = isUAE ? 'AED' : (config.currency || 'INR');
 
   const resolveApCompanyId = async (): Promise<string> => {
     return resolveApSupabaseCompanyId(accessToken);
@@ -141,7 +142,7 @@ export function InvoiceUpload() {
     vendor_phone: '',
     vendor_address: '',
     total_amount: '',
-    currency: 'USD',
+    currency: marketCurrency,
     taxCode: 'NONE',
     tax_type: 'None' as 'None' | 'VAT' | 'GST' | 'Sales Tax' | 'Withholding Tax',
     tax_rate: '',
@@ -152,6 +153,13 @@ export function InvoiceUpload() {
   const [lineItems, setLineItems] = useState<LineItem[]>([
     { id: '1', description: '', quantity: 1, unit_price: 0, total: 0 },
   ]);
+
+  // Keep form currency aligned with India/UAE market toggle
+  useEffect(() => {
+    setFormData((prev) =>
+      prev.currency === marketCurrency ? prev : { ...prev, currency: marketCurrency },
+    );
+  }, [marketCurrency]);
 
   // IFRS Classification data from n8n extraction
   const [ifrsData, setIfrsData] = useState<{
@@ -466,7 +474,10 @@ export function InvoiceUpload() {
       formPayload.append('market', isUAE ? 'uae' : 'india');
 
       console.log('ðŸ“¤ Calling Anthropic proxy:', proxyUrl);
-      const response = await fetch(proxyUrl, { method: 'POST', body: formPayload });
+      const headers: Record<string, string> = {};
+      const token = getStoredAccessToken() || accessToken;
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(proxyUrl, { method: 'POST', headers, body: formPayload });
 
       if (!response.ok) {
         const errText = await response.text();
@@ -875,7 +886,7 @@ export function InvoiceUpload() {
       vendor_phone: '',
       vendor_address: '',
       total_amount: '',
-      currency: baseCurrency || 'USD',
+      currency: baseCurrency || marketCurrency,
       taxCode: 'NONE',
       tax_type: 'None',
       tax_rate: '',
@@ -1276,7 +1287,7 @@ export function InvoiceUpload() {
           vendor_phone: '',
           vendor_address: '',
           total_amount: '',
-          currency: baseCurrency || 'USD',
+          currency: baseCurrency || marketCurrency,
           taxCode: 'NONE',
           tax_type: 'None',
           tax_rate: '',
@@ -1471,7 +1482,7 @@ export function InvoiceUpload() {
         vendor_phone: '+1-555-1234',
         vendor_address: '123 Main St, City, State 12345',
         total_amount: '1250.00',
-        currency: 'USD',
+        currency: marketCurrency,
         description: 'Office Supplies - Paper, Pens, Staplers',
       },
       {
@@ -1483,7 +1494,7 @@ export function InvoiceUpload() {
         vendor_phone: '+1-555-5678',
         vendor_address: '456 Tech Ave, City, State 54321',
         total_amount: '3500.00',
-        currency: 'USD',
+        currency: marketCurrency,
         description: 'Software License - Annual Subscription',
       },
     ];
@@ -2149,16 +2160,13 @@ export function InvoiceUpload() {
     const url = invoiceFlowAgentUrl('/api/agent/extract-image');
     const payload = new FormData();
     payload.append('file', file, file.name);
+    payload.append('market', isUAE ? 'uae' : 'india');
 
-    const _token = getStoredAccessToken();
-    // Pass market so backend uses GST prompt for India invoices
-    const _storedMarket = (() => { try { return localStorage.getItem('finreportai_ap_market') || 'uae'; } catch { return 'uae'; } })();
-    payload.append('market', _storedMarket);
-    const response = await fetch(url, {
-      method: 'POST',
-      body: payload,
-      headers: _token ? { Authorization: `Bearer ${_token}` } : undefined,
-    });
+    const headers: Record<string, string> = {};
+    const token = getStoredAccessToken() || accessToken;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetch(url, { method: 'POST', headers, body: payload });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -2956,7 +2964,7 @@ export function InvoiceUpload() {
                       vendor_phone: '',
                       vendor_address: '',
                       total_amount: '',
-                      currency: baseCurrency || 'USD',
+                      currency: baseCurrency || marketCurrency,
                       taxCode: 'NONE',
                       tax_type: 'None',
                       tax_rate: '',

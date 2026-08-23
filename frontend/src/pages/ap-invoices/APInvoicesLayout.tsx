@@ -145,7 +145,7 @@ function ApWorkspaceSync() {
 }
 
 function APInvoicesLayoutInner() {
-  const { isUAE } = useMarket();
+  const { isUAE, config } = useMarket();
   const { apLabel, costCenterLabel } = useIndustryConfig();
   return (
     /* 36px = GnanovaBanner height; min-h-0 lets flex children scroll */
@@ -156,17 +156,23 @@ function APInvoicesLayoutInner() {
         {/* Brand — pinned top */}
         <div className="shrink-0 px-4 py-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${isUAE ? 'bg-blue-600' : 'bg-orange-600'}`}>
               <FileText className="w-4 h-4" />
             </div>
             <div>
               <p className="text-sm font-bold text-white leading-tight">InvoiceFlow</p>
-              <p className="text-[10px] text-slate-500">{apLabel}</p>
+              <p className="text-[10px] text-slate-500">
+                {isUAE ? 'UAE · AED · VAT' : 'India · INR · GST'} · {apLabel}
+              </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full bg-green-900 text-green-300 border border-green-800 font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            Live · InvoiceFlow
+          <span className={`inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+            isUAE
+              ? 'bg-blue-900 text-blue-200 border-blue-800'
+              : 'bg-orange-900 text-orange-200 border-orange-800'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isUAE ? 'bg-blue-400' : 'bg-orange-400'}`} />
+            {isUAE ? `🇦🇪 UAE · ${config.currency}` : `🇮🇳 India · ${config.currency} · GST`}
           </span>
           <MarketToggleSidebar />
         </div>

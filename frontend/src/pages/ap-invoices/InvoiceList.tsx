@@ -1479,13 +1479,14 @@ export function InvoiceList() {
                 <div key={label} className="flex flex-1 min-w-[4.5rem] items-start">
                   <div className="flex flex-col items-center flex-1 min-w-0">
                     <div
-                      className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 border-2 ${
+                      className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 border-2 ${
                         isCompleted
-                          ? 'bg-green-500 border-green-600 text-white'
+                          ? 'bg-emerald-100 border-emerald-600'
                           : isCurrent
-                            ? 'bg-[#1a56db] border-[#1a56db] text-white'
-                            : 'bg-white border-gray-300 text-gray-700'
+                            ? 'bg-[#1a56db] border-[#1a56db]'
+                            : 'bg-white border-gray-300'
                       }`}
+                      style={{ color: isCurrent ? '#ffffff' : isCompleted ? '#047857' : '#1f2937' }}
                     >
                       {step}
                     </div>

@@ -19,21 +19,18 @@ export function WorkspaceSelector() {
 
   if (!isAuthenticated) {
     return (
-      <button
-        type="button"
-        onClick={() => navigate('/login', { state: { from: window.location.pathname } })}
+      <span
         style={{
-          background: 'rgba(255,255,255,0.1)',
-          border: '1px solid rgba(255,255,255,0.2)',
+          background: 'rgba(255,153,51,0.15)',
+          border: '1px solid rgba(255,153,51,0.35)',
           borderRadius: 6,
           padding: '4px 10px',
-          color: '#93c5fd',
+          color: '#fdba74',
           fontSize: 12,
-          cursor: 'pointer',
         }}
       >
-        Log in to select workspace
-      </button>
+        Guest · India/UAE AP (login later)
+      </span>
     );
   }
 

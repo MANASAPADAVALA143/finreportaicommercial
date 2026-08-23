@@ -17,11 +17,10 @@ import PrivateRoute from './components/PrivateRoute';
 import WorkspaceGuard from './components/WorkspaceGuard';
 import RoleRoute from './components/RoleRoute';
 import { useAuth } from './context/AuthContext';
-import { canAccessPath, homePathForRole } from './config/productRole';
+import { canAccessPath } from './config/productRole';
 import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
-import { LandingPage } from './components/landing/LandingPage';
 import GulfTaxLayout from './pages/gulftax/GulfTaxLayout';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
@@ -46,7 +45,7 @@ function GnanovaBanner() {
     try {
       await logout();
     } finally {
-      navigate('/login', { replace: true });
+      navigate('/', { replace: true });
     }
   };
 
@@ -256,11 +255,12 @@ const MonthEndClose = safeLazy(() => import('./pages/MonthEndClose'));
 const EarningsReviewer = safeLazy(() => import('./pages/EarningsReviewer'));
 const GLReconciler = safeLazy(() => import('./pages/GLReconciler'));
 const ModelBuilder = safeLazy(() => import('./pages/ModelBuilder'));
-const Login = safeLazy(() => import('./pages/Login'));
+// Login temporarily disabled — keep imports commented for restore later
+// const Login = safeLazy(() => import('./pages/Login'));
+// const Register = safeLazy(() => import('./pages/Register'));
+// const ForgotPassword = safeLazy(() => import('./pages/ForgotPassword'));
+// const ResetPassword = safeLazy(() => import('./pages/ResetPassword'));
 const RealEstateLanding = safeLazy(() => import('./pages/RealEstateLanding'));
-const Register = safeLazy(() => import('./pages/Register'));
-const ForgotPassword = safeLazy(() => import('./pages/ForgotPassword'));
-const ResetPassword = safeLazy(() => import('./pages/ResetPassword'));
 const Unauthorized = safeLazy(() => import('./pages/Unauthorized'));
 const UserManagement = safeLazy(() => import('./pages/UserManagement'));
 const NovaAssistant = safeLazy(() =>
@@ -551,21 +551,19 @@ function AutoSwitchOnly() {
 }
 
 function RootRedirect() {
-  const { isAuthenticated, accessToken, bootstrapping, productRole, user } = useAuth();
-
-  if (bootstrapping) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <p className="text-slate-400 text-sm">Loading session…</p>
-      </div>
-    );
+  // Login temporarily disabled — open AP directly (India if no market saved yet)
+  try {
+    const saved = localStorage.getItem('finreportai_ap_market');
+    if (saved !== 'uae' && saved !== 'india') {
+      localStorage.setItem('finreportai_ap_market', 'india');
+      localStorage.setItem('gnanova_suite', 'india');
+      localStorage.setItem('finreportai_market_user_set', '1');
+      window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'india' }));
+    }
+  } catch {
+    /* ignore */
   }
-
-  if (!isAuthenticated || !accessToken) {
-    return <LandingPage />;
-  }
-
-  return <Navigate to={homePathForRole(productRole, user?.role)} replace />;
+  return <Navigate to="/ap-invoices" replace />;
 }
 
 function App() {
@@ -589,11 +587,12 @@ function App() {
             <Routes>
               <Route path="/" element={<RootRedirect />} />
               <Route path="/get-demo" element={<GetDemoPage />} />
-              <Route path="/login" element={<Login />} />
+              {/* Login temporarily disabled — reopen these routes later */}
+              <Route path="/login" element={<Navigate to="/ap-invoices" replace />} />
               <Route path="/real-estate" element={<RealEstateLanding />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route path="/register" element={<Navigate to="/ap-invoices" replace />} />
+              <Route path="/forgot-password" element={<Navigate to="/ap-invoices" replace />} />
+              <Route path="/reset-password" element={<Navigate to="/ap-invoices" replace />} />
               <Route element={<PrivateRoute />}>
                 <Route element={<WorkspaceGuard />}>
                 <Route element={<RoleRoute />}>

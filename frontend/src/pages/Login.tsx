@@ -5,7 +5,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
 import type { Market } from '../lib/ap-invoice/marketConfig';
-import { loginRedirectFor, normalizeProductRole, pinUaeSuiteMarket, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
+import { loginRedirectFor, normalizeProductRole, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
 
 /** Never resume the old module-picker after login. */
 function normalizePostLoginPath(path: string | undefined): string | undefined {
@@ -17,13 +17,13 @@ function normalizePostLoginPath(path: string | undefined): string | undefined {
 function resolvePostLoginPath(
   from: string | undefined,
   productRole: ProductRole,
-  isUAE: boolean,
+  market: Market,
 ): string {
-  const uaeLanding = isUaeProductRole(productRole) || (productRole === 'full_access' && isUAE);
-  if (uaeLanding || isUAE) pinUaeSuiteMarket();
   const resume = normalizePostLoginPath(from);
   if (resume) return resume;
-  if (uaeLanding || (productRole === 'full_access' && isUAE)) return uaeHubPath();
+  // Always land on AP for the market chosen on the login screen
+  if (market === 'india' || market === 'uae') return '/ap-invoices';
+  if (isUaeProductRole(productRole)) return uaeHubPath();
   return loginRedirectFor(productRole);
 }
 
@@ -56,7 +56,7 @@ export default function Login() {
       const loggedIn = await login(email, password);
       const from = (location.state as { from?: string } | null)?.from;
       const role = normalizeProductRole(loggedIn.product_role);
-      nav(resolvePostLoginPath(from, role, country === 'uae'), { replace: true });
+      nav(resolvePostLoginPath(from, role, country), { replace: true });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       try {
