@@ -171,6 +171,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
     scheduleRefresh(j.access_token);
+
+    // The backend RBAC login above authenticates against FastAPI only. Direct
+    // supabase.from(...).insert() calls elsewhere (invoice save, GRN import, etc.)
+    // go through the Supabase JS client, which RLS blocks unless that client also
+    // holds a real Supabase session — so mirror the same credentials into Supabase
+    // auth. Non-fatal: some accounts may only exist on the RBAC backend.
+    if (isSupabaseConfigured) {
+      supabase.auth.signInWithPassword({ email, password }).catch((e) => {
+        console.warn('[Auth] Supabase session mirror failed (RLS-protected writes may fail):', e);
+      });
+    }
+
     return loggedIn;
   }, [base, scheduleRefresh]);
 
