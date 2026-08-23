@@ -120,30 +120,18 @@ def _media_type(filename: str, content_type: str | None) -> str:
 
 
 async def _extract_with_claude(data: bytes, media_type: str, prompt: str) -> dict[str, Any]:
-    import boto3
-    import json
+    import anthropic
 
-    region = os.getenv("AWS_BEDROCK_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
-    # Bedrock model ID for Claude Sonnet via AWS Bedrock
-    model_id = os.getenv(
-        "BEDROCK_MODEL_ID",
-        "us.anthropic.claude-sonnet-4-5-20251001-v1:0",
-    )
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("no_api_key")
 
     b64 = base64.standard_b64encode(data).decode("ascii")
-
-    bedrock = boto3.client(
-        "bedrock-runtime",
-        region_name=region,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        aws_session_token=os.getenv("AWS_SESSION_TOKEN"),  # optional, for temp creds
-    )
-
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1200,
-        "messages": [
+    client = anthropic.Anthropic(api_key=key)
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1200,
+        messages=[
             {
                 "role": "user",
                 "content": [
@@ -155,19 +143,11 @@ async def _extract_with_claude(data: bytes, media_type: str, prompt: str) -> dic
                 ],
             }
         ],
-    })
-
-    response = bedrock.invoke_model(
-        modelId=model_id,
-        contentType="application/json",
-        accept="application/json",
-        body=body,
     )
-    result = json.loads(response["body"].read())
-    raw = result["content"][0]["text"]
+    raw = response.content[0].text
     parsed = parse_llm_json_dict(raw)
     if not parsed:
-        raise ValueError("Could not parse extraction JSON from Bedrock model")
+        raise ValueError("Could not parse extraction JSON from model")
     return parsed
 
 
