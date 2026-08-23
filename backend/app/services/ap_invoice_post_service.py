@@ -890,19 +890,31 @@ def _mark_supabase_invoice_approved(invoice_id: str) -> dict[str, Any]:
     status = (inv.get("status") or "").strip()
     if status == "Approved":
         return {"ok": True, "already_approved": True}
-    res = (
-        sb.table("invoices")
-        .update(
-            {
-                "status": "Approved",
-                "approval_status": "approved",
-                "approved_at": now,
-                "updated_at": now,
-            }
+    try:
+        res = (
+            sb.table("invoices")
+            .update(
+                {
+                    "status": "Approved",
+                    "approval_status": "approved",
+                    "approved_at": now,
+                    "updated_at": now,
+                }
+            )
+            .eq("id", invoice_id)
+            .execute()
         )
-        .eq("id", invoice_id)
-        .execute()
-    )
+    except Exception as exc:
+        # A missing approval_status column raises (PGRST204) rather than
+        # returning empty data — catch it too, not just the empty-data case.
+        if "approval_status" not in str(exc):
+            raise
+        res = (
+            sb.table("invoices")
+            .update({"status": "Approved", "approved_at": now, "updated_at": now})
+            .eq("id", invoice_id)
+            .execute()
+        )
     if not (res.data or []):
         # Some schemas omit approval_status — retry without it
         res = (
@@ -949,8 +961,13 @@ def bulk_approve_ap_invoices(
                 payload.company_id = company_id
             cid = (payload.company_id or company_id or "").strip()
 
+            # GulfTax = UAE VAT reporting; India GST invoices have their own
+            # module (india_purchase_invoices / GSTR) and must not be synced
+            # into GulfTax's AED VAT-return boxes.
+            is_uae_invoice = str(inv.get("currency") or "AED").strip().upper() == "AED"
+
             # GulfTax first via shared helper (same path as single approve) — count accurately
-            if cid:
+            if cid and is_uae_invoice:
                 from app.services.gulftax_sync_service import sync_ap_invoice_gulftax_after_approve
 
                 sync_res = sync_ap_invoice_gulftax_after_approve(
@@ -965,11 +982,15 @@ def bulk_approve_ap_invoices(
                     gulftax_skipped += 1
                 elif not sync_res.get("ok"):
                     gulftax_errors += 1
-            else:
+            elif not cid:
                 gulftax_errors += 1
+            # else: India (non-AED) invoice — correctly skipped, not an error.
 
             # GL post (idempotent; gulftax sync inside is a no-op skip if already done)
-            post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
+            # UAE-only: posts VAT-treatment journal entries + GulfTax boxes that don't
+            # apply to India GST invoices, which have their own posting path.
+            if is_uae_invoice:
+                post_invoice_to_gl_and_tax(payload, tenant_id=tenant_id, db=db)
         except Exception as exc:
             logger.exception("Bulk approve failed for invoice %s", invoice_id)
             failed.append({"invoice_id": invoice_id, "error": str(exc)[:300]})
