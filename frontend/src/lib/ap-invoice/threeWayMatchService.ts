@@ -1405,7 +1405,6 @@ function rowToMaster(r: Record<string, unknown>): GRNImportRow | null {
     'GRN Amount',
     'GRN Total',
     'Total Receipt',
-    'Net Amount',
     'Grand Total',
     'Total Value',
     'Total (INR)',
@@ -1415,7 +1414,11 @@ function rowToMaster(r: Record<string, unknown>): GRNImportRow | null {
     'total_amount',
     'Total Amount',
     'Total',
-    'Amount'
+    'Amount',
+    // Pre-tax fallback only — a GST invoice's total includes tax, so a "Net Amount"
+    // (taxable value before GST) column must lose to any tax-inclusive total above,
+    // or the match compares pre-tax GRN vs post-tax invoice and false-fails.
+    'Net Amount'
   );
   let received_total = parseImportNumber(totalRaw);
   if (!Number.isFinite(received_total) || received_total <= 0) received_total = 0;
