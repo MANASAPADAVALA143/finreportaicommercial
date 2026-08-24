@@ -318,9 +318,20 @@ export async function updateInvoiceGstFields(
   invoiceId: string,
   patch: Partial<Pick<Invoice, 'gstin' | 'gst_amount' | 'cgst' | 'sgst' | 'igst'>>
 ): Promise<void> {
+  // This table has two parallel sets of GST columns from earlier schema drift
+  // (cgst/sgst/igst/gst_amount vs cgst_amount/sgst_amount/igst_amount/tax_amount).
+  // Write both so every reader — this modal, the queue upload, bulk Excel import,
+  // India Purchase Invoices — sees the same values regardless of which set it reads.
+  const mirrored: Record<string, unknown> = { ...patch };
+  if (patch.cgst !== undefined) mirrored.cgst_amount = patch.cgst;
+  if (patch.sgst !== undefined) mirrored.sgst_amount = patch.sgst;
+  if (patch.igst !== undefined) mirrored.igst_amount = patch.igst;
+  if (patch.gst_amount !== undefined) mirrored.tax_amount = patch.gst_amount;
+  if (patch.gstin !== undefined) mirrored.vendor_gstin = patch.gstin;
+
   const { error } = await supabase
     .from('invoices')
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...mirrored, updated_at: new Date().toISOString() })
     .eq('id', invoiceId);
   if (error) throw error;
 }

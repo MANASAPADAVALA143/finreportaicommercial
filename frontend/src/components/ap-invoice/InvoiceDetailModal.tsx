@@ -3134,7 +3134,7 @@ export function InvoiceDetailModal({
                               <Label>Supplier GSTIN (on invoice)</Label>
                               <Input
                                 className="font-mono text-sm"
-                                value={editedInvoice.gstin ?? ''}
+                                value={editedInvoice.gstin ?? (editedInvoice as unknown as { vendor_gstin?: string }).vendor_gstin ?? ''}
                                 onChange={(e) => setEditedInvoice({ ...editedInvoice, gstin: e.target.value })}
                                 placeholder="15-character GSTIN"
                               />
@@ -3144,7 +3144,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.cgst ?? ''}
+                                value={editedInvoice.cgst ?? (editedInvoice as unknown as { cgst_amount?: number }).cgst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, cgst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3155,7 +3155,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.sgst ?? ''}
+                                value={editedInvoice.sgst ?? (editedInvoice as unknown as { sgst_amount?: number }).sgst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, sgst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3166,7 +3166,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.igst ?? ''}
+                                value={editedInvoice.igst ?? (editedInvoice as unknown as { igst_amount?: number }).igst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, igst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3177,7 +3177,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.gst_amount ?? ''}
+                                value={editedInvoice.gst_amount ?? editedInvoice.tax_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, gst_amount: parseFloat(e.target.value) || 0 })
                                 }
