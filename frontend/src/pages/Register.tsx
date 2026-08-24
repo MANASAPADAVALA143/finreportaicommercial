@@ -24,7 +24,10 @@ export default function Register() {
     setLoading(true);
     try {
       await register({ company_name: companyName, name, email, password });
-      nav('/dashboard', { replace: true });
+      // New accounts go through the full company setup wizard (industry, profile,
+      // chart of accounts, opening balances, controls, users) before the dashboard —
+      // previously this skipped straight to /dashboard with none of that configured.
+      nav('/company-setup', { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
