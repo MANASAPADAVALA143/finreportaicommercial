@@ -668,7 +668,16 @@ export function InvoiceList() {
       toast({ title: r.seeded > 0 ? 'GST demo invoices seeded' : 'Already seeded', description: r.message });
       await fetchInvoices();
     } catch (e) {
-      toast({ title: 'Seed failed', description: e instanceof Error ? e.message : String(e), variant: 'destructive' });
+      // Supabase errors are plain objects, not Error instances — String(e) on
+      // those yields the useless literal "[object Object]". Pull the real
+      // message/details out instead.
+      const raw = e as { message?: string; details?: string; hint?: string; code?: string } | Error | undefined;
+      const msg =
+        e instanceof Error
+          ? e.message
+          : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('Seed GST demo invoices failed:', e);
+      toast({ title: 'Seed failed', description: msg, variant: 'destructive' });
     } finally {
       setSeedingGst(false);
     }
@@ -1216,17 +1225,38 @@ export function InvoiceList() {
 
   async function exportExcel(invList: Invoice[]) {
     // Sheet 1 — Invoices summary
+    // Every field the OCR extraction/import can populate — not just the
+    // summary columns — so the export reflects "whatever was on the PDF",
+    // matching the client's raw-data requirement, not just the app's own
+    // workflow-tracking fields.
     const headers = [
-      'Invoice #', 'Vendor', 'Date', 'Due Date', 'Amount', 'Currency', 'Status',
+      'Invoice #', 'Vendor', 'Vendor Email', 'Vendor Phone', 'Vendor Address',
+      'Vendor GSTIN', 'Buyer GSTIN', 'HSN/SAC', 'Place of Supply', 'Supply Type', 'Reverse Charge',
+      'Date', 'Due Date', 'Taxable Amount', 'CGST', 'SGST', 'IGST',
+      'Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
+      'TDS Section', 'TDS Amount',
       'Department', 'Property', 'Project Code', 'Match Status', 'Risk Score',
-      'Approval Level', 'Approved By', 'Payment Status',
+      'Approval Level', 'Approved By', 'Payment Status', 'Description', 'Source',
     ];
     const rows = invList.map((inv) => [
       inv.invoice_number,
       inv.vendor_name,
+      inv.vendor_email || '',
+      inv.vendor_phone || '',
+      inv.vendor_address || '',
+      inv.vendor_gstin || inv.gstin || '',
+      (inv as unknown as { buyer_gstin?: string }).buyer_gstin || '',
+      inv.hsn_sac || (inv as unknown as { hsn_sac_code?: string }).hsn_sac_code || '',
+      (inv as unknown as { place_of_supply?: string }).place_of_supply || '',
+      (inv as unknown as { supply_type?: string }).supply_type || '',
+      inv.reverse_charge ? 'Yes' : '',
       displayDate(inv.invoice_date, dateFormat),
       displayDate(inv.due_date, dateFormat),
+      (inv as unknown as { taxable_amount?: number }).taxable_amount ?? inv.subtotal_amount ?? '',
+      inv.cgst ?? (inv as unknown as { cgst_amount?: number }).cgst_amount ?? '',
+      inv.sgst ?? (inv as unknown as { sgst_amount?: number }).sgst_amount ?? '',
+      inv.igst ?? (inv as unknown as { igst_amount?: number }).igst_amount ?? '',
       inv.total_amount,
       inv.currency,
       inv.status,
@@ -1235,6 +1265,8 @@ export function InvoiceList() {
       inv.ifrs_category || '',
       inv.tax_type || '',
       inv.tax_amount || 0,
+      inv.tds_section || '',
+      inv.tds_amount ?? '',
       inv.department || '',
       effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) || inv.cost_center || '',
       inv.project_code || '',
@@ -1243,6 +1275,8 @@ export function InvoiceList() {
       inv.approval_level || '',
       inv.approved_by || '',
       inv.payment_status || '',
+      (inv as unknown as { description?: string }).description || '',
+      inv.source || '',
     ]);
     const ws1 = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     // Auto-width columns
