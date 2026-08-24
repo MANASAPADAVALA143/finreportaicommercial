@@ -163,12 +163,15 @@ export async function runGstReconciliation(
 /** Invoices in period with GST amount — all recon statuses (for GST Recon table). */
 export async function getGstReconInvoices(period: string): Promise<Invoice[]> {
   const { start, end } = periodToDateRange(period);
+  // gst_amount (legacy) and tax_amount (canonical, used by queue/bulk-Excel/seed
+  // imports) both hold the same value depending on which import path wrote the
+  // row — check both so imported invoices actually show up here.
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
     .gte('invoice_date', start)
     .lte('invoice_date', end)
-    .gt('gst_amount', 0)
+    .or('gst_amount.gt.0,tax_amount.gt.0')
     .order('invoice_date', { ascending: false });
   if (error) throw error;
   return (data || []) as Invoice[];
@@ -194,21 +197,22 @@ export async function getGstReconSummary(period: string): Promise<{
   const { data, error } = await supabase
     .from('invoices')
     .select(
-      'gst_recon_status, gst_amount, gstin, reverse_charge, hsn_sac_code, ifrs_category, description, tds_amount'
+      'gst_recon_status, gst_amount, tax_amount, gstin, vendor_gstin, reverse_charge, hsn_sac_code, ifrs_category, description, tds_amount'
     )
     .gte('invoice_date', start)
     .lte('invoice_date', end);
   if (error) throw error;
   const rows = data ?? [];
-  const withTax = rows.filter((r) => Number(r.gst_amount || 0) > 0);
+  const withTax = rows.filter((r) => Number(r.gst_amount || r.tax_amount || 0) > 0);
   let itcEligible = 0;
   let itcBlocked = 0;
   let tdsPayable = 0;
   let missingGstin = 0;
   for (const r of rows) {
-    const gst = Number(r.gst_amount || 0);
+    const gst = Number(r.gst_amount || r.tax_amount || 0);
+    const gstin = String(r.gstin || r.vendor_gstin || '').trim();
     tdsPayable += Number(r.tds_amount || 0);
-    if (!String(r.gstin || '').trim() && gst > 0) missingGstin += 1;
+    if (!gstin && gst > 0) missingGstin += 1;
     if (gst <= 0) continue;
     if (isItcBlocked(r)) itcBlocked += gst;
     else itcEligible += gst;
