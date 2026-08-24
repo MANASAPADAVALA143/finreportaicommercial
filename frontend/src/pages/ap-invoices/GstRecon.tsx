@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import type { Invoice } from '../../lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -232,9 +233,67 @@ export function GstRecon() {
     }
   }
 
+  /** Map arbitrary GSTR-2B Excel/CSV headers to the snake_case keys parseGstr2bJson expects. */
+  function normalizeGstr2bExcelRow(row: Record<string, unknown>): Record<string, unknown> {
+    const alias: Record<string, string> = {
+      gstin: 'supplier_gstin',
+      supplier_gstin: 'supplier_gstin',
+      'trade name': 'supplier_name',
+      tradename: 'supplier_name',
+      supplier_name: 'supplier_name',
+      'invoice number': 'invoice_number',
+      invoiceno: 'invoice_number',
+      invoice_number: 'invoice_number',
+      'invoice date': 'invoice_date',
+      invoicedate: 'invoice_date',
+      invoice_date: 'invoice_date',
+      'taxable value': 'taxable_value',
+      taxablevalue: 'taxable_value',
+      taxable_value: 'taxable_value',
+      igst: 'igst',
+      cgst: 'cgst',
+      sgst: 'sgst',
+    };
+    const out: Record<string, unknown> = {};
+    for (const [rawKey, value] of Object.entries(row)) {
+      const key = String(rawKey || '').trim().toLowerCase();
+      const mapped = alias[key];
+      if (mapped) out[mapped] = value;
+    }
+    return out;
+  }
+
   function onFileIndia(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    const name = f.name.toLowerCase();
+    const isExcel = name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv');
+
+    if (isExcel) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = reader.result as ArrayBuffer;
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
+          const normalized = rows.map(normalizeGstr2bExcelRow);
+          setFileJson(normalized);
+          const parsed = parseGstr2bJson(normalized, uploadGstin.trim() || companyGstin.trim(), uploadPeriod);
+          setPreviewCount(parsed.length);
+          if (parsed.length === 0) {
+            toast({ title: 'No entries parsed', description: 'Columns not recognized — expected GSTIN, Trade Name, Invoice Number, Invoice Date, Taxable Value, IGST, CGST, SGST.', variant: 'destructive' });
+          }
+        } catch (err) {
+          setFileJson(null);
+          setPreviewCount(0);
+          toast({ title: 'Invalid Excel/CSV file', description: err instanceof Error ? err.message : String(err), variant: 'destructive' });
+        }
+      };
+      reader.readAsArrayBuffer(f);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -623,7 +682,7 @@ export function GstRecon() {
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{isUAE ? 'Upload FTA VAT Return (CSV)' : 'Upload GSTR-2B JSON'}</DialogTitle>
+            <DialogTitle>{isUAE ? 'Upload FTA VAT Return (CSV)' : 'Upload GSTR-2B (JSON or Excel/CSV)'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-2">
@@ -647,10 +706,10 @@ export function GstRecon() {
               )}
             </div>
             <div className="space-y-2">
-              <Label>{isUAE ? 'CSV file' : 'JSON file'}</Label>
+              <Label>{isUAE ? 'CSV file' : 'JSON, Excel (.xlsx), or CSV file'}</Label>
               <Input
                 type="file"
-                accept={isUAE ? '.csv,text/csv' : '.json,application/json'}
+                accept={isUAE ? '.csv,text/csv' : '.json,application/json,.xlsx,.xls,.csv'}
                 onChange={isUAE ? onFileUae : onFileIndia}
               />
             </div>
