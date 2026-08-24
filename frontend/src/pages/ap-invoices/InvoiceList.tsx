@@ -758,7 +758,9 @@ export function InvoiceList() {
     }
     if (
       !window.confirm(
-        `Approve ${selected.length} selected invoice(s) and sync to GulfTax / VAT Return?`,
+        isUAE
+          ? `Approve ${selected.length} selected invoice(s) and sync to GulfTax / VAT Return?`
+          : `Approve ${selected.length} selected invoice(s)?`,
       )
     ) {
       return;
@@ -780,9 +782,11 @@ export function InvoiceList() {
       setSelectedIds([]);
       toast({
         title: 'Bulk approve complete',
-        description: `${result.approved_count} approved · ${result.gulftax_synced} synced to GulfTax${
-          result.gulftax_skipped ? ` · ${result.gulftax_skipped} already synced` : ''
-        }${result.gulftax_errors ? ` · ${result.gulftax_errors} sync errors` : ''}${
+        description: `${result.approved_count} approved${
+          isUAE ? ` · ${result.gulftax_synced} synced to GulfTax` : ''
+        }${
+          isUAE && result.gulftax_skipped ? ` · ${result.gulftax_skipped} already synced` : ''
+        }${isUAE && result.gulftax_errors ? ` · ${result.gulftax_errors} sync errors` : ''}${
           result.failed?.length ? ` · ${result.failed.length} failed` : ''
         }.`,
         variant: result.failed?.length ? 'destructive' : 'default',
