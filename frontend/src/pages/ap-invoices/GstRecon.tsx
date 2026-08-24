@@ -238,9 +238,13 @@ export function GstRecon() {
     const alias: Record<string, string> = {
       gstin: 'supplier_gstin',
       supplier_gstin: 'supplier_gstin',
+      'gstin of supplier': 'supplier_gstin',
+      'supplier gstin': 'supplier_gstin',
       'trade name': 'supplier_name',
       tradename: 'supplier_name',
       supplier_name: 'supplier_name',
+      'trade/legal name': 'supplier_name',
+      'legal name': 'supplier_name',
       'invoice number': 'invoice_number',
       invoiceno: 'invoice_number',
       invoice_number: 'invoice_number',
@@ -251,8 +255,13 @@ export function GstRecon() {
       taxablevalue: 'taxable_value',
       taxable_value: 'taxable_value',
       igst: 'igst',
+      'integrated tax': 'igst',
       cgst: 'cgst',
+      'central tax': 'cgst',
       sgst: 'sgst',
+      'state/ut tax': 'sgst',
+      'state tax': 'sgst',
+      'ut tax': 'sgst',
     };
     const out: Record<string, unknown> = {};
     for (const [rawKey, value] of Object.entries(row)) {
