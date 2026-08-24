@@ -356,7 +356,7 @@ export function GstRecon() {
             inv.vendor_name,
             inv.gstin ?? '',
             inv.invoice_date,
-            inv.gst_amount ?? 0,
+            inv.gst_amount ?? inv.tax_amount ?? 0,
             `Box ${box}`,
             st,
           ];
@@ -366,10 +366,10 @@ export function GstRecon() {
           inv.vendor_name,
           inv.gstin ?? '',
           inv.invoice_date,
-          inv.gst_amount ?? 0,
-          inv.cgst ?? 0,
-          inv.sgst ?? 0,
-          inv.igst ?? 0,
+          inv.gst_amount ?? inv.tax_amount ?? 0,
+          inv.cgst ?? (inv as unknown as { cgst_amount?: number }).cgst_amount ?? 0,
+          inv.sgst ?? (inv as unknown as { sgst_amount?: number }).sgst_amount ?? 0,
+          inv.igst ?? (inv as unknown as { igst_amount?: number }).igst_amount ?? 0,
           st,
         ];
       }).map((cols) => cols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
@@ -586,7 +586,7 @@ export function GstRecon() {
                           <TableCell>{inv.vendor_name}</TableCell>
                           <TableCell className="font-mono text-xs">{inv.gstin || '—'}</TableCell>
                           <TableCell>{displayDate(inv.invoice_date, dateFormat)}</TableCell>
-                          <TableCell>{formatCurrency(Number(inv.gst_amount ?? 0), inv.currency || currency)}</TableCell>
+                          <TableCell>{formatCurrency(Number(inv.gst_amount ?? inv.tax_amount ?? 0), inv.currency || currency)}</TableCell>
                           {isUAE && (
                             <TableCell className="text-xs text-gray-600">
                               Box {box}: {FTA_BOX_LABELS[box!].replace(/^Box \d+ — /, '')}
