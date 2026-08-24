@@ -963,8 +963,10 @@ def bulk_approve_ap_invoices(
 
             # GulfTax = UAE VAT reporting; India GST invoices have their own
             # module (india_purchase_invoices / GSTR) and must not be synced
-            # into GulfTax's AED VAT-return boxes.
-            is_uae_invoice = str(inv.get("currency") or "AED").strip().upper() == "AED"
+            # into GulfTax's AED VAT-return boxes. Default to NOT UAE when
+            # currency is missing/blank — assuming UAE by default previously
+            # let India rows with an unset currency field slip into GulfTax.
+            is_uae_invoice = str(inv.get("currency") or "").strip().upper() == "AED"
 
             # GulfTax first via shared helper (same path as single approve) — count accurately
             if cid and is_uae_invoice:

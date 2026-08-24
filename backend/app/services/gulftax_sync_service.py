@@ -492,6 +492,15 @@ def sync_ap_invoice_gulftax_after_approve(
     if not invoice_id or not company_id:
         return {"ok": False, "synced": False, "skipped": False, "error": "invoice_id and company_id required"}
 
+    # GulfTax is UAE VAT-only. India GST invoices have their own module and
+    # must never be synced into GulfTax's AED VAT-return boxes. Enforced here
+    # (not per call site) so no approve path — single, bulk, or PDF-auto-sync
+    # — can bypass it. Default to skip when currency is missing/blank.
+    inv_for_currency = _fetch_invoice(invoice_id)
+    currency = str((inv_for_currency or {}).get("currency") or "").strip().upper()
+    if currency != "AED":
+        return {"ok": True, "synced": False, "skipped": True, "reason": "not_uae_currency"}
+
     ws_id = (workspace_id or "").strip() or None
     sync_result = sync_approved_invoice_to_gulftax(
         invoice_id,
