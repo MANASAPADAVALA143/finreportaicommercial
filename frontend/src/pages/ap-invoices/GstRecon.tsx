@@ -361,7 +361,10 @@ export function GstRecon() {
       });
       await load(uploadPeriod);
     } catch (e) {
-      toast({ title: 'Upload failed', description: String(e), variant: 'destructive' });
+      const raw = e as { message?: string; details?: string; hint?: string } | Error | undefined;
+      const msg = e instanceof Error ? e.message : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('GST/VAT upload failed:', e);
+      toast({ title: 'Upload failed', description: msg, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -393,7 +396,10 @@ export function GstRecon() {
       });
       await load(uploadPeriod);
     } catch (e) {
-      toast({ title: 'Upload failed', description: String(e), variant: 'destructive' });
+      const raw = e as { message?: string; details?: string; hint?: string } | Error | undefined;
+      const msg = e instanceof Error ? e.message : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('GST/VAT upload failed:', e);
+      toast({ title: 'Upload failed', description: msg, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
