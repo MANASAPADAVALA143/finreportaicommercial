@@ -107,6 +107,8 @@ export type Invoice = {
   sgst?: number | null;
   igst?: number | null;
   gst_recon_status?: 'unmatched' | 'matched' | 'mismatch' | 'ignored' | null;
+  tds_amount?: number | null;
+  tds_section?: string | null;
   /** UAE FTA fields */
   vat_amount?: number | null;
   vat_rate?: number | null;

@@ -2,6 +2,68 @@ import { supabase } from './supabase';
 import { requireCompanyId } from './companyService';
 import type { Gstr2bEntry, Invoice } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
+import { joinApiUrl } from '@/utils/backendOrigin';
+
+// ── TDS Section (Sec 51 / Chapter XVII-B) ─────────────────────────────────
+//
+// A wrong TDS rate is a compliance liability, not a cosmetic bug — so this
+// never silently applies a section. It only *suggests* one from the invoice's
+// existing IFRS/expense category (itself AI-classified, so still a guess),
+// leaves it fully editable, and returns nothing when there's no confident
+// mapping. Real calculation happens server-side via india_tds_service.py's
+// TDS_SECTIONS table (POST /api/india/full/tds/calc) so the rate/threshold
+// logic lives in exactly one place.
+
+const IFRS_CATEGORY_TO_TDS_SECTION: Array<{ match: RegExp; section: string }> = [
+  { match: /professional|consulting|consultancy|legal|audit|technical/i, section: '194J' },
+  { match: /contractor|construction|installation|fabrication/i, section: '194C' },
+  { match: /rent|lease/i, section: '194I' },
+  { match: /commission|brokerage/i, section: '194H' },
+  { match: /interest/i, section: '194A' },
+  { match: /insurance/i, section: '194D' },
+];
+
+/** Suggest a TDS section from the invoice's IFRS category — or null if no confident match. */
+export function suggestTdsSection(ifrsCategory: string | null | undefined): string | null {
+  const cat = (ifrsCategory || '').trim();
+  if (!cat) return null;
+  const hit = IFRS_CATEGORY_TO_TDS_SECTION.find((m) => m.match.test(cat));
+  return hit ? hit.section : null;
+}
+
+export type TdsCalcResult = {
+  ok: boolean;
+  section?: string;
+  description?: string;
+  threshold?: number;
+  threshold_met?: boolean;
+  tds_rate?: number;
+  net_tds?: number;
+  applicable_tds?: number;
+  error?: string;
+};
+
+export async function calculateTds(section: string, taxableAmount: number): Promise<TdsCalcResult> {
+  const res = await fetch(joinApiUrl('/api/india/full/tds/calc'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ section, taxable_amount: taxableAmount, deductee_type: 'company' }),
+  });
+  if (!res.ok) return { ok: false, error: `Calculation failed (${res.status})` };
+  return (await res.json()) as TdsCalcResult;
+}
+
+export async function updateInvoiceTdsSection(
+  invoiceId: string,
+  section: string | null,
+  tdsAmount: number | null
+): Promise<void> {
+  const { error } = await supabase
+    .from('invoices')
+    .update({ tds_section: section, tds_amount: tdsAmount, updated_at: new Date().toISOString() })
+    .eq('id', invoiceId);
+  if (error) throw error;
+}
 
 export function periodToDateRange(period: string): { start: string; end: string } {
   const [y, m] = period.split('-').map((x) => parseInt(x, 10));

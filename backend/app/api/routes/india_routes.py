@@ -65,6 +65,40 @@ def tenant_header(x_tenant_id: str = Header(default="demo")) -> str:
     return x_tenant_id
 
 
+class TdsCalcIn(BaseModel):
+    section: str
+    taxable_amount: float
+    deductee_type: str = "company"
+
+
+@router.post("/tds/calc", summary="Stateless TDS calculation for a section + amount (no DB write)")
+def calc_tds_for_invoice(body: TdsCalcIn) -> dict[str, Any]:
+    """Used by the AP InvoiceFlow TDS Section dropdown — pure calculation,
+    not tied to a tenant/DB row, so any authenticated caller can use it to
+    preview the TDS a given section/amount would produce before saving."""
+    sec = TDS_SECTIONS.get(body.section)
+    if not sec:
+        return {"ok": False, "error": f"Unknown TDS section: {body.section}"}
+    threshold_met = body.taxable_amount >= sec["threshold"]
+    result = calc_tds(body.taxable_amount, body.section, body.deductee_type)
+    return {
+        "ok": True,
+        "section": body.section,
+        "description": sec["desc"],
+        "threshold": sec["threshold"],
+        "threshold_met": threshold_met,
+        **result,
+        # If below threshold, TDS isn't actually deductible yet — surface the
+        # calculated rate/amount for reference but flag it as not applicable.
+        "applicable_tds": result["net_tds"] if threshold_met else 0.0,
+    }
+
+
+@router.get("/tds/sections", summary="List TDS sections for the dropdown")
+def list_tds_sections() -> dict[str, Any]:
+    return {"sections": [{"code": k, **v} for k, v in TDS_SECTIONS.items()]}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CHART OF ACCOUNTS
 # ══════════════════════════════════════════════════════════════════════════════

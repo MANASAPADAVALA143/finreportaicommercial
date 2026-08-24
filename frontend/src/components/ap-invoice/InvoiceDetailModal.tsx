@@ -116,7 +116,23 @@ import {
   fetchGstr2bByMatchedInvoice,
   fetchGstr2bBySupplierAndInvoice,
   updateInvoiceGstFields,
+  suggestTdsSection,
+  calculateTds,
+  updateInvoiceTdsSection,
+  type TdsCalcResult,
 } from '@/lib/ap-invoice/gstService';
+
+const TDS_SECTION_OPTIONS = [
+  { value: '', label: 'None' },
+  { value: '194A', label: '194A — Interest' },
+  { value: '194C', label: '194C — Contractor' },
+  { value: '194D', label: '194D — Insurance commission' },
+  { value: '194H', label: '194H — Commission/brokerage' },
+  { value: '194I', label: '194I — Rent (land/building)' },
+  { value: '194I(a)', label: '194I(a) — Rent (plant/machinery)' },
+  { value: '194J', label: '194J — Professional/technical fees' },
+  { value: '194Q', label: '194Q — Purchase of goods' },
+];
 
 /** Same key as GST Recon page (localStorage). */
 const COMPANY_GSTIN_KEY = 'invoiceflow_company_gstin';
@@ -199,6 +215,11 @@ export function InvoiceDetailModal({
   const [queryMessage, setQueryMessage] = useState('');
   const [showHoldDialog, setShowHoldDialog] = useState(false);
   const [showQueryDialog, setShowQueryDialog] = useState(false);
+  // Suggested (not applied) from IFRS category — user must confirm/edit before it's saved.
+  const [tdsSection, setTdsSection] = useState<string>('');
+  const [tdsPreview, setTdsPreview] = useState<TdsCalcResult | null>(null);
+  const [tdsCalculating, setTdsCalculating] = useState(false);
+  const [tdsSuggested, setTdsSuggested] = useState(false);
   const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [selectedPoNumber, setSelectedPoNumber] = useState('');
@@ -306,10 +327,43 @@ export function InvoiceDetailModal({
       if (invoice.ifrs_category && !invoice.gl_code) {
         autoSuggestGLAccount(invoice.ifrs_category);
       }
+      // TDS Section: use what's already saved, otherwise suggest from IFRS
+      // category — but never silently apply it. The dropdown shows the
+      // suggestion pre-filled and editable; nothing is saved until the
+      // approver clicks Save GST fields.
+      const savedSection = (invoice.tds_section || '').trim();
+      if (savedSection) {
+        setTdsSection(savedSection);
+        setTdsSuggested(false);
+      } else {
+        const suggestion = suggestTdsSection(invoice.ifrs_category);
+        setTdsSection(suggestion || '');
+        setTdsSuggested(!!suggestion);
+      }
+      setTdsPreview(null);
     } else {
       autoPoMatchAttemptedKeyRef.current = null;
     }
   }, [open, invoice]);
+
+  useEffect(() => {
+    if (!open || !tdsSection) {
+      setTdsPreview(null);
+      return;
+    }
+    const amount = Number(editedInvoice.taxable_amount ?? editedInvoice.subtotal_amount ?? editedInvoice.total_amount ?? 0);
+    if (amount <= 0) {
+      setTdsPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setTdsCalculating(true);
+    calculateTds(tdsSection, amount)
+      .then((r) => { if (!cancelled) setTdsPreview(r); })
+      .catch(() => { if (!cancelled) setTdsPreview({ ok: false, error: 'Calculation failed' }); })
+      .finally(() => { if (!cancelled) setTdsCalculating(false); });
+    return () => { cancelled = true; };
+  }, [open, tdsSection, editedInvoice.taxable_amount, editedInvoice.subtotal_amount, editedInvoice.total_amount]);
 
   useEffect(() => {
     if (!open) return;
@@ -623,6 +677,11 @@ export function InvoiceDetailModal({
         sgst: Number(editedInvoice.sgst ?? 0),
         igst: Number(editedInvoice.igst ?? 0),
       });
+      // TDS only gets written when a section is actually set and the amount
+      // clears the threshold — otherwise clear it, never leave a stale number.
+      const tdsAmountToSave =
+        tdsSection && tdsPreview?.ok && tdsPreview.threshold_met ? tdsPreview.applicable_tds ?? null : null;
+      await updateInvoiceTdsSection(invoice.id, tdsSection || null, tdsAmountToSave ?? null);
       toast({ title: 'GST details saved' });
       onUpdate();
     } catch (error) {
@@ -3184,6 +3243,45 @@ export function InvoiceDetailModal({
                               />
                             </div>
                           </div>
+
+                          <div className="space-y-2 border-t pt-4 mt-2">
+                            <Label>TDS Section (Sec 51 / Chapter XVII-B)</Label>
+                            <select
+                              className="w-full border rounded-md px-3 py-2 text-sm"
+                              value={tdsSection}
+                              onChange={(e) => { setTdsSection(e.target.value); setTdsSuggested(false); }}
+                            >
+                              {TDS_SECTION_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                            {tdsSuggested && tdsSection && (
+                              <p className="text-xs text-blue-600">
+                                Suggested from IFRS category "{editedInvoice.ifrs_category}" — review before saving.
+                              </p>
+                            )}
+                            {tdsSection && (
+                              <div className="text-xs bg-gray-50 border rounded-lg p-3 space-y-1">
+                                {tdsCalculating ? (
+                                  <span className="text-gray-500">Calculating…</span>
+                                ) : tdsPreview?.ok ? (
+                                  tdsPreview.threshold_met ? (
+                                    <>
+                                      <div className="flex justify-between"><span className="text-gray-600">Rate</span><span className="font-mono">{tdsPreview.tds_rate}%</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-600">TDS (incl. cess)</span><span className="font-mono font-semibold">₹{tdsPreview.net_tds?.toFixed(2)}</span></div>
+                                    </>
+                                  ) : (
+                                    <span className="text-amber-700">
+                                      Below ₹{tdsPreview.threshold?.toLocaleString('en-IN')} threshold — no TDS applicable, nothing will be saved.
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="text-red-600">{tdsPreview?.error || 'Could not calculate'}</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
                           <Button type="button" className="bg-[#0A4B8F]" disabled={loading} onClick={() => void handleSaveGst()}>
                             <Save className="h-4 w-4 mr-2" />
                             Save GST fields
