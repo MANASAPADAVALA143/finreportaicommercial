@@ -414,7 +414,9 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
     if (!i.due_date) return false;
     const due = new Date(i.due_date);
     due.setHours(0, 0, 0, 0);
-    return due < today && (i.status === 'Approved' || normalizedOpenPaymentStatus(i) === 'overdue');
+    // "Overdue approved" means status === 'Approved', not just any overdue
+    // payment status — Processing invoices were previously counted here too.
+    return due < today && i.status === 'Approved';
   });
   if (overdueOpen.length > 0) {
     const overdueTotal = overdueOpen.reduce((s, i) => s + Number(i.total_amount ?? 0), 0);
@@ -607,7 +609,9 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     if (!i.due_date) return false;
     const due = new Date(i.due_date);
     due.setHours(0, 0, 0, 0);
-    return due < today && (i.status === 'Approved' || normalizedOpenPaymentStatus(i) === 'overdue');
+    // "Overdue approved" means status === 'Approved', not just any overdue
+    // payment status — Processing invoices were previously counted here too.
+    return due < today && i.status === 'Approved';
   });
   let overdueOldestDays = 0;
   for (const inv of overdueOpen) {

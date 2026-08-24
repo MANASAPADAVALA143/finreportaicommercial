@@ -104,7 +104,10 @@ export function Dashboard() {
     const currentYear = new Date().getFullYear();
     const acc: Record<string, { total: number; tax: number }> = {};
     invoices.forEach((inv) => {
-      const invDate = new Date(inv.created_at);
+      // Filter by the invoice's own date, not when the row was inserted —
+      // bulk imports/seed data all share today's created_at regardless of
+      // their real invoice_date spread, which made this card equal Total Open AP.
+      const invDate = new Date(inv.invoice_date || inv.created_at);
       if (invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear) {
         const c = (inv.currency || baseCurrencyDisplay).toUpperCase();
         if (!acc[c]) acc[c] = { total: 0, tax: 0 };
@@ -160,25 +163,22 @@ export function Dashboard() {
       if (!auditRes.error) setAuditLogs(auditRes.data || []);
 
       try {
-        if (companyId) {
-          const now = new Date();
-          const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-          const { data: mrRows } = await supabase
-            .from('match_results')
-            .select('match_status')
-            .eq('company_id', companyId)
-            .gte('created_at', start);
-          const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
-          for (const r of mrRows ?? []) {
-            acc.total += 1;
-            const s = String((r as { match_status?: string }).match_status || '');
-            if (s === 'full_match') acc.full += 1;
-            else if (s === 'partial_match') acc.partial += 1;
-            else if (s === 'amount_variance' || s === 'qty_variance' || s === 'failed') acc.variance += 1;
-            else if (s === 'no_po') acc.noPo += 1;
-          }
-          setMatchMonth(acc);
+        // Aggregate off invoices.match_status directly — the same field the
+        // Invoice List "3-Way Match" column displays — instead of the separate
+        // match_results audit table, which uses different raw engine status
+        // codes (full_match/amount_variance/etc.) that don't line up 1:1 with
+        // what's shown elsewhere, and previously folded "no_po" into "variance".
+        const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
+        for (const inv of invoiceData) {
+          const s = String(inv.match_status || '').toLowerCase();
+          if (!s) continue;
+          acc.total += 1;
+          if (s === 'three_way_matched' || s === 'matched') acc.full += 1;
+          else if (s === 'partial') acc.partial += 1;
+          else if (s === 'no_po') acc.noPo += 1;
+          else if (s === 'mismatch') acc.variance += 1;
         }
+        setMatchMonth(acc);
       } catch {
         setMatchMonth({ full: 0, partial: 0, variance: 0, noPo: 0, total: 0 });
       }
