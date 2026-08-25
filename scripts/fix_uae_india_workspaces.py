@@ -63,7 +63,7 @@ def fix_existing(token: str, ws_id: str, market: str) -> None:
     meta = MARKET_META[market]
     r = httpx.patch(
         f"{API_URL}/api/workspaces/{ws_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "X-Workspace-ID": ws_id},
         json={"country": meta["country"], "currency": meta["currency"]},
         timeout=30,
     )
