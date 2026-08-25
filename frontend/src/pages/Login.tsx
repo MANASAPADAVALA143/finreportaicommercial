@@ -32,8 +32,8 @@ export default function Login() {
   const location = useLocation();
   const { login } = useAuth();
   const { isUAE, setMarket } = useMarket();
-  const [email, setEmail] = useState('admin@gnanova.com');
-  const [password, setPassword] = useState('Admin@123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +122,7 @@ export default function Login() {
           </div>
         </label>
 
-        {error && <p className="text-sm text-white">{error}</p>}
+        {error && <p className="text-sm text-red-400">{error}</p>}
 
         <button disabled={loading} className="w-full rounded bg-blue-600 py-2 text-white font-medium hover:bg-blue-500 disabled:opacity-50" type="submit">
           {loading ? 'Signing in...' : 'Sign In'}
