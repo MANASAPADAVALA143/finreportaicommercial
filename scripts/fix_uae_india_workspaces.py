@@ -47,7 +47,7 @@ MARKET_META = {
 
 def login(email: str, password: str) -> str:
     r = httpx.post(f"{API_URL}/api/auth/login", json={"email": email, "password": password}, timeout=30)
-    if not r.ok:
+    if r.status_code >= 400:
         print(f"Login failed: {r.status_code} {r.text}")
         sys.exit(1)
     return r.json()["access_token"]
@@ -67,7 +67,7 @@ def fix_existing(token: str, ws_id: str, market: str) -> None:
         json={"country": meta["country"], "currency": meta["currency"]},
         timeout=30,
     )
-    if not r.ok:
+    if r.status_code >= 400:
         print(f"Failed to update existing workspace: {r.status_code} {r.text}")
         sys.exit(1)
     print(f"OK  corrected existing workspace -> country={meta['country']} currency={meta['currency']}")
@@ -86,7 +86,7 @@ def create_new(token: str, name: str, market: str) -> dict:
         },
         timeout=30,
     )
-    if not r.ok:
+    if r.status_code >= 400:
         print(f"Failed to create new workspace: {r.status_code} {r.text}")
         sys.exit(1)
     ws = r.json()["workspace"]
