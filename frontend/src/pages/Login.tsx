@@ -3,8 +3,6 @@ import { Eye, EyeOff } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { useAuth } from '../context/AuthContext';
-import { useMarket } from '../contexts/MarketContext';
-import type { Market } from '../lib/ap-invoice/marketConfig';
 import { loginRedirectFor, normalizeProductRole, isUaeProductRole, uaeHubPath, type ProductRole } from '../config/productRole';
 
 /** Never resume the old module-picker after login. */
@@ -14,15 +12,12 @@ function normalizePostLoginPath(path: string | undefined): string | undefined {
   return path;
 }
 
-function resolvePostLoginPath(
-  from: string | undefined,
-  productRole: ProductRole,
-  market: Market,
-): string {
+// UAE and India both live as permanent sections on the dashboard sidebar now
+// (see SuiteSidebar) — login no longer asks which market to land in, it just
+// goes to the dashboard and the user picks a section there.
+function resolvePostLoginPath(from: string | undefined, productRole: ProductRole): string {
   const resume = normalizePostLoginPath(from);
   if (resume) return resume;
-  // Always land on AP for the market chosen on the login screen
-  if (market === 'india' || market === 'uae') return '/ap-invoices';
   if (isUaeProductRole(productRole)) return uaeHubPath();
   return loginRedirectFor(productRole);
 }
@@ -31,32 +26,21 @@ export default function Login() {
   const nav = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
-  const { isUAE, setMarket } = useMarket();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Pre-select whatever the last session used, so returning users aren't
-  // reset to UAE every time.
-  const [country, setCountry] = useState<Market>(isUAE ? 'uae' : 'india');
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      // Persist the login-screen choice BEFORE calling login(): login()
-      // internally pins a market based on the account's product_role
-      // (pinUaeSuiteMarket / pinIndiaSuiteMarket in AuthContext), and that
-      // pin logic checks whether the user has already made an explicit
-      // choice this session — so the flag has to be set first, or the
-      // login-time auto-pin fires and silently reverts this selection.
-      await setMarket(country);
       const loggedIn = await login(email, password);
       const from = (location.state as { from?: string } | null)?.from;
       const role = normalizeProductRole(loggedIn.product_role);
-      nav(resolvePostLoginPath(from, role, country), { replace: true });
+      nav(resolvePostLoginPath(from, role), { replace: true });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       try {
@@ -76,35 +60,6 @@ export default function Login() {
         <div className="text-center">
           <h1 className="text-2xl font-bold text-white">FinReportAI</h1>
           <p className="text-slate-400 text-sm mt-1">Sign in to your workspace</p>
-        </div>
-
-        <div>
-          <span className="block text-sm text-slate-300 mb-1.5">Country</span>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setCountry('uae')}
-              className={`flex items-center justify-center gap-2 rounded border py-2 text-sm font-medium transition-colors ${
-                country === 'uae'
-                  ? 'border-blue-500 bg-blue-500/10 text-white'
-                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
-              }`}
-            >
-              🇦🇪 UAE
-            </button>
-            <button
-              type="button"
-              onClick={() => setCountry('india')}
-              className={`flex items-center justify-center gap-2 rounded border py-2 text-sm font-medium transition-colors ${
-                country === 'india'
-                  ? 'border-orange-500 bg-orange-500/10 text-white'
-                  : 'border-slate-700 bg-slate-950 text-slate-400 hover:border-slate-600'
-              }`}
-            >
-              🇮🇳 India
-            </button>
-          </div>
-          <p className="text-xs text-slate-500 mt-1.5">You can switch this anytime from the header after signing in.</p>
         </div>
 
         <label className="block text-sm text-slate-300">
