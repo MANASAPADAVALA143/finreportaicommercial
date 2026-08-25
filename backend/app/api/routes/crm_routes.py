@@ -548,23 +548,58 @@ def convert_quote_to_invoice(
     )
     result = create_invoice(payload, request, db)
 
+    invoice_id = result["invoice_id"]
+    invoice_number = result["invoice_number"]
+
+    # Ensure GL + GulfTax via the unified approve-and-post path (idempotent if create already posted).
+    # Do not override GulfTax HARD_BLOCK drafts — those stay draft for manual Approve & Post.
+    from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+
+    poster = (
+        request.headers.get("x-user-email")
+        or request.headers.get("X-User-Email")
+        or "system"
+    )
+    post_result: dict = {}
+    if result.get("posted") or result.get("gulftax_decision") != "HARD_BLOCK":
+        post_result = post_sales_invoice_to_gl_and_tax(
+            invoice_id,
+            tenant_id=ws,
+            company_id=cid,
+            db=db,
+            approved_by=poster,
+        )
+    else:
+        post_result = {
+            "ok": False,
+            "success": False,
+            "status": "draft",
+            "error": "hard_block_draft",
+        }
+
     quote.status = "Accepted"
-    quote.ar_invoice_id = result["invoice_id"]
+    quote.ar_invoice_id = invoice_id
     db.add(quote)
 
     if quote.deal_id:
         deal = db.query(CRMDeal).filter_by(id=quote.deal_id).first()
         if deal:
-            deal.ar_invoice_id = result["invoice_id"]
+            deal.ar_invoice_id = invoice_id
             deal.stage = "Won"
             deal.updated_at = datetime.utcnow()
             db.add(deal)
 
     db.commit()
+    posted = bool(post_result.get("ok") or post_result.get("success") or result.get("posted"))
     return {
-        "invoice_id": result["invoice_id"],
-        "invoice_number": result["invoice_number"],
+        "invoice_id": invoice_id,
+        "invoice_number": invoice_number,
         "total": result["total"],
+        "posted": posted,
+        "journal_entry_id": post_result.get("journal_entry_id") or post_result.get("je_id"),
+        "gulftax_transaction_id": post_result.get("gulftax_transaction_id"),
+        "status": post_result.get("status") or result.get("status"),
+        "deal_stage": "Won" if quote.deal_id else None,
     }
 
 

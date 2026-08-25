@@ -16,33 +16,31 @@ import { supabase } from '../../lib/ap-invoice/supabase';
 import { clearCompanyCache, TIER_PRESETS, type SubscriptionTier } from '../../lib/ap-invoice/companyService';
 import { useMarket } from '../../contexts/MarketContext';
 import type { Market } from '../../lib/ap-invoice/marketConfig';
-
-const INDUSTRIES = [
-  'Finance',
-  'Society',
-  'Hospital',
-  'Restaurant',
-  'School',
-  'Startup',
-  'Manufacturing',
-  'Other',
-];
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import {
+  INDUSTRY_CARDS,
+  INDUSTRY_PREVIEW,
+  type IndustryKey,
+} from '../../services/industryConfig.service';
 
 export function Onboarding() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { market, setMarket } = useMarket();
+  const { setIndustry: persistIndustry } = useIndustryConfig();
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
 
   const [companyName, setCompanyName] = useState('');
-  const [industry, setIndustry] = useState('Finance');
-  const [size, setSize] = useState('1â€“10');
+  const [industry, setIndustry] = useState<IndustryKey>('general');
+  const [size, setSize] = useState('1–10');
   const [standard, setStandard] = useState('IFRS');
   const [loadStandardGl, setLoadStandardGl] = useState(true);
   const [approverEmails, setApproverEmails] = useState('');
+  const [cfoEmail, setCfoEmail] = useState('');
   const [autoUnder, setAutoUnder] = useState('25000');
   const [teamEmails, setTeamEmails] = useState('');
+  const preview = INDUSTRY_PREVIEW[industry] || INDUSTRY_PREVIEW.general;
 
   async function finish() {
     setBusy(true);
@@ -79,7 +77,7 @@ export function Onboarding() {
           id: companyId,
           name: companyName.trim() || 'My organisation',
           slug: slug || `org-${Date.now().toString(36)}`,
-          industry: industry.toLowerCase(),
+          industry: industry,
           accounting_standard: standard,
           subscription_tier: tier,
           max_invoices_per_month: preset.max_invoices_per_month,
@@ -130,6 +128,25 @@ export function Onboarding() {
       });
       if (cfgErr) console.warn('company_config:', cfgErr.message);
 
+      const cfo = cfoEmail.trim() || user.email || null;
+      const { error: settingsErr } = await supabase.from('company_settings').insert({
+        company_id: companyId,
+        company_name: companyName.trim() || 'My organisation',
+        country: market === 'uae' ? 'AE' : 'IN',
+        base_currency: market === 'uae' ? 'AED' : 'INR',
+        accounting_standard: standard === 'Ind AS' ? 'IND_AS' : standard === 'IFRS' ? 'IFRS' : standard,
+        date_format: 'DD-MM-YYYY',
+        timezone: market === 'uae' ? 'Asia/Dubai' : 'Asia/Kolkata',
+        fy_start: market === 'uae' ? '01-01' : '04-01',
+        cfo_email: cfo,
+        updated_at: new Date().toISOString(),
+      });
+      if (settingsErr) console.warn('company_settings:', settingsErr.message);
+
+      if (cfo) {
+        await supabase.from('companies').update({ admin_email: cfo }).eq('id', companyId);
+      }
+
       if (loadStandardGl) {
         /* Optional: chart seed can be run from Settings later */
       }
@@ -149,6 +166,11 @@ export function Onboarding() {
       }
 
       await supabase.auth.updateUser({ data: { active_company_id: companyId } });
+      try {
+        await persistIndustry(industry);
+      } catch (e) {
+        console.warn('industry config:', e);
+      }
       clearCompanyCache();
       toast({ title: 'Welcome to InvoiceFlow', description: 'Your workspace is ready.' });
       // Full reload ensures no stale company cache or in-memory state from previous workspace
@@ -166,15 +188,63 @@ export function Onboarding() {
   }
 
   return (
-    <div className="mx-auto max-w-lg py-8">
+    <div className="mx-auto max-w-2xl py-8">
       <div className="mb-6 flex justify-between text-sm text-gray-500">
-        <span>Step {step} of 5</span>
+        <span>Step {step} of 6</span>
         <Button type="button" variant="ghost" size="sm" onClick={() => navigate('/dashboard')}>
           Skip for now
         </Button>
       </div>
 
       {step === 1 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Select your industry</CardTitle>
+            <CardDescription>
+              Labels for cost centers, AP/AR, and compliance modules follow your industry.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {INDUSTRY_CARDS.map((card) => {
+                const active = industry === card.key;
+                return (
+                  <button
+                    key={card.key}
+                    type="button"
+                    onClick={() => setIndustry(card.key)}
+                    className={`text-left rounded-xl border p-3 transition-colors ${
+                      active
+                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-400'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="text-xl mb-1">{card.icon}</div>
+                    <div className="font-semibold text-sm text-slate-900">{card.label}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{card.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Sidebar preview</p>
+              <ul className="space-y-1">
+                <li>• {preview.apLabel}</li>
+                <li>• {preview.arLabel}</li>
+                <li>• {preview.costCenterLabel}</li>
+                {preview.showIfrs15 && <li>• IFRS 15 Recognition</li>}
+                {preview.showIfrs16 && <li>• IFRS 16 Leases</li>}
+                {preview.showRera && <li>• RERA Compliance</li>}
+              </ul>
+            </div>
+            <Button className="w-full" onClick={() => setStep(2)}>
+              Continue
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 2 && (
         <Card>
           <CardHeader>
             <CardTitle>Company details</CardTitle>
@@ -195,8 +265,8 @@ export function Onboarding() {
                     fontWeight: 600,
                   }}
                 >
-                  <div>ðŸ‡®ðŸ‡³ India</div>
-                  <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>GST Â· GSTIN Â· INR</div>
+                  <div>🇮🇳 India</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>GST · GSTIN · INR</div>
                 </button>
                 <button
                   type="button"
@@ -209,8 +279,8 @@ export function Onboarding() {
                     fontWeight: 600,
                   }}
                 >
-                  <div>ðŸ‡¦ðŸ‡ª UAE</div>
-                  <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>VAT Â· TRN Â· AED</div>
+                  <div>🇦🇪 UAE</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, marginTop: 2 }}>VAT · TRN · AED</div>
                 </button>
               </div>
             </div>
@@ -219,42 +289,32 @@ export function Onboarding() {
               <Input className="mt-1" value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
             </div>
             <div>
-              <Label>Industry</Label>
-              <Select value={industry} onValueChange={setIndustry}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INDUSTRIES.map((i) => (
-                    <SelectItem key={i} value={i}>
-                      {i}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
               <Label>Company size</Label>
               <Select value={size} onValueChange={setSize}>
                 <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1â€“10">1â€“10</SelectItem>
-                  <SelectItem value="11â€“50">11â€“50</SelectItem>
-                  <SelectItem value="51â€“200">51â€“200</SelectItem>
+                  <SelectItem value="1–10">1–10</SelectItem>
+                  <SelectItem value="11–50">11–50</SelectItem>
+                  <SelectItem value="51–200">51–200</SelectItem>
                   <SelectItem value="200+">200+</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full" onClick={() => setStep(2)}>
-              Continue
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setStep(1)}>
+                Back
+              </Button>
+              <Button className="flex-1" onClick={() => setStep(3)}>
+                Continue
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {step === 2 && (
+      {step === 3 && (
         <Card>
           <CardHeader>
             <CardTitle>Accounting standard</CardTitle>
@@ -282,30 +342,6 @@ export function Onboarding() {
               Load standard GL codes (you can refine in Settings)
             </label>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep(1)}>
-                Back
-              </Button>
-              <Button className="flex-1" onClick={() => setStep(3)}>
-                Continue
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {step === 3 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Approvals</CardTitle>
-            <CardDescription>Comma-separated approver emails (optional).</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <TextareaLike value={approverEmails} onChange={setApproverEmails} placeholder="cfo@company.com, fm@company.com" />
-            <div>
-              <Label>Auto-approve below (â‚¹)</Label>
-              <Input className="mt-1" value={autoUnder} onChange={(e) => setAutoUnder(e.target.value)} />
-            </div>
-            <div className="flex gap-2">
               <Button variant="outline" onClick={() => setStep(2)}>
                 Back
               </Button>
@@ -320,19 +356,49 @@ export function Onboarding() {
       {step === 4 && (
         <Card>
           <CardHeader>
-            <CardTitle>First invoice</CardTitle>
-            <CardDescription>Upload later from the main menu.</CardDescription>
+            <CardTitle>Approvals &amp; CFO email</CardTitle>
+            <CardDescription>
+              Daily CFO briefing goes to this address automatically (AED or INR by market). Optional approver emails for the chain.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="flex gap-2">
-            <Button variant="outline" onClick={() => setStep(3)}>
-              Back
-            </Button>
-            <Button className="flex-1" onClick={() => navigate('/upload')}>
-              Upload now
-            </Button>
-            <Button className="flex-1" variant="secondary" onClick={() => setStep(5)}>
-              Skip
-            </Button>
+          <CardContent className="space-y-4">
+            <div>
+              <Label>CFO email (required for daily briefing)</Label>
+              <Input
+                className="mt-1"
+                type="email"
+                value={cfoEmail}
+                onChange={(e) => setCfoEmail(e.target.value)}
+                placeholder="cfo@yourcompany.com"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Stored on company settings — no server changes when you add clients.
+              </p>
+            </div>
+            <div>
+              <Label>Approver emails (optional)</Label>
+              <TextareaLike value={approverEmails} onChange={setApproverEmails} placeholder="cfo@company.com, fm@company.com" />
+            </div>
+            <div>
+              <Label>Auto-approve below (₹)</Label>
+              <Input className="mt-1" value={autoUnder} onChange={(e) => setAutoUnder(e.target.value)} />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setStep(3)}>
+                Back
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  if (!cfoEmail.trim() && !approverEmails.trim()) {
+                    /* allow continue — finish() falls back to signed-in user email */
+                  }
+                  setStep(5);
+                }}
+              >
+                Continue
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -340,17 +406,37 @@ export function Onboarding() {
       {step === 5 && (
         <Card>
           <CardHeader>
+            <CardTitle>First invoice</CardTitle>
+            <CardDescription>Upload later from the main menu.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex gap-2">
+            <Button variant="outline" onClick={() => setStep(4)}>
+              Back
+            </Button>
+            <Button className="flex-1" onClick={() => navigate('/ap-invoices/upload')}>
+              Upload now
+            </Button>
+            <Button className="flex-1" variant="secondary" onClick={() => setStep(6)}>
+              Skip
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 6 && (
+        <Card>
+          <CardHeader>
             <CardTitle>Invite team</CardTitle>
-            <CardDescription>Optional â€” comma-separated emails.</CardDescription>
+            <CardDescription>Optional — comma-separated emails.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <TextareaLike value={teamEmails} onChange={setTeamEmails} placeholder="ap1@company.com, ap2@company.com" />
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep(4)}>
+              <Button variant="outline" onClick={() => setStep(5)}>
                 Back
               </Button>
               <Button className="flex-1" disabled={busy} onClick={() => void finish()}>
-                {busy ? 'Finishingâ€¦' : 'Finish'}
+                {busy ? 'Finishing…' : 'Finish'}
               </Button>
             </div>
           </CardContent>

@@ -170,9 +170,14 @@ def run_single_period(company_id: str, tax_period: str, dry_run: bool) -> int:
             )
         return 0
 
+    from app.core.database import SessionLocal
     from app.services.gulftax_sync_service import sync_period
 
-    result = sync_period(company_id, tax_period)
+    db = SessionLocal()
+    try:
+        result = sync_period(company_id, tax_period, db=db)
+    finally:
+        db.close()
     log.info("Result: %s", result)
     return 0 if result.get("ok") else 1
 

@@ -1,10 +1,13 @@
 /**
  * Sales Invoices — UAE FTA-compliant VAT invoices + AR Aging
+ * Approve/Post routes through POST /api/uae/ar/approve-and-post (same as AR Suite + CRM).
  */
 import { useEffect, useState } from 'react';
-import { FileText, AlertTriangle, RefreshCw, ChevronRight } from 'lucide-react';
+import { FileText, AlertTriangle, RefreshCw } from 'lucide-react';
+import toast from 'react-hot-toast';
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { SalesInvoice } from '../../services/uaeFullAccounting.service';
+import { arPostedToastMessage } from '../../services/arService';
 
 const STATUS_STYLE: Record<string, string> = {
   draft:  'bg-gray-700 text-gray-300 border-gray-600',
@@ -18,9 +21,8 @@ export default function SalesInvoices() {
   const [aging, setAging]         = useState<Record<string, number> | null>(null);
   const [tab, setTab]             = useState<'invoices' | 'aging'>('invoices');
   const [loading, setLoading]     = useState(true);
+  const [postingId, setPostingId] = useState<string | null>(null);
   const [error, setError]         = useState('');
-  const [postingGL, setPostingGL] = useState<string>('');
-  const [glCreated, setGLCreated] = useState<Record<string, string>>({});
 
   const load = () => {
     setLoading(true);
@@ -38,35 +40,20 @@ export default function SalesInvoices() {
 
   useEffect(load, []);
 
-  const handlePost = async (id: string) => {
+  const handlePost = async (inv: SalesInvoice) => {
+    setError('');
+    setPostingId(inv.id);
     try {
-      await svc.postInvoice(id);
+      const res = await svc.approveAndPostSalesInvoice(inv.id);
+      const num = res.invoice_number || inv.invoice_number;
+      toast.success(res.message || arPostedToastMessage(num));
       load();
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-
-  const handlePostToGL = async (inv: SalesInvoice) => {
-    setPostingGL(inv.id);
-    try {
-      const res = await fetch('/api/uae/accounting/invoice-to-je', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          invoice_id: inv.invoice_number,
-          invoice_type: 'AR',
-          amount: inv.subtotal,
-          vendor: inv.customer_id,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setGLCreated(prev => ({ ...prev, [inv.id]: data.je_id ?? 'JE Created' }));
-    } catch (e: any) {
-      setError(`GL post failed: ${e.message}`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Post failed';
+      setError(msg);
+      toast.error(msg);
     } finally {
-      setPostingGL('');
+      setPostingId(null);
     }
   };
 
@@ -194,23 +181,13 @@ export default function SalesInvoices() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-2 flex-wrap">
-                        {inv.status === 'draft' && (
+                        {(inv.status === 'draft' || inv.status === 'pending') && (
                           <button
-                            onClick={() => handlePost(inv.id)}
-                            className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors"
+                            onClick={() => void handlePost(inv)}
+                            disabled={postingId === inv.id}
+                            className="text-xs bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-white transition-colors disabled:opacity-50"
                           >
-                            Post
-                          </button>
-                        )}
-                        {glCreated[inv.id] ? (
-                          <span className="text-xs text-green-400 font-medium whitespace-nowrap">JE Created ✅</span>
-                        ) : (
-                          <button
-                            onClick={() => handlePostToGL(inv)}
-                            disabled={postingGL === inv.id}
-                            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:opacity-50 px-3 py-1 rounded text-white transition-colors whitespace-nowrap"
-                          >
-                            {postingGL === inv.id ? '…' : 'Post to GL →'}
+                            {postingId === inv.id ? 'Posting…' : 'Approve & Post'}
                           </button>
                         )}
                       </div>

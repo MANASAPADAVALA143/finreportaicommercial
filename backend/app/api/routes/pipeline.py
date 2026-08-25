@@ -697,7 +697,50 @@ async def approve_match(match_id: int, db: Session = Depends(get_db)):
 
 @router.post("/api/uae/accounting/invoice-to-je")
 async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
-    """UAE-specific invoice-to-JE: 5% VAT, AED, UAE GL codes."""
+    """UAE invoice-to-JE. AR invoices redirect to unified approve-and-post (uae_journal_entries)."""
+    invoice_type = str(body.get("invoice_type", "AP")).upper()
+    if invoice_type == "AR":
+        from app.models.uae_accounting_full import UAESalesInvoice
+        from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+
+        inv_ref = str(body.get("invoice_id") or body.get("sales_invoice_id") or "")
+        if not inv_ref:
+            raise HTTPException(
+                status_code=400,
+                detail="invoice_id required. Use POST /api/uae/ar/approve-and-post for AR sales invoices.",
+            )
+        inv = (
+            db.query(UAESalesInvoice)
+            .filter(
+                (UAESalesInvoice.id == inv_ref) | (UAESalesInvoice.invoice_number == inv_ref),
+            )
+            .first()
+        )
+        if not inv:
+            raise HTTPException(
+                status_code=404,
+                detail="Sales invoice not found. Use POST /api/uae/ar/approve-and-post with invoice UUID.",
+            )
+        result = post_sales_invoice_to_gl_and_tax(
+            inv.id,
+            tenant_id=inv.tenant_id,
+            company_id=inv.company_id,
+            db=db,
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
+        return {
+            "je_id": result.get("je_id"),
+            "je_reference": result.get("je_reference"),
+            "status": result.get("status", "posted"),
+            "invoice_id": inv.id,
+            "invoice_number": inv.invoice_number,
+            "country": "UAE",
+            "currency": "AED",
+            "redirected": True,
+            "message": result.get("message"),
+        }
+
     try:
         invoice_id = body.get("invoice_id", f"INV-{uuid.uuid4().hex[:6].upper()}")
         invoice_type = str(body.get("invoice_type", "AP")).upper()

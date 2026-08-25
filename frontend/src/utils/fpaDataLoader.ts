@@ -1311,7 +1311,7 @@ export function persistFpaMasterPayloads(payloads: {
 }
 
 /** Pull master PL rows from API → localStorage (shared by hub + all FP&A modules). */
-export async function syncFpaMasterFromApi(companyId = 'default'): Promise<{
+export async function syncFpaMasterFromApi(companyId: string): Promise<{
   ok: boolean;
   rowCount: number;
   usableRowCount: number;
@@ -1321,9 +1321,15 @@ export async function syncFpaMasterFromApi(companyId = 'default'): Promise<{
   if (!base) {
     return { ok: false, rowCount: 0, usableRowCount: 0, message: 'Backend API not configured' };
   }
+  if (!companyId) {
+    return { ok: false, rowCount: 0, usableRowCount: 0, message: 'company_id is required — select an AP company' };
+  }
   try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
+    const { workspaceHeaders } = await import('../services/workspaceService');
     const res = await fetch(
-      `${base}/api/fpa/master-data?section=PL&company_id=${encodeURIComponent(companyId)}`
+      `${base}/api/fpa/master-data?section=PL&company_id=${encodeURIComponent(companyId)}`,
+      { headers: workspaceHeaders(token), credentials: 'include' },
     );
     if (!res.ok) {
       return { ok: false, rowCount: 0, usableRowCount: 0, message: `Master data fetch failed (${res.status})` };

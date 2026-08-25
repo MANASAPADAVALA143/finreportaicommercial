@@ -5,9 +5,63 @@ const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_AP
 const BASE_URL = `${API_BASE.replace(/\/$/, "")}/api/ifrs`;
 const BOARD_PACK_BASE = `${API_BASE.replace(/\/$/, "")}/api/board-pack`;
 
-const headers = (tenantId?: string) => ({
-  "X-Tenant-ID": (tenantId && tenantId.trim()) || getIfrsTenantId(),
-});
+const headers = (tenantId?: string) => {
+  const tid = (tenantId && tenantId.trim()) || getIfrsTenantId();
+  const h: Record<string, string> = { "X-Tenant-ID": tid };
+  try {
+    const cid = localStorage.getItem("active_company_id");
+    if (cid) h["X-Company-Id"] = cid;
+    const ws = localStorage.getItem("gnanova_workspace_id");
+    if (ws) h["X-Workspace-Id"] = ws;
+  } catch {
+    /* ignore */
+  }
+  return h;
+};
+
+export type IfrsModulePreview = {
+  trial_balance_id: number;
+  ifrs16: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  ifrs15: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  ifrs9: { count: number; label: string; skip_recommended: boolean; skip_reason?: string | null };
+  already_injected_count: number;
+};
+
+export type IfrsModuleAdjustmentSummary = {
+  applied_count: number;
+  message: string;
+  adjustments?: { gl_code: string; module: string; net_amount: number; ifrs_line_item?: string }[];
+  skipped?: string[];
+};
+
+export type BalanceCheck = {
+  balanced: boolean;
+  difference: number;
+  total_assets: number;
+  total_liabilities: number;
+  total_equity: number;
+  gap_section?: string | null;
+};
+
+export type CashFlowRecon = {
+  closing_cash: number;
+  balance_sheet_cash: number;
+  difference: number;
+  ties: boolean;
+  opening_cash?: number;
+  net_movement?: number;
+  has_prior_period?: boolean;
+  note?: string | null;
+};
+
+export type SoceCheck = {
+  closing_equity: number;
+  balance_sheet_equity: number;
+  difference: number;
+  ties: boolean;
+  has_prior_period?: boolean;
+  opening_note?: string | null;
+};
 
 export type HarnessTier = "blocked" | "needs_review" | "auto_confirmed" | "confirmed" | "auto_fixed";
 
@@ -91,17 +145,30 @@ export type GeneratedStatementPayload = {
 };
 
 export const ifrsService = {
-  async uploadTrialBalance(file: File, companyName = "Uploaded Entity") {
+  async uploadTrialBalance(
+    file: File,
+    companyName = "Uploaded Entity",
+    opts?: { linkAsPriorFor?: number; autoMap?: boolean }
+  ) {
     const form = new FormData();
     form.append("file", file);
     form.append("company_name", companyName);
-    form.append("auto_map", "true");
+    form.append("auto_map", opts?.autoMap === false || opts?.linkAsPriorFor ? "false" : "true");
+    if (opts?.linkAsPriorFor) {
+      form.append("link_as_prior_for", String(opts.linkAsPriorFor));
+    }
     // Do not set Content-Type: axios sets multipart boundary automatically; a bare
     // "multipart/form-data" breaks parsing and causes 400 / flaky CORS errors.
     const { data } = await axios.post(`${BASE_URL}/trial-balance/upload`, form, {
       headers: headers(),
     });
-    return data as { trial_balance_id: number; lines_count: number; status: string; message?: string };
+    return data as {
+      trial_balance_id: number;
+      lines_count: number;
+      status: string;
+      message?: string;
+      linked_as_prior_for?: number | null;
+    };
   },
 
   async getTrialBalance(tbId: number) {
@@ -204,13 +271,42 @@ export const ifrsService = {
     };
   },
 
-  async generateStatements(tbId: number) {
-    const { data } = await axios.post(`${BASE_URL}/trial-balance/${tbId}/generate-statements`, {}, { headers: headers() });
+  async generateStatements(
+    tbId: number,
+    flags?: {
+      apply_ifrs16?: boolean;
+      apply_ifrs15?: boolean;
+      apply_ifrs9?: boolean;
+      prior_trial_balance_id?: number | null;
+    }
+  ) {
+    const { data } = await axios.post(
+      `${BASE_URL}/trial-balance/${tbId}/generate-statements`,
+      {
+        apply_ifrs16: flags?.apply_ifrs16 ?? true,
+        apply_ifrs15: flags?.apply_ifrs15 ?? true,
+        apply_ifrs9: flags?.apply_ifrs9 ?? true,
+        prior_trial_balance_id: flags?.prior_trial_balance_id ?? undefined,
+      },
+      { headers: headers() }
+    );
     return data as {
       trial_balance_id: number;
       statements: Record<string, { section: string; line_item: string; amount: number; is_subtotal: boolean; is_total: boolean; indent_level: number }[]>;
       generated_at: string;
+      ifrs_module_adjustments?: IfrsModuleAdjustmentSummary;
+      balance_check?: BalanceCheck;
+      cash_flow_reconciliation?: CashFlowRecon;
+      soce_check?: SoceCheck;
+      prior_trial_balance_id?: number | null;
     };
+  },
+
+  async getIfrsModulePreview(tbId: number) {
+    const { data } = await axios.get(`${BASE_URL}/trial-balance/${tbId}/ifrs-module-preview`, {
+      headers: headers(),
+    });
+    return data as IfrsModulePreview;
   },
 
   async getStatements(tbId: number) {
@@ -218,6 +314,10 @@ export const ifrsService = {
     return data as {
       trial_balance_id: number;
       statements: Record<string, GeneratedStatementPayload>;
+      balance_check?: BalanceCheck;
+      cash_flow_reconciliation?: CashFlowRecon;
+      soce_check?: SoceCheck;
+      prior_trial_balance_id?: number | null;
     };
   },
 
@@ -415,16 +515,27 @@ export const ifrsService = {
 
   // ── Export Downloads ───────────────────────────────────────────────────────
 
-  downloadExport(tbId: number, format: "excel" | "pdf" | "word"): void {
+  async downloadExport(tbId: number, format: "excel" | "pdf" | "word"): Promise<void> {
     const ext = format === "excel" ? "excel" : format;
-    const url = `${BASE_URL}/trial-balance/${tbId}/export/${ext}`;
-    // Create a hidden anchor and click it — preserves auth headers via same-origin
+    const res = await axios.get(`${BASE_URL}/trial-balance/${tbId}/export/${ext}`, {
+      headers: headers(),
+      responseType: "blob",
+    });
+    const mime =
+      format === "pdf"
+        ? "application/pdf"
+        : format === "word"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const blob = new Blob([res.data], { type: mime });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.setAttribute("download", "");
+    a.download = `IFRS_Statements_${tbId}.${format === "excel" ? "xlsx" : format === "word" ? "docx" : "pdf"}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
 
   async finalizeBoardPack(boardPackId: number, reviewedBy = "board") {

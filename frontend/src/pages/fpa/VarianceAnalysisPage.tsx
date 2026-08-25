@@ -45,7 +45,7 @@ import {
 import type { CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { callAI } from '../../services/aiProvider';
 import { postCfoAgentRun } from '../../services/cfoAgents';
-import { useClient } from '../../context/ClientContext';
+import { getActiveCompanyId } from '../../context/CompanyContext';
 import { loadFPAActual, loadFPABudget, convertToVarianceData, syncFpaMasterFromApi, FPA_MASTER_UPDATED_EVENT } from '../../utils/fpaDataLoader';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
@@ -281,8 +281,7 @@ function computeVarianceAnalysis(items: VarianceLineItem[]) {
 
 export function VarianceAnalysisPage() {
   const navigate = useNavigate();
-  const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
+  const tenantId = getActiveCompanyId() || '';
   const [rawItems, setRawItems] = useState<VarianceLineItem[]>([]);
   const [activeTab, setActiveTab] = useState<'overview' | 'table' | 'charts' | 'ai'>('overview');
   const [uploadModal, setUploadModal] = useState(false);

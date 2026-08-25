@@ -4,9 +4,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiClient } from '../../services/gulfTaxClient';
 import { useCompany } from '../../context/CompanyContext';
 import {
+  calculateEInvoicingPhase,
+  validateEInvoice,
+  validateEInvoiceXml,
+  fetchCompanyEInvoicingReadiness,
+  generateEInvoiceXml,
   fetchAspSubmissions,
   redriveAspSubmission,
   submitToAsp,
+  submitAspSubmissionRow,
+  isInternalVendorSubmission,
   type AspSubmission,
 } from '../../services/gulfTaxApi';
 
@@ -157,6 +164,7 @@ export default function EInvoicingPage() {
   const [aspSubmissions, setAspSubmissions] = useState<AspSubmission[]>([]);
   const [aspLoading, setAspLoading] = useState(false);
   const [aspSubmitting, setAspSubmitting] = useState(false);
+  const [aspRowSubmitting, setAspRowSubmitting] = useState<string | null>(null);
   const [aspRedriving, setAspRedriving] = useState<string | null>(null);
 
   const triggerCooldownSeconds = useMemo(() => {
@@ -259,10 +267,25 @@ export default function EInvoicingPage() {
     setPhaseLoading(true);
     try {
       const revenue = parseFloat(String(revInput).replace(/,/g, "")) || 0;
-      const res = await apiClient.post<PhaseResult>("/api/einvoicing/calculate-phase", {
-        annual_revenue_aed: revenue,
+      const res = await calculateEInvoicingPhase(revenue);
+      setPhaseResult({
+        phase: res.phase,
+        phase_label: res.phase_label,
+        annual_revenue_aed: res.annual_revenue_aed,
+        mandatory_date: res.mandatory_date ?? res.mandatory_from,
+        asp_registration_deadline: res.asp_registration_deadline,
+        days_to_mandatory: res.days_to_mandatory,
+        days_to_asp_deadline: res.days_to_asp_deadline,
+        voluntary_pilot_start: res.voluntary_pilot_start,
+        days_to_voluntary_pilot: res.days_to_voluntary_pilot,
+        voluntary_pilot_open: res.voluntary_pilot_open,
+        peppol_5_corner_adopted: res.peppol_5_corner_adopted,
+        monthly_penalty_aed: res.monthly_penalty_aed,
+        phase_1_asp_deadline_label: res.phase_1_asp_deadline_label,
+        phase_2_asp_deadline_label: res.phase_2_asp_deadline_label,
+        urgency_banner: res.urgency_banner,
+        urgency_message: res.urgency_message,
       });
-      setPhaseResult(res.data);
     } catch {
       setToast({ kind: "error", message: "Failed to calculate phase" });
     } finally {
@@ -275,18 +298,14 @@ export default function EInvoicingPage() {
     setValResult(null);
     try {
       if (valMode === "xml" && xmlFile) {
-        const form = new FormData();
-        form.append("file", xmlFile);
-        form.append("is_b2b", "true");
-        const res = await apiClient.post<ValidationResult>("/api/einvoicing/validate-xml", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-        setValResult(res.data);
+        const res = await validateEInvoiceXml(xmlFile, true);
+        setValResult(res as ValidationResult);
       } else {
-        const res = await apiClient.post<ValidationResult>("/api/einvoicing/validate", {
+        const res = await validateEInvoice({
           invoice_number: invNumber,
           invoice_date: invDate,
           seller_trn: sellerTrn,
+          supplier_trn: sellerTrn,
           buyer_trn: buyerTrn,
           net_amount: parseFloat(netAmount) || 0,
           vat_amount: parseFloat(vatAmount) || 0,
@@ -295,7 +314,7 @@ export default function EInvoicingPage() {
           vat_rate: parseFloat(vatRate) || 0,
           is_b2b: true,
         });
-        setValResult(res.data);
+        setValResult(res as ValidationResult);
       }
     } catch {
       setToast({ kind: "error", message: "Validation failed" });
@@ -307,8 +326,30 @@ export default function EInvoicingPage() {
   const fetchReadiness = useCallback(async () => {
     setReadinessLoading(true);
     try {
-      const res = await apiClient.get<ReadinessResult>(`/api/einvoicing/readiness`);
-      setReadinessResult(res.data);
+      const res = await fetchCompanyEInvoicingReadiness();
+      const revenue = Number(res.annual_revenue_aed ?? res.inputs?.annual_revenue_aed ?? 0);
+      setReadinessResult({
+        company_id: 0,
+        readiness_score: Number(res.readiness_score ?? 0),
+        checks: (res.gaps ?? []).map((g: { text: string; level: string }, i: number) => ({
+          id: String(i),
+          label: g.text,
+          passed: false,
+          detail: g.level,
+        })),
+        action_items: (res.gaps ?? []).map((g: { text: string }) => g.text),
+        phase: res.phase_label ? {
+          phase: res.phase,
+          phase_label: res.phase_label,
+          annual_revenue_aed: revenue,
+          mandatory_date: res.mandatory_date ?? res.mandatory_from,
+          asp_registration_deadline: res.asp_registration_deadline,
+          days_to_mandatory: res.days_to_mandatory,
+          days_to_asp_deadline: res.days_to_asp_deadline,
+          urgency_banner: res.urgency_banner,
+          urgency_message: res.urgency_message,
+        } as PhaseResult : null,
+      });
     } catch {
       setToast({ kind: "error", message: "Failed to load readiness check" });
     } finally {
@@ -381,6 +422,20 @@ export default function EInvoicingPage() {
     }
   };
 
+  const onSubmitPendingAspRow = async (row: AspSubmission) => {
+    if (isInternalVendorSubmission(row) || row.status !== "pending") return;
+    setAspRowSubmitting(row.id);
+    try {
+      await submitAspSubmissionRow(row);
+      setToast({ kind: "success", message: `Submitted ${row.invoice_number} to ASP — status Pending` });
+      await loadAspSubmissions();
+    } catch {
+      setToast({ kind: "error", message: "ASP submission failed — check N8N_ASP_WEBHOOK_URL" });
+    } finally {
+      setAspRowSubmitting(null);
+    }
+  };
+
   const aspStatusClass = (status: AspSubmission["status"]) => {
     if (status === "accepted") return "border-green/40 text-green bg-[rgba(45,212,160,0.1)]";
     if (status === "rejected") return "border-red/40 text-red bg-[rgba(255,107,107,0.1)]";
@@ -391,20 +446,17 @@ export default function EInvoicingPage() {
     e.preventDefault();
     setGenLoading(true);
     try {
-      const res = await apiClient.post(
-        "/api/einvoicing/generate-xml",
-        {
-          invoice_number: genNumber,
-          invoice_date: genDate,
-          seller_trn: genSeller,
-          buyer_trn: genBuyer,
-          net_amount: parseFloat(genNet) || 0,
-          vat_amount: parseFloat(genVat) || 0,
-          gross_amount: parseFloat(genGross) || 0,
-        },
-        { responseType: "blob" }
-      );
-      const blob = new Blob([res.data], { type: "application/xml" });
+      const res = await generateEInvoiceXml({
+        invoice_number: genNumber,
+        invoice_date: genDate,
+        supplier_name: genSeller,
+        supplier_trn: genSeller,
+        buyer_trn: genBuyer,
+        net_amount: parseFloat(genNet) || 0,
+        vat_amount: parseFloat(genVat) || 0,
+        gross_amount: parseFloat(genGross) || 0,
+      });
+      const blob = new Blob([res.xml_content], { type: "application/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1107,6 +1159,7 @@ export default function EInvoicingPage() {
                 <thead className="bg-[rgba(4,12,30,0.9)] text-muted2 uppercase text-[11px]">
                   <tr>
                     <th className="px-4 py-2">Invoice</th>
+                    <th className="px-4 py-2">Type</th>
                     <th className="px-4 py-2">Submitted</th>
                     <th className="px-4 py-2">Status</th>
                     <th className="px-4 py-2">Rejection reason</th>
@@ -1118,7 +1171,20 @@ export default function EInvoicingPage() {
                     <tr key={row.id} className="border-t border-border text-muted">
                       <td className="px-4 py-3 text-white font-mono">{row.invoice_number}</td>
                       <td className="px-4 py-3">
-                        {new Date(row.submitted_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai" })}
+                        {isInternalVendorSubmission(row) ? (
+                          <span className="text-[10px] font-mono uppercase px-2 py-1 rounded-full border border-border text-muted2">
+                            Internal vendor record
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono uppercase px-2 py-1 rounded-full border border-green/30 text-green">
+                            Outbound e-invoice
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {row.submitted_at
+                          ? new Date(row.submitted_at).toLocaleString("en-GB", { timeZone: "Asia/Dubai" })
+                          : <span className="text-muted2 text-[11px]">Queued — not yet sent</span>}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`text-xs font-mono uppercase px-2 py-1 rounded-full border ${aspStatusClass(row.status)}`}>
@@ -1129,16 +1195,31 @@ export default function EInvoicingPage() {
                         {row.rejection_reason ?? "—"}
                       </td>
                       <td className="px-4 py-3">
-                        {row.status === "rejected" && (
-                          <button
-                            type="button"
-                            onClick={() => void onRedriveAsp(row.id)}
-                            disabled={aspRedriving === row.id}
-                            className="px-3 py-1.5 text-xs rounded-lg border border-border-g text-gold-lt disabled:opacity-50"
-                          >
-                            {aspRedriving === row.id ? "Redriving…" : "Redrive"}
-                          </button>
-                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {row.status === "pending" && !isInternalVendorSubmission(row) && (
+                            <button
+                              type="button"
+                              onClick={() => void onSubmitPendingAspRow(row)}
+                              disabled={aspRowSubmitting === row.id}
+                              className="px-3 py-1.5 text-xs rounded-lg bg-gradient-to-br from-gold to-gold-lt text-deep font-semibold disabled:opacity-50"
+                            >
+                              {aspRowSubmitting === row.id ? "Submitting…" : "Submit to ASP"}
+                            </button>
+                          )}
+                          {row.status === "rejected" && !isInternalVendorSubmission(row) && (
+                            <button
+                              type="button"
+                              onClick={() => void onRedriveAsp(row.id)}
+                              disabled={aspRedriving === row.id}
+                              className="px-3 py-1.5 text-xs rounded-lg border border-border-g text-gold-lt disabled:opacity-50"
+                            >
+                              {aspRedriving === row.id ? "Redriving…" : "Redrive"}
+                            </button>
+                          )}
+                          {isInternalVendorSubmission(row) && (
+                            <span className="text-[10px] text-muted2">Internal record — not for ASP</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

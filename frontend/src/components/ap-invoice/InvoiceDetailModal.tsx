@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
+import { CostCenterSelect } from '@/components/industry/CostCenterSelect';
+import { PropertyCombobox } from '@/components/ap-invoice/PropertyCombobox';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
 import { classifyVATWithGulfTax } from '@/lib/ap-invoice/gulfTaxService';
 import {
@@ -98,12 +100,14 @@ import { getTaxLabel } from '@/utils/taxConfig';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
+import { awaitGlPostAfterApproval } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import {
   getAccountingStandard,
   logGlSuggestionAction,
 } from '@/lib/ap-invoice/accountingStandardService';
-import { getMatchStatusColor } from '@/utils/threeWayMatch';
+import { getMatchStatusColor, resolveDisplayMatchStatus } from '@/utils/threeWayMatch';
 import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
 import { pushToTallyPrime } from '@/utils/tallyExport';
 import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
@@ -112,7 +116,23 @@ import {
   fetchGstr2bByMatchedInvoice,
   fetchGstr2bBySupplierAndInvoice,
   updateInvoiceGstFields,
+  suggestTdsSection,
+  calculateTds,
+  updateInvoiceTdsSection,
+  type TdsCalcResult,
 } from '@/lib/ap-invoice/gstService';
+
+const TDS_SECTION_OPTIONS = [
+  { value: '', label: 'None' },
+  { value: '194A', label: '194A — Interest' },
+  { value: '194C', label: '194C — Contractor' },
+  { value: '194D', label: '194D — Insurance commission' },
+  { value: '194H', label: '194H — Commission/brokerage' },
+  { value: '194I', label: '194I — Rent (land/building)' },
+  { value: '194I(a)', label: '194I(a) — Rent (plant/machinery)' },
+  { value: '194J', label: '194J — Professional/technical fees' },
+  { value: '194Q', label: '194Q — Purchase of goods' },
+];
 
 /** Same key as GST Recon page (localStorage). */
 const COMPANY_GSTIN_KEY = 'invoiceflow_company_gstin';
@@ -195,6 +215,11 @@ export function InvoiceDetailModal({
   const [queryMessage, setQueryMessage] = useState('');
   const [showHoldDialog, setShowHoldDialog] = useState(false);
   const [showQueryDialog, setShowQueryDialog] = useState(false);
+  // Suggested (not applied) from IFRS category — user must confirm/edit before it's saved.
+  const [tdsSection, setTdsSection] = useState<string>('');
+  const [tdsPreview, setTdsPreview] = useState<TdsCalcResult | null>(null);
+  const [tdsCalculating, setTdsCalculating] = useState(false);
+  const [tdsSuggested, setTdsSuggested] = useState(false);
   const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [selectedPoNumber, setSelectedPoNumber] = useState('');
@@ -302,17 +327,58 @@ export function InvoiceDetailModal({
       if (invoice.ifrs_category && !invoice.gl_code) {
         autoSuggestGLAccount(invoice.ifrs_category);
       }
+      // TDS Section: use what's already saved, otherwise suggest from IFRS
+      // category — but never silently apply it. The dropdown shows the
+      // suggestion pre-filled and editable; nothing is saved until the
+      // approver clicks Save GST fields.
+      const savedSection = (invoice.tds_section || '').trim();
+      if (savedSection) {
+        setTdsSection(savedSection);
+        setTdsSuggested(false);
+      } else {
+        const suggestion = suggestTdsSection(invoice.ifrs_category);
+        setTdsSection(suggestion || '');
+        setTdsSuggested(!!suggestion);
+      }
+      setTdsPreview(null);
     } else {
       autoPoMatchAttemptedKeyRef.current = null;
     }
   }, [open, invoice]);
 
   useEffect(() => {
+    if (!open || !tdsSection) {
+      setTdsPreview(null);
+      return;
+    }
+    const amount = Number(editedInvoice.taxable_amount ?? editedInvoice.subtotal_amount ?? editedInvoice.total_amount ?? 0);
+    if (amount <= 0) {
+      setTdsPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setTdsCalculating(true);
+    calculateTds(tdsSection, amount)
+      .then((r) => { if (!cancelled) setTdsPreview(r); })
+      .catch(() => { if (!cancelled) setTdsPreview({ ok: false, error: 'Calculation failed' }); })
+      .finally(() => { if (!cancelled) setTdsCalculating(false); });
+    return () => { cancelled = true; };
+  }, [open, tdsSection, editedInvoice.taxable_amount, editedInvoice.subtotal_amount, editedInvoice.total_amount]);
+
+  useEffect(() => {
     if (!open) return;
     const po = invoice.po_number?.trim();
-    if (!po || invoice.po_id) return;
+    if (!po && !invoice.po_id) return;
 
-    const attemptKey = `${invoice.id}|${po}`;
+    // Once po_id is set, match_status is a cached value written by the last
+    // runAutoMatch — trust it when it looks resolved. Only auto re-run when the
+    // cached status still looks unresolved (including null — seed may set po_id
+    // without writing match_status).
+    const status = String(invoice.match_status || '').toLowerCase() || 'no_po';
+    const staleStatuses = ['mismatch', 'no_po', 'partial'];
+    if (invoice.po_id && !staleStatuses.includes(status)) return;
+
+    const attemptKey = `${invoice.id}|${po || invoice.po_id}`;
     if (autoPoMatchAttemptedKeyRef.current === attemptKey) return;
     autoPoMatchAttemptedKeyRef.current = attemptKey;
 
@@ -320,7 +386,11 @@ export function InvoiceDetailModal({
     setMatchLoading(true);
     void (async () => {
       try {
-        await runAutoMatch(invoice.id, { respectUploadSetting: false });
+        await runAutoMatch(invoice.id, {
+          respectUploadSetting: false,
+          invoice,
+          invoiceNumber: invoice.invoice_number,
+        });
         if (!cancelled) onUpdateRef.current();
       } catch (e) {
         console.error('Auto 3-way match failed:', e);
@@ -331,7 +401,7 @@ export function InvoiceDetailModal({
     return () => {
       cancelled = true;
     };
-  }, [open, invoice.id, invoice.po_number, invoice.po_id, invoice.vendor_name, invoice.total_amount]);
+  }, [open, invoice.id, invoice.po_number, invoice.po_id, invoice.match_status, invoice.vendor_name, invoice.total_amount]);
 
   useEffect(() => {
     if (!open || invoice.gst_recon_status !== 'mismatch') {
@@ -454,6 +524,21 @@ export function InvoiceDetailModal({
     }
   }
 
+  async function handleRerunMatch() {
+    setMatchLoading(true);
+    try {
+      await runAutoMatch(invoice.id, { respectUploadSetting: false });
+      toast({ title: 'Match re-run', description: 'Recomputed the 3-way match against current PO/GRN data.' });
+      onUpdate();
+    } catch (error) {
+      console.error('Manual match re-run failed:', error);
+      const err = error as { message?: string };
+      toast({ title: 'Match re-run failed', description: err?.message || 'Check console.', variant: 'destructive' });
+    } finally {
+      setMatchLoading(false);
+    }
+  }
+
   function autoSuggestGLAccount(ifrsCategory: string) {
     // Map IFRS categories to GL accounts
     const ifrsToGLMap: Record<string, string> = {
@@ -539,6 +624,7 @@ export function InvoiceDetailModal({
             : {}),
           department: editedInvoice.department,
           cost_center: editedInvoice.cost_center,
+          property_ref: editedInvoice.property_ref?.trim() || null,
           project_code: editedInvoice.project_code,
           updated_at: new Date().toISOString(),
         })
@@ -591,6 +677,11 @@ export function InvoiceDetailModal({
         sgst: Number(editedInvoice.sgst ?? 0),
         igst: Number(editedInvoice.igst ?? 0),
       });
+      // TDS only gets written when a section is actually set and the amount
+      // clears the threshold — otherwise clear it, never leave a stale number.
+      const tdsAmountToSave =
+        tdsSection && tdsPreview?.ok && tdsPreview.threshold_met ? tdsPreview.applicable_tds ?? null : null;
+      await updateInvoiceTdsSection(invoice.id, tdsSection || null, tdsAmountToSave ?? null);
       toast({ title: 'GST details saved' });
       onUpdate();
     } catch (error) {
@@ -752,6 +843,22 @@ export function InvoiceDetailModal({
       return;
     }
 
+    const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+    if (gulfDecision === 'HARD_BLOCK') {
+      toast({
+        title: 'Cannot approve',
+        description: 'VAT classification blocked. Fix the invoice first.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (gulfDecision === 'REVIEW_QUEUE') {
+      toast({
+        title: 'VAT review recommended',
+        description: 'GulfTax flagged this invoice for review. Proceeding with approval.',
+      });
+    }
+
     setLoading(true);
     try {
       const { data: authData } = await supabase.auth.getUser();
@@ -778,14 +885,17 @@ export function InvoiceDetailModal({
         user_name: approverName,
       });
 
+      void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
+
       try {
-        const cid = invoice.company_id || (await getMyCompany())?.id;
+        const cid = invoice.company_id || (await getMyCompany())?.id || null;
         if (cid) {
-          const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-          void syncApprovedInvoiceToGulfTax(invoice.id, cid);
+          await awaitGlPostAfterApproval(invoice, cid, (opts) =>
+            toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+          );
         }
-      } catch {
-        /* GulfTax sync is best-effort */
+      } catch (e) {
+        console.warn('[AP] GL post after approval failed:', e);
       }
 
       toast({
@@ -1058,6 +1168,8 @@ export function InvoiceDetailModal({
         user_name: email || 'System User',
       });
 
+      void notifyVendorStatusByInvoiceId(invoice.id, 'Paid');
+
       toast({
         title: 'Payment recorded',
         description: utrTrim ? `UTR / reference: ${utrTrim}` : 'Invoice marked as paid.',
@@ -1094,7 +1206,7 @@ export function InvoiceDetailModal({
   async function handleStatusChange(newStatus: 'Approved' | 'Rejected') {
     if (
       newStatus === 'Approved' &&
-      ['no_po', 'partial', 'mismatch'].includes((invoice.match_status || '').toLowerCase())
+      ['no_po', 'partial', 'mismatch'].includes(String(invoice.match_status || '').toLowerCase())
     ) {
       toast({
         title: 'Approval blocked',
@@ -1102,6 +1214,24 @@ export function InvoiceDetailModal({
         variant: 'destructive',
       });
       return;
+    }
+
+    if (newStatus === 'Approved') {
+      const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+      if (gulfDecision === 'HARD_BLOCK') {
+        toast({
+          title: 'Cannot approve',
+          description: 'VAT classification blocked. Fix the invoice first.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (gulfDecision === 'REVIEW_QUEUE') {
+        toast({
+          title: 'VAT review recommended',
+          description: 'GulfTax flagged this invoice for review. Proceeding with approval.',
+        });
+      }
     }
 
     setLoading(true);
@@ -1132,14 +1262,16 @@ export function InvoiceDetailModal({
       });
 
       if (newStatus === 'Approved') {
+        void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
         try {
-          const cid = invoice.company_id || (await getMyCompany())?.id;
+          const cid = invoice.company_id || (await getMyCompany())?.id || null;
           if (cid) {
-            const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-            void syncApprovedInvoiceToGulfTax(invoice.id, cid);
+            await awaitGlPostAfterApproval(invoice, cid, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
           }
-        } catch {
-          /* GulfTax sync is best-effort */
+        } catch (e) {
+          console.warn('[AP] GL post after status change failed:', e);
         }
       }
 
@@ -1195,17 +1327,24 @@ export function InvoiceDetailModal({
     }
   }
 
+  const childDialogOpen = duplicateAlertOpen || markPaidOpen;
+
   return (
     <>
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-7xl max-h-[90vh] p-0">
+    <Dialog
+      open={open && !childDialogOpen}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="max-w-7xl max-h-[90vh] p-0 overflow-hidden flex flex-col bg-white">
         <DuplicateWarningBanner
           invoice={invoice}
           performedByEmail={workEmail}
           onRefresh={onUpdate}
           onNavigateInvoice={onNavigateInvoice}
         />
-        <DialogHeader className="p-6 pb-4 border-b">
+        <DialogHeader className="p-6 pb-4 border-b shrink-0">
           <div className="flex items-start justify-between">
             <div>
               <DialogTitle className="text-2xl">
@@ -1265,11 +1404,11 @@ export function InvoiceDetailModal({
           </div>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 max-h-[calc(90vh-8rem)] overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 min-h-0 flex-1 max-h-[calc(90vh-8rem)] overflow-hidden bg-white">
           {/* Left Side - PDF Preview */}
-          <div className="space-y-4">
-            <Card className="h-full">
-              <CardHeader>
+          <div className="space-y-4 min-w-0 min-h-0 overflow-hidden relative z-0 isolate bg-white">
+            <Card className="h-full max-h-full overflow-hidden flex flex-col bg-white">
+              <CardHeader className="shrink-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Document Preview</CardTitle>
                   <div className="flex items-center gap-2">
@@ -1308,9 +1447,9 @@ export function InvoiceDetailModal({
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
+              <CardContent className="p-0 min-h-0 flex-1 overflow-hidden">
                 <ScrollArea className="h-[calc(90vh-20rem)]">
-                  <div className="flex items-center justify-center bg-gray-100 min-h-[500px] p-6">
+                  <div className="flex items-center justify-center bg-gray-100 min-h-[500px] p-6 overflow-hidden">
                     {invoice.file_url ? (
                       <div
                         className="bg-white shadow-lg rounded-lg overflow-hidden border border-gray-200"
@@ -1357,8 +1496,8 @@ export function InvoiceDetailModal({
           </div>
 
           {/* Right Side - Invoice Details */}
-          <ScrollArea className="h-[calc(90vh-12rem)]">
-            <div className="pr-2">
+          <ScrollArea className="h-[calc(90vh-12rem)] min-w-0 relative z-10 bg-white">
+            <div className="pr-2 space-y-0 bg-white">
               <Tabs defaultValue="details" className="w-full">
                 <TabsList className="mb-3 flex w-full flex-wrap justify-start gap-1">
                   <TabsTrigger value="details">Details</TabsTrigger>
@@ -2463,32 +2602,32 @@ export function InvoiceDetailModal({
             {/* 3-Way Match */}
             <Card
               className={
-                invoice.match_status === 'three_way_matched'
-                  ? 'border-2 border-green-500 bg-green-50/30'
-                  : invoice.match_status === 'matched'
-                    ? 'border-2 border-teal-500 bg-teal-50/20'
-                    : invoice.match_status === 'mismatch'
-                      ? 'border-2 border-amber-500 bg-amber-50/20'
-                      : invoice.match_status === 'partial'
-                        ? 'border-2 border-amber-400 bg-amber-50/15'
-                        : invoice.match_status === 'no_po' || !invoice.match_status
-                          ? 'border-2 border-red-300 bg-red-50/10'
-                          : 'border border-gray-200'
+                resolveDisplayMatchStatus(invoice) === 'three_way_matched'
+                  ? 'border-2 border-green-500 bg-green-50'
+                  : resolveDisplayMatchStatus(invoice) === 'matched'
+                    ? 'border-2 border-teal-500 bg-teal-50'
+                    : resolveDisplayMatchStatus(invoice) === 'mismatch'
+                      ? 'border-2 border-amber-500 bg-amber-50'
+                      : resolveDisplayMatchStatus(invoice) === 'partial'
+                        ? 'border-2 border-amber-400 bg-amber-50'
+                        : resolveDisplayMatchStatus(invoice) === 'no_po'
+                          ? 'border-2 border-red-300 bg-white'
+                          : 'border border-gray-200 bg-white'
               }
             >
               <CardHeader
                 className={
-                  invoice.match_status === 'three_way_matched'
-                    ? 'bg-green-100/80 border-b border-green-200'
-                    : invoice.match_status === 'matched'
-                      ? 'bg-teal-100/60 border-b border-teal-200'
-                      : invoice.match_status === 'mismatch'
-                        ? 'bg-amber-100/60 border-b border-amber-200'
-                        : invoice.match_status === 'partial'
+                  resolveDisplayMatchStatus(invoice) === 'three_way_matched'
+                    ? 'bg-green-100 border-b border-green-200'
+                    : resolveDisplayMatchStatus(invoice) === 'matched'
+                      ? 'bg-teal-100 border-b border-teal-200'
+                      : resolveDisplayMatchStatus(invoice) === 'mismatch'
+                        ? 'bg-amber-100 border-b border-amber-200'
+                        : resolveDisplayMatchStatus(invoice) === 'partial'
                           ? 'bg-amber-50 border-b border-amber-200'
-                          : invoice.match_status === 'no_po' || !invoice.match_status
+                          : resolveDisplayMatchStatus(invoice) === 'no_po'
                             ? 'bg-red-50 border-b border-red-200'
-                            : ''
+                            : 'bg-white'
                 }
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2499,19 +2638,28 @@ export function InvoiceDetailModal({
                         Score: {Math.round(Number(invoice.match_score))}/100
                       </span>
                     )}
-                    {invoice.match_status ? (
-                      <Badge variant="outline" className={getMatchStatusColor(invoice.match_status)}>
-                        {invoice.match_status === 'three_way_matched' && '3-Way Matched'}
-                        {invoice.match_status === 'matched' && 'PO Matched'}
-                        {invoice.match_status === 'partial' && 'Partial'}
-                        {invoice.match_status === 'mismatch' && 'Variance'}
-                        {invoice.match_status === 'no_po' && 'No PO'}
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="bg-gray-100 text-gray-800 border-gray-200">
-                        No PO
-                      </Badge>
-                    )}
+                    {(() => {
+                      const ms = resolveDisplayMatchStatus(invoice);
+                      return (
+                        <Badge variant="outline" className={getMatchStatusColor(ms)}>
+                          {ms === 'three_way_matched' && '3-Way Matched'}
+                          {ms === 'matched' && 'PO Matched'}
+                          {ms === 'partial' && 'Partial'}
+                          {ms === 'mismatch' && 'Variance'}
+                          {ms === 'no_po' && 'No PO'}
+                        </Badge>
+                      );
+                    })()}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={matchLoading}
+                      onClick={() => void handleRerunMatch()}
+                      title="Recompute this invoice's 3-way match against current PO/GRN data"
+                    >
+                      {matchLoading ? 'Matching…' : 'Re-run match'}
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
@@ -2546,16 +2694,32 @@ export function InvoiceDetailModal({
                   </li>
                   <li className="flex gap-2">
                     <span className="w-5 shrink-0">
-                      {invoice.match_status === 'mismatch' ? '✗' : invoice.po_amount != null ? '✓' : '—'}
+                      {invoice.match_status === 'mismatch' &&
+                      Number(invoice.match_percentage ?? 0) > 0
+                        ? '✗'
+                        : invoice.po_amount != null
+                          ? '✓'
+                          : '—'}
                     </span>
                     <span>
-                      {invoice.match_status === 'mismatch' ? 'Amount variance' : 'Amount vs PO'}{' '}
+                      {invoice.match_status === 'mismatch' && Number(invoice.match_percentage ?? 0) > 0
+                        ? 'Amount variance'
+                        : 'Amount vs PO'}{' '}
                       <span className="text-gray-700">
                         Invoice {formatCurrency(Number(invoice.total_amount), invoice.currency || 'USD')}
                         {invoice.po_amount != null &&
                           ` vs PO ${formatCurrency(invoice.po_amount, invoice.currency || 'USD')}`}
-                        {invoice.match_percentage != null && ` (${invoice.match_percentage.toFixed(1)}%)`}
+                        {invoice.match_percentage != null &&
+                          Number(invoice.match_percentage) > 0 &&
+                          ` (${invoice.match_percentage.toFixed(1)}%)`}
                       </span>
+                      {invoice.po_amount != null &&
+                        Number(invoice.total_amount) > 0 &&
+                        Math.abs(Number(invoice.total_amount) / Number(invoice.po_amount) - 1.05) < 0.01 && (
+                          <span className="block text-xs text-gray-500 mt-0.5">
+                            Invoice looks VAT-inclusive (gross); PO stored ex-VAT — match engine normalizes 5% UAE VAT.
+                          </span>
+                        )}
                     </span>
                   </li>
                   <li className="flex gap-2">
@@ -2565,7 +2729,7 @@ export function InvoiceDetailModal({
                 </ul>
 
                 {invoice.match_notes && (
-                  <p className="rounded-md bg-white/80 p-3 text-sm text-gray-700 border border-gray-100">
+                  <p className="rounded-md bg-white/80 p-3 text-sm text-gray-700 border border-gray-100 whitespace-pre-wrap">
                     {invoice.match_notes}
                   </p>
                 )}
@@ -2664,7 +2828,7 @@ export function InvoiceDetailModal({
                 )}
 
                 {invoice.match_status === 'partial' && (
-                  <div className="rounded-md border border-amber-100 bg-amber-50/40 p-3 text-sm text-amber-950 space-y-2">
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 space-y-2">
                     <p>PO linked — waiting for a confirmed goods receipt or further review.</p>
                     {invoice.po_id && (
                       <Button type="button" size="sm" variant="secondary" asChild>
@@ -2674,8 +2838,8 @@ export function InvoiceDetailModal({
                   </div>
                 )}
 
-                {(invoice.match_status === 'no_po' || !invoice.match_status) && (
-                  <div className="rounded-md border border-red-100 bg-red-50/30 p-3 text-sm text-gray-900">
+                {(resolveDisplayMatchStatus(invoice) === 'no_po') && (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-gray-900">
                     <p className="mb-2">No purchase order linked to this invoice.</p>
                     <div className="space-y-2">
                       <Label>Link a Purchase Order</Label>
@@ -2806,14 +2970,22 @@ export function InvoiceDetailModal({
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="cost_center">Cost Center</Label>
-                  <Input
-                    id="cost_center"
-                    value={editedInvoice.cost_center || ''}
-                    onChange={(e) =>
-                      setEditedInvoice({ ...editedInvoice, cost_center: e.target.value })
+                  <Label htmlFor="property_ref">Property / Project</Label>
+                  <PropertyCombobox
+                    id="property_ref"
+                    value={editedInvoice.property_ref || ''}
+                    onChange={(propertyName) =>
+                      setEditedInvoice({ ...editedInvoice, property_ref: propertyName || null })
                     }
-                    placeholder="e.g. ADM-001"
+                  />
+                  <p className="text-xs text-muted-foreground">Optional — not required for approval.</p>
+                </div>
+                <div className="space-y-2">
+                  <CostCenterSelect
+                    value={editedInvoice.cost_center || ''}
+                    onChange={(v) =>
+                      setEditedInvoice({ ...editedInvoice, cost_center: v })
+                    }
                   />
                 </div>
                 <div
@@ -2904,7 +3076,7 @@ export function InvoiceDetailModal({
                 <Button
                   className="flex-1 bg-green-600 hover:bg-green-700"
                   onClick={() => handleStatusChange('Approved')}
-                  disabled={loading || ['no_po', 'partial', 'mismatch'].includes((invoice.match_status || '').toLowerCase())}
+                  disabled={loading || ['no_po', 'partial', 'mismatch'].includes(String(invoice.match_status || '').toLowerCase())}
                 >
                   <CheckCircle className="mr-2 h-4 w-4" />
                   Approve Invoice
@@ -3021,7 +3193,7 @@ export function InvoiceDetailModal({
                               <Label>Supplier GSTIN (on invoice)</Label>
                               <Input
                                 className="font-mono text-sm"
-                                value={editedInvoice.gstin ?? ''}
+                                value={editedInvoice.gstin ?? (editedInvoice as unknown as { vendor_gstin?: string }).vendor_gstin ?? ''}
                                 onChange={(e) => setEditedInvoice({ ...editedInvoice, gstin: e.target.value })}
                                 placeholder="15-character GSTIN"
                               />
@@ -3031,7 +3203,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.cgst ?? ''}
+                                value={editedInvoice.cgst ?? (editedInvoice as unknown as { cgst_amount?: number }).cgst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, cgst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3042,7 +3214,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.sgst ?? ''}
+                                value={editedInvoice.sgst ?? (editedInvoice as unknown as { sgst_amount?: number }).sgst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, sgst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3053,7 +3225,7 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.igst ?? ''}
+                                value={editedInvoice.igst ?? (editedInvoice as unknown as { igst_amount?: number }).igst_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, igst: parseFloat(e.target.value) || 0 })
                                 }
@@ -3064,13 +3236,52 @@ export function InvoiceDetailModal({
                               <Input
                                 type="number"
                                 step="0.01"
-                                value={editedInvoice.gst_amount ?? ''}
+                                value={editedInvoice.gst_amount ?? editedInvoice.tax_amount ?? ''}
                                 onChange={(e) =>
                                   setEditedInvoice({ ...editedInvoice, gst_amount: parseFloat(e.target.value) || 0 })
                                 }
                               />
                             </div>
                           </div>
+
+                          <div className="space-y-2 border-t pt-4 mt-2">
+                            <Label>TDS Section (Sec 51 / Chapter XVII-B)</Label>
+                            <select
+                              className="w-full border rounded-md px-3 py-2 text-sm"
+                              value={tdsSection}
+                              onChange={(e) => { setTdsSection(e.target.value); setTdsSuggested(false); }}
+                            >
+                              {TDS_SECTION_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                            {tdsSuggested && tdsSection && (
+                              <p className="text-xs text-blue-600">
+                                Suggested from IFRS category "{editedInvoice.ifrs_category}" — review before saving.
+                              </p>
+                            )}
+                            {tdsSection && (
+                              <div className="text-xs bg-gray-50 border rounded-lg p-3 space-y-1">
+                                {tdsCalculating ? (
+                                  <span className="text-gray-500">Calculating…</span>
+                                ) : tdsPreview?.ok ? (
+                                  tdsPreview.threshold_met ? (
+                                    <>
+                                      <div className="flex justify-between"><span className="text-gray-600">Rate</span><span className="font-mono">{tdsPreview.tds_rate}%</span></div>
+                                      <div className="flex justify-between"><span className="text-gray-600">TDS (incl. cess)</span><span className="font-mono font-semibold">₹{tdsPreview.net_tds?.toFixed(2)}</span></div>
+                                    </>
+                                  ) : (
+                                    <span className="text-amber-700">
+                                      Below ₹{tdsPreview.threshold?.toLocaleString('en-IN')} threshold — no TDS applicable, nothing will be saved.
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="text-red-600">{tdsPreview?.error || 'Could not calculate'}</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
                           <Button type="button" className="bg-[#0A4B8F]" disabled={loading} onClick={() => void handleSaveGst()}>
                             <Save className="h-4 w-4 mr-2" />
                             Save GST fields
@@ -3181,9 +3392,9 @@ export function InvoiceDetailModal({
       </DialogContent>
     </Dialog>
 
-    {/* Duplicate alert before payment */}
+    {/* Duplicate alert before payment — exclusive of main detail modal */}
     <Dialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md z-[10020]" overlayClassName="z-[10010]">
         <DialogHeader>
           <DialogTitle>⚠️ Possible Duplicate Invoice</DialogTitle>
         </DialogHeader>
@@ -3220,7 +3431,7 @@ export function InvoiceDetailModal({
     </Dialog>
 
     <Dialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto z-[10020]" overlayClassName="z-[10010]">
         <DialogHeader>
           <DialogTitle>Mark invoice as paid</DialogTitle>
         </DialogHeader>

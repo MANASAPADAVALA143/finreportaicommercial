@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import type { Invoice } from '../../lib/ap-invoice/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -29,6 +30,12 @@ import {
   runGstReconciliation,
   uploadGstr2bEntries,
 } from '../../lib/ap-invoice/gstService';
+import {
+  getIndiaAccountingReconInvoices,
+  getIndiaAccountingReconSummary,
+  ignoreIndiaAccountingMismatch,
+  runIndiaAccountingReconciliation,
+} from '../../lib/ap-invoice/indiaAccountingReconService';
 import {
   classifyInvoiceToBox,
   computeBoxSummaries,
@@ -80,7 +87,17 @@ export function GstRecon() {
     }
   });
   const [period, setPeriod] = useState(() => (isUAE ? defaultUaeQuarter() : defaultIndiaPeriod()));
-  const [summary, setSummary] = useState({ matched: 0, mismatch: 0, unmatched: 0, ignored: 0, total: 0 });
+  const [summary, setSummary] = useState({
+    matched: 0,
+    mismatch: 0,
+    unmatched: 0,
+    ignored: 0,
+    total: 0,
+    missing_gstin: 0,
+    itc_eligible: 0,
+    itc_blocked: 0,
+    tds_payable: 0,
+  });
   const [rows, setRows] = useState<Invoice[]>([]);
   const [boxSummary, setBoxSummary] = useState<BoxReconSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,13 +124,42 @@ export function GstRecon() {
       try {
         if (isUAE) {
           const [s, inv] = await Promise.all([getUaeVatReconSummary(p), getUaeVatReconInvoices(p)]);
-          setSummary(s);
+          setSummary({
+            matched: 0,
+            mismatch: 0,
+            unmatched: 0,
+            ignored: 0,
+            total: 0,
+            missing_gstin: 0,
+            itc_eligible: 0,
+            itc_blocked: 0,
+            tds_payable: 0,
+            ...s,
+          });
           setRows(inv);
           setBoxSummary(computeBoxSummaries(p, companyGstin.trim(), inv));
         } else {
-          const [s, inv] = await Promise.all([getGstReconSummary(p), getGstReconInvoices(p)]);
-          setSummary(s);
-          setRows(inv);
+          // India: merge AP InvoiceFlow invoices (Supabase `invoices` table)
+          // with India Accounting purchase invoices (FastAPI `india_purchase_invoices`
+          // table) — the two live in separate stores, so both need reading.
+          const [apSummary, apInv, iaInv] = await Promise.all([
+            getGstReconSummary(p),
+            getGstReconInvoices(p),
+            getIndiaAccountingReconInvoices(p, companyGstin.trim()).catch(() => [] as Invoice[]),
+          ]);
+          const iaSummary = await getIndiaAccountingReconSummary(p, companyGstin.trim()).catch(() => null);
+          setSummary({
+            matched: apSummary.matched + (iaSummary?.matched ?? 0),
+            mismatch: apSummary.mismatch + (iaSummary?.mismatch ?? 0),
+            unmatched: apSummary.unmatched + (iaSummary?.unmatched ?? 0),
+            ignored: apSummary.ignored + (iaSummary?.ignored ?? 0),
+            total: apSummary.total + (iaSummary?.total ?? 0),
+            missing_gstin: apSummary.missing_gstin + (iaSummary?.missing_gstin ?? 0),
+            itc_eligible: apSummary.itc_eligible,
+            itc_blocked: apSummary.itc_blocked,
+            tds_payable: apSummary.tds_payable,
+          });
+          setRows([...apInv, ...iaInv]);
           setBoxSummary([]);
         }
       } catch (e) {
@@ -147,13 +193,22 @@ export function GstRecon() {
     }
     setBusy(true);
     try {
-      const r = isUAE
-        ? await runUaeVatReconciliation(period, companyGstin.trim())
-        : await runGstReconciliation(period, companyGstin.trim());
-      toast({
-        title: 'Reconciliation complete',
-        description: `Matched ${r.matched}, mismatch ${r.mismatch}, unmatched ${r.unmatched}`,
-      });
+      if (isUAE) {
+        const r = await runUaeVatReconciliation(period, companyGstin.trim());
+        toast({
+          title: 'Reconciliation complete',
+          description: `Matched ${r.matched}, mismatch ${r.mismatch}, unmatched ${r.unmatched}`,
+        });
+      } else {
+        const [apR, iaR] = await Promise.all([
+          runGstReconciliation(period, companyGstin.trim()),
+          runIndiaAccountingReconciliation(period, companyGstin.trim()).catch(() => ({ matched: 0, mismatch: 0, unmatched: 0, period })),
+        ]);
+        toast({
+          title: 'Reconciliation complete',
+          description: `Matched ${apR.matched + iaR.matched}, mismatch ${apR.mismatch + iaR.mismatch}, unmatched ${apR.unmatched + iaR.unmatched}`,
+        });
+      }
       await load();
     } catch (e) {
       toast({
@@ -166,9 +221,10 @@ export function GstRecon() {
     }
   }
 
-  async function handleIgnore(id: string) {
+  async function handleIgnore(id: string, source?: string) {
     try {
       if (isUAE) await ignoreUaeVatMismatch(id);
+      else if (source === 'india_accounting') await ignoreIndiaAccountingMismatch(id);
       else await ignoreGstMismatch(id);
       toast({ title: 'Marked ignored' });
       await load();
@@ -177,9 +233,76 @@ export function GstRecon() {
     }
   }
 
+  /** Map arbitrary GSTR-2B Excel/CSV headers to the snake_case keys parseGstr2bJson expects. */
+  function normalizeGstr2bExcelRow(row: Record<string, unknown>): Record<string, unknown> {
+    const alias: Record<string, string> = {
+      gstin: 'supplier_gstin',
+      supplier_gstin: 'supplier_gstin',
+      'gstin of supplier': 'supplier_gstin',
+      'supplier gstin': 'supplier_gstin',
+      'trade name': 'supplier_name',
+      tradename: 'supplier_name',
+      supplier_name: 'supplier_name',
+      'trade/legal name': 'supplier_name',
+      'legal name': 'supplier_name',
+      'invoice number': 'invoice_number',
+      invoiceno: 'invoice_number',
+      invoice_number: 'invoice_number',
+      'invoice date': 'invoice_date',
+      invoicedate: 'invoice_date',
+      invoice_date: 'invoice_date',
+      'taxable value': 'taxable_value',
+      taxablevalue: 'taxable_value',
+      taxable_value: 'taxable_value',
+      igst: 'igst',
+      'integrated tax': 'igst',
+      cgst: 'cgst',
+      'central tax': 'cgst',
+      sgst: 'sgst',
+      'state/ut tax': 'sgst',
+      'state tax': 'sgst',
+      'ut tax': 'sgst',
+    };
+    const out: Record<string, unknown> = {};
+    for (const [rawKey, value] of Object.entries(row)) {
+      const key = String(rawKey || '').trim().toLowerCase();
+      const mapped = alias[key];
+      if (mapped) out[mapped] = value;
+    }
+    return out;
+  }
+
   function onFileIndia(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    const name = f.name.toLowerCase();
+    const isExcel = name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv');
+
+    if (isExcel) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = reader.result as ArrayBuffer;
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as Record<string, unknown>[];
+          const normalized = rows.map(normalizeGstr2bExcelRow);
+          setFileJson(normalized);
+          const parsed = parseGstr2bJson(normalized, uploadGstin.trim() || companyGstin.trim(), uploadPeriod);
+          setPreviewCount(parsed.length);
+          if (parsed.length === 0) {
+            toast({ title: 'No entries parsed', description: 'Columns not recognized — expected GSTIN, Trade Name, Invoice Number, Invoice Date, Taxable Value, IGST, CGST, SGST.', variant: 'destructive' });
+          }
+        } catch (err) {
+          setFileJson(null);
+          setPreviewCount(0);
+          toast({ title: 'Invalid Excel/CSV file', description: err instanceof Error ? err.message : String(err), variant: 'destructive' });
+        }
+      };
+      reader.readAsArrayBuffer(f);
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -247,7 +370,10 @@ export function GstRecon() {
       });
       await load(uploadPeriod);
     } catch (e) {
-      toast({ title: 'Upload failed', description: String(e), variant: 'destructive' });
+      const raw = e as { message?: string; details?: string; hint?: string } | Error | undefined;
+      const msg = e instanceof Error ? e.message : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('GST/VAT upload failed:', e);
+      toast({ title: 'Upload failed', description: msg, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -279,7 +405,10 @@ export function GstRecon() {
       });
       await load(uploadPeriod);
     } catch (e) {
-      toast({ title: 'Upload failed', description: String(e), variant: 'destructive' });
+      const raw = e as { message?: string; details?: string; hint?: string } | Error | undefined;
+      const msg = e instanceof Error ? e.message : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('GST/VAT upload failed:', e);
+      toast({ title: 'Upload failed', description: msg, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -301,7 +430,7 @@ export function GstRecon() {
             inv.vendor_name,
             inv.gstin ?? '',
             inv.invoice_date,
-            inv.gst_amount ?? 0,
+            inv.gst_amount ?? inv.tax_amount ?? 0,
             `Box ${box}`,
             st,
           ];
@@ -311,10 +440,10 @@ export function GstRecon() {
           inv.vendor_name,
           inv.gstin ?? '',
           inv.invoice_date,
-          inv.gst_amount ?? 0,
-          inv.cgst ?? 0,
-          inv.sgst ?? 0,
-          inv.igst ?? 0,
+          inv.gst_amount ?? inv.tax_amount ?? 0,
+          inv.cgst ?? (inv as unknown as { cgst_amount?: number }).cgst_amount ?? 0,
+          inv.sgst ?? (inv as unknown as { sgst_amount?: number }).sgst_amount ?? 0,
+          inv.igst ?? (inv as unknown as { igst_amount?: number }).igst_amount ?? 0,
           st,
         ];
       }).map((cols) => cols.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
@@ -402,6 +531,50 @@ export function GstRecon() {
         ))}
       </div>
 
+      {!isUAE && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card className="bg-red-50 border-red-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">Missing GSTIN</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-red-700">{summary.missing_gstin}</div>
+              <p className="text-xs text-muted-foreground mt-1">Invoices with GST but no vendor GSTIN</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-emerald-50 border-emerald-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">ITC Eligible</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-emerald-800">
+                {formatCurrency(summary.itc_eligible, currency)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-orange-50 border-orange-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">ITC Blocked (Sec 17(5))</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-orange-800">
+                {formatCurrency(summary.itc_blocked, currency)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="bg-yellow-50 border-yellow-200">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-700">TDS Payable</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-xl font-bold text-yellow-900">
+                {formatCurrency(summary.tds_payable, currency)}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {isUAE && boxSummary.some((b) => b.books_vat > 0 || b.fta_vat > 0) && (
         <Card>
           <CardHeader>
@@ -487,7 +660,7 @@ export function GstRecon() {
                           <TableCell>{inv.vendor_name}</TableCell>
                           <TableCell className="font-mono text-xs">{inv.gstin || '—'}</TableCell>
                           <TableCell>{displayDate(inv.invoice_date, dateFormat)}</TableCell>
-                          <TableCell>{formatCurrency(Number(inv.gst_amount ?? 0), inv.currency || currency)}</TableCell>
+                          <TableCell>{formatCurrency(Number(inv.gst_amount ?? inv.tax_amount ?? 0), inv.currency || currency)}</TableCell>
                           {isUAE && (
                             <TableCell className="text-xs text-gray-600">
                               Box {box}: {FTA_BOX_LABELS[box!].replace(/^Box \d+ — /, '')}
@@ -500,7 +673,12 @@ export function GstRecon() {
                           </TableCell>
                           <TableCell className="text-right">
                             {(st === 'mismatch' || st === 'unmatched') && (
-                              <Button type="button" size="sm" variant="ghost" onClick={() => void handleIgnore(inv.id)}>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => void handleIgnore(inv.id, (inv as unknown as { _source?: string })._source)}
+                              >
                                 Ignore
                               </Button>
                             )}
@@ -519,7 +697,7 @@ export function GstRecon() {
       <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{isUAE ? 'Upload FTA VAT Return (CSV)' : 'Upload GSTR-2B JSON'}</DialogTitle>
+            <DialogTitle>{isUAE ? 'Upload FTA VAT Return (CSV)' : 'Upload GSTR-2B (JSON or Excel/CSV)'}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-2">
@@ -543,10 +721,10 @@ export function GstRecon() {
               )}
             </div>
             <div className="space-y-2">
-              <Label>{isUAE ? 'CSV file' : 'JSON file'}</Label>
+              <Label>{isUAE ? 'CSV file' : 'JSON, Excel (.xlsx), or CSV file'}</Label>
               <Input
                 type="file"
-                accept={isUAE ? '.csv,text/csv' : '.json,application/json'}
+                accept={isUAE ? '.csv,text/csv' : '.json,application/json,.xlsx,.xls,.csv'}
                 onChange={isUAE ? onFileUae : onFileIndia}
               />
             </div>

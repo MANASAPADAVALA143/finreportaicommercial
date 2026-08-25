@@ -71,6 +71,7 @@ from app.services.board_pack_seed import (
 )
 from app.services.mapping_validator import human_mapping_signoff, validate_mappings
 from app.services.statement_generator import build_tb_data_from_db, generate_all_statements
+from app.services.ifrs_module_bridge import preview_ifrs_module_adjustments
 from app.services.tb_column_mapper import (
     load_trial_balance_dataframe,
     load_trial_balance_dataframe_no_header,
@@ -357,9 +358,13 @@ async def trial_balance_upload(
     # Omit field to auto-detect from filename + first 3 rows; send e.g. currency=INR to override.
     currency: Optional[str] = Form(default=None),
     auto_map: bool = Form(True),
+    link_as_prior_for: Optional[int] = Form(None),
     tenant_id: str = Depends(tenant_id_header),
     db: Session = Depends(get_db),
 ):
+    from app.services.statement_generator import ensure_prior_tb_column
+
+    ensure_prior_tb_column(db)
     content = await file.read()
     try:
         from app.core.aws_config import upload_to_s3
@@ -452,6 +457,20 @@ async def trial_balance_upload(
     db.commit()
     db.refresh(tb)
 
+    linked_prior_to = None
+    if link_as_prior_for:
+        current = (
+            db.query(TrialBalance)
+            .filter(TrialBalance.id == int(link_as_prior_for), TrialBalance.tenant_id == tenant_id)
+            .first()
+        )
+        if not current:
+            raise HTTPException(status_code=404, detail="Current trial balance not found for prior-period link")
+        current.prior_trial_balance_id = tb.id
+        db.commit()
+        linked_prior_to = current.id
+        auto_map = False
+
     existing_maps = (
         db.query(GLMapping)
         .filter(GLMapping.trial_balance_id == tb.id, GLMapping.tenant_id == tenant_id)
@@ -471,6 +490,7 @@ async def trial_balance_upload(
         "status": tb.status.value,
         "currency": resolved_currency,
         "auto_map": auto_map,
+        "linked_as_prior_for": linked_prior_to,
         "message": f"Upload stored; {map_msg}",
     }
 
@@ -505,6 +525,7 @@ def get_trial_balance(
             "status": tb.status.value,
             "file_name": tb.file_name,
             "uploaded_at": tb.uploaded_at.isoformat() if tb.uploaded_at else None,
+            "prior_trial_balance_id": getattr(tb, "prior_trial_balance_id", None),
         },
         "lines": [
             {
@@ -966,10 +987,20 @@ def _line_item_to_dict(li: StatementLineItem) -> dict[str, Any]:
     }
 
 
-@router.post("/trial-balance/{trial_balance_id}/generate-statements")
-def generate_statements(
+class GenerateStatementsBody(BaseModel):
+    apply_ifrs16: bool = True
+    apply_ifrs15: bool = True
+    apply_ifrs9: bool = True
+    company_id: str | None = None
+    prior_trial_balance_id: int | None = None
+
+
+@router.get("/trial-balance/{trial_balance_id}/ifrs-module-preview")
+def ifrs_module_preview(
     trial_balance_id: int,
     tenant_id: str = Depends(tenant_id_header),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     tb = (
@@ -979,9 +1010,49 @@ def generate_statements(
     )
     if not tb:
         raise HTTPException(status_code=404, detail="Trial balance not found")
-
     try:
-        result = generate_all_statements(trial_balance_id, db)
+        return preview_ifrs_module_adjustments(
+            db,
+            trial_balance_id,
+            company_id=x_company_id or tenant_id,
+            workspace_id=x_workspace_id or tenant_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/trial-balance/{trial_balance_id}/generate-statements")
+def generate_statements(
+    trial_balance_id: int,
+    body: Optional[GenerateStatementsBody] = Body(default=None),
+    tenant_id: str = Depends(tenant_id_header),
+    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    from app.services.statement_generator import ensure_prior_tb_column
+
+    ensure_prior_tb_column(db)
+    tb = (
+        db.query(TrialBalance)
+        .filter(TrialBalance.id == trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    )
+    if not tb:
+        raise HTTPException(status_code=404, detail="Trial balance not found")
+
+    opts = body or GenerateStatementsBody()
+    try:
+        result = generate_all_statements(
+            trial_balance_id,
+            db,
+            apply_ifrs16=opts.apply_ifrs16,
+            apply_ifrs15=opts.apply_ifrs15,
+            apply_ifrs9=opts.apply_ifrs9,
+            company_id=opts.company_id or x_company_id or tenant_id,
+            workspace_id=x_workspace_id or tenant_id,
+            prior_trial_balance_id=opts.prior_trial_balance_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     tb.status = TBStatus.statements_generated
@@ -1025,7 +1096,20 @@ def get_statements_for_trial_balance(
             "generated_at": stmt.generated_at.isoformat() if stmt.generated_at else None,
             "line_items": [_line_item_to_dict(li) for li in line_items],
         }
-    return {"trial_balance_id": trial_balance_id, "statements": grouped}
+    from app.services.statement_generator import integrity_from_grouped_statements
+
+    integrity = integrity_from_grouped_statements(grouped)
+    tb_row = (
+        db.query(TrialBalance)
+        .filter(TrialBalance.id == trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    )
+    return {
+        "trial_balance_id": trial_balance_id,
+        "statements": grouped,
+        "prior_trial_balance_id": getattr(tb_row, "prior_trial_balance_id", None) if tb_row else None,
+        **integrity,
+    }
 
 
 @router.get("/statements/{statement_id}")

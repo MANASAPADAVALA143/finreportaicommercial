@@ -4,25 +4,31 @@
  * Full sidebar matching standalone InvoiceFlow app.
  */
 import type React from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { MarketProvider, useMarket } from '../../contexts/MarketContext';
+import { useMarket } from '../../contexts/MarketContext';
+import { MarketToggle } from '../../components/MarketToggle';
 import { useAuth } from '../../context/AuthContext';
-import { ensureApCompanySynced, setApSyncAccessToken } from '../../lib/ap-invoice/workspaceCompanySync';
-import { clearCompanyCache } from '../../lib/ap-invoice/companyService';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import {
+  ensureApCompanySynced,
+  getApCompanySyncStatus,
+  setApSyncAccessToken,
+  type ApCompanySyncStatus,
+} from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import {
   LayoutDashboard, FileText, Upload, CheckCircle, Users,
-  ShoppingCart, Package, ListTodo, TrendingUp, Landmark,
+  ShoppingCart, Package, ListTodo, TrendingUp,   Landmark,
   Receipt, CalendarDays, BookOpen, Link2, Settings,
   BarChart3, Mail, AlertTriangle, ClipboardList, Building,
-  Database, CreditCard, Shield, MessageSquare, FileDown,
+  Database, CreditCard, Shield, MessageSquare, FileDown, Banknote, Building2,
 } from 'lucide-react';
 
 type NavItem = { to: string; label: string; icon: React.ElementType; end?: boolean };
 type NavSection = { label: string | null; items: NavItem[] };
 
-function useNavSections(isUAE: boolean): NavSection[] {
+function useNavSections(isUAE: boolean, costCenterLabel: string, apLabel: string): NavSection[] {
   return [
     {
       label: null,
@@ -56,6 +62,7 @@ function useNavSections(isUAE: boolean): NavSection[] {
       label: 'Analytics & Recon',
       items: [
         { to: '/ap-invoices/aging',        label: 'AP Aging',             icon: TrendingUp },
+        { to: '/ap-invoices/payment-run',  label: 'Payment Runs',         icon: Banknote },
         { to: '/ap-invoices/bank-recon',   label: 'Bank Recon',           icon: Landmark },
         { to: '/ap-invoices/gst-recon',    label: isUAE ? 'VAT Recon' : 'GST Recon', icon: Receipt },
         { to: '/ap-invoices/calendar',     label: 'Payment Calendar',     icon: CalendarDays },
@@ -81,6 +88,9 @@ function useNavSections(isUAE: boolean): NavSection[] {
         { to: '/ap-invoices/onboarding',     label: 'Onboarding',         icon: ClipboardList },
         { to: '/ap-invoices/admin/clients',  label: 'Admin Clients',      icon: Users },
         { to: '/ap-invoices/integrations',   label: 'Integrations',       icon: Link2 },
+        { to: '/ap-invoices/industry',       label: 'Industry & Workspace', icon: Settings },
+        { to: '/ap-invoices/settings/cost-centers', label: `${costCenterLabel}s`, icon: Building2 },
+        { to: '/ap-invoices/settings/coa-mapping', label: 'Company COA Mapping', icon: BookOpen },
         { to: '/ap-invoices/settings',       label: 'Settings',           icon: Settings },
       ],
     },
@@ -91,74 +101,85 @@ const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-me
 const linkIdle   = 'text-slate-300 hover:bg-slate-800 hover:text-white';
 const linkActive = 'bg-blue-700/80 text-white';
 
-function MarketToggle() {
-  const { market, setMarket } = useMarket();
+function MarketToggleSidebar() {
   return (
-    <div className="flex items-center gap-1 bg-slate-800 rounded-full p-0.5 mt-2">
-      <button
-        type="button"
-        onClick={() => void setMarket('uae')}
-        title="UAE mode — VAT, TRN, AED"
-        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          market === 'uae' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-        }`}
-      >
-        🇦🇪 UAE
-      </button>
-      <button
-        type="button"
-        onClick={() => void setMarket('india')}
-        title="India mode — GST, GSTIN, INR"
-        className={`flex-1 text-[10px] font-semibold px-2 py-1 rounded-full transition-all ${
-          market === 'india' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'
-        }`}
-      >
-        🇮🇳 India
-      </button>
+    <div className="mt-2">
+      <MarketToggle />
     </div>
   );
 }
 
 function ApWorkspaceSync() {
   const { accessToken } = useAuth();
+  const [syncStatus, setSyncStatus] = useState<ApCompanySyncStatus>(() => getApCompanySyncStatus().status);
+  const [syncDetail, setSyncDetail] = useState(() => getApCompanySyncStatus().detail);
+
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const detail = (e as CustomEvent<{ status: ApCompanySyncStatus; detail: string }>).detail;
+      if (!detail) return;
+      setSyncStatus(detail.status);
+      setSyncDetail(detail.detail || '');
+    };
+    window.addEventListener('ap-company-sync-status', onStatus);
+    return () => window.removeEventListener('ap-company-sync-status', onStatus);
+  }, []);
+
   useEffect(() => {
     setApSyncAccessToken(accessToken);
-    if (!getStoredWorkspaceId()) return;
-    clearCompanyCache();
+    if (!getStoredWorkspaceId() || !accessToken) return;
+    // Do not clearCompanyCache here — that forces re-resolution and re-sync on every token tick.
     void ensureApCompanySynced(accessToken);
   }, [accessToken]);
-  return null;
+
+  if (syncStatus !== 'pending' && syncStatus !== 'error') return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute top-2 right-2 z-20 max-w-xs rounded-md border border-amber-700/60 bg-amber-950/90 px-2.5 py-1.5 text-[11px] text-amber-100 shadow"
+      role="status"
+    >
+      {syncDetail || (syncStatus === 'pending' ? 'Company sync pending' : 'Company sync error')}
+    </div>
+  );
 }
 
 function APInvoicesLayoutInner() {
-  const { isUAE } = useMarket();
+  const { isUAE, config } = useMarket();
+  const { apLabel, costCenterLabel } = useIndustryConfig();
   return (
     /* 36px = GnanovaBanner height; min-h-0 lets flex children scroll */
-    <div className="flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
+    <div className="relative flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
       <ApWorkspaceSync />
       {/* Left sub-nav — header/footer fixed, nav scrolls */}
       <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Brand — pinned top */}
         <div className="shrink-0 px-4 py-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm ${isUAE ? 'bg-blue-600' : 'bg-orange-600'}`}>
               <FileText className="w-4 h-4" />
             </div>
             <div>
               <p className="text-sm font-bold text-white leading-tight">InvoiceFlow</p>
-              <p className="text-[10px] text-slate-500">AP Processing</p>
+              <p className="text-[10px] text-slate-500">
+                {isUAE ? 'UAE · AED · VAT' : 'India · INR · GST'} · {apLabel}
+              </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full bg-green-900 text-green-300 border border-green-800 font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            Live · InvoiceFlow
+          <span className={`inline-flex items-center gap-1 mt-2 text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+            isUAE
+              ? 'bg-blue-900 text-blue-200 border-blue-800'
+              : 'bg-orange-900 text-orange-200 border-orange-800'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isUAE ? 'bg-blue-400' : 'bg-orange-400'}`} />
+            {isUAE ? `🇦🇪 UAE · ${config.currency}` : `🇮🇳 India · ${config.currency} · GST`}
           </span>
-          <MarketToggle />
+          <MarketToggleSidebar />
         </div>
 
         {/* Nav — scrollable */}
         <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-3 space-y-4 sidebar-scroll">
-          {useNavSections(isUAE).map((section, si) => (
+          {useNavSections(isUAE, costCenterLabel, apLabel).map((section, si) => (
             <div key={si}>
               {section.label && (
                 <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -206,10 +227,6 @@ function APInvoicesLayoutInner() {
 }
 
 export default function APInvoicesLayout() {
-  return (
-    <MarketProvider>
-      <APInvoicesLayoutInner />
-    </MarketProvider>
-  );
+  return <APInvoicesLayoutInner />;
 }
 

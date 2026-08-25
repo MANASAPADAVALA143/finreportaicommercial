@@ -15,6 +15,14 @@ export function isBackendConfigured(): boolean {
   return backendOrigin() !== "";
 }
 
+/** Join origin + API path without template-literal `\u` escape pitfalls in `uae` segments. */
+export function joinApiUrl(path: string): string {
+  const origin = backendOrigin().replace(/\/$/, "");
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  if (!origin) return normalized;
+  return `${origin}${normalized}`;
+}
+
 /** Turn browser "Failed to fetch" into an actionable message for login/API calls. */
 export function formatApiNetworkError(err: unknown, apiUrl: string): Error {
   const isNetworkFailure =

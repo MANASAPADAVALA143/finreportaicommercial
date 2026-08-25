@@ -1,16 +1,11 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { supabase as sharedSupabase } from '../supabase';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env — app will load but data features will fail until set.');
-}
-
-export const supabase: SupabaseClient = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key'
-);
+/**
+ * Singleton Supabase client — re-exported from the app-wide client in
+ * `frontend/src/lib/supabase.ts` to avoid "Multiple GoTrueClient instances".
+ */
+export const supabase: SupabaseClient = sharedSupabase;
 
 export type Invoice = {
   id: string;
@@ -92,6 +87,8 @@ export type Invoice = {
   gl_source?: 'company_coa' | 'ifrs_auto' | string | null;
   department: string | null;
   cost_center: string | null;
+  /** Manual property / project tag (free text). */
+  property_ref?: string | null;
   project_code: string | null;
   company_id?: string | null;
   created_at: string;
@@ -110,6 +107,8 @@ export type Invoice = {
   sgst?: number | null;
   igst?: number | null;
   gst_recon_status?: 'unmatched' | 'matched' | 'mismatch' | 'ignored' | null;
+  tds_amount?: number | null;
+  tds_section?: string | null;
   /** UAE FTA fields */
   vat_amount?: number | null;
   vat_rate?: number | null;
@@ -386,6 +385,7 @@ export type InvoiceApprovalRow = {
 
 export type GLAccount = {
   id: string;
+  company_id?: string | null;
   gl_code: string;
   gl_name: string;
   account_type: 'Asset' | 'Liability' | 'Equity' | 'Revenue' | 'Expense' | 'COGS';

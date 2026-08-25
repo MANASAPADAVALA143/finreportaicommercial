@@ -31,7 +31,6 @@ from app.middleware.product_role_middleware import ProductRoleMiddleware
 from app.core.database import get_db
 from app.routers import consolidation as consolidation_router
 from app.routers import month_end_close as month_end_close_router
-from app.routers import ar_collections_enhanced as ar_enhanced
 from app.routers import earnings_review as earnings_review_router
 from app.routers import gl_reconciliation as gl_reconciliation_router
 from app.routers import model_builder as model_builder_router
@@ -41,6 +40,11 @@ from app.routers import gulftax_team as gulftax_team_router
 from app.routers import workspaces as workspaces_router
 from app.routers import company_setup as company_setup_router
 from app.routers import ap_settings as ap_settings_router
+from app.routers import ap_email_privacy as ap_email_privacy_router
+from app.routers import ap_ses_intake as ap_ses_intake_router
+from app.routers import ap_whatsapp_intake as ap_whatsapp_intake_router
+from app.api.routes import gulftax_audit_routes
+from app.api.routes.ar_collections_routes import router as ar_collections_router
 from app.api.routes import (
     fpa_master_upload,
     upload_routes,
@@ -90,6 +94,7 @@ from app.api.routes import (
     uae_ar_routes,
     uae_controls_routes,
     india_routes,
+    india_excel_routes,
     pipeline as pipeline_router,
     o2c_routes,
     crm_routes,
@@ -97,8 +102,14 @@ from app.api.routes import (
     agent_extract,
     ap_anomaly,
     ap_insights,
+    ap_aging,
+    ap_cfo_daily,
+    ap_vendor_whatsapp,
     audit_log_routes,
+    audit_command_center,
     cit_return,
+    ct_return,
+    uae_suite_routes,
     gl_summary,
     notifications_routes,
     uae_account_classification,
@@ -107,10 +118,18 @@ from app.api.routes import (
     journal_entries,
     analytics,
     ap_invoices_rds,
+    ap_purchase_orders,
+    ap_goods_receipts,
+    ap_companies_rds,
     vat_advanced_rds,
     system_routes,
+    ap_payment_run_routes,
+    ap_payment_runs_alias,
+    industry_config_routes,
 )
 from app.modules.ifrs9.router import router as ifrs9_router
+from app.modules.ifrs15.router import router as ifrs15_router
+from app.modules.rera.router import router as rera_router
 from app.middleware.request_logging import RequestLoggingMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -118,7 +137,7 @@ from slowapi.util import get_remote_address
 from app.db import init_db
 from app.agents.intelligence import generate_board_pack_content
 from app.board_pack_generator import generate_pdf
-from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler
+from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler, setup_ses_intake_scheduler
 from app.agents.command_center.registry import list_agent_names
 from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
 from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
@@ -162,6 +181,10 @@ async def lifespan(app: FastAPI):
             print("Agentic scheduler started")
             logger.info("Agentic scheduler started")
         asyncio.create_task(run_daily_watchdog())
+    try:
+        setup_ses_intake_scheduler()
+    except Exception as exc:
+        logger.warning("SES email intake scheduler not started: %s", exc)
     yield
 
 
@@ -175,7 +198,10 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(RequestLoggingMiddleware)
-
+# ProductRole must be *inside* CORS: last add_middleware = outermost.
+# Otherwise 401/403 JSONResponses from ProductRole skip CORS headers and the
+# browser reports a misleading CORS failure instead of the real auth error.
+app.add_middleware(ProductRoleMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -189,7 +215,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(ProductRoleMiddleware)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 
@@ -230,7 +255,6 @@ app.include_router(audit_intelligence.router)
 app.include_router(history_router.router, prefix="/api/v2", tags=["History"])
 app.include_router(historical_analysis.router, prefix="/api/v2", tags=["History"])
 app.include_router(month_end_close_router.router)
-app.include_router(ar_enhanced.router, prefix="/api/ar", tags=["AR Enhanced"])
 app.include_router(earnings_review_router.router)
 app.include_router(gl_reconciliation_router.router)
 app.include_router(model_builder_router.router)
@@ -240,6 +264,9 @@ app.include_router(gulftax_team_router.router)
 app.include_router(workspaces_router.router)
 app.include_router(company_setup_router.router)
 app.include_router(ap_settings_router.router)
+app.include_router(ap_email_privacy_router.router)
+app.include_router(ap_ses_intake_router.router)
+app.include_router(ap_whatsapp_intake_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(o2c_routes.router)
 app.include_router(crm_routes.router)
@@ -256,14 +283,22 @@ app.include_router(uae_accounting.router)
 app.include_router(uae_full_routes.router)
 app.include_router(uae_full_routes.fx_router)
 app.include_router(uae_ar_routes.router)
+app.include_router(ar_collections_router)
 app.include_router(uae_controls_routes.router)
 app.include_router(india_routes.router)
+app.include_router(india_excel_routes.router)
 app.include_router(pipeline_router.router)
 app.include_router(agent_extract.router)
 app.include_router(ap_anomaly.router)
 app.include_router(ap_insights.router)
+app.include_router(ap_aging.router)
+app.include_router(ap_cfo_daily.router)
+app.include_router(ap_vendor_whatsapp.router)
 app.include_router(audit_log_routes.router)
+app.include_router(audit_command_center.router)
 app.include_router(cit_return.router)
+app.include_router(ct_return.router)
+app.include_router(uae_suite_routes.router)
 app.include_router(gl_summary.router)
 app.include_router(notifications_routes.router)
 app.include_router(uae_account_classification.router)
@@ -273,17 +308,28 @@ app.include_router(journal_entries.router)
 app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
 app.include_router(ifrs9_router)
+app.include_router(ifrs15_router)
+app.include_router(rera_router)
 app.include_router(ap_invoices_rds.router)
+app.include_router(ap_purchase_orders.router)
+app.include_router(ap_goods_receipts.router)
+app.include_router(ap_payment_run_routes.router)
+app.include_router(ap_payment_runs_alias.router)
+app.include_router(industry_config_routes.router)
+app.include_router(ap_companies_rds.router)
 app.include_router(vat_advanced_rds.router)
 app.include_router(system_routes.router)
 
 # GulfTax AI — embedded (replaces external localhost:8000 service)
 from app.modules.gulftax.router import router as gulftax_router
 from app.modules.gulftax.gulftax_einvoicing import router as gulftax_einvoicing_router
+from app.modules.gulftax.esr_filing import router as gulftax_esr_router
 from app.modules.gulftax.ported_mount import register_gulftax_ported_routers
 
 app.include_router(gulftax_router)
 app.include_router(gulftax_einvoicing_router)
+app.include_router(gulftax_esr_router)
+app.include_router(gulftax_audit_routes.router)
 register_gulftax_ported_routers(app)
 
 if settings.ENABLE_FASTAPI_MCP:
@@ -326,8 +372,11 @@ async def root():
 async def health():
     import os as _os
     from pathlib import Path as _Path
+    from app.core.config import settings as _settings
     _k = _os.environ.get("ANTHROPIC_API_KEY", "")
     _env = _Path(__file__).resolve().parent.parent / ".env"
+    _sb_url = bool((_settings.SUPABASE_URL or "").strip())
+    _sb_key = bool((_settings.SUPABASE_KEY or "").strip())
     return {
         "status": "healthy",
         "ai_key_set": bool(_k),
@@ -335,6 +384,7 @@ async def health():
         "cwd": _os.getcwd(),
         "env_file_path": str(_env),
         "env_file_exists": _env.exists(),
+        "supabase_configured": _sb_url and _sb_key,
         "file": __file__,
     }
 

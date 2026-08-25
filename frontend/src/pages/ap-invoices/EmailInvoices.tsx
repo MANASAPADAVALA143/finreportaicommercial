@@ -17,8 +17,32 @@ import {
 } from '../../components/ui/table';
 import { useToast } from '../../hooks/use-toast';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
-import { requireCompanyId } from '../../lib/ap-invoice/companyService';
+import { requireCompanyId, getMyCompany } from '../../lib/ap-invoice/companyService';
 import { runAutoMatch } from '../../lib/ap-invoice/threeWayMatchService';
+import {
+  fetchEmailIntakeConsent,
+  recordEmailIntakeConsent,
+  fetchSuggestedForwardingAddress,
+  eraseEmailIntakeData,
+  type EmailIntakeConsentRecord,
+} from '../../lib/ap-invoice/emailIntakeConsentService';
+import {
+  EMAIL_INVOICE_CONSENT_VERSION,
+  EMAIL_INTAKE_CONSENT_SUMMARY,
+  PRIVACY_POLICY_URL,
+  DPA_URL,
+} from '../../config/emailIntakeConsent';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '../../components/ui/alert-dialog';
 import {
   Mail,
   Download,
@@ -28,7 +52,20 @@ import {
   Loader2,
   Copy,
   Inbox,
+  Zap,
 } from 'lucide-react';
+import { joinApiUrl } from '../../utils/backendOrigin';
+import { getStoredAccessToken } from '../../utils/authToken';
+
+const SES_INTAKE_ADDRESS = 'invoices@finreportai.com';
+
+type SesIntakeStatus = {
+  status: string;
+  pending_emails: number;
+  bucket: string;
+  error?: string;
+  region?: string;
+};
 
 type EmailStatus = 'pending' | 'processing' | 'imported' | 'skipped';
 
@@ -70,14 +107,125 @@ export function EmailInvoices() {
   const [forwardingInput, setForwardingInput] = useState('');
   const [providerInput, setProviderInput] = useState('n8n');
   const [savingInbox, setSavingInbox] = useState(false);
+  const [hasEmailConsent, setHasEmailConsent] = useState(false);
+  const [consentRecord, setConsentRecord] = useState<EmailIntakeConsentRecord | null>(null);
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [acceptingConsent, setAcceptingConsent] = useState(false);
+  const [erasingData, setErasingData] = useState(false);
+  const [sesStatus, setSesStatus] = useState<SesIntakeStatus | null>(null);
+  const [sesLoading, setSesLoading] = useState(false);
+  const [sesTriggering, setSesTriggering] = useState(false);
 
   const emailIntakeWebhookUrl = import.meta.env.VITE_EMAIL_INTAKE_WEBHOOK_URL ?? '';
 
+  const authHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const token = getStoredAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }, []);
+
+  const loadSesStatus = useCallback(async () => {
+    setSesLoading(true);
+    try {
+      const res = await fetch(joinApiUrl('/api/ap/ses-intake/status'), {
+        headers: authHeaders(),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        setSesStatus((await res.json()) as SesIntakeStatus);
+      } else {
+        setSesStatus({ status: 'error', pending_emails: 0, bucket: 'finreportai-email-intake', error: `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setSesStatus({
+        status: 'error',
+        pending_emails: 0,
+        bucket: 'finreportai-email-intake',
+        error: e instanceof Error ? e.message : 'unreachable',
+      });
+    } finally {
+      setSesLoading(false);
+    }
+  }, [authHeaders]);
+
+  const loadSesLogs = useCallback(async () => {
+    try {
+      const companyId = await requireCompanyId();
+      const res = await fetch(
+        joinApiUrl(`/api/ap/ses-intake/logs?company_id=${encodeURIComponent(companyId)}&limit=50`),
+        { headers: authHeaders(), credentials: 'include' },
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as { logs?: EmailIntakeLog[] };
+      if (body.logs && body.logs.length > 0) {
+        setIntakeLog(body.logs);
+      }
+    } catch {
+      /* keep supabase-loaded logs */
+    }
+  }, [authHeaders]);
+
+  async function triggerSesProcess() {
+    setSesTriggering(true);
+    try {
+      const res = await fetch(joinApiUrl('/api/ap/ses-intake/trigger'), {
+        method: 'POST',
+        headers: authHeaders(),
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: 'Processing started', description: 'SES intake is running in the background.' });
+      setTimeout(() => {
+        void loadSesStatus();
+        void loadInboxMonitoring();
+        void loadSesLogs();
+      }, 2500);
+    } catch (e: unknown) {
+      toast({
+        title: 'Trigger failed',
+        description: e instanceof Error ? e.message : 'Could not start processing',
+        variant: 'destructive',
+      });
+    } finally {
+      setSesTriggering(false);
+    }
+  }
+
+  function copyIntakeAddress() {
+    void navigator.clipboard.writeText(SES_INTAKE_ADDRESS);
+    toast({ title: 'Copied', description: SES_INTAKE_ADDRESS });
+  }
+
+  const loadConsentStatus = useCallback(async () => {
+    try {
+      const companyId = await requireCompanyId();
+      const status = await fetchEmailIntakeConsent(companyId);
+      setHasEmailConsent(status.has_active_consent);
+      setConsentRecord(status.consent);
+      if (status.has_active_consent && !forwardingInput) {
+        const company = await getMyCompany();
+        if (company?.slug) {
+          const suggested = await fetchSuggestedForwardingAddress(company.slug);
+          if (suggested) setForwardingInput(suggested);
+        }
+      }
+    } catch (e) {
+      console.warn('Email intake consent lookup failed:', e);
+      setHasEmailConsent(false);
+      setConsentRecord(null);
+    } finally {
+      setConsentChecked(true);
+    }
+  }, []);
+
   const loadInboxMonitoring = useCallback(async () => {
     try {
+      const companyId = await requireCompanyId();
       const { data: cfg } = await supabase
         .from('email_inbox_config')
         .select('*')
+        .eq('company_id', companyId)
         .eq('is_active', true)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -95,9 +243,13 @@ export function EmailInvoices() {
         supabase
           .from('email_intake_log')
           .select('*')
+          .eq('company_id', companyId)
           .order('received_at', { ascending: false })
           .limit(50),
-        supabase.from('email_intake_log').select('invoices_created, status, received_at'),
+        supabase
+          .from('email_intake_log')
+          .select('invoices_created, status, received_at')
+          .eq('company_id', companyId),
       ]);
 
       const rows = (logs ?? []) as EmailIntakeLog[];
@@ -125,8 +277,17 @@ export function EmailInvoices() {
 
   useEffect(() => {
     loadSettings();
+    void loadConsentStatus();
     void loadInboxMonitoring();
-  }, [loadInboxMonitoring]);
+    void loadSesStatus();
+    void loadSesLogs();
+    const id = window.setInterval(() => {
+      void loadSesStatus();
+      void loadSesLogs();
+      void loadInboxMonitoring();
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [loadInboxMonitoring, loadConsentStatus, loadSesStatus, loadSesLogs]);
 
   async function loadSettings() {
     try {
@@ -515,7 +676,61 @@ export function EmailInvoices() {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   }
 
+  async function acceptEmailIntakeConsent() {
+    setAcceptingConsent(true);
+    try {
+      const companyId = await requireCompanyId();
+      const row = await recordEmailIntakeConsent(companyId);
+      setHasEmailConsent(true);
+      setConsentRecord(row);
+      const company = await getMyCompany();
+      if (company?.slug && !forwardingInput.trim()) {
+        const suggested = await fetchSuggestedForwardingAddress(company.slug);
+        if (suggested) setForwardingInput(suggested);
+      }
+      toast({
+        title: 'Consent recorded',
+        description: `Version ${EMAIL_INVOICE_CONSENT_VERSION} — you can now activate email forwarding.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not record consent';
+      toast({ title: 'Consent failed', description: msg, variant: 'destructive' });
+    } finally {
+      setAcceptingConsent(false);
+    }
+  }
+
+  async function runEmailIntakeErasure() {
+    setErasingData(true);
+    try {
+      const companyId = await requireCompanyId();
+      const purged = await eraseEmailIntakeData(companyId);
+      setInboxConfig(null);
+      setHasEmailConsent(false);
+      setConsentRecord(null);
+      setForwardingInput('');
+      await loadInboxMonitoring();
+      toast({
+        title: 'Email intake data purged',
+        description: `Removed ${purged.intake_log_deleted ?? 0} log entries and ${purged.invoices_deleted ?? 0} email-sourced invoices.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erasure failed';
+      toast({ title: 'Erasure failed', description: msg, variant: 'destructive' });
+    } finally {
+      setErasingData(false);
+    }
+  }
+
   async function saveInboxForwarding() {
+    if (!hasEmailConsent) {
+      toast({
+        title: 'Consent required',
+        description: 'Accept data processing terms before activating email forwarding.',
+        variant: 'destructive',
+      });
+      return;
+    }
     if (!forwardingInput.trim()) {
       toast({ title: 'Forwarding address required', variant: 'destructive' });
       return;
@@ -554,11 +769,13 @@ export function EmailInvoices() {
     }
   }
 
-  function intakeStatusBadge(status: EmailIntakeLog['status']) {
+  function intakeStatusBadge(status: EmailIntakeLog['status'] | string) {
     if (status === 'processed')
       return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Processed</Badge>;
     if (status === 'failed')
       return <Badge variant="destructive">Failed</Badge>;
+    if (status === 'pending')
+      return <Badge className="bg-amber-100 text-amber-900 hover:bg-amber-100">Pending</Badge>;
     return <Badge variant="secondary" className="bg-gray-100 text-gray-700">Skipped</Badge>;
   }
 
@@ -578,6 +795,70 @@ export function EmailInvoices() {
           Fetch and process invoices from email attachments
         </p>
       </div>
+
+      {/* SES Email Intake Status */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Email Intake Status</CardTitle>
+              <CardDescription>
+                AWS SES → S3 bucket <code className="text-xs">{sesStatus?.bucket ?? 'finreportai-email-intake'}</code>
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void loadSesStatus()} disabled={sesLoading}>
+                {sesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Refresh
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
+                onClick={() => void triggerSesProcess()}
+                disabled={sesTriggering}
+              >
+                {sesTriggering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                Process Now
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            {sesStatus?.status === 'connected' ? (
+              <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Connected</Badge>
+            ) : (
+              <Badge variant="destructive">Not Connected</Badge>
+            )}
+            <span className="text-muted-foreground">
+              Pending emails in S3: <strong className="text-gray-900">{sesStatus?.pending_emails ?? '—'}</strong>
+            </span>
+            <span className="text-muted-foreground">
+              Last processed:{' '}
+              <strong className="text-gray-900">
+                {intakeStats.lastReceived ? new Date(intakeStats.lastReceived).toLocaleString() : '—'}
+              </strong>
+            </span>
+          </div>
+          {sesStatus?.error && (
+            <p className="text-sm text-red-600">{sesStatus.error}</p>
+          )}
+          <div className="rounded-lg border bg-slate-50 p-4">
+            <p className="text-sm font-medium text-gray-900">Your invoice intake email:</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <code className="rounded bg-white px-2 py-1 text-sm border">{SES_INTAKE_ADDRESS}</code>
+              <Button type="button" variant="outline" size="sm" onClick={copyIntakeAddress}>
+                <Copy className="h-4 w-4" />
+                Copy
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Ask vendors to email PDF invoices to this address. New mail is polled every 5 minutes.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Email inbox monitoring â€” stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -622,6 +903,60 @@ export function EmailInvoices() {
         </Card>
       </div>
 
+      {/* Data processing consent (required before forwarding) */}
+      <Card className={!hasEmailConsent ? 'border-amber-300 bg-amber-50/40' : ''}>
+        <CardHeader>
+          <CardTitle>Data processing consent</CardTitle>
+          <CardDescription>
+            Required before Gnanova can receive and process forwarded invoice emails for your company.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {hasEmailConsent && consentRecord ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+              <p className="font-medium">Consent on file</p>
+              <p className="mt-1 text-emerald-800">
+                Accepted by {consentRecord.accepted_by_email ?? 'authorized user'} on{' '}
+                {new Date(consentRecord.accepted_at).toLocaleString()} (version{' '}
+                {consentRecord.consent_version}).
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3 text-sm text-gray-700">
+              <p className="font-medium">Before you forward vendor invoices, please confirm:</p>
+              <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                {EMAIL_INTAKE_CONSENT_SUMMARY.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+              <p>
+                Read our{' '}
+                <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" className="text-[#0A4B8F] underline">
+                  Privacy Policy
+                </a>{' '}
+                and{' '}
+                <a href={DPA_URL} target="_blank" rel="noopener noreferrer" className="text-[#0A4B8F] underline">
+                  Data Processing terms
+                </a>
+                .
+              </p>
+              <Button
+                type="button"
+                onClick={() => void acceptEmailIntakeConsent()}
+                disabled={acceptingConsent || !consentChecked}
+                className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
+              >
+                {acceptingConsent ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  `I agree — enable email invoice processing (${EMAIL_INVOICE_CONSENT_VERSION})`
+                )}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Forwarding setup + webhook URL */}
       <Card>
         <CardHeader>
@@ -630,12 +965,17 @@ export function EmailInvoices() {
             Inbox forwarding (automatic intake)
           </CardTitle>
           <CardDescription>
-            n8n receives mail, runs OCR, then POSTs JSON to your Edge Function. Run{' '}
-            <code className="text-xs bg-muted px-1 rounded">EMAIL-INBOX-MIGRATION.sql</code> first.
+            {hasEmailConsent
+              ? 'Configure the address vendors forward invoices to. n8n/Mailgun receives mail, runs OCR, then posts to your intake endpoint.'
+              : 'Accept data processing consent above to view or activate your forwarding address.'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {inboxConfig ? (
+          {!hasEmailConsent ? (
+            <p className="text-sm text-muted-foreground rounded-lg border border-dashed p-4">
+              Forwarding address is hidden until consent is recorded for this company.
+            </p>
+          ) : inboxConfig ? (
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border bg-muted/30 p-4">
               <div>
                 <p className="text-xs font-medium text-muted-foreground">Forwarding address</p>
@@ -688,6 +1028,7 @@ export function EmailInvoices() {
             </div>
           )}
 
+          {hasEmailConsent && (
           <div className="rounded-lg border border-dashed p-4 space-y-2 text-sm text-gray-700">
             <p className="font-medium">Setup steps</p>
             <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
@@ -718,6 +1059,45 @@ export function EmailInvoices() {
               </p>
             )}
           </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Withdraw consent / erasure */}
+      <Card className="border-red-100">
+        <CardHeader>
+          <CardTitle className="text-base">Withdraw consent &amp; delete email data</CardTitle>
+          <CardDescription>
+            For offboarding or DPDP erasure requests — removes intake logs, deactivates forwarding, and deletes
+            invoices captured from email for this company.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="destructive" disabled={erasingData}>
+                {erasingData ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Purge email intake data'}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete all email intake data?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This withdraws consent, deactivates your forwarding address, deletes email intake log entries, and
+                  removes invoices with source email for this company. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-red-600 hover:bg-red-700"
+                  onClick={() => void runEmailIntakeErasure()}
+                >
+                  Yes, purge data
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </CardContent>
       </Card>
 
@@ -726,8 +1106,8 @@ export function EmailInvoices() {
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <CardTitle>Recent email intake</CardTitle>
-              <CardDescription>Last 50 events from email_intake_log</CardDescription>
+              <CardTitle>Email Intake Log</CardTitle>
+              <CardDescription>From, subject, attachments — SES + legacy n8n events</CardDescription>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadInboxMonitoring()}>
               <RefreshCw className="h-4 w-4" />
@@ -759,11 +1139,23 @@ export function EmailInvoices() {
                       <TableCell className="whitespace-nowrap text-sm">
                         {new Date(row.received_at).toLocaleString()}
                       </TableCell>
-                      <TableCell className="max-w-[140px] truncate text-sm">{row.from_address ?? 'â€”'}</TableCell>
-                      <TableCell className="max-w-[200px] truncate text-sm">{row.subject ?? 'â€”'}</TableCell>
-                      <TableCell>{row.attachment_count}</TableCell>
+                      <TableCell className="max-w-[140px] truncate text-sm">
+                        {(row as EmailIntakeLog & { from_email?: string }).from_email
+                          ?? row.from_address
+                          ?? '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate text-sm">{row.subject ?? '—'}</TableCell>
+                      <TableCell>
+                        {(row as EmailIntakeLog & { attachments_count?: number }).attachments_count
+                          ?? row.attachment_count}
+                      </TableCell>
                       <TableCell>{row.invoices_created}</TableCell>
-                      <TableCell>{intakeStatusBadge(row.status)}</TableCell>
+                      <TableCell>
+                        {intakeStatusBadge(
+                          (row as EmailIntakeLog & { processing_status?: string }).processing_status
+                            ?? row.status,
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         {row.status === 'processed' && row.invoices_created > 0 ? (
                           <Link

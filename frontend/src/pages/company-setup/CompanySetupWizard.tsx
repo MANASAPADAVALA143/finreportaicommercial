@@ -1,36 +1,45 @@
 /**
- * Company Setup Wizard — 6-step onboarding before /uae-full
+ * Company Setup Wizard — 7-step onboarding before /uae-full
+ * Step 1 = Industry selection (drives labels & feature flags)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Papa from 'papaparse';
 import { useNavigate } from 'react-router-dom';
 import {
   Building2, CheckCircle2, ChevronLeft, ChevronRight, Loader2,
-  Upload, Users, BookOpen, Scale, Settings, ClipboardCheck,
+  Upload, Users, BookOpen, Scale, Settings, ClipboardCheck, Factory,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import {
+  INDUSTRY_CARDS,
+  INDUSTRY_PREVIEW,
+  type IndustryKey,
+} from '../../services/industryConfig.service';
 import * as setup from '../../services/companySetup.service';
 import type { CompanyProfile, SetupAccount } from '../../services/companySetup.service';
 
 const STEPS = [
-  { n: 1, label: 'Company Profile', icon: Building2 },
-  { n: 2, label: 'Chart of Accounts', icon: BookOpen },
-  { n: 3, label: 'Opening Balances', icon: Scale },
-  { n: 4, label: 'Accounting Controls', icon: Settings },
-  { n: 5, label: 'Users & Roles', icon: Users },
-  { n: 6, label: 'Review & Activate', icon: ClipboardCheck },
+  { n: 1, label: 'Industry', icon: Factory },
+  { n: 2, label: 'Company Profile', icon: Building2 },
+  { n: 3, label: 'Chart of Accounts', icon: BookOpen },
+  { n: 4, label: 'Opening Balances', icon: Scale },
+  { n: 5, label: 'Accounting Controls', icon: Settings },
+  { n: 6, label: 'Users & Roles', icon: Users },
+  { n: 7, label: 'Review & Activate', icon: ClipboardCheck },
 ];
 
 const LEGAL_TYPES = ['LLC', 'FZE', 'Branch', 'Sole Proprietor', 'Other'];
-const INDUSTRIES = ['Trading', 'Services', 'Manufacturing', 'Real Estate', 'Other'];
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
 const inputCls = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-teal-500 focus:outline-none';
+const inputErrorCls = 'w-full bg-gray-800 border border-red-600 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none';
 const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
+const fieldErrorCls = 'mt-1 text-xs text-red-400';
 
 type CoaCsvRow = { code: string; name: string; type: string; sub_type: string };
 
@@ -60,14 +69,31 @@ function parseCoaCsvContent(text: string): CoaCsvRow[] {
   return (result.data || []).map(mapCoaCsvRow).filter((r): r is CoaCsvRow => r !== null);
 }
 
+function mapLegacyIndustry(raw?: string | null): IndustryKey {
+  const v = (raw || '').toLowerCase().replace(/\s+/g, '_');
+  if (['real_estate', 'realestate', 'property'].some((x) => v.includes(x))) return 'real_estate';
+  if (v.includes('construction')) return 'construction';
+  if (v.includes('manufactur')) return 'manufacturing';
+  if (v.includes('health') || v.includes('hospital') || v.includes('clinic')) return 'healthcare';
+  if (v.includes('retail')) return 'retail';
+  if (v.includes('ca_firm') || v.includes('account')) return 'ca_firm';
+  if (INDUSTRY_CARDS.some((c) => c.key === v)) return v as IndustryKey;
+  return 'general';
+}
+
 export default function CompanySetupWizard() {
   const navigate = useNavigate();
   const { accessToken } = useAuth();
   const { loadCompanies, setActiveCompany } = useCompany();
+  const { setIndustry, industryLabel } =
+    useIndustryConfig();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [selectedIndustry, setSelectedIndustry] = useState<IndustryKey>('general');
+  const preview = INDUSTRY_PREVIEW[selectedIndustry] || INDUSTRY_PREVIEW.general;
 
   const [profile, setProfile] = useState<Partial<CompanyProfile>>({
     base_currency: 'AED',
@@ -102,7 +128,11 @@ export default function CompanySetupWizard() {
       const status = await setup.getSetupStatus(accessToken);
       if (status.draft_company) {
         setProfile(status.draft_company);
-        setStep(Math.max(1, status.draft_company.setup_step || 1));
+        const ind = mapLegacyIndustry(status.draft_company.industry);
+        setSelectedIndustry(ind);
+        // Existing drafts used setup_step 1–6 for profile…activate; shift +1 if already past industry
+        const rawStep = status.draft_company.setup_step || 1;
+        setStep(Math.min(7, Math.max(1, rawStep >= 1 && status.draft_company.industry ? rawStep + 1 : 1)));
       } else if (status.has_active_company) {
         setProfile({ base_currency: 'AED', reporting_standard: 'IFRS', financial_year_start: 1 });
         setStep(1);
@@ -182,21 +212,48 @@ export default function CompanySetupWizard() {
     if (opt !== 'csv') clearCsvImport();
   };
 
-  const saveProfile = async () => {
+  const validateProfile = (): boolean => {
+    const errors: Record<string, string> = {};
     if (!profile.company_name?.trim()) {
-      setError('Company name is required');
-      return;
+      errors.company_name = 'Company name is required';
     }
-    if (profile.trn && !/^\d{15}$/.test(profile.trn)) {
-      setError('TRN must be exactly 15 digits');
-      return;
+    if (profile.trn?.trim() && !/^\d{15}$/.test(profile.trn.trim())) {
+      errors.trn = 'TRN must be exactly 15 digits';
     }
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const saveIndustry = async () => {
     setSaving(true);
     setError('');
     try {
-      const res = await setup.saveProfile(accessToken, profile);
-      setProfile(res.profile);
+      const cfg = await setIndustry(selectedIndustry);
+      setProfile((p) => ({
+        ...p,
+        industry: cfg.industry,
+        industry_label: cfg.industry_label,
+      }));
       setStep(2);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save industry');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setError('');
+    if (!validateProfile()) return;
+    setSaving(true);
+    try {
+      const res = await setup.saveProfile(accessToken, {
+        ...profile,
+        industry: selectedIndustry,
+      });
+      setProfile(res.profile);
+      setFieldErrors({});
+      setStep(3);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
     } finally {
@@ -210,7 +267,7 @@ export default function CompanySetupWizard() {
     try {
       const res = await setup.setupCoA(accessToken, coaOption, coaOption === 'csv' ? csvText : undefined);
       setAccounts(res.accounts);
-      setStep(3);
+      setStep(4);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'CoA setup failed');
     } finally {
@@ -234,7 +291,7 @@ export default function CompanySetupWizard() {
         prior_year: balances[a.code]?.prior,
       }));
       await setup.saveOpeningBalances(accessToken, openingDate, lines);
-      setStep(4);
+      setStep(5);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Opening balances failed');
     } finally {
@@ -247,7 +304,7 @@ export default function CompanySetupWizard() {
     setError('');
     try {
       await setup.saveControls(accessToken, controls);
-      setStep(5);
+      setStep(6);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Controls save failed');
     } finally {
@@ -272,7 +329,7 @@ export default function CompanySetupWizard() {
   }, [accessToken]);
 
   useEffect(() => {
-    if (step === 5) void loadUsers();
+    if (step === 6) void loadUsers();
   }, [step, loadUsers]);
 
   const saveRoles = async () => {
@@ -288,7 +345,7 @@ export default function CompanySetupWizard() {
       await setup.saveRoles(accessToken, assignments);
       const rev = await setup.getReview(accessToken);
       setReview(rev);
-      setStep(6);
+      setStep(7);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Roles save failed');
     } finally {
@@ -324,11 +381,29 @@ export default function CompanySetupWizard() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="flex items-center gap-3 mb-8">
-          <StepIcon className="w-8 h-8 text-teal-400" />
-          <div>
-            <h1 className="text-2xl font-bold">Company Setup</h1>
-            <p className="text-gray-400 text-sm">Step {step} of 6 — {STEPS[step - 1]?.label}</p>
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
+          <div className="flex items-center gap-3">
+            <StepIcon className="w-8 h-8 text-teal-400" />
+            <div>
+              <h1 className="text-2xl font-bold">Company Setup</h1>
+              <p className="text-gray-400 text-sm">Step {step} of 7 — {STEPS[step - 1]?.label}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => navigate('/uae-suite')}
+              className="px-3 py-1.5 rounded-lg border border-indigo-500/40 text-indigo-300 hover:bg-indigo-900/30"
+            >
+              UAE Taxation (AP + Tax) →
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard')}
+              className="px-3 py-1.5 rounded-lg border border-gray-600 text-gray-400 hover:text-white hover:bg-gray-800"
+            >
+              All modules
+            </button>
           </div>
         </div>
 
@@ -358,11 +433,84 @@ export default function CompanySetupWizard() {
             )}
 
             {step === 1 && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">What industry are you in?</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    This sets cost-center labels, AP/AR wording, and which compliance modules appear in your sidebar.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {INDUSTRY_CARDS.map((card) => {
+                    const active = selectedIndustry === card.key;
+                    return (
+                      <button
+                        key={card.key}
+                        type="button"
+                        onClick={() => setSelectedIndustry(card.key)}
+                        className={`text-left rounded-xl border p-4 transition-colors ${
+                          active
+                            ? 'border-teal-500 bg-teal-900/30 ring-1 ring-teal-500/40'
+                            : 'border-gray-700 bg-gray-800/40 hover:border-gray-500'
+                        }`}
+                      >
+                        <div className="text-2xl mb-2">{card.icon}</div>
+                        <div className="font-medium text-white text-sm">{card.label}</div>
+                        <div className="text-xs text-gray-400 mt-1">{card.description}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="rounded-xl border border-gray-700 bg-gray-950/60 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">
+                    Sidebar preview — {INDUSTRY_CARDS.find((c) => c.key === selectedIndustry)?.label}
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-[10px] font-semibold text-gray-500 uppercase mb-2">Finance</p>
+                      <ul className="space-y-1.5 text-gray-300">
+                        <li>• {preview.apLabel}</li>
+                        <li>• {preview.arLabel}</li>
+                        <li>• {preview.costCenterLabel} master</li>
+                      </ul>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-semibold text-gray-500 uppercase mb-2">Compliance</p>
+                      <ul className="space-y-1.5 text-gray-300">
+                        <li>• VAT Return</li>
+                        {preview.showIfrs15 && <li>• Revenue Recognition (IFRS 15)</li>}
+                        {preview.showIfrs16 && <li>• Lease Accounting (IFRS 16)</li>}
+                        {preview.showRera && <li>• RERA Compliance</li>}
+                        {!preview.showIfrs15 && !preview.showIfrs16 && !preview.showRera && (
+                          <li className="text-gray-500">• Core VAT only for this industry</li>
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className={labelCls}>Company Name *</label>
-                    <input className={inputCls} value={profile.company_name || ''} onChange={e => setProfile(p => ({ ...p, company_name: e.target.value }))} />
+                    <input
+                      className={fieldErrors.company_name ? inputErrorCls : inputCls}
+                      value={profile.company_name || ''}
+                      onChange={e => {
+                        setProfile(p => ({ ...p, company_name: e.target.value }));
+                        if (fieldErrors.company_name) {
+                          setFieldErrors(fe => {
+                            const next = { ...fe };
+                            delete next.company_name;
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {fieldErrors.company_name && <p className={fieldErrorCls}>{fieldErrors.company_name}</p>}
                   </div>
                   <div>
                     <label className={labelCls}>Trade Name</label>
@@ -377,14 +525,30 @@ export default function CompanySetupWizard() {
                   </div>
                   <div>
                     <label className={labelCls}>TRN (15 digits)</label>
-                    <input className={inputCls} value={profile.trn || ''} maxLength={15} onChange={e => setProfile(p => ({ ...p, trn: e.target.value.replace(/\D/g, '') }))} />
+                    <input
+                      className={fieldErrors.trn ? inputErrorCls : inputCls}
+                      value={profile.trn || ''}
+                      maxLength={15}
+                      onChange={e => {
+                        setProfile(p => ({ ...p, trn: e.target.value.replace(/\D/g, '') }));
+                        if (fieldErrors.trn) {
+                          setFieldErrors(fe => {
+                            const next = { ...fe };
+                            delete next.trn;
+                            return next;
+                          });
+                        }
+                      }}
+                    />
+                    {fieldErrors.trn && <p className={fieldErrorCls}>{fieldErrors.trn}</p>}
                   </div>
                   <div>
                     <label className={labelCls}>Industry</label>
-                    <select className={inputCls} value={profile.industry || ''} onChange={e => setProfile(p => ({ ...p, industry: e.target.value }))}>
-                      <option value="">Select…</option>
-                      {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
-                    </select>
+                    <input
+                      className={inputCls + ' opacity-80'}
+                      value={INDUSTRY_CARDS.find((c) => c.key === selectedIndustry)?.label || selectedIndustry}
+                      readOnly
+                    />
                   </div>
                   <div>
                     <label className={labelCls}>Financial Year Start</label>
@@ -404,7 +568,7 @@ export default function CompanySetupWizard() {
               </div>
             )}
 
-            {step === 2 && (
+            {step === 3 && (
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-3">
                   {(['default', 'csv', 'blank'] as const).map(opt => (
@@ -503,8 +667,11 @@ export default function CompanySetupWizard() {
               </div>
             )}
 
-            {step === 3 && (
+            {step === 4 && (
               <div className="space-y-4">
+                <p className="text-sm text-gray-400">
+                  Optional — leave debits and credits at zero to skip, or enter your opening trial balance. You can return later from Company Setup.
+                </p>
                 <div>
                   <label className={labelCls}>Opening Balance Date</label>
                   <input type="date" className={inputCls} value={openingDate} onChange={e => setOpeningDate(e.target.value)} />
@@ -541,10 +708,20 @@ export default function CompanySetupWizard() {
                   Debits: {balanceTotals.dr.toFixed(2)} | Credits: {balanceTotals.cr.toFixed(2)}
                   {!balanceTotals.balanced && balanceTotals.dr + balanceTotals.cr > 0 && ' — must balance'}
                 </div>
+                {balanceTotals.balanced && balanceTotals.dr === 0 && balanceTotals.cr === 0 && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void saveOpening()}
+                    className="text-sm text-teal-400 hover:text-teal-300 underline"
+                  >
+                    Skip opening balances for now (save zeros and continue) →
+                  </button>
+                )}
               </div>
             )}
 
-            {step === 4 && (
+            {step === 5 && (
               <div className="space-y-4 max-w-md">
                 <div>
                   <label className={labelCls}>JE Approval Threshold (AED)</label>
@@ -563,7 +740,7 @@ export default function CompanySetupWizard() {
               </div>
             )}
 
-            {step === 5 && (
+            {step === 6 && (
               <div className="space-y-4">
                 {workspaceUsers.map(u => (
                   <div key={u.user_id} className="border border-gray-700 rounded-lg p-3">
@@ -585,9 +762,10 @@ export default function CompanySetupWizard() {
               </div>
             )}
 
-            {step === 6 && review && (
+            {step === 7 && review && (
               <div className="space-y-3 text-sm">
                 <p><span className="text-gray-500">Company:</span> {(review.profile as CompanyProfile)?.company_name}</p>
+                <p><span className="text-gray-500">Industry:</span> {industryLabel || selectedIndustry}</p>
                 <p><span className="text-gray-500">Accounts:</span> {String(review.account_count)}</p>
                 <p><span className="text-gray-500">Periods:</span> {Array.isArray(review.periods) ? review.periods.length : 0} generated</p>
                 <p className="text-teal-400">Ready to activate and start UAE accounting.</p>
@@ -599,13 +777,14 @@ export default function CompanySetupWizard() {
                 className="flex items-center gap-1 px-4 py-2 text-sm text-gray-400 hover:text-white disabled:opacity-30">
                 <ChevronLeft className="w-4 h-4" /> Back
               </button>
-              {step < 6 ? (
-                <button type="button" disabled={saving || (step === 2 && coaOption === 'csv')} onClick={() => {
-                  if (step === 1) void saveProfile();
-                  else if (step === 2) void saveCoA();
-                  else if (step === 3) void saveOpening();
-                  else if (step === 4) void saveControlsStep();
-                  else if (step === 5) void saveRoles();
+              {step < 7 ? (
+                <button type="button" disabled={saving || (step === 3 && coaOption === 'csv' && !csvText)} onClick={() => {
+                  if (step === 1) void saveIndustry();
+                  else if (step === 2) void saveProfile();
+                  else if (step === 3) void saveCoA();
+                  else if (step === 4) void saveOpening();
+                  else if (step === 5) void saveControlsStep();
+                  else if (step === 6) void saveRoles();
                 }}
                   className="flex items-center gap-1 px-5 py-2 bg-teal-600 hover:bg-teal-500 rounded-lg text-sm font-medium disabled:opacity-50">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <>Next <ChevronRight className="w-4 h-4" /></>}

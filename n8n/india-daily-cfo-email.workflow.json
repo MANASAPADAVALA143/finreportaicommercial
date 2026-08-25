@@ -1,0 +1,105 @@
+{
+  "name": "Daily CFO Email — AP InvoiceFlow India (Gnanova)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-india-8am",
+      "name": "Cron 08:00 IST (02:30 UTC)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300],
+      "notes": "8:00 IST = 02:30 UTC. Original draft used 0 2 * * * (= 07:30 IST); corrected to 30 2 * * *."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.AP_API_BASE}}/api/ap/cfo-daily-summary",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"company_id\": \"{{$env.AP_COMPANY_ID}}\", \"days\": 7, \"send_email\": false, \"market\": \"IN\"}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-build-summary",
+      "name": "Build CFO Summary (API)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = items[0].json;\nconst fmt = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\nconst vendors = (s.top_vendors || []).slice(0, 3);\nconst vendorRows = vendors.length\n  ? vendors.map((v, i) => `<tr><td style=\"padding:8px 12px;border-bottom:1px solid #e5e7eb;\">${i+1}. ${v.vendor_name}</td><td style=\"padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;\">${fmt(v.amount)}</td></tr>`).join('')\n  : `<tr><td colspan=\"2\" style=\"padding:12px;color:#6b7280;\">No open vendor balances</td></tr>`;\nconst overdue = Number(s.overdue_count ?? 0);\nconst pending = Number(s.pending_approvals ?? 0);\nconst highRisk = Number(s.high_risk_flags ?? 0);\nconst dueWeek = Number(s.due_this_week_count ?? 0);\nconst itcEligible = fmt(s.itc_eligible ?? 0);\nconst itcBlocked = fmt(s.itc_blocked ?? 0);\nconst tdsPayable = fmt(s.tds_payable ?? 0);\n\nconst today = new Date();\nconst gstr1Due = `11th ${new Date(today.getFullYear(), today.getMonth()+1, 1).toLocaleString('default',{month:'long'})} ${today.getFullYear()}`;\nconst gstr3bDue = `20th ${new Date(today.getFullYear(), today.getMonth()+1, 1).toLocaleString('default',{month:'long'})} ${today.getFullYear()}`;\n\nconst html = `<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:#f3f4f6;font-family:Segoe UI,Arial,sans-serif;\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f3f4f6;padding:24px 12px;\"><tr><td align=\"center\">\n<table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#fff;border-radius:8px;border:1px solid #e5e7eb;\">\n<tr><td style=\"background:#1e40af;padding:20px 28px;\">\n  <div style=\"font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#bfdbfe;\">Gnanova Finance OS — India</div>\n  <div style=\"font-size:22px;font-weight:700;color:#fff;margin-top:4px;\">Daily CFO Briefing</div>\n  <div style=\"font-size:13px;color:#93c5fd;margin-top:6px;\">${s.period_label || new Date().toISOString().slice(0,10)} · IST 08:00</div>\n</td></tr>\n<tr><td style=\"padding:24px 28px;\">\n<table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">\n<tr>\n  <td width=\"50%\" style=\"padding:0 8px 12px 0;vertical-align:top;\">\n    <div style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;\">\n      <div style=\"font-size:11px;color:#1e40af;text-transform:uppercase;\">Total outstanding AP</div>\n      <div style=\"font-size:22px;font-weight:700;margin-top:4px;\">${fmt(s.total_outstanding)}</div>\n    </div>\n  </td>\n  <td width=\"50%\" style=\"padding:0 0 12px 8px;vertical-align:top;\">\n    <div style=\"background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:14px;\">\n      <div style=\"font-size:11px;color:#c2410c;text-transform:uppercase;\">Due this week</div>\n      <div style=\"font-size:22px;font-weight:700;margin-top:4px;\">${dueWeek} invoices</div>\n      <div style=\"font-size:12px;color:#9a3412;margin-top:2px;\">${fmt(s.due_this_week_amount)}</div>\n    </div>\n  </td>\n</tr>\n<tr>\n  <td width=\"50%\" style=\"padding:0 8px 12px 0;vertical-align:top;\">\n    <div style=\"background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;\">\n      <div style=\"font-size:11px;color:#b91c1c;text-transform:uppercase;\">Overdue</div>\n      <div style=\"font-size:22px;font-weight:700;margin-top:4px;\">${overdue} invoices</div>\n      <div style=\"font-size:12px;color:#991b1b;margin-top:2px;\">${fmt(s.overdue_amount)}</div>\n    </div>\n  </td>\n  <td width=\"50%\" style=\"padding:0 0 12px 8px;vertical-align:top;\">\n    <div style=\"background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:14px;\">\n      <div style=\"font-size:11px;color:#7e22ce;text-transform:uppercase;\">High risk flags</div>\n      <div style=\"font-size:22px;font-weight:700;margin-top:4px;\">${highRisk}</div>\n    </div>\n  </td>\n</tr>\n</table>\n<div style=\"margin-top:4px;padding:14px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;\">\n  <div style=\"font-size:13px;font-weight:600;margin-bottom:8px;color:#15803d;\">GST Input Tax Credit</div>\n  <table width=\"100%\">\n    <tr><td style=\"font-size:12px;color:#166534;\">ITC Eligible</td><td style=\"text-align:right;font-weight:600;color:#166534;\">${itcEligible}</td></tr>\n    <tr><td style=\"font-size:12px;color:#b91c1c;\">ITC Blocked (Sec 17(5))</td><td style=\"text-align:right;font-weight:600;color:#b91c1c;\">${itcBlocked}</td></tr>\n    <tr><td style=\"font-size:12px;color:#92400e;\">TDS Payable</td><td style=\"text-align:right;font-weight:600;color:#92400e;\">${tdsPayable}</td></tr>\n  </table>\n</div>\n<div style=\"margin-top:12px;padding:14px;background:#fefce8;border-radius:8px;border:1px solid #fde68a;\">\n  <div style=\"font-size:13px;font-weight:600;margin-bottom:8px;color:#92400e;\">Upcoming GST Filing Deadlines</div>\n  <table width=\"100%\">\n    <tr><td style=\"font-size:12px;color:#78350f;\">GSTR-1 due</td><td style=\"text-align:right;font-weight:600;font-size:12px;\">${gstr1Due}</td></tr>\n    <tr><td style=\"font-size:12px;color:#78350f;\">GSTR-3B due</td><td style=\"text-align:right;font-weight:600;font-size:12px;\">${gstr3bDue}</td></tr>\n  </table>\n</div>\n<div style=\"margin-top:12px;padding:14px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;\">\n  <div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;\">Pending approvals</div>\n  <div style=\"font-size:20px;font-weight:700;margin-top:4px;\">${pending}</div>\n</div>\n<div style=\"margin-top:20px;\">\n  <div style=\"font-size:14px;font-weight:600;margin-bottom:8px;\">Top 3 vendors by outstanding</div>\n  <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;\">\n    <thead><tr style=\"background:#f9fafb;\">\n      <th align=\"left\" style=\"padding:8px 12px;font-size:11px;color:#6b7280;text-transform:uppercase;\">Vendor</th>\n      <th align=\"right\" style=\"padding:8px 12px;font-size:11px;color:#6b7280;text-transform:uppercase;\">Outstanding</th>\n    </tr></thead>\n    <tbody>${vendorRows}</tbody>\n  </table>\n</div>\n<p style=\"margin:20px 0 0;font-size:12px;color:#6b7280;\">Ref: Gnanova Finance OS India | Automated daily briefing</p>\n</td></tr>\n</table></td></tr></table>\n</body></html>`;\nreturn [{ json: { ...s, subject: `Daily CFO Briefing — ${fmt(s.total_outstanding)} AP · ${overdue} overdue · GSTR-3B due ${gstr3bDue}`, html, to: $env.CFO_EMAIL } }];"
+      },
+      "id": "code-html-template",
+      "name": "Render HTML Email (India)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$env.SMTP_FROM || 'noreply@finreportai.com'}}",
+        "toEmail": "={{$json.to || $env.CFO_EMAIL}}",
+        "subject": "={{$json.subject}}",
+        "emailType": "html",
+        "html": "={{$json.html}}",
+        "options": {}
+      },
+      "id": "smtp-send",
+      "name": "Send via SMTP",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1080, 300],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE_WITH_SMTP_CREDENTIAL_ID",
+          "name": "AP SMTP"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron 08:00 IST (02:30 UTC)": {
+      "main": [[{ "node": "Build CFO Summary (API)", "type": "main", "index": 0 }]]
+    },
+    "Build CFO Summary (API)": {
+      "main": [[{ "node": "Render HTML Email (India)", "type": "main", "index": 0 }]]
+    },
+    "Render HTML Email (India)": {
+      "main": [[{ "node": "Send via SMTP", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "meta": {
+    "instanceId": "gnanova-ap-daily-cfo-email-india"
+  },
+  "versionId": "1.0.0",
+  "tags": [
+    { "name": "ap-invoiceflow" },
+    { "name": "india" },
+    { "name": "gst" },
+    { "name": "gnanova" }
+  ]
+}

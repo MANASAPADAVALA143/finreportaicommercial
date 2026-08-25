@@ -38,12 +38,37 @@ export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
   },
 ];
 
+// ── UAE Finance Suite Full (uae_suite role — AP + AR + Tax) ───────────────────
+export const UAE_SUITE_NAV: NavEntry[] = [
+  {
+    section: '🇦🇪 UAE Finance Suite',
+    items: [
+      { label: 'UAE Taxation', path: '/uae-suite', icon: 'layout-dashboard', badge: 'AP+Tax' },
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP' },
+      { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
+      { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
+      { label: 'E-Invoicing', path: '/gulftax/e-invoicing', icon: 'receipt', badge: 'Peppol' },
+      { label: 'IFRS 16 Leases', path: '/ifrs/16', icon: 'building-2', badge: 'IFRS' },
+    ],
+  },
+  {
+    section: 'AR',
+    items: [
+      { label: 'Invoices & Aging', path: '/uae-full/ar', icon: 'file-text' },
+      { label: 'Customer Risk', path: '/uae-full/ar/customer-risk', icon: 'shield' },
+      { label: 'Dunning', path: '/uae-full/ar/dunning', icon: 'clock' },
+      { label: 'Recurring Invoices', path: '/uae-full/ar/recurring', icon: 'calendar' },
+    ],
+  },
+];
+
 // ── India Suite ───────────────────────────────────────────────────────────────
 export const INDIA_NAV: NavEntry[] = [
   { label: 'Dashboard',          path: '/india-full',           icon: 'layout-dashboard' },
   { label: 'Chart of Accounts',  path: '/india-full/coa',       icon: 'book' },
   { label: 'Journal Entries',    path: '/india-full/journals',  icon: 'file-text' },
   { label: 'Sales Invoices',     path: '/india-full/sales',     icon: 'receipt' },
+  { label: 'AP InvoiceFlow',     path: '/ap-invoices',          icon: 'shopping-cart', badge: 'AP' },
   { label: 'Purchase + ITC',     path: '/india-full/purchases', icon: 'shopping-cart' },
   { label: 'GST Returns',        path: '/india-full/gst',       icon: 'percent' },
   { label: 'TDS Management',     path: '/india-full/tds',       icon: 'calculator' },
@@ -66,6 +91,7 @@ export const INDIA_NAV: NavEntry[] = [
 export const UAE_NAV: NavEntry[] = [
   { label: 'Workspaces',         path: '/workspaces',            icon: 'building-2' },
   { label: 'Company Setup',      path: '/company-setup',         icon: 'sliders', badge: 'Setup' },
+  { label: 'UAE Taxation',       path: '/uae-suite',             icon: 'shield', badge: 'AP+Tax' },
   { label: 'Dashboard',          path: '/uae-full',              icon: 'layout-dashboard' },
   { label: 'Chart of Accounts',  path: '/uae-full/coa',          icon: 'book' },
   { label: 'Journal Entries',    path: '/uae-full/journals',     icon: 'file-text' },
@@ -75,6 +101,9 @@ export const UAE_NAV: NavEntry[] = [
     section: 'Receivables',
     items: [
       { label: 'Sales Invoices', path: '/uae-full/ar',           icon: 'receipt' },
+      { label: 'Customer Risk',  path: '/uae-full/ar/customer-risk', icon: 'shield-alert' },
+      { label: 'AR Dunning',     path: '/uae-full/ar/dunning',     icon: 'mail' },
+      { label: 'Recurring',      path: '/uae-full/ar/recurring',   icon: 'calendar-clock' },
       { label: 'AR Aging',       path: '/uae-full/ar#aging',     icon: 'bar-chart-2' },
       { label: 'O2C Dashboard',  path: '/o2c',                   icon: 'activity', badge: 'O2C' },
     ],
@@ -105,6 +134,11 @@ export const UAE_NAV: NavEntry[] = [
       { label: 'Invoice Flow',       path: '/gulftax/invoice-flow',          icon: 'file-text' },
       { label: 'VAT Return',         path: '/gulftax/vat-return',            icon: 'file-text' },
       { label: 'Reconciliation',     path: '/gulftax/reconciliation',        icon: 'git-merge' },
+      { label: 'Audit Exports',      path: '/gulftax/audit-exports',         icon: 'shield' },
+      { label: 'Anomaly Detection',  path: '/gulftax/anomaly-detection',     icon: 'activity' },
+      { label: 'Tax Compliance',     path: '/gulftax/tax-compliance',        icon: 'file-check' },
+      { label: 'Recon Summary',      path: '/gulftax/recon-summary',         icon: 'git-merge' },
+      { label: 'Financial Statements', path: '/gulftax/financial-statements', icon: 'file-text' },
       { label: 'Corporate Tax',      path: '/gulftax/corporate-tax',         icon: 'building' },
       { label: 'CIT Return',         path: '/gulftax/corporate-tax/return',  icon: 'file-text', badge: 'CT' },
       { label: 'ESR Filing',         path: '/gulftax/esr-filing',            icon: 'file-check' },
@@ -146,6 +180,7 @@ export const UAE_NAV: NavEntry[] = [
     items: [
       { label: 'R2R Pattern Engine', path: '/r2r/pattern',         icon: 'git-merge',      badge: 'AI' },
       { label: 'Audit Intelligence', path: '/audit',               icon: 'shield',         badge: 'AI' },
+      { label: 'Command Center',     path: '/audit/command-center', icon: 'shield-check',  badge: 'AI' },
       { label: 'Board Pack',         path: '/reports/board-pack',  icon: 'presentation',   badge: 'AI' },
     ],
   },

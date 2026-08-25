@@ -69,13 +69,17 @@ export const STANDARD_TEMPLATES: Record<AccountingStandard, StandardConfig> = {
     categories: [
       { code: '1000', name: 'Property Plant & Equipment', type: 'asset', standardRef: 'IAS 16', keywords: ['equipment', 'machinery', 'vehicle', 'furniture'] },
       { code: '1500', name: 'Intangible Assets', type: 'asset', standardRef: 'IAS 38', keywords: ['software', 'license', 'patent', 'brand'] },
+      { code: '1810', name: 'Input VAT Recoverable', type: 'asset', standardRef: 'IAS 12 / UAE VAT', keywords: ['vat', 'input vat', 'tax recoverable'] },
+      { code: '1100', name: 'Cash & Bank', type: 'asset', standardRef: 'IAS 7', keywords: ['bank', 'cash', 'dewa', 'etisalat'] },
+      { code: '2100', name: 'Accounts Payable', type: 'liability', standardRef: 'IAS 1', keywords: ['payable', 'vendor', 'supplier'] },
+      { code: '2200', name: 'Output VAT Payable', type: 'liability', standardRef: 'IAS 12 / UAE VAT', keywords: ['output vat', 'vat payable'] },
       { code: '5000', name: 'Cost of Sales', type: 'expense', standardRef: 'IAS 2', keywords: ['raw material', 'inventory', 'goods'] },
       { code: '6000', name: 'Employee Benefits', type: 'expense', standardRef: 'IAS 19', keywords: ['salary', 'wages', 'staff', 'payroll', 'hr'] },
       { code: '6100', name: 'Professional Services', type: 'expense', standardRef: 'IAS 1', keywords: ['consulting', 'legal', 'audit', 'advisory'] },
       { code: '6200', name: 'Lease Expense', type: 'expense', standardRef: 'IFRS 16', keywords: ['rent', 'lease', 'office space', 'wework'] },
-      { code: '6300', name: 'Utilities', type: 'expense', standardRef: 'IAS 1', keywords: ['electricity', 'water', 'internet', 'phone', 'bsnl', 'airtel', 'tsspdcl'] },
+      { code: '6300', name: 'Utilities', type: 'expense', standardRef: 'IAS 1', keywords: ['electricity', 'water', 'internet', 'phone', 'dewa', 'etisalat'] },
       { code: '6400', name: 'Marketing & Advertising', type: 'expense', standardRef: 'IAS 38', keywords: ['marketing', 'advertising', 'ads', 'google', 'meta', 'brand'] },
-      { code: '6500', name: 'Travel & Entertainment', type: 'expense', standardRef: 'IAS 1', keywords: ['travel', 'hotel', 'flight', 'makemytrip', 'cab'] },
+      { code: '6500', name: 'Travel & Entertainment', type: 'expense', standardRef: 'IAS 1', keywords: ['travel', 'hotel', 'flight', 'cab'] },
       { code: '6600', name: 'IT & Technology', type: 'expense', standardRef: 'IAS 38', keywords: ['saas', 'cloud', 'aws', 'azure', 'github', 'hosting'] },
       { code: '7000', name: 'Research & Development', type: 'expense', standardRef: 'IAS 38', keywords: ['r&d', 'research', 'development', 'innovation'] },
       { code: '7100', name: 'Finance Costs', type: 'expense', standardRef: 'IAS 23', keywords: ['interest', 'bank charges', 'loan'] },
@@ -517,10 +521,10 @@ export async function loadStandardTemplateGLAccounts(
   standard: AccountingStandard
 ): Promise<{ inserted: number; skipped: number; error: string | null }> {
   if (standard === 'CUSTOM') return { inserted: 0, skipped: 0, error: null };
+  const { insertGlAccount, listExistingGlCodes } = await import('./glAccountsStore');
   const company_id = await requireCompanyId();
   const template = STANDARD_TEMPLATES[standard];
-  const { data: existing } = await client.from('gl_accounts').select('gl_code').eq('company_id', company_id);
-  const have = new Set((existing || []).map((r: { gl_code: string }) => r.gl_code));
+  const have = await listExistingGlCodes(client, company_id);
   let inserted = 0;
   let skipped = 0;
   for (const c of template.categories) {
@@ -528,7 +532,7 @@ export async function loadStandardTemplateGLAccounts(
       skipped++;
       continue;
     }
-    const { error } = await client.from('gl_accounts').insert({
+    const { error } = await insertGlAccount(client, {
       company_id,
       gl_code: c.code,
       gl_name: c.name,
@@ -537,7 +541,7 @@ export async function loadStandardTemplateGLAccounts(
       imported_from: 'template',
       standard_reference: c.standardRef ?? null,
     });
-    if (error) return { inserted, skipped, error: error.message };
+    if (error) return { inserted, skipped, error };
     inserted++;
     have.add(c.code);
   }

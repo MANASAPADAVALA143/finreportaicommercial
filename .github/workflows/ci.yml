@@ -75,8 +75,7 @@ jobs:
     
     - name: Build backend image
       run: |
-        cd backend
-        docker build -t finreportai-backend:latest .
+        docker build -f backend/Dockerfile -t finreportai-backend:latest .
     
     - name: Build frontend image
       run: |

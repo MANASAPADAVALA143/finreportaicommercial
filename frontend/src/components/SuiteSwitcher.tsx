@@ -1,7 +1,13 @@
 import { useSuite } from '../context/SuiteContext';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useMarket } from '../contexts/MarketContext';
 import { visibleSuiteIds } from '../config/productRole';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from './ui/tooltip';
 
 const SUITES = [
   {
@@ -10,7 +16,7 @@ const SUITES = [
     flag: '🇮🇳',
     color: '#FF9933',
     subtitle: 'GST · TDS · Payroll · Ind AS',
-    defaultPath: '/india-full',
+    defaultPath: '/ap-invoices',
   },
   {
     id: 'uae' as const,
@@ -18,7 +24,7 @@ const SUITES = [
     flag: '🇦🇪',
     color: '#0D9488',
     subtitle: 'VAT · CT · EOSB · IFRS',
-    defaultPath: '/uae-full',
+    defaultPath: '/ap-invoices',
   },
   {
     id: 'fpa' as const,
@@ -30,8 +36,9 @@ const SUITES = [
   },
 ];
 
-export function SuiteSwitcher() {
+export function SuiteSwitcher({ collapsed = false }: { collapsed?: boolean }) {
   const { activeSuite, setSuite } = useSuite();
+  const { setMarket } = useMarket();
   const { productRole } = useAuth();
   const navigate = useNavigate();
 
@@ -40,11 +47,46 @@ export function SuiteSwitcher() {
 
   const handleSwitch = (suite: (typeof SUITES)[0]) => {
     setSuite(suite.id);
+    if (suite.id === 'india' || suite.id === 'uae') {
+      void setMarket(suite.id);
+    }
     navigate(suite.defaultPath);
   };
 
   const active = suites.find(s => s.id === activeSuite) ?? suites[0];
   if (!active || suites.length === 0) return null;
+
+  if (collapsed) {
+    return (
+      <div className="px-2 py-2 border-b border-white/10 flex flex-col items-center gap-1">
+        {suites.map((suite) => (
+          <Tooltip key={suite.id}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => handleSwitch(suite)}
+                className={`
+                  flex h-9 w-9 items-center justify-center rounded-lg text-base transition-all
+                  ${activeSuite === suite.id
+                    ? 'text-white font-medium'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}
+                `}
+                style={
+                  activeSuite === suite.id
+                    ? { backgroundColor: suite.color + '30', border: `1px solid ${suite.color}50` }
+                    : { border: '1px solid transparent' }
+                }
+                aria-label={suite.label}
+              >
+                {suite.flag}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{suite.label}</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="px-3 py-2 border-b border-white/10">

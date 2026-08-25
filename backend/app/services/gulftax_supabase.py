@@ -141,8 +141,12 @@ def fetch_advance_payment_invoices(
 
 
 def mark_invoice_je_posted(invoice_id: str, je_reference: str) -> bool:
-    """Mark AP invoice as GL-posted in FinReportAI Supabase (commercial project)."""
-    if not invoice_id:
+    """Mark AP invoice as GL-posted in FinReportAI Supabase (commercial project).
+
+    Call ONLY after a real row exists in SQLAlchemy `uae_journal_entries`.
+    Never set this flag from a generated reference alone.
+    """
+    if not invoice_id or not (je_reference or "").strip():
         return False
     try:
         from app.core.supabase import get_supabase
@@ -154,4 +158,27 @@ def mark_invoice_je_posted(invoice_id: str, je_reference: str) -> bool:
         return True
     except Exception:
         logger.exception("Failed to update je_posted for invoice %s", invoice_id)
+        return False
+
+
+def clear_invoice_je_posted(invoice_id: str, *, reason: str = "") -> bool:
+    """Clear a false-positive je_posted flag when no GL row exists."""
+    if not invoice_id:
+        return False
+    try:
+        from app.core.supabase import get_supabase
+        sb = get_supabase()
+        sb.table("invoices").update({
+            "je_posted": False,
+            "je_reference": None,
+        }).eq("id", invoice_id).execute()
+        if reason:
+            logger.warning(
+                "Cleared je_posted for invoice %s — %s",
+                invoice_id,
+                reason,
+            )
+        return True
+    except Exception:
+        logger.exception("Failed to clear je_posted for invoice %s", invoice_id)
         return False

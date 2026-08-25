@@ -1,5 +1,7 @@
 import { supabase, type Invoice, type PurchaseOrder } from './supabase';
 import { getMyCompany } from './companyService';
+import { listInvoicesViaApi } from './listInvoicesService';
+import { resolveApSupabaseCompanyId } from './workspaceCompanySync';
 import { effectivePaymentDate, normalizedOpenPaymentStatus } from './paymentService';
 import { anonymiseVendor, redactDemoVendorNames } from './vendorDisplay';
 
@@ -40,6 +42,16 @@ export interface CFOKPIs {
   dueSoonCount: number;
   highRiskCount: number;
   highRiskAmount: number;
+  /** Category breakdown of open high/critical invoice_anomalies (max ~5 + Other). */
+  highRiskFlagBreakdown: Array<{ label: string; count: number }>;
+  /** Top invoices by anomaly risk_score for the briefing-style risk card. */
+  highestRiskInvoices: Array<{
+    invoice_number: string;
+    vendor_name: string;
+    flag_label: string;
+    amount: number;
+    risk_score: number;
+  }>;
   autoApproveRate: number;
   avgProcessDays: number;
   momChange: number;
@@ -150,7 +162,30 @@ export function formatInr(n: number): string {
   return `₹${Math.round(n).toLocaleString('en-IN')}`;
 }
 
+/** Same company resolution as Invoice List (workspace sync → AP Supabase company). */
+async function resolveCfoCompanyId(): Promise<string | undefined> {
+  try {
+    return await resolveApSupabaseCompanyId();
+  } catch {
+    const company = await getMyCompany();
+    return company?.id;
+  }
+}
+
+/**
+ * Prefer service-role list-invoices (FinReport JWT has no Supabase session → browser RLS = 0 rows).
+ * Fall back to browser Supabase only if the API fails.
+ */
 async function loadInvoices(companyId: string | undefined, limit = 800): Promise<Invoice[]> {
+  if (companyId) {
+    try {
+      const viaApi = await listInvoicesViaApi(companyId, limit);
+      if (viaApi.length > 0) return viaApi;
+    } catch (e) {
+      console.warn('[CFO] list-invoices API failed, falling back to browser Supabase:', e);
+    }
+  }
+
   let q = supabase.from('invoices').select('*').order('invoice_date', { ascending: false }).limit(limit);
   if (companyId) q = q.eq('company_id', companyId);
   const { data, error } = await q;
@@ -181,6 +216,103 @@ async function loadPOs(companyId: string | undefined): Promise<PurchaseOrder[]> 
     return [];
   }
   return (data || []) as PurchaseOrder[];
+}
+
+const FLAG_LABELS: Record<string, string> = {
+  GHOST_VENDOR: 'Ghost Vendor',
+  VENDOR_IDENTITY_MISMATCH: 'Vendor Identity Mismatch',
+  INVOICE_BEFORE_PO: 'Invoice Before PO/GRN',
+  INVOICE_BEFORE_GRN: 'Invoice Before PO/GRN',
+  AMOUNT_HIGH_ZSCORE: 'Statistical Outlier (unusual amount)',
+  AMOUNT_LOW_ZSCORE: 'Statistical Outlier (unusual amount)',
+  AMOUNT_HIGH_VS_AVG: 'Statistical Outlier (unusual amount)',
+  AMOUNT_LOW_VS_AVG: 'Statistical Outlier (unusual amount)',
+  FREQUENCY_ANOMALY: 'Frequency Anomaly',
+  SPLIT_INVOICE: 'Split Invoice',
+  NEAR_DUPLICATE: 'Near Duplicate',
+  DUPLICATE_INVOICE: 'Duplicate Invoice',
+  JUST_BELOW_THRESHOLD: 'Just Below Approval Threshold',
+  NEW_VENDOR_HIGH_AMOUNT: 'New Vendor High Amount',
+  ML_HIGH_RISK: 'ML High Risk',
+};
+
+function flagLabel(code: string | null | undefined, anomalyType?: string | null): string {
+  const c = (code || '').trim().toUpperCase();
+  if (c && FLAG_LABELS[c]) return FLAG_LABELS[c];
+  if (c) return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+  if ((anomalyType || '').toLowerCase() === 'statistical') return 'Statistical Outlier (unusual amount)';
+  return 'Other';
+}
+
+async function loadHighRiskAnomalyStats(
+  companyId: string | undefined,
+  invoices: Invoice[],
+): Promise<{
+  breakdown: Array<{ label: string; count: number }>;
+  topInvoices: CFOKPIs['highestRiskInvoices'];
+  flagCount: number;
+}> {
+  let q = supabase
+    .from('invoice_anomalies')
+    .select('invoice_id,severity,risk_score,flag_code,flag_reason,anomaly_type,status')
+    .eq('status', 'open');
+  if (companyId) q = q.eq('company_id', companyId);
+  const { data, error } = await q;
+  if (error) {
+    console.warn('strategicAdvisorService anomalies:', error.message);
+    return { breakdown: [], topInvoices: [], flagCount: 0 };
+  }
+  const high = (data || []).filter((a) => {
+    const sev = String(a.severity || '').toLowerCase();
+    if (sev === 'high' || sev === 'critical') return true;
+    return Number(a.risk_score || 0) >= 60;
+  });
+  const counts = new Map<string, number>();
+  for (const a of high) {
+    const label = flagLabel(a.flag_code as string, a.anomaly_type as string);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  let breakdown: Array<{ label: string; count: number }>;
+  if (ranked.length <= 5) {
+    breakdown = ranked.map(([label, count]) => ({ label, count }));
+  } else {
+    const head = ranked.slice(0, 4);
+    const other = ranked.slice(4).reduce((s, [, n]) => s + n, 0);
+    breakdown = head.map(([label, count]) => ({ label, count }));
+    if (other) breakdown.push({ label: 'Other', count: other });
+  }
+
+  const byId = new Map(invoices.map((i) => [i.id, i]));
+  const best = new Map<string, { score: number; label: string; reason: string }>();
+  for (const a of high) {
+    const id = String(a.invoice_id || '');
+    if (!id) continue;
+    const score = Number(a.risk_score || 0);
+    const prev = best.get(id);
+    if (!prev || score > prev.score) {
+      best.set(id, {
+        score,
+        label: flagLabel(a.flag_code as string, a.anomaly_type as string),
+        reason: String(a.flag_reason || ''),
+      });
+    }
+  }
+  const topInvoices = [...best.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
+    .slice(0, 5)
+    .map(([id, meta]) => {
+      const inv = byId.get(id);
+      return {
+        invoice_number: inv?.invoice_number || '—',
+        vendor_name: inv?.vendor_name || 'Unknown',
+        flag_label: meta.label,
+        amount: Number(inv?.total_amount ?? 0),
+        risk_score: meta.score,
+      };
+    });
+
+  return { breakdown, topInvoices, flagCount: high.length };
 }
 
 async function loadPaymentLog(
@@ -243,8 +375,7 @@ function riskForVendor(vendor: string, unpaid: Invoice[]): VendorRisk {
 }
 
 export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const invData = await loadInvoices(cid);
   const vendors = await loadVendors(cid);
   const today = new Date();
@@ -283,7 +414,9 @@ export async function generateStrategicInsights(): Promise<StrategicInsight[]> {
     if (!i.due_date) return false;
     const due = new Date(i.due_date);
     due.setHours(0, 0, 0, 0);
-    return due < today && (i.status === 'Approved' || normalizedOpenPaymentStatus(i) === 'overdue');
+    // "Overdue approved" means status === 'Approved', not just any overdue
+    // payment status — Processing invoices were previously counted here too.
+    return due < today && i.status === 'Approved';
   });
   if (overdueOpen.length > 0) {
     const overdueTotal = overdueOpen.reduce((s, i) => s + Number(i.total_amount ?? 0), 0);
@@ -456,14 +589,14 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     return kpiCache.data;
   }
 
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const [invData, vendors, pos, payLog] = await Promise.all([
     loadInvoices(cid, 1000),
     loadVendors(cid),
     loadPOs(cid),
     loadPaymentLog(cid, new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10)),
   ]);
+  const anomalyStats = await loadHighRiskAnomalyStats(cid, invData);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -476,7 +609,9 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     if (!i.due_date) return false;
     const due = new Date(i.due_date);
     due.setHours(0, 0, 0, 0);
-    return due < today && (i.status === 'Approved' || normalizedOpenPaymentStatus(i) === 'overdue');
+    // "Overdue approved" means status === 'Approved', not just any overdue
+    // payment status — Processing invoices were previously counted here too.
+    return due < today && i.status === 'Approved';
   });
   let overdueOldestDays = 0;
   for (const inv of overdueOpen) {
@@ -505,6 +640,10 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
   const highRisk = unpaid.filter((i) => {
     if (i.risk_score === 'high') return true;
     if (i.risk_level && String(i.risk_level).toLowerCase() === 'high') return true;
+    // Invoice List stores numeric risk_score (e.g. 88) — treat ≥60 as high when anomalies RLS is empty.
+    if (typeof i.risk_score === 'number' && i.risk_score >= 60) return true;
+    const n = Number(i.risk_score);
+    if (Number.isFinite(n) && n >= 60) return true;
     return false;
   });
 
@@ -840,8 +979,10 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
     overdueCount: overdueOpen.length,
     dueSoonAmount: dueSoon.reduce((s, i) => s + Number(i.total_amount ?? 0), 0),
     dueSoonCount: dueSoon.length,
-    highRiskCount: highRisk.length,
+    highRiskCount: anomalyStats.flagCount || highRisk.length,
     highRiskAmount: highRisk.reduce((s, i) => s + Number(i.total_amount ?? 0), 0),
+    highRiskFlagBreakdown: anomalyStats.breakdown,
+    highestRiskInvoices: anomalyStats.topInvoices,
     autoApproveRate,
     avgProcessDays,
     momChange,
@@ -879,8 +1020,7 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
 }
 
 export async function getCFOCashFlowSeries(openingBalance: number, _minFloor: number): Promise<CashFlowDay[]> {
-  const company = await getMyCompany();
-  const cid = company?.id;
+  const cid = await resolveCfoCompanyId();
   const invData = await loadInvoices(cid, 600);
   const today = new Date();
   today.setHours(0, 0, 0, 0);

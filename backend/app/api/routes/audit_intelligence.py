@@ -11,10 +11,18 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import Workbook
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.audit_intelligence import AuditRun
+from app.models.client_data import ApInvoice, CtReturn, GulftaxTransaction
+from app.models.uae_accounting_full import (
+    UAEAccount,
+    UAEJournalEntry,
+    UAEJournalLine,
+    UAESalesInvoice,
+)
 from app.services.audit_claude import invoke_audit_json
 from app.services.audit_intelligence_helpers import (
     read_upload_as_csv_text,
@@ -22,10 +30,20 @@ from app.services.audit_intelligence_helpers import (
     result_summary_for_agent,
 )
 from app.services.audit_pdf_report import build_audit_pdf_bytes
+from app.services.audit_command_center_service import parse_period_dates
+from app.services.llm_service import invoke
 from app.services.r2r_pattern_engine import R2RPatternEngine
 from docx import Document
 
 router = APIRouter(prefix="/api/audit", tags=["audit-intelligence"])
+
+
+GOING_CONCERN_SYSTEM_PROMPT = (
+    "You are a senior auditor assessing going concern under ISA 570 and IAS 1 paragraph 25. "
+    "Based on the indicators provided, write a concise going concern assessment paragraph "
+    "(3-5 sentences) in professional audit language. If material uncertainty exists, state it "
+    "explicitly. Do not use bullet points."
+)
 
 # --- System prompts (JSON-only responses) ---
 
@@ -769,3 +787,291 @@ def download_management_letter_docx(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+class GoingConcernIn(BaseModel):
+    workspace_id: str = Field(..., min_length=1)
+    company_id: str = Field(..., min_length=1)
+    period: str = Field(..., min_length=4)
+    financial_data: dict[str, Any] | None = None
+
+
+def _to_float(v: Any) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _previous_period(period: str) -> str | None:
+    p = (period or "").strip()
+    # YYYY-QN
+    if len(p) == 7 and p[4] == "-" and p[5].upper() == "Q" and p[6].isdigit():
+        year = int(p[:4])
+        q = int(p[6])
+        if 1 <= q <= 4:
+            if q == 1:
+                return f"{year - 1}-Q4"
+            return f"{year}-Q{q - 1}"
+    # YYYY-MM
+    if len(p) == 7 and p[4] == "-" and p[5:7].isdigit():
+        year = int(p[:4])
+        month = int(p[5:7])
+        if 1 <= month <= 12:
+            if month == 1:
+                return f"{year - 1}-12"
+            return f"{year}-{month - 1:02d}"
+    return None
+
+
+def _going_concern_level(triggered_count: int) -> str:
+    if triggered_count <= 0:
+        return "none"
+    if triggered_count <= 2:
+        return "low"
+    if triggered_count <= 4:
+        return "medium"
+    return "high"
+
+
+def _is_revenue_account(account_type: str | None, account_code: str | None, account_name: str | None) -> bool:
+    t = str(account_type or "").strip().lower()
+    if t in {"income", "revenue"}:
+        return True
+    name = str(account_name or "").lower()
+    if "revenue" in name or "income" in name or "sales" in name:
+        return True
+    code = str(account_code or "").strip()
+    return bool(code.startswith("4"))
+
+
+def _is_expense_account(account_type: str | None, account_code: str | None, account_name: str | None) -> bool:
+    t = str(account_type or "").strip().lower()
+    if t in {"expense", "expenses", "cost of sales", "cogs"}:
+        return True
+    name = str(account_name or "").lower()
+    if "expense" in name or "cost of" in name or "fees" in name:
+        return True
+    code = str(account_code or "").strip()
+    return bool(code[:1] in {"5", "6", "7"})
+
+
+@router.post("/going-concern")
+def audit_going_concern(
+    body: GoingConcernIn,
+    db: Session = Depends(get_db),
+):
+    start, end = parse_period_dates(body.period)
+
+    # 1) Net loss from uae_journal_entries (CR revenue < DR expenses)
+    je_line_rows = (
+        db.query(
+            UAEJournalLine.account_code,
+            UAEJournalLine.account_name,
+            UAEJournalLine.debit,
+            UAEJournalLine.credit,
+            UAEAccount.account_type,
+        )
+        .join(UAEJournalEntry, UAEJournalEntry.id == UAEJournalLine.journal_entry_id)
+        .outerjoin(UAEAccount, UAEAccount.id == UAEJournalLine.account_id)
+        .filter(
+            UAEJournalEntry.tenant_id == body.workspace_id,
+            UAEJournalEntry.company_id == body.company_id,
+            UAEJournalEntry.entry_date >= start,
+            UAEJournalEntry.entry_date <= end,
+            UAEJournalEntry.status == "posted",
+        )
+        .all()
+    )
+    je_revenue_cr = 0.0
+    je_expense_dr = 0.0
+    for row in je_line_rows:
+        if _is_revenue_account(row.account_type, row.account_code, row.account_name):
+            je_revenue_cr += _to_float(row.credit)
+        if _is_expense_account(row.account_type, row.account_code, row.account_name):
+            je_expense_dr += _to_float(row.debit)
+    net_loss_current_period = je_revenue_cr < je_expense_dr
+
+    # GulfTax rows for VAT stress + revenue trend (period window)
+    gt_rows = (
+        db.query(GulftaxTransaction)
+        .filter(
+            GulftaxTransaction.tenant_id == body.workspace_id,
+            GulftaxTransaction.company_id == body.company_id,
+            GulftaxTransaction.transaction_date >= start,
+            GulftaxTransaction.transaction_date <= end,
+            GulftaxTransaction.status == "posted",
+        )
+        .all()
+    )
+    period_revenue = sum(
+        max(0.0, _to_float(r.gross_amount) - _to_float(r.vat_amount))
+        for r in gt_rows
+        if str(r.direction or "").lower() == "output"
+    )
+
+    # 2) AR aging stress (>90 days >30% of total AR)
+    ar_open_rows = (
+        db.query(
+            UAESalesInvoice.due_date,
+            UAESalesInvoice.outstanding,
+            UAESalesInvoice.status,
+        )
+        .filter(
+            UAESalesInvoice.tenant_id == body.workspace_id,
+            UAESalesInvoice.company_id == body.company_id,
+            UAESalesInvoice.status.in_(("sent", "overdue", "partial", "draft")),
+            UAESalesInvoice.outstanding > 0,
+        )
+        .all()
+    )
+    total_ar = sum(_to_float(r.outstanding) for r in ar_open_rows)
+    overdue_90_ar = 0.0
+    for row in ar_open_rows:
+        if row.due_date and (end - row.due_date).days > 90:
+            overdue_90_ar += _to_float(row.outstanding)
+    ar_overdue_ratio = (overdue_90_ar / total_ar) if total_ar > 0 else 0.0
+    ar_overdue_above_30pct = ar_overdue_ratio > 0.30
+
+    # 3) AP payment delays (>60 days overdue >25% of total open AP)
+    ap_open_rows = (
+        db.query(ApInvoice)
+        .filter(
+            ApInvoice.tenant_id == body.workspace_id,
+            ApInvoice.company_id == body.company_id,
+        )
+        .all()
+    )
+    total_ap_open = 0.0
+    overdue_60_ap = 0.0
+    for row in ap_open_rows:
+        s = str(row.status or "").lower()
+        if s in {"paid", "cancelled", "canceled", "void"}:
+            continue
+        amt = _to_float(row.total_amount)
+        if amt <= 0:
+            continue
+        total_ap_open += amt
+        if row.due_date and (end - row.due_date).days > 60:
+            overdue_60_ap += amt
+    ap_overdue_ratio = (overdue_60_ap / total_ap_open) if total_ap_open > 0 else 0.0
+    ap_payment_delays = ap_overdue_ratio > 0.25
+
+    # 4) VAT/CT compliance stress
+    vat_overdue = any(
+        str(r.direction or "").lower() == "output"
+        and str(r.status or "").lower() not in {"paid", "settled"}
+        and (end - r.transaction_date).days > 45
+        for r in gt_rows
+        if r.transaction_date
+    )
+    ct_rows = (
+        db.query(CtReturn)
+        .filter(
+            CtReturn.tenant_id == body.workspace_id,
+            CtReturn.company_id == body.company_id,
+            CtReturn.period_start <= end,
+            CtReturn.period_end >= start,
+        )
+        .order_by(CtReturn.updated_at.desc())
+        .all()
+    )
+    ct_missing_or_overdue = (len(ct_rows) == 0) or all(
+        str(r.status or "").lower() not in {"approved", "filed"} for r in ct_rows
+    )
+    vat_compliance_stress = vat_overdue or ct_missing_or_overdue
+
+    # 5) Revenue decline over 20% vs prior period from gulftax_transactions
+    prev_period = _previous_period(body.period)
+    prev_revenue = 0.0
+    if prev_period:
+        prev_rows = (
+            db.query(GulftaxTransaction)
+            .filter(
+                GulftaxTransaction.tenant_id == body.workspace_id,
+                GulftaxTransaction.company_id == body.company_id,
+                GulftaxTransaction.tax_period == prev_period,
+                GulftaxTransaction.direction == "output",
+                GulftaxTransaction.status == "posted",
+            )
+            .all()
+        )
+        prev_revenue = sum(
+            max(0.0, _to_float(r.gross_amount) - _to_float(r.vat_amount)) for r in prev_rows
+        )
+    revenue_decline_over_20pct = bool(prev_revenue > 0 and period_revenue < (0.8 * prev_revenue))
+
+    # 6) Negative working capital (proxy from open AR vs open AP)
+    negative_working_capital = (ap_overdue_ratio > 0.25 and ar_overdue_ratio > 0.30) or (
+        total_ap_open > total_ar and total_ap_open > 0
+    )
+
+    indicators = {
+        "net_loss_current_period": bool(net_loss_current_period),
+        "negative_working_capital": bool(negative_working_capital),
+        "ar_overdue_above_30pct": bool(ar_overdue_above_30pct),
+        "ap_payment_delays": bool(ap_payment_delays),
+        "vat_compliance_stress": bool(vat_compliance_stress),
+        "revenue_decline_over_20pct": bool(revenue_decline_over_20pct),
+    }
+    overrides = (body.financial_data or {}).get("overrides") if isinstance(body.financial_data, dict) else None
+    if isinstance(overrides, dict):
+        for key in list(indicators.keys()):
+            if key in overrides:
+                indicators[key] = bool(overrides[key])
+    triggered_count = sum(1 for v in indicators.values() if v)
+    level = _going_concern_level(triggered_count)
+
+    user_prompt = (
+        f"Company ID: {body.company_id}\n"
+        f"Workspace ID: {body.workspace_id}\n"
+        f"Period: {body.period}\n"
+        f"Triggered indicators: {triggered_count} of 6\n"
+        f"Indicators: {json.dumps(indicators)}\n"
+        f"Metrics: {{"
+        f"\"je_revenue_credits\": {round(je_revenue_cr, 2)}, "
+        f"\"je_expense_debits\": {round(je_expense_dr, 2)}, "
+        f"\"gulftax_period_revenue\": {round(period_revenue, 2)}, "
+        f"\"ar_overdue_ratio\": {round(ar_overdue_ratio, 4)}, "
+        f"\"ap_overdue_ratio\": {round(ap_overdue_ratio, 4)}, "
+        f"\"total_ar\": {round(total_ar, 2)}, "
+        f"\"total_ap_open\": {round(total_ap_open, 2)}, "
+        f"\"previous_period\": \"{prev_period}\", "
+        f"\"previous_period_revenue\": {round(prev_revenue, 2)}"
+        f"}}"
+    )
+    try:
+        narrative = invoke(
+            prompt=user_prompt,
+            system=GOING_CONCERN_SYSTEM_PROMPT,
+            max_tokens=500,
+            temperature=0.2,
+            model_id="claude-sonnet-4-6",
+        ).strip()
+    except Exception as exc:
+        # Keep endpoint live even if LLM is down.
+        narrative = (
+            f"Going concern assessment generated with deterministic indicators only: "
+            f"{triggered_count}/6 indicators triggered ({level}). AI narrative unavailable ({exc})."
+        )
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    result = {
+        "period": body.period,
+        "workspace_id": body.workspace_id,
+        "company_id": body.company_id,
+        "indicators": indicators,
+        "triggered_count": triggered_count,
+        "going_concern_level": level,
+        "narrative": narrative,
+        "generated_at": generated_at,
+        "isa_570_reference": "ISA 570",
+    }
+    run = _persist(
+        db,
+        agent_type="going_concern",
+        client_name=body.company_id,
+        file_name=None,
+        result=result,
+    )
+    return {"run_id": run.id, **result}

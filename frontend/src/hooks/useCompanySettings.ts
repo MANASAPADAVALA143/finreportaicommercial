@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/ap-invoice/supabase';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { backendOrigin } from '@/utils/backendOrigin';
+import { workspaceHeaders } from '@/utils/workspaceHeaders';
 
 export type CompanySettingsRow = {
   id: string;
@@ -50,7 +51,9 @@ export function useCompanySettings() {
       if (base) {
         try {
           const qs = cid ? `?company_id=${encodeURIComponent(cid)}` : '';
-          const res = await fetch(`${base}/api/ap/company-settings${qs}`);
+          const res = await fetch(`${base}/api/ap/company-settings${qs}`, {
+            headers: workspaceHeaders(),
+          });
           if (res.ok) {
             const data = (await res.json()) as Partial<CompanySettingsRow>;
             if (data && Object.keys(data).length > 0) {

@@ -111,7 +111,9 @@ def determine_transaction_side(
     explicit_type: Optional[str] = None,
     vendor_or_customer: Optional[str] = None,
 ) -> str:
-    """Purchase keywords checked first — expenses default to purchase."""
+    """Honor explicit CSV/API type first; otherwise keyword heuristics."""
+    if explicit_type and explicit_type.lower() in ("sale", "purchase"):
+        return explicit_type.lower()
     combined = f"{description or ''} {vendor_or_customer or ''}".lower()
     if _contains_any(combined, STRONG_SALE_KEYWORDS):
         return "sale"
@@ -119,8 +121,6 @@ def determine_transaction_side(
         return "purchase"
     if _contains_any(combined, SALE_KEYWORDS):
         return "sale"
-    if explicit_type and explicit_type.lower() in ("sale", "purchase"):
-        return explicit_type.lower()
     return "purchase"
 
 
@@ -194,6 +194,24 @@ def map_box_number(vat_treatment: str, transaction_side: str) -> int:
     if treatment == "exempt":
         return 11
     return 9
+
+
+def coerce_box_number(
+    transaction_type: str,
+    vat_treatment: Optional[str] = None,
+    box_number: Optional[int] = None,
+) -> int:
+    """Assign FTA box from AP/AR side + VAT treatment.
+
+    Purchase (AP) → Box 9 (or 6 for RCM); sale (AR) → Box 1/4/5 per treatment.
+    Stored ``box_number`` is ignored when it conflicts with side+treatment.
+    """
+    from app.services.vat_box_mapping import assign_box_number
+
+    del box_number  # side + treatment win
+    n = assign_box_number(transaction_type, vat_treatment)
+    # Classifier UI expects an int; use 0 for "no box" rows
+    return int(n) if n is not None else 0
 
 
 def build_risk_flags(

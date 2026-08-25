@@ -282,11 +282,14 @@ def generate_ct_bridge(
             "Ensure non-qualifying income is separately computed at 9%."
         )
     else:
+        # Exact AED: 0% on first AED 375,000, 9% on the balance
         ct_rate = UAE_CT_RATE
-        ct_liability = (taxable_income * ct_rate).quantize(Decimal("0.01"))
+        amount_at_9 = max(Decimal("0.00"), taxable_income - SMALL_BUSINESS_THRESHOLD)
+        ct_liability = (amount_at_9 * ct_rate).quantize(Decimal("0.01"))
         rate_note = (
-            f"Standard UAE CT rate 9% applied on taxable income of "
-            f"AED {float(taxable_income):,.2f}."
+            f"Standard UAE CT: 0% on first AED 375,000; 9% on "
+            f"AED {float(amount_at_9):,.2f} "
+            f"(taxable income AED {float(taxable_income):,.2f})."
         )
 
     # ── Step 7: Effective rate ────────────────────────────────────────────────

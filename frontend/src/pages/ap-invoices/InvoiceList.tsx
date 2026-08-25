@@ -21,16 +21,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, Download, Eye, Calendar, FileSpreadsheet, Trash2, Zap } from 'lucide-react';
+import {
+  Search,
+  Download,
+  Eye,
+  Calendar,
+  FileSpreadsheet,
+  Trash2,
+  Zap,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
-import { detectAnomalies } from '@/utils/anomalyDetection';
-import { listInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { listInvoiceAnomalies, scanInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { bulkApproveApInvoices } from '@/lib/ap-invoice/bulkApproveService';
 import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { useAuth } from '@/context/AuthContext';
+import { useCompany } from '@/context/CompanyContext';
 import { resolveApSupabaseCompanyId } from '@/lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '@/services/workspaceService';
 import { useErpSettings, toTallySettings } from '@/hooks/useErpSettings';
@@ -38,15 +51,53 @@ import { downloadTallyXML } from '@/utils/tallyExport';
 import { downloadQBIIF } from '@/utils/quickbooksExport';
 import { downloadXeroCSV } from '@/utils/xeroExport';
 import * as XLSX from 'xlsx';
+import {
+  invoiceCoaCategoryKey,
+  loadEffectiveCoaMappings,
+  resolveGlFromMappings,
+  type CoaMappingRow,
+} from '@/services/coaVatMapping.service';
+
+/** Keep the same object reference when refresh data is unchanged — prevents InvoiceDetailModal shake. */
+function pickUpdatedInvoice(prev: Invoice | null, list: Invoice[]): Invoice | null {
+  if (!prev) return null;
+  const next = list.find((i) => i.id === prev.id);
+  if (!next) return prev;
+  const keys: (keyof Invoice)[] = [
+    'status',
+    'match_status',
+    'po_id',
+    'po_number',
+    'gl_code',
+    'gl_account_code',
+    'risk_score',
+    'payment_status',
+    'ifrs_category',
+    'vat_treatment',
+    'property_ref',
+    'gulftax_decision',
+    'total_amount',
+    'vendor_name',
+    'updated_at',
+  ];
+  if (keys.every((k) => String(prev[k] ?? '') === String(next[k] ?? ''))) {
+    return prev;
+  }
+  return next;
+}
 import { fetchInvoiceById } from '@/lib/ap-invoice/invoices';
 import { ConfidenceBadge } from '@/components/invoices/ConfidenceBadge';
 import { getEffectiveExtractionScore, invoiceNeedsExtractionReview } from '@/utils/extractionConfidence';
-import { runAutoMatch } from '@/lib/ap-invoice/threeWayMatchService';
+import { resolveDisplayMatchStatus } from '@/utils/threeWayMatch';
+import { runAutoMatch, markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
+import { retryPendingGlPosts } from '@/lib/ap-invoice/glPostService';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '@/utils/coaMapping';
 import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
+import { glAccountDisplayName } from '@/utils/glAccountLabels';
 import {
   deriveInvoiceRiskDisplayScore,
   invoiceHasRiskSignal,
+  invoiceMatchesAnomalyTab,
   invoiceRiskTierForFilter,
 } from '@/lib/ap-invoice/invoiceRiskDisplay';
 import {
@@ -59,7 +110,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
-import { getMyCompany, clearCompanyCache } from '@/lib/ap-invoice/companyService';
+import { getMyCompany } from '@/lib/ap-invoice/companyService';
+import { effectivePropertyRef } from '@/lib/ap-invoice/propertyFromGl';
+import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -69,6 +122,9 @@ import {
   type NormalizedExtractedInvoice,
 } from '@/lib/ap-invoice/cameraService';
 import { useMarket } from '@/contexts/MarketContext';
+import { seedDemoGstInvoices } from '@/lib/ap-invoice/gstService';
+import { useIndustryConfig } from '@/context/IndustryConfigContext';
+import { spendByTitle } from '@/services/industryConfig.service';
 import { PintAeValidateModal } from '@/components/gulftax/PintAeValidateModal';
 
 const DEBUG_INVOICE_NUMBERS = [
@@ -86,37 +142,6 @@ const statusColors: Record<string, string> = {
   'On Hold': 'bg-orange-100 text-orange-800 border-orange-200',
   Queried: 'bg-purple-100 text-purple-800 border-purple-200',
 };
-
-function sourceIntakeBadge(source: Invoice['source']) {
-  const s = source ?? 'upload';
-  const styles: Record<string, string> = {
-    email: 'bg-blue-100 text-blue-800 border-blue-200',
-    email_n8n: 'bg-sky-100 text-sky-900 border-sky-200',
-    whatsapp: 'bg-emerald-100 text-emerald-900 border-emerald-200',
-    camera: 'bg-amber-100 text-amber-950 border-amber-200',
-    excel: 'bg-violet-100 text-violet-900 border-violet-200',
-    excel_vba: 'bg-indigo-100 text-indigo-900 border-indigo-200',
-    vendor_portal: 'bg-purple-100 text-purple-800 border-purple-200',
-    manual: 'border-slate-200 bg-slate-50 text-slate-800',
-    upload: 'bg-slate-100 text-slate-800 border-slate-200',
-  };
-  const labels: Record<string, string> = {
-    email: '📧 Email',
-    email_n8n: '📧 n8n email',
-    whatsapp: '💬 WhatsApp',
-    camera: '📷 Camera',
-    excel: '📊 Excel',
-    excel_vba: '📊 Excel VBA',
-    vendor_portal: 'Portal',
-    manual: 'Manual',
-    upload: '📤 Upload',
-  };
-  return (
-    <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${styles[s] ?? styles.upload}`}>
-      {labels[s] ?? labels.upload}
-    </Badge>
-  );
-}
 
 function invoicePaymentPill(inv: Invoice): { label: string; title?: string; variant: 'paid' | 'overdue' | 'pending' } {
   const paid = inv.status === 'Paid' || inv.payment_status === 'paid';
@@ -145,6 +170,30 @@ function invoicePaymentPill(inv: Invoice): { label: string; title?: string; vari
 
 function invoiceGlCode(inv: Invoice): string {
   return String(inv.gl_account_code ?? inv.gl_code ?? '').trim();
+}
+
+/** Prefer stored invoice GL; fall back to company/default COA map for any status. */
+function displayGlFromCoaMap(
+  inv: Invoice,
+  mappings: CoaMappingRow[],
+): { code: string; name: string; source: 'stored' | 'company' | 'default' } | null {
+  const storedCode = invoiceGlCode(inv);
+  const storedName = String(inv.gl_account_name ?? inv.gl_name ?? '').trim();
+  if (storedCode) {
+    return {
+      code: storedCode,
+      name: glAccountDisplayName(storedCode, storedName),
+      source: 'stored',
+    };
+  }
+  const key = invoiceCoaCategoryKey(inv);
+  const hit = resolveGlFromMappings(mappings, key);
+  if (!hit) return null;
+  return {
+    code: hit.gl_code,
+    name: glAccountDisplayName(hit.gl_code, hit.gl_name),
+    source: hit.source,
+  };
 }
 
 /** Dirham unicode (د.إ) and Latin-1 mojibake (Ø¯.Ø¥) → ISO code for display */
@@ -284,14 +333,20 @@ export function InvoiceList() {
   const { accessToken } = useAuth();
   const workspaceId = getStoredWorkspaceId();
   const { market, isUAE } = useMarket();
+  const { costCenterLabel } = useIndustryConfig();
   const { dateFormat } = useCompanySettings();
+  const { activeCompanyId } = useCompany();
   const tallySettings = useErpSettings();
   const [showExport, setShowExport] = useState(false);
+  /** Secondary filters (search / property / IFRS / source / dates) — collapsed until needed. */
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [filteredInvoices, setFilteredInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [costCenterFilter, setCostCenterFilter] = useState<string>('all');
+  const [propertyFilter, setPropertyFilter] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review' | 'anomalies'>('all');
   const [anomalyInvoiceIds, setAnomalyInvoiceIds] = useState<Set<string>>(new Set());
   const [confidenceSort, setConfidenceSort] = useState<'none' | 'high_first' | 'low_first'>('none');
@@ -313,12 +368,45 @@ export function InvoiceList() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewNorm, setPreviewNorm] = useState<NormalizedExtractedInvoice | null>(null);
   const [previewConfidence, setPreviewConfidence] = useState<number | undefined>();
+  const [coaMappings, setCoaMappings] = useState<CoaMappingRow[]>([]);
   const [savingExtract, setSavingExtract] = useState(false);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [seedingGst, setSeedingGst] = useState(false);
   const [advanceFilter, setAdvanceFilter] = useState(false);
   const [pintAeInvoice, setPintAeInvoice] = useState<Invoice | null>(null);
   const itemsPerPage = 20;
+
+  const costCenterOptions = Array.from(
+    new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
+  ).sort();
+  const propertyOptions = Array.from(
+    new Set(
+      invoices
+        .map((inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)))
+        .filter(Boolean),
+    ),
+  ).sort();
+  /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
+  const showCostCenterFilter = costCenterOptions.length > 0;
+  const showPropertyFilter = propertyOptions.length > 0;
+  const showPropertyColumn = true;
+  const costCenterIsPropertyLabel = /^propert/i.test(costCenterLabel.trim());
+  /** Don't show a second blank "Property" column when cost centers are empty or label duplicates property_ref. */
+  const showCostCenterColumn = showCostCenterFilter && !costCenterIsPropertyLabel;
+  const advancedFiltersActive =
+    Boolean(searchTerm.trim()) ||
+    costCenterFilter !== 'all' ||
+    propertyFilter !== 'all' ||
+    ifrsFilter !== 'all' ||
+    sourceFilter !== 'all' ||
+    Boolean(startDate) ||
+    Boolean(endDate) ||
+    Boolean(sourceReceivedAtFilter);
+  const filtersExpanded = showAdvancedFilters || advancedFiltersActive;
+  const costCenterAllLabel = /y$/i.test(costCenterLabel)
+    ? `All ${costCenterLabel.replace(/y$/i, 'ies')}`
+    : `All ${costCenterLabel}s`;
 
   const STEPPER_LABELS = [
     'Uploaded',
@@ -349,11 +437,12 @@ export function InvoiceList() {
   }
 
   useEffect(() => {
+    void retryPendingGlPosts();
     fetchInvoices();
     void deleteDebugInvoicesOnce();
-    void listInvoiceAnomalies({ status: 'open' })
-      .then((rows) => setAnomalyInvoiceIds(new Set(rows.map((r) => r.invoice_id).filter(Boolean) as string[])))
-      .catch(() => setAnomalyInvoiceIds(new Set()));
+    void loadEffectiveCoaMappings()
+      .then(setCoaMappings)
+      .catch(() => setCoaMappings([]));
     // Check for vendor filter in URL
     const urlParams = new URLSearchParams(window.location.search);
     const vendorFilter = urlParams.get('vendor');
@@ -383,10 +472,28 @@ export function InvoiceList() {
       setSourceReceivedAtFilter(decodeURIComponent(receivedAt));
       setSourceFilter('email');
     }
-  }, [workspaceId]);
+  }, [workspaceId, activeCompanyId]);
+
+  /** Reload open anomaly invoice ids using the same company scope as the list. */
+  async function refreshAnomalyInvoiceIds(companyId: string | null, invoiceList: Invoice[]) {
+    try {
+      let rows = await listInvoiceAnomalies({ status: 'open', companyId });
+      // Company drift: if scoped query is empty but invoices exist, load all open flags and
+      // keep only those that belong to invoices currently on screen.
+      if (rows.length === 0 && invoiceList.length > 0) {
+        rows = await listInvoiceAnomalies({ status: 'open', companyId: null });
+        const visible = new Set(invoiceList.map((i) => i.id));
+        rows = rows.filter((r) => r.invoice_id && visible.has(r.invoice_id));
+      }
+      setAnomalyInvoiceIds(new Set(rows.map((r) => r.invoice_id).filter(Boolean) as string[]));
+    } catch {
+      // Fall back to invoice-row signals (risk_score / risk_flags) in the Anomaly tab filter
+      setAnomalyInvoiceIds(new Set());
+    }
+  }
 
   useEffect(() => {
-    const onSynced = () => { void fetchInvoices(); };
+    const onSynced = () => { void fetchInvoices({ quiet: true }); };
     window.addEventListener('ap-company-synced', onSynced);
     return () => window.removeEventListener('ap-company-synced', onSynced);
   }, [accessToken, workspaceId]);
@@ -397,6 +504,8 @@ export function InvoiceList() {
     invoices,
     searchTerm,
     statusFilter,
+    costCenterFilter,
+    propertyFilter,
     startDate,
     endDate,
     viewMode,
@@ -425,6 +534,7 @@ export function InvoiceList() {
   function clearInvoiceListFilters() {
     setSearchTerm('');
     setStatusFilter('all');
+    setCostCenterFilter('all');
     setViewMode('all');
     setIfrsFilter('all');
     setMatchStatusFilter('all');
@@ -462,9 +572,18 @@ export function InvoiceList() {
   }
 
   async function handleBulkClassifyAndMatch() {
-    const targets = invoices.filter((inv) => inv.status === 'Processing');
+    const stale = new Set(['mismatch', 'no_po', 'partial', 'unmatched', '']);
+    const seen = new Set<string>();
+    const targets = invoices.filter((inv) => {
+      if (seen.has(inv.id)) return false;
+      const processing = inv.status === 'Processing';
+      const needsMatch = stale.has(String(inv.match_status || '').toLowerCase());
+      if (!processing && !needsMatch) return false;
+      seen.add(inv.id);
+      return true;
+    });
     if (targets.length === 0) {
-      toast({ title: 'Nothing to process', description: 'No invoices with status Processing.' });
+      toast({ title: 'Nothing to process', description: 'No invoices waiting for classify or 3-way match.' });
       return;
     }
 
@@ -482,6 +601,15 @@ export function InvoiceList() {
         companyId = (await getMyCompany())?.id ?? null;
       }
 
+      if (companyId) {
+        try {
+          const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+          await ensureWorkspaceMatchesViaApi(companyId);
+        } catch (e) {
+          console.warn('[AP] ensure workspace POs/GRNs:', e);
+        }
+      }
+
       for (const invRaw of targets) {
         let inv = invRaw;
         try {
@@ -497,7 +625,11 @@ export function InvoiceList() {
           const didClassify = await classifyInvoiceFromGl(inv, companyId);
           if (didClassify) classified += 1;
 
-          const matchResult = await runAutoMatch(inv.id, { respectUploadSetting: false });
+          const matchResult = await runAutoMatch(inv.id, {
+            respectUploadSetting: false,
+            invoice: inv,
+            invoiceNumber: inv.invoice_number,
+          });
           if (
             matchResult.invoice_match_status === 'matched' ||
             matchResult.invoice_match_status === 'three_way_matched' ||
@@ -529,47 +661,203 @@ export function InvoiceList() {
     }
   }
 
-  async function fetchInvoices() {
-    let invoiceList: Invoice[] = [];
-    let companyId: string | null = null;
+  async function handleSeedGstDemo() {
+    setSeedingGst(true);
     try {
-      setLoading(true);
-      clearCompanyCache();
+      const r = await seedDemoGstInvoices();
+      toast({ title: r.seeded > 0 ? 'GST demo invoices seeded' : 'Already seeded', description: r.message });
+      await fetchInvoices();
+    } catch (e) {
+      // Supabase errors are plain objects, not Error instances — String(e) on
+      // those yields the useless literal "[object Object]". Pull the real
+      // message/details out instead.
+      const raw = e as { message?: string; details?: string; hint?: string; code?: string } | Error | undefined;
+      const msg =
+        e instanceof Error
+          ? e.message
+          : raw?.message || raw?.details || raw?.hint || JSON.stringify(raw) || 'Unknown error';
+      console.error('Seed GST demo invoices failed:', e);
+      toast({ title: 'Seed failed', description: msg, variant: 'destructive' });
+    } finally {
+      setSeedingGst(false);
+    }
+  }
+
+  /**
+   * Force-recompute match_status for invoices whose cached result still looks
+   * unresolved. Unlike handleBulkClassifyAndMatch, this isn't gated by
+   * status === 'Processing' — it targets by match_status instead, so invoices
+   * that moved past "Processing" while carrying a stale mismatch (e.g. because
+   * the underlying PO/GRN data was fixed after the last match run) can be
+   * refreshed without waiting for a new upload.
+   */
+  async function handleBulkRerunStaleMatches() {
+    const staleStatuses = ['mismatch', 'no_po', 'partial'];
+    const targets = invoices.filter((inv) => staleStatuses.includes(String(inv.match_status || '').toLowerCase()));
+    if (targets.length === 0) {
+      toast({ title: 'Nothing to re-match', description: 'No invoices with a mismatch/partial/no-PO status.' });
+      return;
+    }
+
+    setBulkProcessing(true);
+    let resolved = 0;
+    let failed = 0;
+
+    try {
       try {
-        companyId = await resolveApSupabaseCompanyId(accessToken);
-      } catch {
-        const company = await getMyCompany();
-        companyId = company?.id ?? null;
+        const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
+        if (companyId) {
+          const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+          await ensureWorkspaceMatchesViaApi(companyId);
+        }
+      } catch (e) {
+        console.warn('[AP] ensure workspace POs/GRNs:', e);
       }
-      let q = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      if (companyId) q = q.eq('company_id', companyId);
-      const { data, error } = await q;
-
-      if (error) throw error;
-      invoiceList = data || [];
-
-      // Workspace/company drift: show invoices even if company_id filter mismatches bulk import
-      if (invoiceList.length === 0 && companyId) {
-        const { data: allRows, error: allErr } = await supabase
-          .from('invoices')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (!allErr && allRows && allRows.length > 0) {
-          console.warn('[AP] No invoices for active company — showing all invoices in database');
-          invoiceList = allRows;
+      for (const inv of targets) {
+        try {
+          const matchResult = await runAutoMatch(inv.id, {
+            respectUploadSetting: false,
+            invoice: inv,
+            invoiceNumber: inv.invoice_number,
+          });
+          if (
+            matchResult.invoice_match_status === 'matched' ||
+            matchResult.invoice_match_status === 'three_way_matched' ||
+            matchResult.invoice_match_status === 'partial'
+          ) {
+            resolved += 1;
+          }
+        } catch (e) {
+          failed += 1;
+          console.warn('[AP] Re-run match failed for', inv.invoice_number, e);
         }
       }
 
-      setInvoices(invoiceList);
-      setSelectedInvoice((prev) => {
-        if (!prev) return null;
-        const next = invoiceList.find((i: Invoice) => i.id === prev.id);
-        return next ?? prev;
+      await fetchInvoices({ quiet: true });
+      toast({
+        title: 'Re-run match complete',
+        description: `${targets.length} invoice(s) re-checked: ${resolved} now resolved${failed ? `, ${failed} failed` : ''}.`,
       });
+    } catch (e) {
+      console.error('[AP] Bulk re-run match error:', e);
+      toast({
+        title: 'Re-run match failed',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBulkProcessing(false);
+    }
+  }
+
+  async function handleBulkApproveSelected() {
+    const selected = filteredInvoices.filter(
+      (inv) =>
+        selectedIds.includes(inv.id) &&
+        inv.status !== 'Approved' &&
+        inv.status !== 'Paid' &&
+        String(inv.gulftax_decision || '').toUpperCase() !== 'HARD_BLOCK',
+    );
+    if (selected.length === 0) {
+      toast({
+        title: 'Nothing to approve',
+        description: 'Select Processing / On Hold invoices (not already approved or hard-blocked).',
+      });
+      return;
+    }
+    if (
+      !window.confirm(
+        isUAE
+          ? `Approve ${selected.length} selected invoice(s) and sync to GulfTax / VAT Return?`
+          : `Approve ${selected.length} selected invoice(s)?`,
+      )
+    ) {
+      return;
+    }
+
+    setBulkProcessing(true);
+    try {
+      let companyId: string | null = null;
+      try {
+        companyId = await resolveApSupabaseCompanyId(accessToken);
+      } catch {
+        companyId = (await getMyCompany())?.id ?? null;
+      }
+      const result = await bulkApproveApInvoices(
+        selected.map((i) => i.id),
+        companyId || selected[0]?.company_id || null,
+      );
+      await fetchInvoices();
+      setSelectedIds([]);
+      toast({
+        title: 'Bulk approve complete',
+        description: `${result.approved_count} approved${
+          isUAE ? ` · ${result.gulftax_synced} synced to GulfTax` : ''
+        }${
+          isUAE && result.gulftax_skipped ? ` · ${result.gulftax_skipped} already synced` : ''
+        }${isUAE && result.gulftax_errors ? ` · ${result.gulftax_errors} sync errors` : ''}${
+          result.failed?.length ? ` · ${result.failed.length} failed` : ''
+        }.`,
+        variant: result.failed?.length ? 'destructive' : 'default',
+      });
+    } catch (e) {
+      toast({
+        title: 'Bulk approve failed',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBulkProcessing(false);
+    }
+  }
+
+  async function fetchInvoices(opts?: { quiet?: boolean }) {
+    let invoiceList: Invoice[] = [];
+    let companyId: string | null = null;
+    try {
+      if (!opts?.quiet) setLoading(true);
+      // Prefer the banner company (Al Noor / Gnanova UAE Test FZE). Workspace-only
+      // resolve can pick the wrong AP company when several share one workspace.
+      if (activeCompanyId) {
+        companyId = activeCompanyId;
+      } else {
+        try {
+          companyId = await resolveApSupabaseCompanyId(accessToken);
+        } catch {
+          const company = await getMyCompany();
+          companyId = company?.id ?? null;
+        }
+      }
+
+      // Prefer service-role API — FinReport JWT sessions often have no Supabase auth,
+      // so browser RLS returns 0 rows even after a successful Excel import.
+      if (companyId) {
+        try {
+          invoiceList = await listInvoicesViaApi(companyId, 500);
+        } catch (apiErr) {
+          console.warn('[AP] list-invoices API failed, falling back to browser Supabase:', apiErr);
+        }
+      }
+
+      if (invoiceList.length === 0) {
+        let q = supabase.from('invoices').select('*').order('created_at', { ascending: false });
+        if (companyId) q = q.eq('company_id', companyId);
+        const { data, error } = await q;
+        if (error) throw error;
+        invoiceList = data || [];
+        // Do NOT fall back to "all invoices in database" — that made empty
+        // companies (e.g. Gnanova UAE Test FZE) look like they owned Al Noor's data.
+      }
+
+      setInvoices(invoiceList);
+      setSelectedInvoice((prev) => pickUpdatedInvoice(prev, invoiceList));
+
+      void refreshAnomalyInvoiceIds(companyId, invoiceList);
+      void markEscalationDueIfNeeded(invoiceList, companyId);
     } catch (error) {
       console.error('Error fetching invoices:', error);
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
 
     if (invoiceList.length === 0) return;
@@ -584,59 +872,49 @@ export function InvoiceList() {
       // Stop after first 400 so missing/wrong schema doesn't cause hundreds of errors
       const needsRiskCheck = invoiceList.filter((inv: Invoice) => inv.risk_score == null);
       if (needsRiskCheck.length > 0) {
-        const otherInvoices = invoiceList.map((inv: Invoice) => ({
-          invoice_number: inv.invoice_number,
-          vendor_name: inv.vendor_name,
-          total_amount: Number(inv.total_amount),
-          invoice_date: inv.invoice_date,
-          due_date: inv.due_date,
-          vendor_email: inv.vendor_email ?? null,
-        }));
-
         let backfillAborted = false;
         for (const inv of needsRiskCheck) {
           if (backfillAborted) break;
           try {
-            const existing = otherInvoices.filter((o: { invoice_number: string }) => o.invoice_number !== inv.invoice_number);
-            const result = await detectAnomalies(
+            if (!inv.company_id) continue;
+            const result = await scanInvoiceAnomalies(
               {
+                id: inv.id,
+                company_id: inv.company_id,
                 invoice_number: inv.invoice_number,
                 invoice_date: inv.invoice_date,
                 due_date: inv.due_date,
                 vendor_name: inv.vendor_name,
                 vendor_email: inv.vendor_email ?? null,
+                vendor_trn: inv.vendor_trn ?? null,
+                gstin: inv.gstin ?? null,
                 total_amount: Number(inv.total_amount),
+                po_number: inv.po_number ?? null,
+                po_id: inv.po_id ?? null,
+                description: (inv as { description?: string | null }).description ?? null,
+                created_at: inv.created_at ?? null,
               },
-              existing
+              'list-backfill',
             );
-            const riskDb = normalizeRiskForDb(result.risk_score);
-            const { error } = await supabase
-              .from('invoices')
-              .update({
-                risk_score: riskDb.risk_score,
-                risk_level: riskDb.risk_level,
-                risk_flags: Array.isArray(result.risk_flags) ? result.risk_flags : [],
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', inv.id);
-            if (error) {
-              if (error.code === 'PGRST301' || error.message?.includes('400') || (error as { status?: number }).status === 400) {
-                console.warn('Risk backfill stopped: schema may be missing risk_score/risk_flags. Run FIX-IFRS-AND-RISK-SCHEMA.sql in Supabase SQL Editor.', error);
-                backfillAborted = true;
-              } else {
-                console.warn('Failed to backfill risk for invoice', inv.invoice_number, error);
-              }
-              continue;
-            }
             setInvoices((prev) =>
               prev.map((i) =>
                 i.id === inv.id
                   ? ({
                       ...i,
-                      risk_score: riskDb.risk_score,
-                      risk_level: riskDb.risk_level,
-                      risk_flags: result.risk_flags,
-                    } as Invoice)
+                      risk_score: result.overall_risk_score,
+                      risk_level:
+                        result.overall_risk_score >= 60
+                          ? 'High'
+                          : result.overall_risk_score >= 30
+                            ? 'Medium'
+                            : 'Low',
+                      risk_flags: result.flags.map((f) => ({
+                        type: f.flag_code,
+                        severity: f.severity,
+                        message: f.flag_reason,
+                        explanation: JSON.stringify(f.flag_details ?? {}),
+                      })),
+                    } as unknown as Invoice)
                   : i
               )
             );
@@ -648,14 +926,31 @@ export function InvoiceList() {
       }
 
       // Auto-link PO + run 3-way match when invoice already has a PO number but no po_id (e.g. OCR PO, email ingest, or case mismatch)
+      // `!inv.match_status` also picks up Excel/bulk imports that landed without a match run —
+      // they would otherwise sit on "— No PO" forever. Self-limiting: a run always writes a status.
       const needPoAutoLink = invoiceList.filter(
-        (inv: Invoice) => String(inv.po_number || '').trim() !== '' && !inv.po_id
+        (inv: Invoice) =>
+          (String(inv.po_number || '').trim() !== '' && !inv.po_id) ||
+          !inv.match_status ||
+          (inv.po_id && ['no_po', ''].includes(String(inv.match_status || '').toLowerCase()))
       );
       if (needPoAutoLink.length > 0) {
+        try {
+          if (companyId) {
+            const { ensureWorkspaceMatchesViaApi } = await import('@/lib/ap-invoice/matchApiService');
+            await ensureWorkspaceMatchesViaApi(companyId);
+          }
+        } catch (e) {
+          console.warn('[AP] ensure workspace POs before auto-link:', e);
+        }
         let anyUpdated = false;
         for (const inv of needPoAutoLink.slice(0, 60)) {
           try {
-            await runAutoMatch(inv.id, { respectUploadSetting: false });
+            await runAutoMatch(inv.id, {
+              respectUploadSetting: false,
+              invoice: inv,
+              invoiceNumber: inv.invoice_number,
+            });
             anyUpdated = true;
           } catch (e) {
             console.warn('Auto PO link / 3-way match failed for', inv.invoice_number, e);
@@ -670,16 +965,22 @@ export function InvoiceList() {
               refreshCompanyId = (await getMyCompany())?.id ?? null;
             }
           }
-          let rq = supabase.from('invoices').select('*').order('created_at', { ascending: false });
-          if (refreshCompanyId) rq = rq.eq('company_id', refreshCompanyId);
-          const { data: refreshed } = await rq;
-          if (refreshed) {
-            setInvoices(refreshed);
-            setSelectedInvoice((prev) => {
-              if (!prev) return null;
-              const next = refreshed.find((i: Invoice) => i.id === prev.id);
-              return next ?? prev;
-            });
+          if (refreshCompanyId) {
+            try {
+              const refreshed = await listInvoicesViaApi(refreshCompanyId, 500);
+              if (refreshed.length > 0) {
+                setInvoices(refreshed);
+                setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
+              }
+            } catch {
+              let rq = supabase.from('invoices').select('*').order('created_at', { ascending: false });
+              rq = rq.eq('company_id', refreshCompanyId);
+              const { data: refreshed } = await rq;
+              if (refreshed) {
+                setInvoices(refreshed);
+                setSelectedInvoice((prev) => pickUpdatedInvoice(prev, refreshed));
+              }
+            }
           }
         }
       }
@@ -705,19 +1006,33 @@ export function InvoiceList() {
     } else if (viewMode === 'needs_review') {
       filtered = filtered.filter((inv) => invoiceNeedsExtractionReview(inv));
     } else if (viewMode === 'anomalies') {
-      filtered = filtered.filter((inv) => anomalyInvoiceIds.has(inv.id) || invoiceHasRiskSignal(inv));
+      filtered = filtered.filter(
+        (inv) => anomalyInvoiceIds.has(inv.id) || invoiceMatchesAnomalyTab(inv),
+      );
     }
 
     if (searchTerm) {
+      const q = searchTerm.toLowerCase();
       filtered = filtered.filter(
         (inv) =>
-          inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          inv.vendor_name.toLowerCase().includes(searchTerm.toLowerCase())
+          inv.invoice_number.toLowerCase().includes(q) ||
+          inv.vendor_name.toLowerCase().includes(q) ||
+          (inv.property_ref || '').toLowerCase().includes(q)
       );
     }
 
     if (statusFilter !== 'all') {
       filtered = filtered.filter((inv) => inv.status === statusFilter);
+    }
+
+    if (costCenterFilter !== 'all') {
+      filtered = filtered.filter((inv) => (inv.cost_center || '') === costCenterFilter);
+    }
+
+    if (propertyFilter !== 'all') {
+      filtered = filtered.filter(
+        (inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) === propertyFilter,
+      );
     }
 
     if (startDate) {
@@ -910,17 +1225,38 @@ export function InvoiceList() {
 
   async function exportExcel(invList: Invoice[]) {
     // Sheet 1 — Invoices summary
+    // Every field the OCR extraction/import can populate — not just the
+    // summary columns — so the export reflects "whatever was on the PDF",
+    // matching the client's raw-data requirement, not just the app's own
+    // workflow-tracking fields.
     const headers = [
-      'Invoice #', 'Vendor', 'Date', 'Due Date', 'Amount', 'Currency', 'Status',
+      'Invoice #', 'Vendor', 'Vendor Email', 'Vendor Phone', 'Vendor Address',
+      'Vendor GSTIN', 'Buyer GSTIN', 'HSN/SAC', 'Place of Supply', 'Supply Type', 'Reverse Charge',
+      'Date', 'Due Date', 'Taxable Amount', 'CGST', 'SGST', 'IGST',
+      'Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
-      'Department', 'Cost Center', 'Project Code', 'Match Status', 'Risk Score',
-      'Approval Level', 'Approved By', 'Payment Status',
+      'TDS Section', 'TDS Amount',
+      'Department', 'Property', 'Project Code', 'Match Status', 'Risk Score',
+      'Approval Level', 'Approved By', 'Payment Status', 'Description', 'Source',
     ];
     const rows = invList.map((inv) => [
       inv.invoice_number,
       inv.vendor_name,
+      inv.vendor_email || '',
+      inv.vendor_phone || '',
+      inv.vendor_address || '',
+      inv.vendor_gstin || inv.gstin || '',
+      (inv as unknown as { buyer_gstin?: string }).buyer_gstin || '',
+      inv.hsn_sac || (inv as unknown as { hsn_sac_code?: string }).hsn_sac_code || '',
+      (inv as unknown as { place_of_supply?: string }).place_of_supply || '',
+      (inv as unknown as { supply_type?: string }).supply_type || '',
+      inv.reverse_charge ? 'Yes' : '',
       displayDate(inv.invoice_date, dateFormat),
       displayDate(inv.due_date, dateFormat),
+      (inv as unknown as { taxable_amount?: number }).taxable_amount ?? inv.subtotal_amount ?? '',
+      inv.cgst ?? (inv as unknown as { cgst_amount?: number }).cgst_amount ?? '',
+      inv.sgst ?? (inv as unknown as { sgst_amount?: number }).sgst_amount ?? '',
+      inv.igst ?? (inv as unknown as { igst_amount?: number }).igst_amount ?? '',
       inv.total_amount,
       inv.currency,
       inv.status,
@@ -929,14 +1265,18 @@ export function InvoiceList() {
       inv.ifrs_category || '',
       inv.tax_type || '',
       inv.tax_amount || 0,
+      inv.tds_section || '',
+      inv.tds_amount ?? '',
       inv.department || '',
-      inv.cost_center || '',
+      effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) || inv.cost_center || '',
       inv.project_code || '',
       inv.match_status || '',
       inv.risk_score || '',
       inv.approval_level || '',
       inv.approved_by || '',
       inv.payment_status || '',
+      (inv as unknown as { description?: string }).description || '',
+      inv.source || '',
     ]);
     const ws1 = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     // Auto-width columns
@@ -1002,7 +1342,7 @@ export function InvoiceList() {
   }
 
   function exportSAPCSV(invList: Invoice[]) {
-    const headers = 'Vendor,Document,Posting Date,Due Date,Amount,Currency,Cost Center,GL Account';
+    const headers = `Vendor,Document,Posting Date,Due Date,Amount,Currency,${costCenterLabel},GL Account`;
     const rows = invList.map((inv) =>
       [inv.vendor_name, inv.invoice_number, inv.invoice_date, inv.due_date, inv.total_amount, inv.currency, inv.cost_center || '', inv.gl_code || '']
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
@@ -1036,7 +1376,7 @@ export function InvoiceList() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Invoice List</h1>
@@ -1047,26 +1387,83 @@ export function InvoiceList() {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            disabled={bulkProcessing || invoices.filter((i) => i.status === 'Processing').length === 0}
+            disabled={
+              bulkProcessing ||
+              invoices.filter((i) => {
+                const processing = i.status === 'Processing';
+                const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
+                  String(i.match_status || '').toLowerCase(),
+                );
+                return processing || needsMatch;
+              }).length === 0
+            }
             onClick={() => void handleBulkClassifyAndMatch()}
             className="border-[#0A4B8F] text-[#0A4B8F] hover:bg-blue-50"
           >
             <Zap className="mr-2 h-4 w-4" />
             {bulkProcessing
               ? 'Processing…'
-              : `Run 3-Way Match & Classify (${invoices.filter((i) => i.status === 'Processing').length})`}
+              : `Run 3-Way Match & Classify (${
+                  invoices.filter((i) => {
+                    const processing = i.status === 'Processing';
+                    const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
+                      String(i.match_status || '').toLowerCase(),
+                    );
+                    return processing || needsMatch;
+                  }).length
+                })`}
           </Button>
-          {selectedIds.length > 0 && (
+          <Button
+            variant="outline"
+            disabled={
+              bulkProcessing ||
+              invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
+                .length === 0
+            }
+            onClick={() => void handleBulkRerunStaleMatches()}
+            title="Recompute match_status for invoices whose cached result is mismatch/partial/no-PO, without waiting for a new upload"
+            className="border-amber-600 text-amber-800 hover:bg-amber-50"
+          >
+            {bulkProcessing
+              ? 'Processing…'
+              : `Re-run Stale Matches (${
+                  invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
+                    .length
+                })`}
+          </Button>
+          {!isUAE && (
             <Button
               variant="outline"
-              onClick={() => {
-                const selected = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
-                void exportExcel(selected);
-              }}
+              disabled={seedingGst}
+              onClick={() => void handleSeedGstDemo()}
+              title="Seed 5 GST invoices (TCS, Reliance, Infosys, Amazon India, HDFC Bank) into this list"
+              className="border-orange-600 text-orange-800 hover:bg-orange-50"
             >
-              <Download className="mr-2 h-4 w-4" />
-              Export Selected ({selectedIds.length})
+              {seedingGst ? 'Seeding…' : '🎯 Seed GST Demo Invoices'}
             </Button>
+          )}
+          {selectedIds.length > 0 && (
+            <>
+              <Button
+                variant="outline"
+                disabled={bulkProcessing}
+                onClick={() => void handleBulkApproveSelected()}
+                className="border-green-700 text-green-800 hover:bg-green-50"
+              >
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {bulkProcessing ? 'Approving…' : `Bulk Approve (${selectedIds.length})`}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const selected = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
+                  void exportExcel(selected);
+                }}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export Selected ({selectedIds.length})
+              </Button>
+            </>
           )}
           <div className="relative">
             <Button
@@ -1108,35 +1505,40 @@ export function InvoiceList() {
       </div>
 
       {/* AP Process Stepper */}
-      <Card className="border border-gray-200">
-        <CardContent className="pt-6 pb-6">
-          <div className="flex items-center justify-between gap-1 overflow-x-auto">
+      <Card className="border border-gray-200 overflow-visible">
+        <CardContent className="py-4 px-4 overflow-visible">
+          <div className="flex items-start justify-between gap-1 overflow-x-auto overflow-y-visible pb-1">
             {STEPPER_LABELS.map((label, index) => {
               const step = index + 1;
               const currentStep = getCurrentStepperStep(filteredInvoices);
               const isCompleted = step < currentStep;
               const isCurrent = step === currentStep;
               return (
-                <div key={label} className="flex flex-1 min-w-0 items-center">
+                <div key={label} className="flex flex-1 min-w-[4.5rem] items-start">
                   <div className="flex flex-col items-center flex-1 min-w-0">
                     <div
-                      className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0 ${
+                      className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 border-2 ${
                         isCompleted
-                          ? 'bg-green-500 text-white'
+                          ? 'bg-emerald-100 border-emerald-600'
                           : isCurrent
-                            ? 'bg-[#1a56db] text-white'
-                            : 'bg-gray-200 text-gray-500'
+                            ? 'bg-[#1a56db] border-[#1a56db]'
+                            : 'bg-white border-gray-300'
                       }`}
+                      style={{ color: isCurrent ? '#ffffff' : isCompleted ? '#047857' : '#1f2937' }}
                     >
                       {step}
                     </div>
-                    <span className={`mt-1 text-xs truncate w-full text-center ${isCurrent ? 'text-[#1a56db] font-medium' : 'text-gray-600'}`}>
+                    <span
+                      className={`mt-1.5 text-[11px] leading-tight truncate w-full text-center ${
+                        isCurrent ? 'text-[#1a56db] font-medium' : isCompleted ? 'text-green-700' : 'text-gray-600'
+                      }`}
+                    >
                       {label}
                     </span>
                   </div>
                   {index < STEPPER_LABELS.length - 1 && (
                     <div
-                      className={`flex-1 h-0.5 mx-0.5 min-w-[8px] ${
+                      className={`flex-1 h-0.5 mt-4 mx-0.5 min-w-[8px] self-start ${
                         step < currentStep ? 'bg-green-500' : 'bg-gray-200'
                       }`}
                     />
@@ -1150,10 +1552,13 @@ export function InvoiceList() {
 
       {/* Filters */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-4">
-              <Button
+        <CardContent className={filtersExpanded ? 'py-3' : 'py-2'}>
+          <div className={filtersExpanded ? 'space-y-3' : 'space-y-0'}>
+            <div
+              className={`flex flex-wrap gap-2 ${
+                filtersExpanded ? 'border-b border-gray-100 pb-3' : 'pb-0'
+              }`}
+            >              <Button
                 type="button"
                 size="sm"
                 variant={viewMode === 'all' ? 'default' : 'outline'}
@@ -1216,6 +1621,17 @@ export function InvoiceList() {
                 }}
               >
                 Anomaly
+                {(anomalyInvoiceIds.size > 0 ||
+                  invoices.some((i) => invoiceMatchesAnomalyTab(i))) && (
+                  <span className="ml-1.5 rounded-full bg-white/20 px-1.5 text-[10px] font-semibold tabular-nums">
+                    {viewMode === 'anomalies'
+                      ? filteredInvoices.length
+                      : new Set([
+                          ...anomalyInvoiceIds,
+                          ...invoices.filter((i) => invoiceMatchesAnomalyTab(i)).map((i) => i.id),
+                        ]).size}
+                  </span>
+                )}
               </Button>
               <span className="mx-1 hidden sm:inline text-gray-300">|</span>
               <Button
@@ -1247,19 +1663,9 @@ export function InvoiceList() {
               >
                 AR
               </Button>
-            </div>
-            <div className="flex flex-col gap-4 md:flex-row flex-wrap">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <Input
-                  placeholder="Search by invoice # or vendor name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
+              <span className="mx-1 hidden sm:inline text-gray-300">|</span>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full md:w-[160px]">
+                <SelectTrigger className="h-8 w-[140px] text-sm">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1270,20 +1676,8 @@ export function InvoiceList() {
                   <SelectItem value="Paid">Paid</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
-                <SelectTrigger className="w-full md:w-[200px]">
-                  <SelectValue placeholder="IFRS Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All IFRS</SelectItem>
-                  <SelectItem value="not_classified">Not Classified</SelectItem>
-                  {Array.from(new Set(invoices.map((inv) => (inv.ifrs_category || '').trim()).filter(Boolean))).sort().map((cat) => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
               <Select value={matchStatusFilter} onValueChange={setMatchStatusFilter}>
-                <SelectTrigger className="w-full md:w-[160px]">
+                <SelectTrigger className="h-8 w-[150px] text-sm">
                   <SelectValue placeholder="Match" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1297,7 +1691,7 @@ export function InvoiceList() {
                 </SelectContent>
               </Select>
               <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-full md:w-[120px]">
+                <SelectTrigger className="h-8 w-[110px] text-sm">
                   <SelectValue placeholder="Risk" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1305,6 +1699,98 @@ export function InvoiceList() {
                   <SelectItem value="high">High</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="low">Low</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                size="sm"
+                variant={filtersExpanded ? 'default' : 'outline'}
+                className={filtersExpanded ? 'bg-[#0A4B8F]' : ''}
+                onClick={() => {
+                  if (filtersExpanded) {
+                    setShowAdvancedFilters(false);
+                    setSearchTerm('');
+                    setCostCenterFilter('all');
+                    setPropertyFilter('all');
+                    setIfrsFilter('all');
+                    setSourceFilter('all');
+                    setStartDate('');
+                    setEndDate('');
+                    if (sourceReceivedAtFilter) {
+                      setSourceReceivedAtFilter(null);
+                      navigate('/ap-invoices/list', { replace: true });
+                    }
+                  } else {
+                    setShowAdvancedFilters(true);
+                  }
+                }}
+                title={
+                  filtersExpanded
+                    ? 'Hide extra filters and clear them'
+                    : 'Show search, property, IFRS, source, dates'
+                }
+              >
+                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
+                {filtersExpanded ? 'Hide filters' : 'Show filters'}
+                {filtersExpanded ? (
+                  <ChevronUp className="ml-1 h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="ml-1 h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+            {filtersExpanded && (
+            <>
+            <div className="flex flex-col gap-4 md:flex-row flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <Input
+                  placeholder="Search by invoice #, vendor, or property..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              {showCostCenterFilter && (
+              <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
+                <SelectTrigger className="w-full md:w-[180px]">
+                  <SelectValue placeholder={costCenterLabel} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{costCenterAllLabel}</SelectItem>
+                  {costCenterOptions.map((cc) => (
+                      <SelectItem key={cc} value={cc}>
+                        {cc}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              )}
+              {showPropertyFilter && (
+              <Select value={propertyFilter} onValueChange={setPropertyFilter}>
+                <SelectTrigger className="w-full md:w-[180px]">
+                  <SelectValue placeholder="Property" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Properties</SelectItem>
+                  {propertyOptions.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              )}
+              <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
+                <SelectTrigger className="w-full md:w-[200px]">
+                  <SelectValue placeholder="IFRS Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All IFRS</SelectItem>
+                  <SelectItem value="not_classified">Not Classified</SelectItem>
+                  {Array.from(new Set(invoices.map((inv) => (inv.ifrs_category || '').trim()).filter(Boolean))).sort().map((cat) => (
+                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select
@@ -1387,13 +1873,15 @@ export function InvoiceList() {
                 )}
               </div>
             </div>
+            </>
+            )}
           </div>
         </CardContent>
       </Card>
 
       {/* Invoice Table */}
       <Card>
-        <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader className="flex flex-col gap-2 space-y-0 py-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>
             {filteredInvoices.length} Invoice{filteredInvoices.length !== 1 ? 's' : ''}
           </CardTitle>
@@ -1401,6 +1889,7 @@ export function InvoiceList() {
             <Button
               type="button"
               variant="outline"
+              size="sm"
               className="shrink-0 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
               onClick={() => setDeleteAllDialogOpen(true)}
             >
@@ -1409,8 +1898,7 @@ export function InvoiceList() {
             </Button>
           )}
         </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
+        <CardContent className="pt-0">          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1452,6 +1940,8 @@ export function InvoiceList() {
                   </TableHead>
                   <TableHead>3-Way Match</TableHead>
                   <TableHead>GL Account</TableHead>
+                  {showPropertyColumn && <TableHead>Property</TableHead>}
+                  {showCostCenterColumn && <TableHead>{costCenterLabel}</TableHead>}
                   <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -1474,7 +1964,6 @@ export function InvoiceList() {
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         {invoice.invoice_number}
-                        {sourceIntakeBadge(invoice.source)}
                         {invoice.invoice_type === 'sales' && (
                           <Badge className="border-teal-200 bg-teal-50 text-teal-900 text-[10px] px-1.5 py-0">AR</Badge>
                         )}
@@ -1571,44 +2060,54 @@ export function InvoiceList() {
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {invoice.ifrs_category ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
-                            {invoice.ifrs_category}
-                          </span>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <div
-                              style={{
-                                width: '50px',
-                                height: '4px',
-                                background: '#e5e7eb',
-                                borderRadius: '2px',
-                                overflow: 'hidden',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: `${Math.min(100, Math.max(0, Number(invoice.ifrs_confidence ?? 0)))}%`,
-                                  height: '100%',
-                                  background: '#1a56db',
-                                  borderRadius: '2px',
-                                }}
-                              />
+                      {(() => {
+                        const category =
+                          (invoice.ifrs_category || '').trim() ||
+                          (invoice.vat_treatment || '').trim();
+                        if (category) {
+                          const conf = Number(invoice.ifrs_confidence ?? 0);
+                          const showConf = Boolean((invoice.ifrs_category || '').trim()) && conf > 0;
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
+                                {category}
+                              </span>
+                              {showConf ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                  <div
+                                    style={{
+                                      width: '50px',
+                                      height: '4px',
+                                      background: '#e5e7eb',
+                                      borderRadius: '2px',
+                                      overflow: 'hidden',
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        width: `${Math.min(100, Math.max(0, conf))}%`,
+                                        height: '100%',
+                                        background: '#1a56db',
+                                        borderRadius: '2px',
+                                      }}
+                                    />
+                                  </div>
+                                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>{conf}%</span>
+                                </div>
+                              ) : null}
                             </div>
-                            <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                              {Number(invoice.ifrs_confidence ?? 0)}%
+                          );
+                        }
+                        return (
+                          <div>
+                            <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
+                              ⚠ Not Classified
                             </span>
+                            <br />
+                            <span style={{ color: '#4b5563', fontSize: '12px', fontWeight: 500 }}>Fix required</span>
                           </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
-                            ⚠ Not Classified
-                          </span>
-                          <br />
-                          <span style={{ color: '#9ca3af', fontSize: '11px' }}>Fix required</span>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </TableCell>
                     <TableCell
                       className="hidden lg:table-cell cursor-pointer align-middle"
@@ -1620,67 +2119,130 @@ export function InvoiceList() {
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {invoice.match_status === 'three_way_matched' && (
-                        <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>✅ 3-Way Matched</span>
-                      )}
-                      {invoice.match_status === 'matched' && (
-                        <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>✅ PO Matched</span>
-                      )}
-                      {invoice.match_status === 'partial' && (
-                        <div>
-                          <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>⚠️ Partial</span>
-                          <br />
-                          <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                            {formatCurrency(
-                              Number(invoice.match_difference ?? 0),
-                              normalizeCurrencyCode(invoice.currency, market)
-                            )}{' '}
-                            diff
-                          </span>
-                        </div>
-                      )}
-                      {invoice.match_status === 'mismatch' && (
-                        <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>❌ Mismatch</span>
-                      )}
-                      {(!invoice.match_status || invoice.match_status === 'no_po') && (
-                        <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>
-                      )}
+                      {(() => {
+                        const ms = resolveDisplayMatchStatus(invoice);
+                        if (ms === 'three_way_matched') {
+                          return (
+                            <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>
+                              ✅ 3-Way Matched
+                            </span>
+                          );
+                        }
+                        if (ms === 'matched') {
+                          return (
+                            <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>
+                              ✅ PO Matched
+                            </span>
+                          );
+                        }
+                        if (ms === 'partial') {
+                          return (
+                            <div>
+                              <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>
+                                ⚠️ Partial
+                              </span>
+                              <br />
+                              <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                                {formatCurrency(
+                                  Number(invoice.match_difference ?? 0),
+                                  normalizeCurrencyCode(invoice.currency, market)
+                                )}{' '}
+                                diff
+                              </span>
+                            </div>
+                          );
+                        }
+                        if (ms === 'mismatch') {
+                          return (
+                            <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>
+                              ❌ Mismatch
+                            </span>
+                          );
+                        }
+                        return <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>;
+                      })()}
                     </TableCell>
                     <TableCell
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
                     >
-                      {(invoice.gl_account_code ?? invoice.gl_code) ? (
-                        <div>
-                          <span
-                            style={{
-                              fontFamily: 'monospace',
-                              fontWeight: '700',
-                              color: '#1a56db',
-                              fontSize: '13px',
-                            }}
-                          >
-                            {invoice.gl_account_code ?? invoice.gl_code}
-                          </span>
-                          <br />
-                          <span style={{ fontSize: '11px', color: '#6b7280' }}>
-                            {invoice.gl_account_name ?? invoice.gl_name ?? ''}
-                          </span>
-                          <br />
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              color: invoice.gl_source === 'company_coa' ? '#0e9f6e' : '#6b7280',
-                            }}
-                          >
-                            {invoice.gl_source === 'company_coa' ? '🏢 Your COA' : '🤖 IFRS Auto'}
-                          </span>
-                        </div>
-                      ) : (
-                        <span style={{ color: '#9ca3af' }}>—</span>
-                      )}
+                      {(() => {
+                        // DB column is gl_account_code (there is no invoices.gl_code in prod).
+                        const code = String(
+                          invoice.gl_account_code ??
+                            (invoice as { gl_code?: string | null }).gl_code ??
+                            '',
+                        ).trim();
+                        const storedName = String(
+                          invoice.gl_account_name ??
+                            (invoice as { gl_name?: string | null }).gl_name ??
+                            '',
+                        ).trim();
+                        if (code) {
+                          const name = glAccountDisplayName(code, storedName);
+                          return (
+                            <div>
+                              <span
+                                style={{
+                                  fontFamily: 'monospace',
+                                  fontWeight: '700',
+                                  color: '#1a56db',
+                                  fontSize: '13px',
+                                }}
+                              >
+                                {code}
+                              </span>
+                              <br />
+                              <span style={{ fontSize: '11px', color: '#6b7280' }}>{name}</span>
+                            </div>
+                          );
+                        }
+                        const mapped = displayGlFromCoaMap(invoice, coaMappings);
+                        if (!mapped) {
+                          return <span style={{ color: '#9ca3af' }}>—</span>;
+                        }
+                        return (
+                          <div>
+                            <span
+                              style={{
+                                fontFamily: 'monospace',
+                                fontWeight: '700',
+                                color: '#1a56db',
+                                fontSize: '13px',
+                              }}
+                            >
+                              {mapped.code}
+                            </span>
+                            <br />
+                            <span style={{ fontSize: '11px', color: '#6b7280' }}>{mapped.name}</span>
+                          </div>
+                        );
+                      })()}
                     </TableCell>
+                    {showPropertyColumn && (
+                    <TableCell
+                      className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
+                      onClick={() => setSelectedInvoice(invoice)}
+                      title={
+                        effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice)) || undefined
+                      }
+                    >
+                      {(() => {
+                        const full = effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice));
+                        if (!full) return null;
+                        const short = full.length > 15 ? `${full.slice(0, 15)}…` : full;
+                        return <span>{short}</span>;
+                      })()}
+                    </TableCell>
+                    )}
+                    {showCostCenterColumn && (
+                    <TableCell
+                      className="cursor-pointer text-sm text-slate-700"
+                      onClick={() => setSelectedInvoice(invoice)}
+                    >
+                      {(invoice.cost_center || '').trim() || null}
+                    </TableCell>
+                    )}
                     <TableCell
                       className="cursor-pointer"
                       onClick={() => setSelectedInvoice(invoice)}
@@ -1736,7 +2298,7 @@ export function InvoiceList() {
                         {((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 0 ||
                         (typeof invoice.risk_score === 'number' && invoice.risk_score > 0) ||
                         deriveInvoiceRiskDisplayScore(invoice) != null ? (
-                          <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                          <span style={{ fontSize: '12px', color: '#374151', fontWeight: 600 }}>
                             {(invoice as { risk_flag_count?: number }).risk_flag_count
                               ? `${(invoice as { risk_flag_count?: number }).risk_flag_count} flag${((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 1 ? 's' : ''} · `
                               : ''}
@@ -1836,7 +2398,7 @@ export function InvoiceList() {
           invoice={selectedInvoice}
           open={!!selectedInvoice}
           onClose={() => setSelectedInvoice(null)}
-          onUpdate={fetchInvoices}
+          onUpdate={() => void fetchInvoices({ quiet: true })}
           onNavigateInvoice={async (id) => {
             const inv = await fetchInvoiceById(id);
             if (inv) setSelectedInvoice(inv);

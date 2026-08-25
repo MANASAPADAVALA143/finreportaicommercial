@@ -3,31 +3,31 @@
  */
 export function parseAmount(val: unknown): number {
   if (!val) return 0;
-  const cleaned = String(val).replace(/[â‚¹$,\s]/g, '').trim();
+  const cleaned = String(val).replace(/[₹$د.إAED,\s]/gi, '').trim();
   return parseFloat(cleaned) || 0;
 }
 
 export const CURRENCY_SYMBOLS: Record<string, string> = {
-  INR: 'â‚¹',
+  INR: '₹',
   USD: '$',
-  EUR: 'â‚¬',
-  GBP: 'Â£',
-  AED: 'AED ',
+  EUR: '€',
+  GBP: '£',
+  AED: 'د.إ ',
   SGD: 'S$',
-  JPY: 'Â¥',
+  JPY: '¥',
   AUD: 'A$',
   CAD: 'C$',
-  SAR: 'ï·¼',
+  SAR: '﷼',
   MYR: 'RM',
   ZAR: 'R',
   CHF: 'Fr',
   HKD: 'HK$',
   NZD: 'NZ$',
-  NGN: 'â‚¦',
+  NGN: '₦',
   KES: 'KSh',
   BRL: 'R$',
   MXN: 'MX$',
-  PHP: 'â‚±',
+  PHP: '₱',
 };
 
 /**

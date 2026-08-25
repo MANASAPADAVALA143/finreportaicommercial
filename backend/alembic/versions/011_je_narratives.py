@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "011"
+revision = "011_je_narratives"
 down_revision = "010"
 branch_labels = None
 depends_on = None

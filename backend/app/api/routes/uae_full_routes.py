@@ -49,6 +49,7 @@ from app.services.uae_accruals_service import suggest_accruals, post_accrual, pe
 from app.services.uae_bank_recon_service import (
     import_bank_statement, run_reconciliation, get_reconciliation_summary,
 )
+from app.services.ar_aging_service import compute_ar_aging
 
 router = APIRouter(prefix="/api/uae/full", tags=["UAE Full Accounting"])
 
@@ -354,9 +355,15 @@ def _tenant_dep(
 
 
 def _apply_company(q, model, company_id: Optional[str]):
-    """Filter by company_id when provided (multi-company support)."""
+    """Filter by company_id when provided (multi-company support).
+
+    Include NULL company_id rows — older AP posts stamped company_id=None when
+    ap_companies resolution failed, and hiding them made the journals UI look empty.
+    """
     if company_id and hasattr(model, "company_id"):
-        return q.filter(model.company_id == company_id)
+        from sqlalchemy import or_
+
+        return q.filter(or_(model.company_id == company_id, model.company_id.is_(None)))
     return q
 
 
@@ -1005,61 +1012,68 @@ def create_invoice(body: InvoiceCreate, request: Request, db: Session = Depends(
 
 @router.post("/invoices/{inv_id}/post")
 def post_invoice(inv_id: str, request: Request, db: Session = Depends(get_db)):
+    from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+
     tenant_id = _tenant(request.headers)
     inv = db.query(UAESalesInvoice).filter_by(id=inv_id, tenant_id=tenant_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if inv.status != "draft":
-        raise HTTPException(status_code=400, detail="Invoice already posted")
-    lines_in = [
-        {"account_code": "1200", "description": f"AR {inv.invoice_number}",
-         "debit": inv.total_amount, "credit": 0},
-    ]
-    for ln in inv.lines:
-        line_net = float(ln.line_total or 0) - float(ln.vat_amount or 0)
-        lines_in.append({"account_code": "4001",
-                         "description": ln.description, "debit": 0, "credit": line_net})
-    if float(inv.vat_amount or 0):
-        lines_in.append({"account_code": "2300", "description": f"VAT {inv.invoice_number}",
-                         "debit": 0, "credit": float(inv.vat_amount)})
-    je = create_journal_entry(
-        tenant_id=tenant_id, entry_date=inv.invoice_date,
-        description=f"Sales Invoice {inv.invoice_number}", lines=lines_in,
-        reference=inv.invoice_number, source="ar_invoice", db=db, auto_post=True,
+
+    poster = request.headers.get("x-user-email") or request.headers.get("X-User-Email") or "system"
+    result = post_sales_invoice_to_gl_and_tax(
+        inv_id,
+        tenant_id=tenant_id,
+        company_id=inv.company_id,
+        db=db,
+        approved_by=poster,
     )
-    inv.status = "posted"
-    inv.journal_entry_id = je.id
-    db.commit()
-    return {"id": inv.id, "status": "posted", "je_id": je.id}
+    if not result.get("ok") and not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "post_failed"))
+    return {
+        "id": inv_id,
+        "success": True,
+        "status": result.get("status", "posted"),
+        "je_id": result.get("je_id"),
+        "journal_entry_id": result.get("journal_entry_id") or result.get("je_id"),
+        "gulftax_transaction_id": result.get("gulftax_transaction_id"),
+        "je_reference": result.get("je_reference"),
+        "skipped": result.get("skipped", False),
+        "gulftax": result.get("gulftax"),
+        "message": result.get("message"),
+    }
 
 
 @router.get("/ar-aging")
-def ar_aging(request: Request, as_of: Optional[str] = None, db: Session = Depends(get_db)):
+def ar_aging(
+    request: Request,
+    as_of: Optional[str] = None,
+    company_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     tenant_id = _tenant(request.headers)
     as_of_date = date.fromisoformat(as_of) if as_of else date.today()
-    invoices = (
-        db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id)
-        .filter(UAESalesInvoice.outstanding > 0).all()
-    )
-    buckets = {"current": 0.0, "1_30": 0.0, "31_60": 0.0, "61_90": 0.0, "over_90": 0.0}
-    details = []
-    for inv in invoices:
-        days = (as_of_date - inv.due_date).days
-        amt  = float(inv.outstanding or 0)
-        if days <= 0:
-            buckets["current"] += amt; bucket = "current"
-        elif days <= 30:
-            buckets["1_30"] += amt; bucket = "1-30 days"
-        elif days <= 60:
-            buckets["31_60"] += amt; bucket = "31-60 days"
-        elif days <= 90:
-            buckets["61_90"] += amt; bucket = "61-90 days"
-        else:
-            buckets["over_90"] += amt; bucket = "90+ days"
-        details.append({"invoice_number": inv.invoice_number, "customer_id": inv.customer_id,
-                        "due_date": str(inv.due_date), "amount_due": amt,
-                        "days_overdue": max(days, 0), "bucket": bucket})
-    return {"as_of": str(as_of_date), "buckets": buckets, "invoices": details}
+    report = compute_ar_aging(db, tenant_id, company_id, as_of_date)
+
+    # Preserve this endpoint's existing flat {bucket_key: amount} contract
+    # (consumed by frontend/src/pages/uae-accounting/SalesInvoices.tsx via
+    # aging.current / aging['1_30'] / … / aging['over_90']).
+    canonical_to_legacy_key = {
+        "current": "current", "1_30": "1_30", "31_60": "31_60",
+        "61_90": "61_90", "90_plus": "over_90",
+    }
+    buckets = {canonical_to_legacy_key[b["bucket"]]: b["amount"] for b in report["buckets"]}
+    invoices = [
+        {
+            "invoice_number": inv["invoice_number"],
+            "customer_id": inv["customer_id"],
+            "due_date": inv["due_date"],
+            "amount_due": inv["amount_due"],
+            "days_overdue": inv["days_overdue"],
+            "bucket": inv["bucket_label"],
+        }
+        for inv in report["invoices"]
+    ]
+    return {"as_of": report["as_of"], "buckets": buckets, "invoices": invoices}
 
 
 # ===========================================================================
@@ -1575,16 +1589,21 @@ class PurchaseInvoiceCreate(BaseModel):
     description: str = "AP Invoice"
     vat_treatment: str = "standard_rated"
     source: str = "manual"
+    company_id: str = ""
 
 
 @router.post("/purchase-invoices")
 def create_purchase_invoice(body: PurchaseInvoiceCreate, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request.headers)
     from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine
+    from app.services.ap_company_resolver import resolve_ap_company_id
+
+    company_id = resolve_ap_company_id(db, tenant_id, body.company_id or None)
     pi = UAEPurchaseInvoice(
         id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         workspace_id=tenant_id,
+        company_id=company_id,
         invoice_number=body.invoice_number,
         vendor_id=body.vendor_id,
         invoice_date=date.fromisoformat(body.invoice_date),

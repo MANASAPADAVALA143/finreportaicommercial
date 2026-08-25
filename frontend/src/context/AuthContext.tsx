@@ -1,7 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { backendOrigin, formatApiNetworkError, isBackendConfigured } from '../utils/backendOrigin';
-import { loginRedirectFor, normalizeProductRole, type ProductRole } from '../config/productRole';
+import { clearAllAuthStorage, setMemoryAccessToken } from '../utils/authToken';
+import {
+  loginRedirectFor,
+  normalizeProductRole,
+  pinUaeSuiteMarket,
+  pinIndiaSuiteMarket,
+  isUaeProductRole,
+  isIndiaProductRole,
+  type ProductRole,
+} from '../config/productRole';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
 
@@ -88,10 +97,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applySession = useCallback((session: Session | null) => {
     if (!session?.access_token) {
+      setMemoryAccessToken(null);
       setUser(null);
       setAccessToken(null);
       return;
     }
+    setMemoryAccessToken(session.access_token);
+    localStorage.setItem('token', session.access_token);
     setAccessToken(session.access_token);
     setUser(userFromSupabaseSession(session));
   }, []);
@@ -151,11 +163,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       product_role: normalizeProductRole(j.user?.product_role),
     } as AuthUser;
     localStorage.setItem('token', j.access_token);
+    setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
+    if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
+    if (isIndiaProductRole(loggedIn.product_role)) pinIndiaSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
     scheduleRefresh(j.access_token);
+
+    // The backend RBAC login above authenticates against FastAPI only. Direct
+    // supabase.from(...).insert() calls elsewhere (invoice save, GRN import, etc.)
+    // go through the Supabase JS client, which RLS blocks unless that client also
+    // holds a real Supabase session — so mirror the same credentials into Supabase
+    // auth. Non-fatal: some accounts may only exist on the RBAC backend.
+    if (isSupabaseConfigured) {
+      supabase.auth.signInWithPassword({ email, password }).catch((e) => {
+        console.warn('[Auth] Supabase session mirror failed (RLS-protected writes may fail):', e);
+      });
+    }
+
     return loggedIn;
   }, [base, scheduleRefresh]);
 
@@ -203,7 +230,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       product_role: normalizeProductRole(j.user?.product_role),
     } as AuthUser;
     localStorage.setItem('token', j.access_token);
+    setMemoryAccessToken(j.access_token);
     localStorage.setItem('user', JSON.stringify(loggedIn));
+    if (isUaeProductRole(loggedIn.product_role)) pinUaeSuiteMarket();
+    if (isIndiaProductRole(loggedIn.product_role)) pinIndiaSuiteMarket();
     setUser(loggedIn);
     setAccessToken(j.access_token);
     if (j.refresh_token) sessionStorage.setItem(REFRESH_KEY, j.refresh_token);
@@ -212,23 +242,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     clearTimer();
-    if (isBackendConfigured() && base) {
-      const rt = sessionStorage.getItem(REFRESH_KEY);
-      await fetch(`${base}/api/auth/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ refresh_token: rt || undefined }),
-      });
-    } else if (isSupabaseConfigured) {
-      await supabase.auth.signOut();
+    try {
+      if (isBackendConfigured() && base) {
+        const rt = sessionStorage.getItem(REFRESH_KEY);
+        const token = accessToken ?? localStorage.getItem('token');
+        await fetch(`${base}/api/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ refresh_token: rt || undefined }),
+          signal: AbortSignal.timeout(8000),
+        }).catch(() => undefined);
+      }
+      if (isSupabaseConfigured) {
+        await supabase.auth.signOut().catch(() => undefined);
+      }
+    } finally {
+      clearAllAuthStorage();
+      setAccessToken(null);
+      setUser(null);
     }
-    sessionStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setAccessToken(null);
-    setUser(null);
-  }, [base]);
+  }, [base, accessToken]);
 
   const hasPermission = useCallback((module: string) => {
     if (!user) return false;
@@ -288,6 +325,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => () => clearTimer(), []);
 
   useEffect(() => {
+    setMemoryAccessToken(accessToken);
+    if (accessToken) localStorage.setItem('token', accessToken);
+  }, [accessToken]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const finish = () => {
@@ -301,8 +343,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const parsed = JSON.parse(storedUser) as AuthUser;
           if (!cancelled) {
+            setMemoryAccessToken(storedToken);
             setAccessToken(storedToken);
             setUser({ ...parsed, product_role: normalizeProductRole(parsed.product_role) });
+            if (isUaeProductRole(normalizeProductRole(parsed.product_role))) pinUaeSuiteMarket();
+            if (isIndiaProductRole(normalizeProductRole(parsed.product_role))) pinIndiaSuiteMarket();
             scheduleRefresh(storedToken);
           }
           finish();
@@ -341,6 +386,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         if (!cancelled) {
           localStorage.setItem('token', token);
+          setMemoryAccessToken(token);
           localStorage.setItem('user', JSON.stringify(restoredUser));
           setAccessToken(token);
           setUser(restoredUser);

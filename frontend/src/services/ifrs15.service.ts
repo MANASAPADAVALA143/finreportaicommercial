@@ -33,8 +33,50 @@ export interface IFRS15Contract {
   total_remaining_aed: number;
   contract_liability_aed: number;
   contract_asset_aed: number;
+  calculation_results?: Record<string, unknown>;
+  has_calculation?: boolean;
   status: string;
   je_posted?: boolean;
+}
+
+export interface ExtractionValidation {
+  is_valid?: boolean;
+  errors?: string[];
+  warnings?: string[];
+  requires_review?: boolean;
+  overall_confidence?: number;
+  error_count?: number;
+  warning_count?: number;
+}
+
+export interface ClauseScan {
+  clauses_found?: number;
+  high_severity?: number;
+  medium_severity?: number;
+  low_severity?: number;
+  overall_risk?: string;
+  summary?: string;
+  clauses?: Array<{ clause_type?: string; severity?: string; description?: string }>;
+}
+
+export interface ExtractContractResponse {
+  status: string;
+  extracted_data: Record<string, unknown>;
+  validation?: ExtractionValidation;
+  clause_scan?: ClauseScan;
+  contract_type_detected?: string;
+  raw_extraction?: Record<string, unknown>;
+}
+
+export interface CalculateRecognitionResponse {
+  method?: string;
+  percentage_complete?: number | null;
+  revenue_to_recognise?: number;
+  journal_entry_amount?: number;
+  incremental_recognition?: number;
+  transaction_price?: number;
+  calculation_results?: Record<string, unknown>;
+  contract_balances?: Record<string, unknown>;
 }
 
 export async function fetchIFRS15Contracts(companyId: string | null): Promise<IFRS15Contract[]> {
@@ -60,7 +102,10 @@ export async function fetchIFRS15PortfolioSummary(companyId: string | null) {
   return res.json();
 }
 
-export async function calculateRecognition(body: Record<string, unknown>, companyId: string | null) {
+export async function calculateRecognition(
+  body: Record<string, unknown>,
+  companyId: string | null,
+): Promise<CalculateRecognitionResponse> {
   const res = await fetch(`${BASE}/calculate-recognition`, {
     method: 'POST', headers: hdrs(companyId), body: JSON.stringify({ company_id: companyId, ...body }),
   });
@@ -76,7 +121,7 @@ export async function postRecognitionJE(body: Record<string, unknown>, companyId
   return res.json();
 }
 
-export async function extractIFRS15Contract(file: File, companyId: string | null) {
+export async function extractIFRS15Contract(file: File, companyId: string | null): Promise<ExtractContractResponse> {
   const ws = getStoredWorkspaceId();
   const form = new FormData();
   form.append('file', file);

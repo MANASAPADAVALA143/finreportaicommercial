@@ -2,7 +2,8 @@
  * Accounting period dropdown — fetches /api/company-setup/periods
  */
 import { useEffect, useState } from 'react';
-import { backendOrigin } from '../utils/backendOrigin';
+import { joinApiUrl } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 import { useAuth } from '../context/AuthContext';
 
 export interface AccountingPeriod {
@@ -25,14 +26,9 @@ export default function PeriodSelector({ workspaceId, onPeriodChange, className 
   const [selected, setSelected] = useState('');
 
   useEffect(() => {
-    const wsId = workspaceId || localStorage.getItem('gnanova_workspace_id');
-    const hdrs: Record<string, string> = {
-      'X-Workspace-ID': wsId,
-      'X-Tenant-ID': wsId,
-    };
-    if (accessToken) hdrs.Authorization = `Bearer ${accessToken}`;
+    const hdrs = workspaceHeaders(accessToken ?? getStoredAccessToken());
 
-    fetch(`${backendOrigin()}/api/company-setup/periods`, { headers: hdrs, credentials: 'include' })
+    fetch(joinApiUrl('/api/company-setup/periods'), { headers: hdrs, credentials: 'include' })
       .then(r => r.ok ? r.json() : { periods: [] })
       .then(data => {
         const list: AccountingPeriod[] = data.periods ?? [];

@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
-import { fetchVatReturnAllBoxes, fetchVatReturnSummary, recordVatPayment, type VatReturnSummary } from '../../services/gulfTaxApi';
+import { fetchVatReturnAllBoxes, fetchVatReturnSummary, fetchVatReconStatus, recordVatPayment, submitVatReconOverride, type VatReconStatus, type VatReturnSummary } from '../../services/gulfTaxApi';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
-import { getPendingBadDebtTotal } from '../../services/vatAdvanced.service';
 
 function currentQuarter(): string {
   const d = new Date();
@@ -28,7 +27,11 @@ type AllBoxes = {
   box9_standard_rated_expenses: number;
   box10_reverse_charge_expenses: number;
   box11_total_input_vat: number;
+  box11_total_input_vat_raw?: number;
   box12_net_vat_payable_or_refundable: number;
+  partial_exemption_applied?: boolean;
+  recovery_percentage?: number;
+  bad_debt_relief_applied?: number;
   payable: boolean;
   sales_invoice_count: number;
   purchase_entry_count: number;
@@ -107,6 +110,49 @@ function overridesFromSummary(summary: VatReturnSummary): Record<FilingOverrideK
   };
 }
 
+function allBoxesValueForOverride(boxes: AllBoxes, key: FilingOverrideKey): number {
+  if (key === 'box1_gross') return Number(boxes.box1_standard_rated_sales_net || 0);
+  if (key === 'box1_vat') return Number(boxes.box1_standard_rated_sales_vat || 0);
+  if (key === 'box3_gross') return Number(boxes.box4_zero_rated_supplies || 0);
+  if (key === 'box5_gross') return Number(boxes.box5_exempt_supplies || 0);
+  if (key === 'box9_gross') return Number(boxes.box9_standard_rated_expenses || 0);
+  if (key === 'box9_vat') return Number(boxes.box11_total_input_vat || 0);
+  if (key === 'box10_gross') return Number(boxes.box10_reverse_charge_expenses || 0);
+  return 0;
+}
+
+/** Prefill override editor from main all-boxes response (same source as box totals). */
+function overridesFromAllBoxes(boxes: AllBoxes): Record<FilingOverrideKey, string> {
+  return {
+    box1_gross: allBoxesValueForOverride(boxes, 'box1_gross').toFixed(2),
+    box1_vat: allBoxesValueForOverride(boxes, 'box1_vat').toFixed(2),
+    box3_gross: allBoxesValueForOverride(boxes, 'box3_gross').toFixed(2),
+    box5_gross: allBoxesValueForOverride(boxes, 'box5_gross').toFixed(2),
+    box9_gross: allBoxesValueForOverride(boxes, 'box9_gross').toFixed(2),
+    box9_vat: allBoxesValueForOverride(boxes, 'box9_vat').toFixed(2),
+    box10_gross: allBoxesValueForOverride(boxes, 'box10_gross').toFixed(2),
+  };
+}
+
+function summaryLooksEmpty(summary: VatReturnSummary | null): boolean {
+  if (!summary) return true;
+  return FILING_OVERRIDE_FIELDS.every((f) => apValueForOverride(summary, f.key) === 0);
+}
+
+function entryNetAmount(e: Record<string, unknown>): number {
+  if (e.net_amount != null && e.net_amount !== '') {
+    const n = Number(e.net_amount);
+    if (Number.isFinite(n)) return n;
+  }
+  const gross = Number(e.gross_amount ?? NaN);
+  const vat = Number(e.vat_amount ?? NaN);
+  if (Number.isFinite(gross) && Number.isFinite(vat)) {
+    return Math.round((gross - vat) * 100) / 100;
+  }
+  const amount = Number(e.amount ?? e.taxable_amount ?? e.base_amount ?? NaN);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
 export default function VATReturn() {
   const { activeCompany, activeCompanyId } = useCompany();
   const { activeWorkspace } = useWorkspace();
@@ -116,7 +162,6 @@ export default function VATReturn() {
   const [period, setPeriod] = useState(currentQuarter());
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<AllBoxes | null>(null);
-  const [pendingBadDebt, setPendingBadDebt] = useState(0);
   const [showPay, setShowPay] = useState(false);
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payRef, setPayRef] = useState('');
@@ -125,10 +170,31 @@ export default function VATReturn() {
   const [apSyncCount, setApSyncCount] = useState(0);
   const [apSummary, setApSummary] = useState<VatReturnSummary | null>(null);
   const [filingOverrides, setFilingOverrides] = useState<Record<FilingOverrideKey, string> | null>(null);
+  const [showFilingOverrides, setShowFilingOverrides] = useState(false);
+  const [reconStatus, setReconStatus] = useState<VatReconStatus | null>(null);
+  const [showOverride, setShowOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideMsg, setOverrideMsg] = useState<string | null>(null);
+  const [filingOverrideAcknowledged, setFilingOverrideAcknowledged] = useState(false);
+
+  const loadReconStatus = async () => {
+    if (!activeCompanyId) {
+      setReconStatus(null);
+      return;
+    }
+    try {
+      const status = await fetchVatReconStatus(period, activeCompanyId);
+      setReconStatus(status);
+      setFilingOverrideAcknowledged(Boolean(status.override_reason));
+    } catch {
+      setReconStatus(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
     setPayMsg(null);
+    setOverrideMsg(null);
     try {
       const [res, summary] = await Promise.all([
         fetchVatReturnAllBoxes(period, activeCompanyId || undefined),
@@ -136,21 +202,28 @@ export default function VATReturn() {
           ? fetchVatReturnSummary(period, activeCompanyId).catch(() => null)
           : Promise.resolve(null),
       ]);
-      setData(res as unknown as AllBoxes);
+      const boxes = res as unknown as AllBoxes;
+      setData(boxes);
       setApSummary(summary);
       setApSyncCount(
-        Number(summary?.ap_invoiceflow_count ?? res.ap_invoiceflow_count ?? 0),
+        Number(summary?.ap_invoiceflow_count ?? boxes.ap_invoiceflow_count ?? 0),
       );
-      if (summary) {
+      // Prefer main all-boxes values when summary endpoint is empty/zeros
+      if (summary && !summaryLooksEmpty(summary)) {
         setFilingOverrides(overridesFromSummary(summary));
+      } else if (boxes) {
+        setFilingOverrides(overridesFromAllBoxes(boxes));
       } else {
         setFilingOverrides(null);
       }
+      await loadReconStatus();
     } catch {
       setData(null);
       setApSyncCount(0);
       setApSummary(null);
       setFilingOverrides(null);
+      setShowFilingOverrides(false);
+      setReconStatus(null);
     } finally {
       setLoading(false);
     }
@@ -166,23 +239,105 @@ export default function VATReturn() {
     void load();
   }, [period, activeCompanyId]);
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    void getPendingBadDebtTotal(workspaceId).then(setPendingBadDebt);
-  }, [workspaceId]);
+  const submitFilingOverride = async () => {
+    if (!activeCompanyId || overrideReason.trim().length < 3) return;
+    try {
+      await submitVatReconOverride(period, overrideReason.trim(), activeCompanyId);
+      setFilingOverrideAcknowledged(true);
+      setOverrideMsg('Override recorded — you may proceed with filing.');
+      setShowOverride(false);
+      await loadReconStatus();
+    } catch (e) {
+      setOverrideMsg(e instanceof Error ? e.message : 'Override failed');
+    }
+  };
+
+  const reconBanner = () => {
+    if (!reconStatus || reconStatus.status === 'never_run' || reconStatus.status === 'no_return') {
+      return (
+        <div className="mb-6 rounded-xl border border-gray-500/40 bg-gray-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-gray-300">
+            Recon not yet run for this period — review transactions on{' '}
+            <Link to="/gulftax/reconciliation" className="text-amber-300 underline">
+              Recon Bot
+            </Link>{' '}
+            before filing.
+          </p>
+        </div>
+      );
+    }
+    if (reconStatus.status === 'matched') {
+      return (
+        <div className="mb-6 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-500/15 text-green-400 border border-green-500/30">
+            Recon passed
+          </span>
+          {reconStatus.last_run_at && (
+            <span className="text-xs text-gray-500">
+              Last run {new Date(reconStatus.last_run_at).toLocaleString()}
+            </span>
+          )}
+        </div>
+      );
+    }
+    if (reconStatus.status === 'mismatch_found') {
+      return (
+        <div className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 space-y-3">
+          <p className="text-sm text-amber-100 font-medium">
+            Recon has mismatches — review before filing
+            {reconStatus.difference_aed != null && (
+              <> (total diff {fmt(reconStatus.difference_aed)})</>
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Link
+              to="/gulftax/reconciliation"
+              className="text-xs font-semibold text-amber-300 hover:text-amber-200 underline"
+            >
+              Open Recon Bot →
+            </Link>
+            {!filingOverrideAcknowledged && (
+              <button
+                type="button"
+                onClick={() => setShowOverride(true)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40"
+              >
+                Override and file anyway
+              </button>
+            )}
+            {filingOverrideAcknowledged && (
+              <span className="text-xs text-green-400">Filing override recorded</span>
+            )}
+          </div>
+          {reconStatus.override_reason && (
+            <p className="text-xs text-gray-400">Reason: {reconStatus.override_reason}</p>
+          )}
+        </div>
+      );
+    }
+    return null;
+  };
 
   const fmt = (n: number) => `AED ${Number(n || 0).toLocaleString('en-AE', { minimumFractionDigits: 2 })}`;
 
+  const overrideSourceValue = (key: FilingOverrideKey): number => {
+    if (apSummary && !summaryLooksEmpty(apSummary)) {
+      return apValueForOverride(apSummary, key);
+    }
+    if (data) return allBoxesValueForOverride(data, key);
+    return 0;
+  };
+
   const overrideDiff = (key: FilingOverrideKey): number | null => {
-    if (!apSummary || !filingOverrides) return null;
-    const apVal = apValueForOverride(apSummary, key);
+    if (!filingOverrides) return null;
+    const sourceVal = overrideSourceValue(key);
     const manual = Number.parseFloat(filingOverrides[key]);
     if (!Number.isFinite(manual)) return null;
-    const diff = Math.round((manual - apVal) * 100) / 100;
+    const diff = Math.round((manual - sourceVal) * 100) / 100;
     return diff === 0 ? null : diff;
   };
 
-  const hasOverrideDiffs = apSummary && filingOverrides
+  const hasOverrideDiffs = filingOverrides
     ? FILING_OVERRIDE_FIELDS.some((f) => overrideDiff(f.key) !== null)
     : false;
 
@@ -229,18 +384,33 @@ export default function VATReturn() {
         {activeCompany?.company_name ? ` · ${activeCompany.company_name}` : ''}
       </p>
 
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-        <span className="text-sm text-amber-100">
-          Pending Bad Debt Relief:{' '}
-          <strong className="font-mono">{fmt(pendingBadDebt)}</strong>
-        </span>
-        <Link
-          to="/gulftax/bad-debt-relief"
-          className="text-xs font-semibold text-amber-300 hover:text-amber-200 underline"
-        >
-          Review claims →
-        </Link>
-      </div>
+      {(data?.bad_debt_relief_applied ?? 0) > 0 && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3">
+          <span className="text-sm text-green-100">
+            Bad Debt Relief Applied:{' '}
+            <strong className="font-mono">{fmt(data!.bad_debt_relief_applied!)}</strong>
+            <span className="text-green-200/80 ml-2">(reduces Box 7 output VAT)</span>
+          </span>
+          <Link
+            to="/gulftax/bad-debt-relief"
+            className="text-xs font-semibold text-green-300 hover:text-green-200 underline"
+          >
+            View claims →
+          </Link>
+        </div>
+      )}
+
+      {data?.partial_exemption_applied && (
+        <div className="mb-6 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+          Partial exemption applied — Box 11 adjusted to{' '}
+          <strong className="font-mono">{Number(data.recovery_percentage ?? 0).toFixed(2)}%</strong> recovery
+          {data.box11_total_input_vat_raw != null && (
+            <span className="text-blue-200/80 ml-2">
+              (raw input VAT {fmt(data.box11_total_input_vat_raw)} → {fmt(data.box11_total_input_vat)})
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-3 mb-6 flex-wrap">
         <label className="text-sm text-gray-400">Period</label>
@@ -259,6 +429,9 @@ export default function VATReturn() {
         </button>
       </div>
 
+      {reconBanner()}
+      {overrideMsg && <p className="text-xs text-amber-300 mb-4">{overrideMsg}</p>}
+
       {apSyncCount > 0 && (
         <div className="mb-6 flex items-center gap-2 flex-wrap">
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-green-500/15 text-green-400 border border-green-500/30">
@@ -270,16 +443,37 @@ export default function VATReturn() {
           >
             View AP invoices →
           </Link>
+          {filingOverrides && (
+            <button
+              type="button"
+              onClick={() => setShowFilingOverrides((v) => !v)}
+              className="text-xs text-gray-400 hover:text-gray-200 underline"
+            >
+              {showFilingOverrides ? 'Hide filing overrides' : 'Edit filing overrides'}
+            </button>
+          )}
         </div>
       )}
 
-      {apSummary && filingOverrides && (
+      {!apSyncCount && filingOverrides && data && (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setShowFilingOverrides((v) => !v)}
+            className="text-xs text-gray-400 hover:text-gray-200 underline"
+          >
+            {showFilingOverrides ? 'Hide filing overrides' : 'Add / edit filing overrides'}
+          </button>
+        </div>
+      )}
+
+      {showFilingOverrides && filingOverrides && (
         <div className="mb-6 rounded-xl border border-white/10 bg-white/[0.02] p-5">
           <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <div>
               <h2 className="text-sm font-semibold text-white">FTA filing overrides</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Pre-filled from AP InvoiceFlow — edit before FTA submission if needed
+                Pre-filled from VAT return boxes — edit before FTA submission if needed
               </p>
             </div>
             {hasOverrideDiffs && (
@@ -291,7 +485,7 @@ export default function VATReturn() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {FILING_OVERRIDE_FIELDS.map((field) => {
               const diff = overrideDiff(field.key);
-              const apVal = apValueForOverride(apSummary, field.key);
+              const sourceVal = overrideSourceValue(field.key);
               return (
                 <label key={field.key} className="block rounded-lg border border-white/10 bg-gray-950/50 p-3">
                   <span className="text-[10px] font-mono text-gray-500">{field.label}</span>
@@ -306,10 +500,10 @@ export default function VATReturn() {
                     }
                     className="mt-1.5 w-full bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono"
                   />
-                  <p className="text-[10px] text-gray-600 mt-1">AP: {fmt(apVal)}</p>
+                  <p className="text-[10px] text-gray-600 mt-1">Source: {fmt(sourceVal)}</p>
                   {diff !== null && (
                     <p className="text-[10px] text-amber-400 mt-1 font-semibold">
-                      Differs from AP by {fmt(Math.abs(diff))} ({diff > 0 ? '+' : '−'})
+                      Differs from source by {fmt(Math.abs(diff))} ({diff > 0 ? '+' : '−'})
                     </p>
                   )}
                 </label>
@@ -412,6 +606,41 @@ export default function VATReturn() {
         </div>
       )}
 
+      {showOverride && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-amber-500/30 rounded-xl p-6 max-w-md w-full space-y-3">
+            <h3 className="text-lg font-semibold text-white">Override and file anyway</h3>
+            <p className="text-sm text-gray-400">
+              Reconciliation found mismatches. Enter a reason to proceed with filing (logged for audit).
+            </p>
+            <textarea
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              rows={4}
+              placeholder="e.g. Manual FTA adjustment approved by CFO"
+              className="w-full bg-gray-950 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+            />
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => void submitFilingOverride()}
+                disabled={overrideReason.trim().length < 3}
+                className="flex-1 py-2 rounded-lg bg-amber-500 text-deep font-semibold text-sm disabled:opacity-50"
+              >
+                Confirm override
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowOverride(false)}
+                className="flex-1 py-2 rounded-lg border border-white/10 text-sm text-gray-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {data && data.entries.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-white/10">
           <table className="w-full text-sm">
@@ -427,11 +656,15 @@ export default function VATReturn() {
             <tbody>
               {data.entries.map((e, i) => (
                 <tr key={i} className="border-t border-white/5 text-gray-300">
-                  <td className="px-4 py-2">{String(e.transaction_id ?? '')}</td>
+                  <td className="px-4 py-2">
+                    {String(e.invoice_number ?? e.transaction_id ?? e.id ?? '')}
+                  </td>
                   <td className="px-4 py-2">{String(e.vendor_name ?? '')}</td>
-                  <td className="px-4 py-2 font-mono">{fmt(Number(e.net_amount ?? 0))}</td>
+                  <td className="px-4 py-2 font-mono">{fmt(entryNetAmount(e))}</td>
                   <td className="px-4 py-2 font-mono">{fmt(Number(e.vat_amount ?? 0))}</td>
-                  <td className="px-4 py-2 font-mono">{String(e.box_number ?? '')}</td>
+                  <td className="px-4 py-2 font-mono">
+                    {String(e.box_number ?? e.fta_box ?? '')}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -1,10 +1,11 @@
 
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from "react";
-import { apiClient } from '../../services/gulfTaxClient';
+import { useAuth } from '../../context/AuthContext';
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getPendingBadDebtTotal } from '../../services/vatAdvanced.service';
+import { setMemoryAccessToken } from '../../utils/authToken';
 
 interface DashboardSummary {
   current_period: {
@@ -88,28 +89,58 @@ function KpiSkeleton() {
 }
 
 export default function GulfTaxDashboard() {
+  const { accessToken, authFetch } = useAuth();
   const { activeCompanyId: companyId, activeCompany } = useCompany();
   const { activeWorkspace } = useWorkspace();
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [loadError, setLoadError] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [pendingBadDebt, setPendingBadDebt] = useState(0);
 
+  // Keep gulftax clients in sync with the same AuthContext token companies/workspaces use
   useEffect(() => {
-    if (!companyId) return;
+    setMemoryAccessToken(accessToken);
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!companyId || !accessToken) {
+      if (!accessToken) {
+        setLoadState("loading");
+      }
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await apiClient.get<DashboardSummary>(
-          `/api/dashboard/summary`,
-          { timeout: 15000 } as Parameters<typeof apiClient.get>[1]
-        );
+        const headers: Record<string, string> = {};
+        if (activeWorkspace?.id) {
+          headers["X-Workspace-Id"] = activeWorkspace.id;
+          headers["X-Tenant-ID"] = activeWorkspace.id;
+        }
+        if (companyId) headers["X-Company-Id"] = companyId;
+
+        const res = await authFetch("/api/dashboard/summary", { headers });
+        if (!res.ok) {
+          const text = await res.text();
+          let detail = text || `API error ${res.status}`;
+          try {
+            const j = JSON.parse(text) as { detail?: unknown };
+            if (typeof j.detail === "string") detail = j.detail;
+          } catch {
+            /* keep text */
+          }
+          throw new Error(detail);
+        }
+        const data = (await res.json()) as DashboardSummary;
         if (!cancelled) {
           setSummary(data);
+          setLoadError("");
           setLoadState("ok");
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
           setSummary(null);
+          setLoadError(e instanceof Error ? e.message : "Request failed");
           setLoadState("error");
         }
       }
@@ -117,13 +148,12 @@ export default function GulfTaxDashboard() {
     return () => {
       cancelled = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId]);
+  }, [companyId, accessToken, activeWorkspace?.id, authFetch]);
 
   useEffect(() => {
-    if (!activeWorkspace?.id) return;
+    if (!activeWorkspace?.id || !accessToken) return;
     void getPendingBadDebtTotal(activeWorkspace.id).then(setPendingBadDebt);
-  }, [activeWorkspace?.id]);
+  }, [activeWorkspace?.id, accessToken]);
 
   const s = loadState === "ok" ? summary : null;
 
@@ -266,19 +296,29 @@ export default function GulfTaxDashboard() {
           </div>
           {loadState === "error" && (
             <p className="text-[12px] text-amber mt-2">
-              Live metrics unavailable — check API or <span className="font-mono">NEXT_PUBLIC_API_URL</span>.
+              Live metrics unavailable
+              {loadError ? (
+                <>
+                  : <span className="font-mono text-[11px]">{loadError}</span>
+                </>
+              ) : (
+                <>
+                  {" "}
+                  — check API or <span className="font-mono">VITE_API_URL</span>.
+                </>
+              )}
             </p>
           )}
         </div>
         <div className="flex gap-2.5 flex-wrap">
           <Link
-            href="/dashboard/vat-classifier"
+            to="/gulftax/vat-classifier"
             className="inline-flex items-center justify-center px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer border border-border-g text-gold hover:bg-gold-pale transition-all"
           >
             📥 Import CSV
           </Link>
           <Link
-            href="/dashboard/vat-return"
+            to="/gulftax/vat-return"
             className="inline-flex items-center justify-center px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer bg-gradient-to-br from-gold to-gold-lt text-deep shadow-[0_4px_18px_rgba(201,168,76,0.38)] hover:shadow-[0_6px_24px_rgba(201,168,76,0.52)] hover:-translate-y-px transition-all"
           >
             ⚡ Generate VAT Return
@@ -400,7 +440,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Hard blocked</div>
                 <div className="text-[11px] text-muted2 mt-0.5">Finance Manager override required</div>
                 {s.invoice_flow.escalated > 0 && (
-                  <Link href="/dashboard/invoice-flow/review?status=escalated" className="text-[11px] text-red hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/invoice-flow/review?status=escalated" className="text-[11px] text-red hover:underline mt-1 inline-block">
                     Review now →
                   </Link>
                 )}
@@ -419,7 +459,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Awaiting review</div>
                 <div className="text-[11px] text-muted2 mt-0.5">AP accountant approval needed</div>
                 {s.invoice_flow.pending_review > 0 && (
-                  <Link href="/dashboard/invoice-flow/review?status=review" className="text-[11px] text-amber hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/invoice-flow/review?status=review" className="text-[11px] text-amber hover:underline mt-1 inline-block">
                     Review queue →
                   </Link>
                 )}
@@ -438,7 +478,7 @@ export default function GulfTaxDashboard() {
                 <div className="text-[12px] font-medium text-white">Auto-approved today</div>
                 <div className="text-[11px] text-muted2 mt-0.5">Clean invoices · in VAT Return</div>
                 {s.invoice_flow.auto_approved_today > 0 && (
-                  <Link href="/dashboard/vat-classifier" className="text-[11px] text-green hover:underline mt-1 inline-block">
+                  <Link to="/gulftax/vat-classifier" className="text-[11px] text-green hover:underline mt-1 inline-block">
                     View in classifier →
                   </Link>
                 )}
@@ -568,10 +608,27 @@ export default function GulfTaxDashboard() {
                         ? `${s.e_invoicing.readiness_score}/100`
                         : "—"
                     }
+                    valueClass={
+                      loadState === "ok" && s
+                        ? s.e_invoicing.readiness_score >= 80
+                          ? "text-green"
+                          : s.e_invoicing.readiness_score >= 50
+                            ? "text-amber"
+                            : "text-red"
+                        : undefined
+                    }
                   />
                   <div className="h-1 bg-[rgba(255,255,255,0.07)] rounded-full mt-2 overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-gold to-gold-lt transition-all"
+                      className={`h-full rounded-full transition-all ${
+                        loadState === "ok" && s
+                          ? s.e_invoicing.readiness_score >= 80
+                            ? "bg-green"
+                            : s.e_invoicing.readiness_score >= 50
+                              ? "bg-amber"
+                              : "bg-red"
+                          : "bg-gradient-to-r from-gold to-gold-lt"
+                      }`}
                       style={{
                         width:
                           loadState === "ok" && s
@@ -580,11 +637,21 @@ export default function GulfTaxDashboard() {
                       }}
                     />
                   </div>
-                  <div className="text-[11px] text-muted font-mono">
-                    {loadState === "ok" && s
-                      ? `${s.e_invoicing.days_to_mandate}d to e-invoicing mandate · ASP ${s.e_invoicing.asp_appointed ? "on file" : "not recorded"}`
-                      : "—"}
-                  </div>
+                  {loadState === "ok" && s && !s.e_invoicing.asp_appointed ? (
+                    <Link
+                      to="/gulftax/settings"
+                      className="mt-2 block rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-[11px] text-amber hover:bg-amber/20 transition-colors"
+                    >
+                      ⚠ ASP provider not configured — required before Oct 30 2026.
+                      Configure in Settings →
+                    </Link>
+                  ) : (
+                    <div className="text-[11px] text-muted font-mono">
+                      {loadState === "ok" && s
+                        ? `${s.e_invoicing.days_to_mandate}d to e-invoicing mandate · ASP on file`
+                        : "—"}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -638,11 +705,19 @@ export default function GulfTaxDashboard() {
   );
 }
 
-function MetricRow({ label, value }: { label: string; value: string }) {
+function MetricRow({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+}) {
   return (
     <div className="flex items-center justify-between px-4 py-3 rounded-[10px] border bg-[rgba(15,40,90,0.35)] border-border">
       <div className="text-xs text-muted">{label}</div>
-      <div className="font-mono text-sm font-semibold text-white">{value}</div>
+      <div className={`font-mono text-sm font-semibold text-white ${valueClass ?? ""}`}>{value}</div>
     </div>
   );
 }

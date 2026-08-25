@@ -16,8 +16,11 @@ from app.models.uae_accounting_full import (
 )
 from app.services.uae_journal_service import get_trial_balance
 from app.services.dso_service import build_dso_metrics
+from app.services.ar_aging_service import compute_ar_aging, bucket_key, BUCKET_RISK, BUCKET_LABELS
 
 EMPTY_MSG = "No data yet — post transactions to see metrics"
+
+_RISK_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 def _f(v: Any) -> float:
@@ -136,76 +139,65 @@ def build_ar_summary(db: Session, workspace_id: str, company_id: str | None = No
         return empty_ar_summary()
 
     today = date.today()
-    buckets = {
-        "Current (0-30d)": {"amount": 0.0, "risk": "low"},
-        "31-60 days": {"amount": 0.0, "risk": "medium"},
-        "61-90 days": {"amount": 0.0, "risk": "high"},
-        "91-120 days": {"amount": 0.0, "risk": "high"},
-        "120+ days": {"amount": 0.0, "risk": "critical"},
-    }
-    customers: dict[str, dict] = {}
-    total_ar = 0.0
-    total_overdue = 0.0
+    # Bucket totals/pct/risk come from the same compute_ar_aging() used by
+    # /api/uae/ar/aging and /api/uae/full/ar-aging — this used to be a separate
+    # 30/60/90/120-day scheme; now Current/1-30/31-60/61-90/90+ (0/30/60/90),
+    # matching the frontend's own client-side override in ARCollections.tsx /
+    # ARCollectionsLive.tsx (which already assumed this scheme and risk mapping).
+    report = compute_ar_aging(db, workspace_id, company_id, today)
+    aging = [
+        {"bucket": b["label"], "amount": b["amount"], "pct": b["pct"], "risk": b["risk"]}
+        for b in report["buckets"]
+    ]
 
+    # Per-customer rollup + DSO still need the raw invoice list (invoice_date,
+    # customer object) that compute_ar_aging()'s bucket summary doesn't carry —
+    # this loop is presentation aggregation, not aging-bucket math, so it stays
+    # here; bucket_key()/BUCKET_RISK are imported (not re-derived) to keep a
+    # single bucketing definition.
+    customers: dict[str, dict] = {}
     for inv in invoices:
         amt = _f(inv.outstanding)
         if amt <= 0:
             continue
-        total_ar += amt
         due = inv.due_date or inv.invoice_date or today
         days = (today - due).days if due else 0
-        if days <= 30:
-            key = "Current (0-30d)"
-        elif days <= 60:
-            key = "31-60 days"
-        elif days <= 90:
-            key = "61-90 days"
-        elif days <= 120:
-            key = "91-120 days"
-        else:
-            key = "120+ days"
-        buckets[key]["amount"] += amt
-        if days > 30:
-            total_overdue += amt
+        key = bucket_key(days)
+        risk = BUCKET_RISK[key]
 
         cust_name = inv.customer.name if inv.customer else "Unknown Customer"
-        cid = cust_name
-        if cid not in customers:
-            customers[cid] = {
+        if cust_name not in customers:
+            customers[cust_name] = {
                 "name": cust_name,
                 "amount": 0.0,
-                "bucket": key.replace(" days", "d").replace("Current (0-30d)", "0-30d"),
-                "risk": buckets[key]["risk"],
+                "bucket": BUCKET_LABELS[key],
+                "risk": risk,
                 "last_contact": (inv.invoice_date or today).strftime("%b %d") if inv.invoice_date else "—",
                 "entity": "UAE",
                 "note": f"Outstanding AED {amt:,.0f}",
             }
-        customers[cid]["amount"] += amt
-        if days > 60:
-            customers[cid]["risk"] = "high" if days <= 120 else "critical"
+        c = customers[cust_name]
+        c["amount"] += amt
+        # Escalate customer risk/bucket to their single worst invoice, using the
+        # shared risk ranking instead of a second set of hardcoded day cutoffs.
+        if _RISK_RANK[risk] > _RISK_RANK[c["risk"]]:
+            c["risk"] = risk
+            c["bucket"] = BUCKET_LABELS[key]
 
-    aging = []
-    for bucket, meta in buckets.items():
-        amt = meta["amount"]
-        aging.append({
-            "bucket": bucket,
-            "amount": round(amt, 2),
-            "pct": round(amt / total_ar * 100) if total_ar else 0,
-            "risk": meta["risk"],
-        })
-
+    # DSO is unaffected by the bucket-boundary change above — it's a weighted
+    # average over raw due-date age, not derived from the bucket totals.
     dso_current = 0
-    if total_ar > 0 and invoices:
+    if report["total_outstanding"] > 0:
         weighted = sum(
             max(0, (today - (i.due_date or i.invoice_date or today)).days) * _f(i.outstanding)
             for i in invoices
         )
-        dso_current = max(1, int(weighted / total_ar) + 30)
+        dso_current = max(1, int(weighted / report["total_outstanding"]) + 30)
 
     return {
         "data": aging,
-        "total_ar": round(total_ar, 2),
-        "total_overdue": round(total_overdue, 2),
+        "total_ar": report["total_outstanding"],
+        "total_overdue": report["total_overdue"],
         "dso_current": dso_current,
         "dso_target": 30,
         "currency": "AED",

@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services import llm_service
+from app.services.rev_rec_leakage_service import (
+    get_leakage_snapshot,
+    leakage_from_three_way_result,
+    leakage_module_status,
+    save_leakage_snapshot,
+)
 from app.services.ifrs15_service import (
     calculate_percentage_complete,
     calculate_recognition,
@@ -133,6 +139,7 @@ class PeriodCloseSummaryRequest(BaseModel):
     anomaly_result: Optional[dict] = None
     rpo_result: Optional[dict] = None
     commission_result: Optional[dict] = None
+    leakage_result: Optional[dict] = None
 
 
 class PeriodClosePackRequest(BaseModel):
@@ -144,6 +151,19 @@ class PeriodClosePackRequest(BaseModel):
     rpo_result: Optional[dict] = None
     commission_result: Optional[dict] = None
     period_close_result: Optional[dict] = None
+    leakage_result: Optional[dict] = None
+    ifrs15_engine_results: Optional[list[dict]] = Field(default_factory=list)
+    ifrs15_contract_ids: Optional[list[str]] = Field(default_factory=list)
+    include_ifrs15_calculated: bool = True
+    workspace_id: Optional[str] = None
+    company_id: Optional[str] = None
+
+
+class LeakageSnapshotSaveRequest(BaseModel):
+    period: str
+    items: list[dict] = Field(default_factory=list)
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
 
 
 def _parse_posted_hour(posted_date: str) -> Optional[int]:
@@ -710,6 +730,17 @@ async def period_close_summary(request: PeriodCloseSummaryRequest):
         if not reconciled:
             total_exceptions += 1
 
+    leakage = request.leakage_result
+    if not leakage and request.three_way_match_result:
+        leakage = leakage_from_three_way_result(request.three_way_match_result)
+    leakage_status = leakage_module_status(leakage) if request.three_way_match_result else None
+    if leakage_status:
+        module_statuses.append(leakage_status)
+        if leakage_status["status"] != "clean":
+            total_exceptions += int((leakage or {}).get("item_count") or 0)
+            if leakage_status["status"] == "high":
+                high_risk_exceptions += 1
+
     overall_status = (
         "High Risk" if high_risk_exceptions > 0 else "Exceptions" if total_exceptions > 0 else "Clean"
     )
@@ -753,6 +784,7 @@ Style: Big 4 senior manager memo. Professional, direct, specific.
         "modules_run": modules_run,
         "overall_status": overall_status,
         "module_statuses": module_statuses,
+        "leakage_result": leakage,
         "total_exceptions": total_exceptions,
         "high_risk_exceptions": high_risk_exceptions,
         "nova_executive_summary": nova_executive_summary,
@@ -881,11 +913,53 @@ Plain professional English. No boilerplate.
 
 
 @router.post("/download-excel")
-async def download_excel_pack(request: PeriodClosePackRequest):
+async def download_excel_pack(
+    request: PeriodClosePackRequest,
+    req: Request,
+    db: Session = Depends(get_db),
+):
     from app.services.rev_rec_excel import generate_period_close_pack
+    from app.modules.ifrs15.ifrs15_repository import get_contract, list_calculated_contract_ids
+    import json as _json
 
     def _run() -> dict:
-        return generate_period_close_pack(request.model_dump())
+        data = request.model_dump()
+        engine_payloads = list(data.get("ifrs15_engine_results") or [])
+        ws = _ws(req, request.workspace_id)
+        cid = request.company_id or _company_id(req)
+
+        contract_ids = list(request.ifrs15_contract_ids or [])
+        if not contract_ids and request.include_ifrs15_calculated:
+            contract_ids = list_calculated_contract_ids(db, ws, cid, period=request.period)
+
+        if contract_ids:
+            seen: set[str] = set()
+            for contract_id in contract_ids:
+                if contract_id in seen:
+                    continue
+                seen.add(contract_id)
+                row = get_contract(db, contract_id, ws, cid)
+                if not row or not row.calculation_json:
+                    continue
+                try:
+                    calc = _json.loads(row.calculation_json)
+                except _json.JSONDecodeError:
+                    continue
+                engine_payloads.append(
+                    {
+                        "contract_meta": {
+                            "customer_name": row.customer_name,
+                            "contract_id": row.contract_number,
+                            "currency": "AED",
+                            "contract_date": row.contract_date,
+                        },
+                        "calculation_results": calc,
+                    }
+                )
+        if engine_payloads:
+            data["ifrs15_engine_results"] = engine_payloads
+            data["ifrs15_contract_ids"] = contract_ids
+        return generate_period_close_pack(data)
 
     return await asyncio.to_thread(_run)
 
@@ -917,6 +991,36 @@ def _ws(request: Request, query_ws: str | None = None) -> str:
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
     return query_cid or request.headers.get("x-company-id")
+
+
+@router.post("/leakage-snapshot")
+def persist_leakage_snapshot(
+    body: LeakageSnapshotSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Persist revenue leakage rollup for a period (from three-way match items)."""
+    if not body.items:
+        raise HTTPException(status_code=400, detail="items required")
+    ws = _ws(request, body.workspace_id or None)
+    cid = body.company_id or _company_id(request)
+    return save_leakage_snapshot(db, ws, cid, body.period, body.items)
+
+
+@router.get("/leakage-snapshot")
+def fetch_leakage_snapshot(
+    request: Request,
+    period: str = Query(..., description="YYYY-MM"),
+    company_id: str | None = None,
+    workspace_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    row = get_leakage_snapshot(db, ws, cid, period)
+    if not row:
+        raise HTTPException(status_code=404, detail="No leakage snapshot for this period")
+    return row
 
 
 class PerformanceObligationIn(BaseModel):
@@ -1054,63 +1158,15 @@ async def extract_contract(
     file: UploadFile = File(...),
     workspace_id: str | None = Query(None),
     company_id: str | None = Query(None),
+    contract_type: str = Query("auto", description="auto | generic | uae_spa"),
 ):
-    api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-    if not api_key:
-        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+    """Delegate to full IFRS15ContractExtractor (ported from ifrsai)."""
+    from app.modules.ifrs15.router import extract_contract_text
 
-    ext = Path((file.filename or "upload").replace("\\", "_")).suffix.lower()
-    if ext not in {".pdf", ".docx", ".txt"}:
-        raise HTTPException(status_code=400, detail="Supported: PDF, DOCX, TXT")
-
-    upload_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            upload_path = Path(tmp.name)
-            shutil.copyfileobj(file.file, tmp)
-
-        if ext == ".txt":
-            contract_text = upload_path.read_text(encoding="utf-8", errors="ignore")
-        elif ext == ".pdf":
-            from PyPDF2 import PdfReader
-            contract_text = "\n".join(
-                (p.extract_text() or "") for p in PdfReader(str(upload_path)).pages
-            )
-        else:
-            from docx import Document
-            contract_text = "\n".join(p.text for p in Document(str(upload_path)).paragraphs)
-
-        prompt = f"""Extract IFRS 15 revenue contract fields from this document. Return JSON only:
-{{
-  "customer_name": "",
-  "contract_value_aed": 0,
-  "contract_date": "YYYY-MM-DD",
-  "performance_obligations": [{{"description": "", "standalone_selling_price_aed": 0, "satisfaction_method": "over_time|point_in_time", "start_date": "", "end_date": ""}}],
-  "payment_terms": "",
-  "contract_duration_months": 0
-}}
-
-CONTRACT:
-{contract_text[:12000] if isinstance(contract_text, str) else str(contract_text)[:12000]}"""
-
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(model="claude-sonnet-4-20250514", max_tokens=2000, temperature=0,
-            messages=[{"role": "user", "content": prompt}])
-        raw = msg.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-        extracted = json.loads(raw)
-        return {
-            "status": "success",
-            "extracted_data": extracted,
-            "workspace_id": _ws(request, workspace_id),
-            "company_id": company_id or _company_id(request),
-        }
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON from AI: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)[:200]) from exc
-    finally:
-        if upload_path and upload_path.exists():
-            upload_path.unlink(missing_ok=True)
+    return await extract_contract_text(
+        request=request,
+        file=file,
+        contract_type=contract_type,
+        workspace_id=workspace_id,
+        company_id=company_id,
+    )

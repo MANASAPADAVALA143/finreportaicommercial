@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase, type PurchaseOrder } from '../../lib/ap-invoice/supabase';
-import { getMyCompany, requireCompanyId } from '../../lib/ap-invoice/companyService';
+import { getMyCompany } from '../../lib/ap-invoice/companyService';
+import { ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { bulkUpsertPurchaseOrdersViaApi } from '../../lib/ap-invoice/bulkUpsertPurchaseOrdersService';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import {
   Table,
@@ -60,20 +62,66 @@ const statusColors = {
 /** numeric(15,2) max — values above this (e.g. TRN in wrong column) cause Postgres 22003 overflow */
 const MAX_PO_AMOUNT = 9999999999999.99;
 
-const PO_AMOUNT_ALIASES = ['po_amount', 'po amount', 'amount', 'total_amount', 'total amount', 'po_value', 'value', 'total'];
+const PO_AMOUNT_ALIASES = [
+  'po_amount',
+  'po amount',
+  'total_amount',
+  'total amount',
+  'po_value',
+  'amount',
+  'value',
+  'total',
+  // Fallback only when no gross/total column exists (exact match; not via substring)
+  'net_amount',
+  'net amount',
+];
 const PO_NUMBER_ALIASES = ['po_number', 'po number', 'po #', 'po_no', 'po no', 'purchase_order', 'purchase order'];
-const PO_VENDOR_ALIASES = ['vendor_name', 'vendor name', 'vendor', 'supplier', 'supplier_name', 'supplier name'];
-const PO_DATE_ALIASES = ['po_date', 'po date', 'date', 'order_date', 'order date'];
+const PO_VENDOR_ALIASES = ['vendor_name', 'vendor name', 'supplier_name', 'supplier name', 'supplier', 'vendor'];
+const PO_DATE_ALIASES = ['po_date', 'po date', 'order_date', 'order date', 'date'];
+
+/** Headers that must never win via substring match (e.g. vendor_code contains "vendor"). */
+const PO_HEADER_BLOCK_SUFFIXES = ['_code', '_id', '_trn', '_tax', '_vat', '_rate', '_pct', '_percent'];
+const PO_HEADER_BLOCK_PREFIXES = ['net_', 'unit_', 'line_', 'tax_', 'vat_'];
 
 function normHeaderKey(k: string): string {
   return k.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_#]/g, '');
 }
 
+/**
+ * Map a spreadsheet column to a field. Exact header matches always win.
+ * Substring matches are only allowed for longer aliases (≥5 chars) and skip
+ * blocked headers so vendor_code / net_amount are not treated as vendor_name / amount.
+ */
 function pickRowValue(row: Record<string, unknown>, aliases: string[]): unknown {
-  for (const key of Object.keys(row)) {
+  const normalized = aliases.map((a) => normHeaderKey(a)).filter(Boolean);
+  const keys = Object.keys(row);
+
+  let bestExact: { key: string; score: number } | null = null;
+  for (const key of keys) {
     const n = normHeaderKey(key);
-    if (aliases.some((a) => normHeaderKey(a) === n || n.includes(normHeaderKey(a)))) return row[key];
+    for (const a of normalized) {
+      if (n === a && (!bestExact || a.length > bestExact.score)) {
+        bestExact = { key, score: a.length };
+      }
+    }
   }
+  if (bestExact) return row[bestExact.key];
+
+  let bestFuzzy: { key: string; score: number } | null = null;
+  for (const key of keys) {
+    const n = normHeaderKey(key);
+    if (PO_HEADER_BLOCK_SUFFIXES.some((s) => n.endsWith(s))) continue;
+    if (PO_HEADER_BLOCK_PREFIXES.some((p) => n.startsWith(p))) continue;
+    for (const a of normalized) {
+      // Short aliases ("vendor", "amount", "total", "date") must be exact only —
+      // otherwise vendor_code / net_amount / total_tax falsely match.
+      if (a.length < 5) continue;
+      if (n.includes(a) && (!bestFuzzy || a.length > bestFuzzy.score)) {
+        bestFuzzy = { key, score: a.length };
+      }
+    }
+  }
+  if (bestFuzzy) return row[bestFuzzy.key];
   return undefined;
 }
 
@@ -130,14 +178,14 @@ function findPOHeaderRowIndex(sheet: XLSX.WorkSheet): number {
 
 export function PurchaseOrders() {
   const { toast } = useToast();
-  const { baseCurrency: settingsCurrency, settings } = useCompanySettings();
+  const { baseCurrency: settingsCurrency } = useCompanySettings();
   const { config, isUAE, market } = useMarket();
   const baseCurrency = useMemo(() => {
+    // Market toggle wins — India always INR, UAE always AED
     if (isUAE || market === 'uae') return 'AED';
-    const country = (settings?.country ?? '').toUpperCase();
-    if (country === 'AE' || country === 'UAE' || settingsCurrency === 'AED') return 'AED';
-    return settingsCurrency ?? config.currency ?? 'AED';
-  }, [isUAE, market, settings?.country, settingsCurrency, config.currency]);
+    if (market === 'india') return 'INR';
+    return settingsCurrency ?? config.currency ?? 'INR';
+  }, [isUAE, market, settingsCurrency, config.currency]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [filteredPOs, setFilteredPOs] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -264,7 +312,8 @@ export function PurchaseOrders() {
 
         const total = Number(d.total_amount ?? d.subtotal_amount ?? 0);
         const poDate = d.invoice_date || new Date().toISOString().split('T')[0];
-        const companyId = await requireCompanyId();
+        await ensureApMembershipForUpload();
+        const companyId = await resolveApSupabaseCompanyId();
         const year = new Date().getFullYear();
         const { data: lastPO } = await supabase.from('purchase_orders').select('po_number').ilike('po_number', `PO-${year}-%`).order('po_number', { ascending: false }).limit(1);
         const lastNum = lastPO?.[0]?.po_number?.match(/PO-\d{4}-(\d+)/i)?.[1];
@@ -323,20 +372,40 @@ export function PurchaseOrders() {
     try {
       let companyId: string | null = null;
       try {
-        companyId = await requireCompanyId();
+        companyId = await resolveApSupabaseCompanyId();
       } catch {
         companyId = (await getMyCompany())?.id ?? null;
       }
-      let q = supabase.from('purchase_orders').select('*').order('created_at', { ascending: false });
-      if (companyId) q = q.eq('company_id', companyId);
-      const { data, error } = await q;
+      if (!companyId) {
+        setPurchaseOrders([]);
+        setPoMeta({});
+        return;
+      }
 
-      if (error) throw error;
-      const rows = data ?? [];
+      let rows: PurchaseOrder[] = [];
+      try {
+        const { listPurchaseOrdersViaApi } = await import(
+          '../../lib/ap-invoice/bulkUpsertGoodsReceiptsService'
+        );
+        const viaApi = await listPurchaseOrdersViaApi(companyId);
+        if (viaApi.ok && Array.isArray(viaApi.purchase_orders)) {
+          rows = viaApi.purchase_orders as PurchaseOrder[];
+        } else {
+          throw new Error(viaApi.error || 'API list failed');
+        }
+      } catch {
+        const { data, error } = await supabase
+          .from('purchase_orders')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        rows = data ?? [];
+      }
       setPurchaseOrders(rows);
 
       const meta: Record<string, { grn?: string; invLabel: string }> = {};
-      if (companyId && rows.length > 0) {
+      if (rows.length > 0) {
         const ids = rows.map((r) => r.id);
         const [grnRes, invRes] = await Promise.all([
           supabase
@@ -401,12 +470,12 @@ export function PurchaseOrders() {
     const count = purchaseOrders.length;
     setDeletingAll(true);
     try {
-      const company = await getMyCompany();
+      const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
       let q = supabase
         .from('purchase_orders')
         .delete()
         .gte('created_at', '1970-01-01T00:00:00.000Z');
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       const { error } = await q;
       if (error) throw error;
 
@@ -589,7 +658,8 @@ export function PurchaseOrders() {
     }
     setUploading(true);
     try {
-      const companyId = await requireCompanyId();
+      await ensureApMembershipForUpload();
+      const companyId = await resolveApSupabaseCompanyId();
       const rows = await parsePOFile(file);
       if (rows.length === 0) {
         toast({
@@ -600,38 +670,23 @@ export function PurchaseOrders() {
         setUploading(false);
         return;
       }
-      let inserted = 0;
-      let failed = 0;
-      let firstError: string | null = null;
-      for (const row of rows) {
-        const payload: Record<string, unknown> = {
-          company_id: companyId,
-          po_number: row.po_number.trim(),
-          vendor_name: row.vendor_name.trim(),
-          po_amount: parsePoAmount(row.po_amount),
-          po_date: row.po_date || null,
-          delivery_date: row.delivery_date || null,
-          description: row.description || null,
-          notes: row.notes || null,
-          status: row.status || 'Open',
-          currency: baseCurrency,
-          updated_at: new Date().toISOString(),
-        };
-        const { error } = await supabase
-          .from('purchase_orders')
-          .upsert(payload, { onConflict: 'po_number' });
-        if (error) {
-          failed++;
-          if (error.code === '23505') {
-            firstError = firstError || 'Duplicate PO number (already exists).';
-          } else {
-            firstError = firstError || error.message;
-          }
-          console.error('PO insert error:', error.code, error.message, row.po_number);
-        } else {
-          inserted++;
-        }
-      }
+      const payloads = rows.map((row) => ({
+        company_id: companyId,
+        po_number: row.po_number.trim(),
+        vendor_name: row.vendor_name.trim(),
+        po_amount: parsePoAmount(row.po_amount),
+        po_date: row.po_date || null,
+        delivery_date: row.delivery_date || null,
+        description: row.description || null,
+        notes: row.notes || null,
+        status: row.status || 'Open',
+        currency: baseCurrency,
+      }));
+      const result = await bulkUpsertPurchaseOrdersViaApi(companyId, payloads);
+      const inserted = result.success;
+      const failed = result.failed;
+      const firstError =
+        result.results.find((r) => !r.ok)?.error || result.error || null;
       fetchPurchaseOrders();
       const desc = inserted
         ? `${inserted} purchase order(s) added.${failed > 0 ? ` ${failed} skipped.` : ''}`
@@ -646,7 +701,7 @@ export function PurchaseOrders() {
 
       // Auto re-run match for all uploaded POs against existing invoices
       if (inserted > 0) {
-        toast({ title: 'ðŸ”„ Running 3-way matchâ€¦', description: 'Matching invoices to new POs and GRNs.' });
+        toast({ title: 'Running 3-way match…', description: 'Matching invoices to new POs and GRNs.' });
         void handleRematchAll(rows.map(r => r.po_number));
       }
     } catch (err) {
@@ -665,9 +720,9 @@ export function PurchaseOrders() {
     setRematching(true);
     try {
       // Get all POs to rematch (specific list or all open POs)
-      const company = await import('../../lib/ap-invoice/companyService').then(m => m.getMyCompany());
+      const companyId = await resolveApSupabaseCompanyId().catch(async () => (await getMyCompany())?.id ?? null);
       let q = supabase.from('purchase_orders').select('id,po_number');
-      if (company?.id) q = q.eq('company_id', company.id);
+      if (companyId) q = q.eq('company_id', companyId);
       if (poNumbers?.length) q = q.in('po_number', poNumbers);
       const { data: pos } = await q;
       if (!pos?.length) return;
@@ -710,7 +765,8 @@ export function PurchaseOrders() {
     const amount = formData.po_amount ? Number(formData.po_amount) : totalFromLines;
 
     try {
-      const companyId = await requireCompanyId();
+      await ensureApMembershipForUpload();
+      const companyId = await resolveApSupabaseCompanyId();
       const payload: Record<string, unknown> = {
         company_id: companyId,
         po_number: formData.po_number.trim(),

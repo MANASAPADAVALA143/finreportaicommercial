@@ -38,6 +38,8 @@ def init_db():
     import app.models.ifrs9_ecl  # noqa: F401 - IFRS 9 ECL portfolios
     import app.models.uae_account_classification  # noqa: F401 - GL account FS/CIT classification
     import app.models.client_data  # noqa: F401 - AP + GulfTax client data (AWS RDS)
+    import app.models.ap_payment_run  # noqa: F401 - AP Payment Run Center
+    import app.models.industry_config  # noqa: F401 - Industry-aware workspace
     Base.metadata.create_all(bind=engine)
 
     # ── Safe column / table additions for SQLite (create_all skips existing tables)
@@ -72,6 +74,7 @@ def init_db():
                 ("last_dunning_level", "ALTER TABLE uae_sales_invoices ADD COLUMN last_dunning_level INTEGER DEFAULT 0"),
                 ("last_dunning_sent_at", "ALTER TABLE uae_sales_invoices ADD COLUMN last_dunning_sent_at DATETIME"),
                 ("dunning_count", "ALTER TABLE uae_sales_invoices ADD COLUMN dunning_count INTEGER DEFAULT 0"),
+                ("recurring_template_id", "ALTER TABLE uae_sales_invoices ADD COLUMN recurring_template_id VARCHAR(36)"),
             ):
                 if ar_cols and col not in ar_cols:
                     conn.execute(__import__("sqlalchemy").text(ddl))
@@ -152,8 +155,51 @@ def init_db():
                     )
                 )
                 conn.commit()
+            if rbac_cols and "tenant_id" not in rbac_cols:
+                conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"
+                    )
+                )
+                conn.commit()
     except Exception:
         pass  # Non-SQLite or table doesn't exist yet — create_all handles it
+
+    # ORM columns missing on existing DBs (SQLite + PostgreSQL)
+    try:
+        from sqlalchemy import inspect, text
+
+        insp = inspect(engine)
+        if insp.has_table("rbac_users"):
+            rbac_cols = {c["name"] for c in insp.get_columns("rbac_users")}
+            with engine.begin() as conn:
+                if "product_role" not in rbac_cols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE rbac_users ADD COLUMN product_role VARCHAR(32) DEFAULT 'full_access'"
+                        )
+                    )
+                if "tenant_id" not in rbac_cols:
+                    conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
+        # UAE fixed assets — dashboard/_apply_company filters company_id; column missing on some RDS DBs
+        if insp.has_table("uae_fixed_assets"):
+            fa_cols = {c["name"] for c in insp.get_columns("uae_fixed_assets")}
+            if "company_id" not in fa_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("ALTER TABLE uae_fixed_assets ADD COLUMN company_id VARCHAR(36)")
+                    )
+                    try:
+                        conn.execute(
+                            text(
+                                "CREATE INDEX IF NOT EXISTS ix_uae_fixed_assets_company_id "
+                                "ON uae_fixed_assets (company_id)"
+                            )
+                        )
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
     db = SessionLocal()
     try:

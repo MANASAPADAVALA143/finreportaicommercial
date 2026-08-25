@@ -37,7 +37,7 @@ export function AnomalyDashboardCard() {
           <AlertTriangle className="h-4 w-4 text-red-500" />
           Anomaly Detection — this month
         </CardTitle>
-        <Button variant="link" size="sm" className="text-xs h-auto p-0" onClick={() => navigate('/invoices?tab=anomalies')}>
+        <Button variant="link" size="sm" className="text-xs h-auto p-0" onClick={() => navigate('/ap-invoices/list?tab=anomalies')}>
           View all →
         </Button>
       </CardHeader>

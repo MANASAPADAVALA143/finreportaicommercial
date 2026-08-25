@@ -1,10 +1,6 @@
-import { getStoredWorkspaceId } from '../../services/workspaceService';
-
-const FINREPORT_API = import.meta.env.VITE_API_URL || '';
-
-function apiBase(): string {
-  return FINREPORT_API || '';
-}
+import { getStoredWorkspaceId, workspaceHeaders } from '../../services/workspaceService';
+import { getStoredAccessToken } from '../../utils/authToken';
+import { joinApiUrl } from '@/utils/backendOrigin';
 
 export interface TRNValidationResult {
   valid: boolean;
@@ -20,6 +16,10 @@ export interface VATClassificationResult {
   reason: string;
   applicable_rate: number;
   error?: string;
+}
+
+function authHeaders(): Record<string, string> {
+  return workspaceHeaders(getStoredAccessToken(), { 'Content-Type': 'application/json' });
 }
 
 /** TRN format check via embedded GulfTax e-invoicing validator */
@@ -43,9 +43,10 @@ export async function classifyVATWithGulfTax(invoice: {
 }): Promise<VATClassificationResult> {
   try {
     const wsId = getStoredWorkspaceId() ?? 'default';
-    const response = await fetch(`${apiBase()}/api/gulftax/vat/classify`, {
+    const response = await fetch(joinApiUrl('/api/gulftax/vat/classify'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
+      credentials: 'include',
       body: JSON.stringify({
         description: invoice.description || `Invoice from ${invoice.vendor_name ?? 'vendor'}`,
         amount_aed: invoice.total_amount ?? 0,
@@ -106,10 +107,15 @@ export async function classifyAPInvoiceEmbedded(params: {
   trn_number?: string;
   company_id?: string;
 }): Promise<GulfTaxAPClassification> {
+  const token = getStoredAccessToken();
+  if (!token) {
+    throw new Error('Missing bearer token — please log out and log in again');
+  }
   const wsId = getStoredWorkspaceId() ?? params.company_id ?? 'default';
-  const res = await fetch(`${apiBase()}/api/uae/ap/classify-invoice`, {
+  const res = await fetch(joinApiUrl('/api/uae/ap/classify-invoice'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
+    credentials: 'include',
     body: JSON.stringify({
       invoice_number: params.invoice_number,
       vendor_name: params.vendor_name,
@@ -118,7 +124,7 @@ export async function classifyAPInvoiceEmbedded(params: {
       description: params.description || '',
       trn_number: params.trn_number || '',
       entity_type: 'mainland',
-      company_id: wsId,
+      company_id: params.company_id || wsId,
       workspace_id: wsId,
     }),
   });

@@ -2,6 +2,68 @@ import { supabase } from './supabase';
 import { requireCompanyId } from './companyService';
 import type { Gstr2bEntry, Invoice } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
+import { joinApiUrl } from '@/utils/backendOrigin';
+
+// ── TDS Section (Sec 51 / Chapter XVII-B) ─────────────────────────────────
+//
+// A wrong TDS rate is a compliance liability, not a cosmetic bug — so this
+// never silently applies a section. It only *suggests* one from the invoice's
+// existing IFRS/expense category (itself AI-classified, so still a guess),
+// leaves it fully editable, and returns nothing when there's no confident
+// mapping. Real calculation happens server-side via india_tds_service.py's
+// TDS_SECTIONS table (POST /api/india/full/tds/calc) so the rate/threshold
+// logic lives in exactly one place.
+
+const IFRS_CATEGORY_TO_TDS_SECTION: Array<{ match: RegExp; section: string }> = [
+  { match: /professional|consulting|consultancy|legal|audit|technical/i, section: '194J' },
+  { match: /contractor|construction|installation|fabrication/i, section: '194C' },
+  { match: /rent|lease/i, section: '194I' },
+  { match: /commission|brokerage/i, section: '194H' },
+  { match: /interest/i, section: '194A' },
+  { match: /insurance/i, section: '194D' },
+];
+
+/** Suggest a TDS section from the invoice's IFRS category — or null if no confident match. */
+export function suggestTdsSection(ifrsCategory: string | null | undefined): string | null {
+  const cat = (ifrsCategory || '').trim();
+  if (!cat) return null;
+  const hit = IFRS_CATEGORY_TO_TDS_SECTION.find((m) => m.match.test(cat));
+  return hit ? hit.section : null;
+}
+
+export type TdsCalcResult = {
+  ok: boolean;
+  section?: string;
+  description?: string;
+  threshold?: number;
+  threshold_met?: boolean;
+  tds_rate?: number;
+  net_tds?: number;
+  applicable_tds?: number;
+  error?: string;
+};
+
+export async function calculateTds(section: string, taxableAmount: number): Promise<TdsCalcResult> {
+  const res = await fetch(joinApiUrl('/api/india/full/tds/calc'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ section, taxable_amount: taxableAmount, deductee_type: 'company' }),
+  });
+  if (!res.ok) return { ok: false, error: `Calculation failed (${res.status})` };
+  return (await res.json()) as TdsCalcResult;
+}
+
+export async function updateInvoiceTdsSection(
+  invoiceId: string,
+  section: string | null,
+  tdsAmount: number | null
+): Promise<void> {
+  const { error } = await supabase
+    .from('invoices')
+    .update({ tds_section: section, tds_amount: tdsAmount, updated_at: new Date().toISOString() })
+    .eq('id', invoiceId);
+  if (error) throw error;
+}
 
 export function periodToDateRange(period: string): { start: string; end: string } {
   const [y, m] = period.split('-').map((x) => parseInt(x, 10));
@@ -163,12 +225,15 @@ export async function runGstReconciliation(
 /** Invoices in period with GST amount — all recon statuses (for GST Recon table). */
 export async function getGstReconInvoices(period: string): Promise<Invoice[]> {
   const { start, end } = periodToDateRange(period);
+  // gst_amount (legacy) and tax_amount (canonical, used by queue/bulk-Excel/seed
+  // imports) both hold the same value depending on which import path wrote the
+  // row — check both so imported invoices actually show up here.
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
     .gte('invoice_date', start)
     .lte('invoice_date', end)
-    .gt('gst_amount', 0)
+    .or('gst_amount.gt.0,tax_amount.gt.0')
     .order('invoice_date', { ascending: false });
   if (error) throw error;
   return (data || []) as Invoice[];
@@ -185,23 +250,68 @@ export async function getGstReconSummary(period: string): Promise<{
   unmatched: number;
   ignored: number;
   total: number;
+  missing_gstin: number;
+  itc_eligible: number;
+  itc_blocked: number;
+  tds_payable: number;
 }> {
   const { start, end } = periodToDateRange(period);
   const { data, error } = await supabase
     .from('invoices')
-    .select('gst_recon_status, gst_amount')
+    .select(
+      'gst_recon_status, gst_amount, tax_amount, gstin, vendor_gstin, reverse_charge, hsn_sac_code, ifrs_category, description, tds_amount'
+    )
     .gte('invoice_date', start)
-    .lte('invoice_date', end)
-    .gt('gst_amount', 0);
+    .lte('invoice_date', end);
   if (error) throw error;
   const rows = data ?? [];
+  const withTax = rows.filter((r) => Number(r.gst_amount || r.tax_amount || 0) > 0);
+  let itcEligible = 0;
+  let itcBlocked = 0;
+  let tdsPayable = 0;
+  let missingGstin = 0;
+  for (const r of rows) {
+    const gst = Number(r.gst_amount || r.tax_amount || 0);
+    const gstin = String(r.gstin || r.vendor_gstin || '').trim();
+    tdsPayable += Number(r.tds_amount || 0);
+    if (!gstin && gst > 0) missingGstin += 1;
+    if (gst <= 0) continue;
+    if (isItcBlocked(r)) itcBlocked += gst;
+    else itcEligible += gst;
+  }
   return {
-    matched: rows.filter((r) => r.gst_recon_status === 'matched').length,
-    mismatch: rows.filter((r) => r.gst_recon_status === 'mismatch').length,
-    unmatched: rows.filter((r) => r.gst_recon_status === 'unmatched' || r.gst_recon_status == null).length,
-    ignored: rows.filter((r) => r.gst_recon_status === 'ignored').length,
-    total: rows.length,
+    matched: withTax.filter((r) => r.gst_recon_status === 'matched').length,
+    mismatch: withTax.filter((r) => r.gst_recon_status === 'mismatch').length,
+    unmatched: withTax.filter((r) => r.gst_recon_status === 'unmatched' || r.gst_recon_status == null).length,
+    ignored: withTax.filter((r) => r.gst_recon_status === 'ignored').length,
+    total: withTax.length,
+    missing_gstin: missingGstin,
+    itc_eligible: Math.round(itcEligible * 100) / 100,
+    itc_blocked: Math.round(itcBlocked * 100) / 100,
+    tds_payable: Math.round(tdsPayable * 100) / 100,
   };
+}
+
+/** Sec 17(5) heuristic — motor vehicles, entertainment, food & beverages, personal. */
+function isItcBlocked(inv: {
+  reverse_charge?: boolean | null;
+  hsn_sac_code?: string | null;
+  ifrs_category?: string | null;
+  description?: string | null;
+}): boolean {
+  const text = `${inv.ifrs_category || ''} ${inv.description || ''} ${inv.hsn_sac_code || ''}`.toLowerCase();
+  const blockedHints = [
+    'motor vehicle',
+    'car ',
+    'entertainment',
+    'food',
+    'beverage',
+    'restaurant',
+    'club',
+    'personal',
+    'sec 17',
+  ];
+  return blockedHints.some((h) => text.includes(h));
 }
 
 export async function fetchGstr2bByMatchedInvoice(invoiceId: string): Promise<Gstr2bEntry | null> {
@@ -274,9 +384,20 @@ export async function updateInvoiceGstFields(
   invoiceId: string,
   patch: Partial<Pick<Invoice, 'gstin' | 'gst_amount' | 'cgst' | 'sgst' | 'igst'>>
 ): Promise<void> {
+  // This table has two parallel sets of GST columns from earlier schema drift
+  // (cgst/sgst/igst/gst_amount vs cgst_amount/sgst_amount/igst_amount/tax_amount).
+  // Write both so every reader — this modal, the queue upload, bulk Excel import,
+  // India Purchase Invoices — sees the same values regardless of which set it reads.
+  const mirrored: Record<string, unknown> = { ...patch };
+  if (patch.cgst !== undefined) mirrored.cgst_amount = patch.cgst;
+  if (patch.sgst !== undefined) mirrored.sgst_amount = patch.sgst;
+  if (patch.igst !== undefined) mirrored.igst_amount = patch.igst;
+  if (patch.gst_amount !== undefined) mirrored.tax_amount = patch.gst_amount;
+  if (patch.gstin !== undefined) mirrored.vendor_gstin = patch.gstin;
+
   const { error } = await supabase
     .from('invoices')
-    .update({ ...patch, updated_at: new Date().toISOString() })
+    .update({ ...mirrored, updated_at: new Date().toISOString() })
     .eq('id', invoiceId);
   if (error) throw error;
 }
@@ -306,4 +427,93 @@ export async function listVendorsFromTable(): Promise<
     risk_score?: number | null;
     bank_verification_status?: string | null;
   }>;
+}
+
+// ── Demo GST invoices (AP InvoiceFlow "Invoice List") ─────────────────────
+//
+// The India Accounting module's own Purchase/Sales Invoices pages have
+// their own demo seed (POST /api/india/demo/seed, FastAPI backend). This
+// seeds the SAME five vendors/amounts/GSTINs directly into AP InvoiceFlow's
+// `invoices` table (Supabase) so this list also shows GST-flavored records
+// during the demo — these are two genuinely separate data stores, so each
+// needs its own seed.
+
+const DEMO_GST_VENDORS = [
+  { name: 'Tata Consultancy Services Ltd', gstin: '27AAACT2727Q1ZW', hsn: '998314', desc: 'IT Consulting Services' },
+  { name: 'Reliance Industries Ltd',        gstin: '27AAACR5055K1Z4', hsn: '271000', desc: 'Petroleum Products Supply' },
+  { name: 'Infosys Ltd',                    gstin: '29AABCI1681B1ZN', hsn: '998313', desc: 'Software Development Services' },
+  { name: 'Amazon India',                   gstin: '29AAGCS8989F1Z9', hsn: '996111', desc: 'Cloud Hosting & Marketplace' },
+  { name: 'HDFC Bank Ltd',                  gstin: '27AAACH2702H1ZC', hsn: '997120', desc: 'Banking & Processing Fees' },
+];
+
+const DEMO_GST_AMOUNTS: Array<{ supply: 'intra' | 'inter'; taxable: number; cgst: number; sgst: number; igst: number }> = [
+  { supply: 'intra', taxable: 100000, cgst: 9000, sgst: 9000, igst: 0 },
+  { supply: 'inter', taxable: 200000, cgst: 0,    sgst: 0,    igst: 36000 },
+  { supply: 'intra', taxable: 50000,  cgst: 4500, sgst: 4500, igst: 0 },
+  { supply: 'inter', taxable: 40000,  cgst: 0,    sgst: 0,    igst: 7200 },
+  { supply: 'intra', taxable: 20000,  cgst: 1800, sgst: 1800, igst: 0 },
+];
+
+/** Seed 5 GST purchase invoices into AP InvoiceFlow's own invoice list (idempotent). */
+export async function seedDemoGstInvoices(): Promise<{ seeded: number; message: string }> {
+  const company_id = await requireCompanyId();
+
+  const { count: existing } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', company_id)
+    .like('invoice_number', 'GST-INV-%');
+  if ((existing ?? 0) >= DEMO_GST_VENDORS.length) {
+    return { seeded: 0, message: 'GST demo invoices already present' };
+  }
+
+  const today = new Date();
+  const yyyymm = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const rows = DEMO_GST_VENDORS.map((v, i) => {
+    const amt = DEMO_GST_AMOUNTS[i];
+    const totalGst = amt.cgst + amt.sgst + amt.igst;
+    const total = amt.taxable + totalGst;
+    const invDate = new Date(today);
+    invDate.setDate(Math.max(1, invDate.getDate() - (i * 5 + 3)));
+    const dueDate = new Date(invDate);
+    dueDate.setDate(dueDate.getDate() + 30);
+
+    return {
+      invoice_number: `GST-INV-${yyyymm}-${String(i + 1).padStart(3, '0')}`,
+      invoice_date: invDate.toISOString().slice(0, 10),
+      due_date: dueDate.toISOString().slice(0, 10),
+      vendor_name: v.name,
+      vendor_email: null,
+      vendor_phone: null,
+      vendor_address: null,
+      total_amount: total,
+      currency: 'INR',
+      gstin: v.gstin,
+      vendor_gstin: v.gstin,
+      cgst_amount: amt.cgst,
+      sgst_amount: amt.sgst,
+      igst_amount: amt.igst,
+      tax_type: 'GST' as const,
+      tax_amount: totalGst,
+      subtotal_amount: amt.taxable,
+      taxable_amount: amt.taxable,
+      hsn_sac: v.hsn,
+      description: v.desc,
+      ifrs_category: 'operating_expense',
+      status: 'Approved' as const,
+      source: 'manual' as const,
+      invoice_type: 'purchase' as const,
+      payment_received: false,
+      company_id,
+      file_type: 'seed-demo',
+      file_url: null,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  const { error } = await supabase.from('invoices').insert(rows);
+  if (error) throw error;
+
+  logAction('invoice.created', 'invoices', null, getInvoiceflowWorkEmail(), { seeded_gst_demo: true, count: rows.length });
+  return { seeded: rows.length, message: `Seeded ${rows.length} GST demo invoices` };
 }

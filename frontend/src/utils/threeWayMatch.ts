@@ -5,6 +5,26 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type MatchStatus = 'matched' | 'partial' | 'mismatch' | 'no_po' | 'three_way_matched';
 
+/**
+ * UI / filter status when DB has po_id but match_status was never written
+ * (e.g. seed linked POs without running the match engine).
+ * Never show "No PO" when a PO is already linked.
+ */
+export function resolveDisplayMatchStatus(inv: {
+  match_status?: string | null;
+  po_id?: string | null;
+  grn_id?: string | null;
+  grn_confirmed?: boolean | null;
+}): MatchStatus | string {
+  const raw = String(inv.match_status || '').trim();
+  if (raw && raw !== 'no_po') return raw;
+  if (inv.po_id) {
+    if (inv.grn_id || inv.grn_confirmed) return 'three_way_matched';
+    return 'matched';
+  }
+  return raw || 'no_po';
+}
+
 export type MatchResult = {
   match_status: MatchStatus;
   match_notes: string;
@@ -219,9 +239,8 @@ export async function runThreeWayMatch(
         po = ci.data[0];
       }
     }
-  }
-
-  if (!po && vendor) {
+    // Explicit po_number not found → do not vendor-substitute (same as resolvePoIdForGrn).
+  } else if (vendor) {
     const res = await supabase
       .from('purchase_orders')
       .select('id, po_amount, po_number')
@@ -238,11 +257,15 @@ export async function runThreeWayMatch(
       .from('invoices')
       .update({
         match_status: 'no_po',
-        match_notes: trimmedPo ? `Purchase Order "${trimmedPo}" not found.` : 'No matching PO found for vendor.',
+        match_notes: trimmedPo
+          ? `Purchase Order "${trimmedPo}" not found — left as-is for review (no vendor substitute).`
+          : 'No matching PO found for vendor.',
         match_difference: null,
         match_percentage: null,
         po_amount: null,
         grn_amount: null,
+        // Preserve explicit source po_number; never clear or replace it here.
+        ...(trimmedPo ? { po_number: trimmedPo, po_id: null } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq('id', invoiceId);
@@ -274,7 +297,8 @@ export async function runThreeWayMatch(
       match_notes: matchNotes,
       po_amount: poAmt,
       grn_amount: grnAmt,
-      po_number: po.po_number,
+      // Keep explicit source po_number; only fill from PO when invoice had none.
+      po_number: trimmedPo || po.po_number,
       po_id: po.id,
       updated_at: new Date().toISOString(),
     })

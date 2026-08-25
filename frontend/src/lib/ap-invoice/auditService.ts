@@ -22,7 +22,11 @@ export type AuditAction =
   | 'vendor.bank_changed'
   | 'invoice.matched'
   | 'tally.sync'
-  | 'tally.bulk_sync';
+  | 'tally.bulk_sync'
+  | 'vat.fta_return_uploaded'
+  | 'vat.reconciled'
+  | 'integration.sync'
+  | 'integration.disconnect';
 
 export function getInvoiceflowWorkEmail(): string | null {
   if (typeof window === 'undefined') return null;
@@ -60,7 +64,28 @@ function mirrorToApAudit(
   });
 }
 
-/** Fire-and-forget; never throws to callers. */
+function mapLegacyAuditLogsRow(row: Record<string, unknown>): AuditLogEntry {
+  return {
+    id: String(row.id),
+    entity_type: 'invoice',
+    entity_id: (row.invoice_id as string | null) ?? null,
+    action: String(row.action ?? 'invoice.updated'),
+    performed_by: (row.user_name as string | null) ?? (row.user_id as string | null) ?? null,
+    metadata: {
+      field_changed: row.field_changed ?? null,
+      old_value: row.old_value ?? null,
+      new_value: row.new_value ?? null,
+      source: 'audit_logs',
+    },
+    created_at: String(row.created_at ?? new Date().toISOString()),
+  };
+}
+
+/** Fire-and-forget; never throws to callers.
+ * Writes to BOTH:
+ * - audit_log (compliance UI schema)
+ * - audit_logs (legacy InvoiceFlow rows used by upload/approve paths)
+ */
 export function logAction(
   action: AuditAction,
   entityType: string,
@@ -72,16 +97,37 @@ export function logAction(
   void (async () => {
     try {
       const co = await getMyCompany();
-      if (!co?.id) return;
-      const { error } = await supabase.from('audit_log').insert({
-        company_id: co.id,
+      const actor = performedBy || 'System User';
+
+      const compliance = await supabase.from('audit_log').insert({
+        company_id: co?.id ?? null,
         entity_type: entityType,
         entity_id: entityId,
         action,
-        performed_by: performedBy,
+        performed_by: actor,
         metadata,
       });
-      if (error) console.warn('[audit] insert failed:', action, error.message);
+      if (compliance.error) {
+        console.warn('[audit] audit_log insert failed:', action, compliance.error.message);
+      }
+
+      // Legacy mirror so Audit Log page can fall back to audit_logs if compliance table is empty
+      if (entityType === 'invoice' || entityId) {
+        const legacy = await supabase.from('audit_logs').insert({
+          invoice_id: entityId,
+          action,
+          field_changed: (metadata.field_changed as string | undefined) ?? action,
+          old_value: metadata.old_value != null ? String(metadata.old_value) : null,
+          new_value:
+            metadata.new_value != null
+              ? String(metadata.new_value)
+              : JSON.stringify(metadata).slice(0, 2000),
+          user_name: actor,
+        });
+        if (legacy.error) {
+          console.warn('[audit] audit_logs insert failed:', action, legacy.error.message);
+        }
+      }
     } catch (e) {
       console.warn('[audit] failed to log:', action, e);
     }
@@ -139,8 +185,38 @@ export async function getAuditLog({
   }
 
   const { data, error, count } = await query;
-  if (error) throw error;
-  return { entries: (data ?? []) as AuditLogEntry[], total: count ?? 0 };
+  if (!error && (count ?? 0) > 0) {
+    return { entries: (data ?? []) as AuditLogEntry[], total: count ?? 0 };
+  }
+
+  // Fallback: legacy InvoiceFlow audit_logs (has data when audit_log is empty)
+  let legacy = supabase
+    .from('audit_logs')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(page * pageSize, (page + 1) * pageSize - 1);
+
+  if (entityId) legacy = legacy.eq('invoice_id', entityId);
+  if (performedBy?.trim()) legacy = legacy.ilike('user_name', `%${performedBy.trim()}%`);
+  if (from) legacy = legacy.gte('created_at', from);
+  if (to) {
+    const end = to.length <= 10 ? `${to}T23:59:59.999Z` : to;
+    legacy = legacy.lte('created_at', end);
+  }
+  if (entityCategory === 'invoice' || entityCategory === 'all' || !entityCategory) {
+    /* show all legacy invoice actions */
+  } else {
+    // Non-invoice categories aren't in legacy table → empty
+    return { entries: [], total: 0 };
+  }
+
+  const leg = await legacy;
+  if (leg.error) {
+    if (error) throw error;
+    throw leg.error;
+  }
+  const entries = ((leg.data ?? []) as Record<string, unknown>[]).map(mapLegacyAuditLogsRow);
+  return { entries, total: leg.count ?? entries.length };
 }
 
 export async function fetchAuditLogForExport(params: {

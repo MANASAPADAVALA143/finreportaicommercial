@@ -25,7 +25,7 @@ export interface CfoSummaryPayload {
   /** Phone numbers to send to (E.164) */
   recipients: string[];
 }
-
+    
 export interface CfoSummaryResult {
   ok: boolean;
   message: string;

@@ -2,13 +2,20 @@
  * India Accounting Service
  * Wraps all /api/india/full/* endpoints.
  */
+import { getStoredAccessToken } from '../utils/authToken';
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
 const BASE = `${API_BASE}/api/india/full`;
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId');
-  return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, ...extra };
+  const tenantId = localStorage.getItem('tenantId') || 'demo';
+  const accessToken = getStoredAccessToken();
+  return {
+    'Content-Type': 'application/json',
+    'X-Tenant-ID': tenantId,
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...extra,
+  };
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -97,6 +104,7 @@ export interface IndiaTDSEntry {
 
 export interface IndiaGSTReturn {
   id: string; return_type: string; period: string;
+  b2b_taxable: number; b2c_taxable: number;
   total_taxable: number; total_cgst: number; total_sgst: number;
   total_igst: number; total_payable: number;
   itc_cgst: number; itc_sgst: number; itc_igst: number;
@@ -206,6 +214,32 @@ export const createPurchaseInvoice = (body: {
 export const postPurchaseInvoice = (invId: string) =>
   post<{ id: string; status: string; je_id: string; itc_claimed: number }>(`/purchase-invoices/${invId}/post`);
 
+export const createPurchaseInvoiceFromOcr = (body: {
+  vendor_name: string; vendor_gstin?: string | null; buyer_gstin?: string | null;
+  invoice_number: string; invoice_date: string; due_date?: string | null;
+  taxable_amount: number;
+  cgst_amount?: number | null; sgst_amount?: number | null; igst_amount?: number | null;
+  tax_amount?: number | null; total_amount?: number | null;
+  hsn_sac?: string | null; payment_terms?: string | null;
+}) => post<{
+  id: string; invoice_number: string; vendor_id: string; supply_type: string;
+  subtotal: number; cgst_amount: number; sgst_amount: number; igst_amount: number; total_amount: number;
+}>('/purchase-invoices/from-ocr', body);
+
+async function downloadBlob(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ── TDS ───────────────────────────────────────────────────────────────────
 
 export const listTDS = (params?: { period?: string; section?: string }) =>
@@ -305,3 +339,133 @@ export const generateIndiaManagementAccounts = (period: string) =>
 
 export const getIndiaDashboard = (period: string) =>
   get<IndiaDashboard>('/dashboard', { period });
+
+// ── Excel Export ──────────────────────────────────────────────────────────
+
+export interface ExtractedInvoicePayload {
+  invoice_number?: string;
+  vendor_name?: string;
+  vendor_gstin?: string;
+  invoice_date?: string;
+  due_date?: string;
+  hsn_sac?: string;
+  supply_type?: string;
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+  itc_eligible?: boolean;
+  status?: string;
+}
+
+/** Download extracted invoice as Excel — returns a Blob the caller can save. */
+export async function downloadExtractedInvoiceExcel(payload: ExtractedInvoicePayload): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/india/invoice/extract-to-excel`, {
+    method: 'POST',
+    headers: hdrs(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.blob();
+}
+
+function filenameFromResponse(res: Response, fallback: string): string {
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  return match?.[1] ?? fallback;
+}
+
+/** Download all purchase invoices as Excel register. */
+export async function downloadPurchaseInvoicesExcel(period?: string): Promise<{ blob: Blob; filename: string }> {
+  const url = period
+    ? `${API_BASE}/api/india/full/purchase-invoices/export/excel?period=${period}`
+    : `${API_BASE}/api/india/full/purchase-invoices/export/excel`;
+  const res = await fetch(url, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  return { blob: await res.blob(), filename: filenameFromResponse(res, 'GST_Purchase_Register.xlsx') };
+}
+
+/** Download all purchase invoices as a branded PDF register. */
+export async function downloadPurchaseInvoicesPdf(
+  period?: string,
+  companyName?: string,
+  companyGstin?: string
+): Promise<{ blob: Blob; filename: string }> {
+  const params = new URLSearchParams();
+  if (period) params.set('period', period);
+  if (companyName) params.set('company_name', companyName);
+  if (companyGstin) params.set('company_gstin', companyGstin);
+  const qs = params.toString();
+  const url = `${API_BASE}/api/india/full/purchase-invoices/export/pdf${qs ? `?${qs}` : ''}`;
+  const res = await fetch(url, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  return { blob: await res.blob(), filename: filenameFromResponse(res, 'GST_Purchase_Register.pdf') };
+}
+
+/** Download a GSTR-3B return's underlying data as a JSON file (client-side, no network). */
+export function downloadGstReturnJson(gstReturn: IndiaGSTReturn): void {
+  const json = JSON.stringify(gstReturn, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  saveBlobAs(blob, `GSTR3B_${gstReturn.period}.json`);
+}
+
+/** Download a two-sheet Excel summary (GSTR-3B totals + underlying invoices). */
+export async function downloadGstReturnExcel(returnId: string): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${API_BASE}/api/india/full/gst-returns/${returnId}/export/excel`, { headers: hdrs() });
+  if (!res.ok) throw new Error(await res.text());
+  return { blob: await res.blob(), filename: filenameFromResponse(res, `GSTR3B_Summary.xlsx`) };
+}
+
+/** Trigger browser file download from a Blob. */
+export function saveBlobAs(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Google Sheets Settings ────────────────────────────────────────────────
+
+export interface GoogleSheetsConfig {
+  sheet_url: string;
+  enabled: boolean;
+  sheet_name?: string;
+}
+
+export const getGoogleSheetsConfig = () =>
+  fetch(`${API_BASE}/api/india/settings/google-sheets`, { headers: hdrs() })
+    .then(r => r.json() as Promise<GoogleSheetsConfig>);
+
+export const saveGoogleSheetsConfig = (cfg: GoogleSheetsConfig) =>
+  fetch(`${API_BASE}/api/india/settings/google-sheets`, {
+    method: 'POST', headers: hdrs(), body: JSON.stringify(cfg),
+  }).then(r => r.json());
+
+export const syncInvoiceToSheets = (payload: ExtractedInvoicePayload) =>
+  fetch(`${API_BASE}/api/india/invoice/sync-to-sheets`, {
+    method: 'POST', headers: hdrs(), body: JSON.stringify(payload),
+  }).then(r => r.json() as Promise<{ synced: boolean; message?: string; sheet_url?: string }>);
+
+// ── Demo Data ─────────────────────────────────────────────────────────────
+
+export interface DemoInvoiceDetail {
+  invoice_number: string;
+  vendor_name: string;
+  vendor_gstin: string;
+  supply_type: string;
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+}
+
+export const seedDemoInvoices = () =>
+  fetch(`${API_BASE}/api/india/demo/seed`, { method: 'POST', headers: hdrs() })
+    .then(r => r.json() as Promise<{
+      seeded: number; message: string; period?: string;
+      invoices?: string[]; detail?: DemoInvoiceDetail[];
+    }>);

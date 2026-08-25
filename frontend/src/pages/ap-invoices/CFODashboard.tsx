@@ -31,10 +31,10 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { formatCurrency, parseAmount } from '../../utils/currency';
+import { parseAmount } from '../../utils/currency';
 import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
-import { useMarket } from '../../contexts/MarketContext';
+import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useToast } from '../../hooks/use-toast';
 import { Loader2, RefreshCw, Download, Sparkles, TrendingUp, TrendingDown, Brain } from 'lucide-react';
 import {
@@ -57,6 +57,9 @@ import {
   type ActionRow,
 } from '../../lib/ap-invoice/strategicAdvisorService';
 import { anonymiseVendor } from '../../lib/ap-invoice/vendorDisplay';
+import { getMyCompany } from '../../lib/ap-invoice/companyService';
+import { resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { useAuth } from '@/context/AuthContext';
 
 const AXIS_TICK = { fontSize: 10, fill: '#94a3b8' };
 const GRID_LIGHT = { strokeDasharray: '3 3', stroke: 'rgba(0,0,0,0.08)' };
@@ -71,10 +74,6 @@ function chartTooltipProps() {
       fontSize: 12,
     },
   };
-}
-
-function fmtL(n: number, currency: string) {
-  return formatCurrency(n, currency);
 }
 
 type KpiVariant = 'default' | 'danger' | 'success' | 'info' | 'purple';
@@ -194,10 +193,10 @@ interface AIIntelligenceSummary {
 
 function AIIntelligenceCard({
   summary,
-  currency,
+  fmtCompact,
 }: {
   summary: AIIntelligenceSummary | null;
-  currency: string;
+  fmtCompact: (n: number) => string;
 }) {
   if (!summary?.is_trained) {
     return (
@@ -236,10 +235,7 @@ function AIIntelligenceCard({
             { label: 'Anomaly flags', value: anomalyCount.toString(), sub: `${summary.splitting_vendors} splitting · ${summary.price_drift_vendors} drift` },
             {
               label: 'Est. risk coverage',
-              value:
-                currency === 'INR'
-                  ? `₹${(estimatedSavings / 100000).toFixed(1)}L`
-                  : fmtL(estimatedSavings, currency),
+              value: fmtCompact(estimatedSavings),
               sub: '~0.3% of AP volume',
             },
           ].map((s) => (
@@ -260,10 +256,14 @@ function AIIntelligenceCard({
 }
 
 export default function CFODashboard() {
-  const { baseCurrency: settingsCurrency, dateFormat } = useCompanySettings();
+  const { dateFormat } = useCompanySettings();
+  const { fmt: fmtMoneyFromMarket, fmtCompact, isUAE, config } = useDisplayCurrency();
+  const taxIdLabel = config?.taxIdLabel ?? (isUAE ? 'TRN' : 'GSTIN');
+  const fmtL = fmtMoneyFromMarket;
   const { toast } = useToast();
-  const { isUAE, config } = useMarket();
+  const { accessToken } = useAuth();
   const { activeCompanyId } = useCompany();
+  const [apCompanyId, setApCompanyId] = useState<string | null>(null);
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
     localStorage.getItem('active_workspace_id') ??
@@ -273,7 +273,7 @@ export default function CFODashboard() {
   const [kpis, setKpis] = useState<CFOKPIs | null>(null);
   const [insights, setInsights] = useState<StrategicInsight[]>([]);
   const [loading, setLoading] = useState(true);
-  const [displayName, setDisplayName] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [deepAnalysis, setDeepAnalysis] = useState<string | null>(null);
   const [deepLoading, setDeepLoading] = useState(false);
   const [tab, setTab] = useState('overview');
@@ -285,13 +285,25 @@ export default function CFODashboard() {
     setLoadError(null);
     setLoading(true);
     try {
+      let resolvedCompanyId: string | null = null;
+      try {
+        resolvedCompanyId = await resolveApSupabaseCompanyId(accessToken);
+        setApCompanyId(resolvedCompanyId);
+      } catch {
+        const company = await getMyCompany();
+        resolvedCompanyId = company?.id ?? null;
+        setApCompanyId(resolvedCompanyId);
+      }
+
       const [k, ins] = await Promise.all([getCFOKPIs(), getStrategicInsightsCached()]);
       setKpis(k);
       setInsights(ins);
       // Load AI training summary
       try {
-        const company = await import('../../lib/ap-invoice/companyService').then((m) => m.getMyCompany());
-        if (company) {
+        const company =
+          (await getMyCompany()) ??
+          (resolvedCompanyId ? { id: resolvedCompanyId } : null);
+        if (company?.id) {
           const [intRes, vpRes] = await Promise.all([
             supabase.from('ap_intelligence').select('*').eq('company_id', company.id).maybeSingle(),
             supabase.from('vendor_profiles').select('is_recurring,is_splitting_vendor,price_trend,historical_rejection_rate').eq('company_id', company.id),
@@ -327,33 +339,34 @@ export default function CFODashboard() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, accessToken]);
 
   useEffect(() => {
     void loadAll();
     void (async () => {
-      const { data } = await supabase.auth.getUser();
-      const u = data.user;
-      const meta = u?.user_metadata as Record<string, unknown> | undefined;
-      const dn =
-        (typeof meta?.full_name === 'string' && meta.full_name) ||
-        (typeof meta?.name === 'string' && meta.name) ||
-        u?.email?.split('@')[0] ||
-        '';
-      setDisplayName(dn);
+      try {
+        const id = await resolveApSupabaseCompanyId(accessToken);
+        setApCompanyId(id);
+      } catch {
+        /* ignore */
+      }
+      const co = await getMyCompany();
+      if (co?.name) setCompanyName(co.name);
     })();
-  }, [loadAll]);
+  }, [loadAll, accessToken]);
 
-  const displayCurrency = useMemo(
-    () => (isUAE ? 'AED' : settingsCurrency || config.currency || 'INR'),
-    [isUAE, settingsCurrency, config.currency]
-  );
+  const timeGreeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }, []);
 
   const alerts = useMemo(() => {
     if (!kpis) return [];
     const a: string[] = [];
     if (kpis.overdueCount > 0) {
-      a.push(`${kpis.overdueCount} overdue — ${fmtL(kpis.overdueAmount, displayCurrency)}`);
+      a.push(`${kpis.overdueCount} overdue — ${fmtL(kpis.overdueAmount)}`);
     }
     if (kpis.dpo > 60) {
       a.push(`DPO ${kpis.dpo} days — ${(kpis.dpo / kpis.industryDpo).toFixed(1)}× industry avg`);
@@ -362,7 +375,7 @@ export default function CFODashboard() {
       a.push(`${kpis.gstinCompliance}% ${isUAE ? 'TRN' : 'GSTIN'} compliance`);
     }
     return a;
-  }, [kpis, displayCurrency, isUAE]);
+  }, [kpis, isUAE]);
 
   const actionRows: ActionRow[] = useMemo(() => {
     const rows = buildActionRows(insights, kpis);
@@ -374,16 +387,16 @@ export default function CFODashboard() {
       if (r.id.startsWith('ins-')) {
         const ins = insById.get(r.id);
         if (ins?.amount != null) {
-          amountLabel = fmtL(ins.amount, displayCurrency);
+          amountLabel = fmtL(ins.amount);
         } else if (amountLabel && !/^[-—]$/.test(amountLabel.trim())) {
-          amountLabel = fmtL(parseAmount(amountLabel), displayCurrency);
+          amountLabel = fmtL(parseAmount(amountLabel));
         } else {
           amountLabel = '—';
         }
       } else if (r.id === 'due-week' && kpis?.dueThisWeekAmount) {
-        amountLabel = fmtL(kpis.dueThisWeekAmount, displayCurrency);
+        amountLabel = fmtL(kpis.dueThisWeekAmount);
       } else if (amountLabel && !/^[-—]$/.test(amountLabel.trim())) {
-        amountLabel = fmtL(parseAmount(amountLabel), displayCurrency);
+        amountLabel = fmtL(parseAmount(amountLabel));
       } else {
         amountLabel = '—';
       }
@@ -391,7 +404,7 @@ export default function CFODashboard() {
       const vendor = r.vendor === '—' || r.vendor === '\u2014' ? '—' : r.vendor;
       return { ...r, amountLabel, vendor };
     });
-  }, [insights, kpis, displayCurrency]);
+  }, [insights, kpis, fmtL]);
 
   const departmentChartData = useMemo(() => {
     if (!kpis) return [];
@@ -480,7 +493,7 @@ export default function CFODashboard() {
             <h1 className="text-2xl font-medium tracking-tight text-gray-900">CFO intelligence suite</h1>
           </div>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Good{displayName ? ` ${displayName}` : ''} — live view for{' '}
+            {companyName ? `${timeGreeting}, ${companyName}` : timeGreeting} — live view for{' '}
             {displayDate(new Date().toISOString().slice(0, 10), dateFormat)}. All figures are scoped to your
             workspace from Supabase.
           </p>
@@ -518,7 +531,7 @@ export default function CFODashboard() {
         </div>
       ) : null}
 
-      <AIIntelligenceCard summary={aiSummary} currency={displayCurrency} />
+      <AIIntelligenceCard summary={aiSummary} fmtCompact={fmtCompact} />
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-muted/60 p-1">
@@ -541,13 +554,13 @@ export default function CFODashboard() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <KpiCard
               label="Total open AP"
-              value={fmtL(kpis.totalAP, displayCurrency)}
+              value={fmtL(kpis.totalAP)}
               sub={`${kpis.totalAPCount} invoices`}
               trend={{ pct: kpis.momChange, up: kpis.momChange > 0 }}
             />
             <KpiCard
               label="Overdue approved"
-              value={fmtL(kpis.overdueAmount, displayCurrency)}
+              value={fmtL(kpis.overdueAmount)}
               sub={`${kpis.overdueCount} invoices`}
               variant="danger"
             />
@@ -560,18 +573,18 @@ export default function CFODashboard() {
             <KpiCard
               label={isUAE ? 'TRN compliance' : 'GSTIN compliance'}
               value={`${kpis.gstinCompliance}%`}
-              sub={`Vendors with ${config.taxIdLabel} on file`}
+              sub={`Vendors with ${taxIdLabel} on file`}
               variant={kpis.gstinCompliance < 80 ? 'danger' : 'success'}
             />
             <KpiCard
               label="Cash position (projected)"
-              value={fmtL(kpis.cashPosition, displayCurrency)}
+              value={fmtL(kpis.cashPosition)}
               sub="6-week projection basis"
               variant="info"
             />
             <KpiCard
               label="Missed early-pay discount (est.)"
-              value={fmtL(kpis.missedDiscount, displayCurrency)}
+              value={fmtL(kpis.missedDiscount)}
               sub="2% on unpaid open AP"
               variant="purple"
             />
@@ -582,7 +595,7 @@ export default function CFODashboard() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium">Cash flow (6-week projection)</CardTitle>
                 <p className="text-[11px] text-muted-foreground">
-                  Min reserve {fmtL(kpis.minCashReserve, displayCurrency)} — opening {fmtL(DEFAULT_CFO_OPENING_CASH, displayCurrency)}.
+                  Min reserve {fmtL(kpis.minCashReserve)} — opening {fmtL(DEFAULT_CFO_OPENING_CASH)}.
                   Six-week projected paydown (net inflows smaller than outflows).
                 </p>
               </CardHeader>
@@ -591,8 +604,8 @@ export default function CFODashboard() {
                   <AreaChart data={kpis.cashFlowForecast} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid {...GRID_LIGHT} />
                     <XAxis dataKey="week" tick={AXIS_TICK} />
-                    <YAxis tick={AXIS_TICK} tickFormatter={(v) => fmtL(v, displayCurrency).slice(0, 8)} width={72} />
-                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v, displayCurrency)} />
+                    <YAxis tick={AXIS_TICK} tickFormatter={(v) => fmtL(v).slice(0, 8)} width={72} />
+                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                     <ReferenceLine
                       y={kpis.minCashReserve}
                       stroke={COL.red}
@@ -653,7 +666,7 @@ export default function CFODashboard() {
                     <CartesianGrid {...GRID_LIGHT} />
                     <XAxis dataKey="month" tick={AXIS_TICK} />
                     <YAxis tick={AXIS_TICK} tickFormatter={(v) => `${(Number(v) / 100000).toFixed(1)}L`} />
-                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v, displayCurrency)} />
+                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Bar dataKey="current" stackId="a" fill="#1D9E75" name="Current" />
                     <Bar dataKey="d30" stackId="a" fill="#EF9F27" name="1–30d overdue" />
@@ -706,7 +719,7 @@ export default function CFODashboard() {
                   <CartesianGrid {...GRID_LIGHT} />
                   <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
                   <YAxis type="category" dataKey="department" width={110} tick={AXIS_TICK} />
-                  <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v, displayCurrency)} />
+                  <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Bar dataKey="actual" fill={COL.blue} name="Recent (30d)" radius={[0, 4, 4, 0]} />
                   <Bar dataKey="prior" fill={COL.purple} name="Prior month" radius={[0, 4, 4, 0]} />
@@ -720,13 +733,13 @@ export default function CFODashboard() {
         <TabsContent value="cash" className="mt-4 space-y-6">
           <ChartMountGate show={tab === 'cash'}>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard label="Due in 7 days" value={fmtL(kpis.dueSoonAmount, displayCurrency)} sub={`${kpis.dueSoonCount} invoices`} />
+            <KpiCard label="Due in 7 days" value={fmtL(kpis.dueSoonAmount)} sub={`${kpis.dueSoonCount} invoices`} />
             <KpiCard
               label="Due this calendar week"
-              value={fmtL(kpis.dueThisWeekAmount, displayCurrency)}
+              value={fmtL(kpis.dueThisWeekAmount)}
               sub={`${kpis.dueThisWeekCount} invoices`}
             />
-            <KpiCard label="Open AP" value={fmtL(kpis.totalAP, displayCurrency)} sub={`${kpis.totalAPCount} invoices`} />
+            <KpiCard label="Open AP" value={fmtL(kpis.totalAP)} sub={`${kpis.totalAPCount} invoices`} />
             <KpiCard
               label={'Fast approvals (<24h)'}
               value={`${kpis.autoApproveRate}%`}
@@ -748,7 +761,7 @@ export default function CFODashboard() {
                   <CartesianGrid {...GRID_LIGHT} />
                   <XAxis dataKey="name" tick={AXIS_TICK} />
                   <YAxis tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
-                  <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v, displayCurrency)} />
+                  <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Bar dataKey="inflow" fill={COL.teal} name="Inflow" />
                   <Bar dataKey="outflow" fill={COL.red} name="Outflow" />
@@ -771,7 +784,7 @@ export default function CFODashboard() {
                     <div key={d.vendor}>
                       <div className="mb-1 flex justify-between text-[11px] font-medium">
                         <span className="truncate pr-2">{anonymiseVendor(d.vendor)}</span>
-                        <span className="shrink-0 text-muted-foreground">{fmtL(d.potential, displayCurrency)}</span>
+                        <span className="shrink-0 text-muted-foreground">{fmtL(d.potential)}</span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-muted">
                         <div
@@ -809,7 +822,7 @@ export default function CFODashboard() {
                         <TableCell className="text-right text-xs">{r.dpo}d</TableCell>
                         <TableCell className="text-right text-xs">{r.benchmark}d</TableCell>
                         <TableCell className="text-right text-xs">{r.overhang}d</TableCell>
-                        <TableCell className="text-right text-xs font-mono">{fmtL(r.trapped, displayCurrency)}</TableCell>
+                        <TableCell className="text-right text-xs font-mono">{fmtL(r.trapped)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -825,9 +838,41 @@ export default function CFODashboard() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard label={isUAE ? 'TRN compliance' : 'GSTIN compliance'} value={`${kpis.gstinCompliance}%`} sub="Vendor master" />
             <KpiCard label="Match coverage" value={`${kpis.matchRate}%`} sub="Matched / partial / 3-way" />
-            <KpiCard label="High-risk open" value={`${kpis.highRiskCount}`} sub={fmtL(kpis.highRiskAmount, displayCurrency)} variant="danger" />
+            <KpiCard
+              label="High risk flags"
+              value={`${kpis.highRiskCount}`}
+              sub={
+                kpis.highRiskFlagBreakdown?.length
+                  ? kpis.highRiskFlagBreakdown.map((b) => `${b.label}: ${b.count}`).join(' · ')
+                  : fmtL(kpis.highRiskAmount)
+              }
+              variant="danger"
+            />
             <KpiCard label="Avg approval cycle" value={`${kpis.avgProcessDays}d`} sub="Intake → approved" />
           </div>
+
+          {kpis.highestRiskInvoices?.length ? (
+            <Card className="border border-violet-200 bg-violet-50/40 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Highest risk invoices this period</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {kpis.highestRiskInvoices.map((r) => (
+                  <div
+                    key={`${r.invoice_number}-${r.flag_label}`}
+                    className="flex items-start justify-between gap-3 text-sm"
+                  >
+                    <div>
+                      <span className="font-medium text-gray-900">{r.invoice_number}</span>
+                      <span className="text-muted-foreground"> ({r.vendor_name})</span>
+                      <div className="text-[11px] text-violet-800">{r.flag_label}</div>
+                    </div>
+                    <div className="shrink-0 tabular-nums text-gray-800">{fmtL(r.amount)}</div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="border border-gray-200 shadow-sm">
@@ -842,7 +887,7 @@ export default function CFODashboard() {
                     <YAxis tick={AXIS_TICK} />
                     <Tooltip {...chartTooltipProps()} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Bar dataKey="compliant" stackId="g" fill={COL.teal} name={`With ${config.taxIdLabel}`} />
+                    <Bar dataKey="compliant" stackId="g" fill={COL.teal} name={`With ${taxIdLabel}`} />
                     <Bar dataKey="missing" stackId="g" fill={COL.amber} name="Missing" />
                   </BarChart>
                 </ResponsiveContainer>
@@ -960,7 +1005,7 @@ export default function CFODashboard() {
                     <CartesianGrid {...GRID_LIGHT} />
                     <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
                     <YAxis type="category" dataKey="vendor" width={120} tick={AXIS_TICK} />
-                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v, displayCurrency)} />
+                    <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                     <Bar dataKey="amount" radius={[0, 4, 4, 0]} name="Spend">
                       {[...kpis.vendorSpend].reverse().map((e, i) => (
                         <Cell
@@ -987,7 +1032,7 @@ export default function CFODashboard() {
                   kpis.newSuppliers.map((s) => (
                     <div key={s.name} className="rounded-lg border border-amber-200 bg-amber-50/50 p-3">
                       <p className="text-sm font-medium text-gray-900">{anonymiseVendor(s.name)}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">{fmtL(s.amount, displayCurrency)} recent</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">{fmtL(s.amount)} recent</p>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {s.checks.map((c) => (
                           <Badge key={c} variant="outline" className="text-[10px] font-medium">
@@ -1125,7 +1170,7 @@ export default function CFODashboard() {
           </DialogHeader>
           <APInsightsPanel
             workspaceId={workspaceId}
-            companyId={activeCompanyId}
+            companyId={apCompanyId ?? activeCompanyId}
             embedded
           />
         </DialogContent>

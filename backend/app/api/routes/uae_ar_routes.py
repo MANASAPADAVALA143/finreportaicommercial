@@ -7,7 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -27,7 +27,32 @@ from app.services.credit_risk_service import recalc_for_customer_name
 from app.services.dso_service import build_dso_metrics
 from app.services.notification_service import get_workspace_role_email, send_notification
 from app.services.payment_prediction_service import predict_payments
+from app.services.credit_note_service import issue_credit_note, list_credit_notes, void_credit_note
+from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
+from app.services.ar_classify_service import (
+    apply_classification_to_invoice,
+    classify_ar_invoice_sync,
+)
+from app.services.ar_bulk_import_service import run_ar_bulk_import
+from app.services.ar_sales_invoice_service import (
+    ARLineItemInput,
+    create_ar_invoice_with_classify,
+    get_or_create_customer,
+    next_invoice_number,
+)
 from app.services.uae_journal_service import create_journal_entry
+from app.services.ar_aging_service import compute_ar_aging
+from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
+from app.services.dunning_service import get_dunning_history, get_dunning_templates, run_dunning as run_dunning_service
+from app.services.recurring_invoice_service import (
+    cancel_template,
+    create_template,
+    generate_due_invoices,
+    get_generated_invoices,
+    list_templates,
+    pause_template,
+    resume_template,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,34 +87,58 @@ def _recalc_credit(db: Session, ws: str, company_id: str | None, customer_name: 
 def _get_or_create_customer(
     db: Session, tenant_id: str, name: str, trn: str | None = None,
 ) -> UAECustomer:
-    cust = (
-        db.query(UAECustomer)
-        .filter(UAECustomer.tenant_id == tenant_id, UAECustomer.name == name)
-        .first()
-    )
-    if cust:
-        if trn and not cust.trn:
-            cust.trn = trn
-            db.add(cust)
-        return cust
-    cust = UAECustomer(
-        id=str(uuid.uuid4()),
-        tenant_id=tenant_id,
-        name=name,
-        trn=trn,
-    )
-    db.add(cust)
-    db.flush()
-    return cust
+    return get_or_create_customer(db, tenant_id, name, trn)
 
 
 def _next_invoice_number(db: Session, tenant_id: str, company_id: str | None) -> str:
-    year = datetime.utcnow().year
-    q = db.query(UAESalesInvoice).filter(UAESalesInvoice.tenant_id == tenant_id)
-    if company_id:
-        q = q.filter(UAESalesInvoice.company_id == company_id)
-    count = q.count()
-    return f"INV-{year}-{count + 1:04d}"
+    return next_invoice_number(db, tenant_id, company_id)
+
+
+def _result_to_create_response(result) -> dict[str, Any]:
+    """Map CreateARInvoiceResult to create-invoice API response."""
+    if result.skipped_hard_block:
+        return {
+            "invoice_id": None,
+            "invoice_number": result.invoice_number,
+            "subtotal": result.subtotal,
+            "vat_amount": result.vat_amount,
+            "total": result.total,
+            "status": "skipped",
+            "posted": False,
+            "needs_manual_review": True,
+            "je_id": None,
+            "je_reference": None,
+            "gulftax": None,
+            "gulftax_decision": result.gulftax_decision,
+            "gulftax_reasoning": result.gulftax_reasoning,
+            "flag_for_review": True,
+            "vat_treatment": result.vat_treatment,
+            "gulftax_risk_score": result.gulftax_risk_score,
+            "gulftax_confidence": result.gulftax_confidence,
+            "trn_valid": result.trn_valid,
+            "message": result.message,
+        }
+    return {
+        "invoice_id": result.invoice_id,
+        "invoice_number": result.invoice_number,
+        "subtotal": result.subtotal,
+        "vat_amount": result.vat_amount,
+        "total": result.total,
+        "status": result.status,
+        "posted": result.posted,
+        "needs_manual_review": result.needs_manual_review,
+        "je_id": result.je_id,
+        "je_reference": result.je_reference,
+        "gulftax": result.gulftax,
+        "gulftax_decision": result.gulftax_decision,
+        "gulftax_reasoning": result.gulftax_reasoning,
+        "flag_for_review": result.flag_for_review,
+        "vat_treatment": result.vat_treatment,
+        "gulftax_risk_score": result.gulftax_risk_score,
+        "gulftax_confidence": result.gulftax_confidence,
+        "trn_valid": result.trn_valid,
+        "message": result.message,
+    }
 
 
 def _flag_overdue(inv: UAESalesInvoice, today: date, db: Session) -> bool:
@@ -114,7 +163,7 @@ def _flag_overdue(inv: UAESalesInvoice, today: date, db: Session) -> bool:
     return inv.status == "overdue"
 
 
-def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session) -> dict[str, Any]:
+def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session, einvoicing_status: str | None = None) -> dict[str, Any]:
     is_overdue = _flag_overdue(inv, today, db)
     cust = inv.customer
     return {
@@ -129,11 +178,19 @@ def _invoice_dict(inv: UAESalesInvoice, today: date, db: Session) -> dict[str, A
         "total": _f(inv.total_amount),
         "amount_due": _f(inv.outstanding),
         "status": inv.status or "draft",
+        "einvoicing_status": einvoicing_status,
         "is_overdue": is_overdue,
         "je_reference": inv.journal_entry_id,
         "sent_at": inv.sent_at.isoformat() if inv.sent_at else None,
         "paid_date": inv.paid_date.isoformat() if inv.paid_date else None,
         "payment_reference": inv.payment_reference,
+        "vat_treatment": inv.vat_treatment,
+        "gulftax_decision": inv.gulftax_decision,
+        "gulftax_risk_score": _f(inv.gulftax_risk_score) if inv.gulftax_risk_score is not None else None,
+        "gulftax_confidence": _f(inv.gulftax_confidence) if inv.gulftax_confidence is not None else None,
+        "trn_valid": inv.trn_valid,
+        "flag_for_review": bool(inv.flag_for_review),
+        "gulftax_reasoning": inv.gulftax_reasoning,
         "line_items": [
             {
                 "description": ln.description,
@@ -229,6 +286,58 @@ class CreateInvoiceIn(BaseModel):
     workspace_id: Optional[str] = None
 
 
+class ARClassifyRequest(BaseModel):
+    """Classify an AR sales invoice (sale direction) via embedded GulfTax."""
+    invoice_number: str = Field(..., description="Sales invoice number")
+    customer_name: str = Field(..., description="Buyer / customer name")
+    total_amount: float = Field(..., gt=0, description="Invoice total in AED")
+    invoice_date: str = Field(..., description="YYYY-MM-DD")
+    description: str = Field(default="", description="Line item description or notes")
+    entity_type: str = Field(default="mainland", description="mainland | free_zone | designated_zone")
+    buyer_trn: str = Field(default="", description="Customer TRN — empty allowed for B2C")
+    company_id: str = Field(default="default", description="Internal company identifier")
+
+
+class ApproveAndPostIn(BaseModel):
+    invoice_id: str
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+
+
+class ExtractedLineItemIn(BaseModel):
+    description: str = "Line item"
+    quantity: float = 1.0
+    unit_price: float = 0.0
+    vat_rate: float = 5.0
+    line_total: Optional[float] = None
+
+
+class ExtractedDataIn(BaseModel):
+    document_type: Optional[str] = "invoice"
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    due_date: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_trn: Optional[str] = None
+    seller_name: Optional[str] = None
+    seller_trn: Optional[str] = None
+    line_items: list[ExtractedLineItemIn] = Field(default_factory=list)
+    subtotal: Optional[float] = None
+    vat_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = "AED"
+    payment_terms: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CreateFromExtractionIn(BaseModel):
+    workspace_id: str
+    company_id: str
+    extracted_data: ExtractedDataIn
+    vat_treatment: Optional[str] = None
+    auto_approve: bool = False
+
+
 class SendInvoiceIn(BaseModel):
     invoice_id: str
     customer_email: str
@@ -255,9 +364,35 @@ class RunDunningIn(BaseModel):
     workspace_id: Optional[str] = None
 
 
+class IssueCreditNoteIn(BaseModel):
+    amount: float = Field(..., gt=0)
+    reason: Optional[str] = None
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+    issued_date: Optional[str] = None
+
+
 class PredictPaymentIn(BaseModel):
     invoice_id: Optional[str] = None
     company_id: str
+    workspace_id: Optional[str] = None
+
+
+class CreateRecurringInvoiceIn(BaseModel):
+    customer_id: str
+    description: str
+    amount: float = Field(..., gt=0)
+    vat_rate: float = Field(5.0, ge=0)
+    recurrence_type: str
+    interval: int = Field(1, ge=1)
+    start_date: str
+    end_date: Optional[str] = None
+    company_id: str
+    workspace_id: Optional[str] = None
+
+
+class GenerateDueRecurringIn(BaseModel):
+    company_id: Optional[str] = None
     workspace_id: Optional[str] = None
 
 
@@ -278,7 +413,10 @@ def list_invoices(
     if status:
         q = q.filter(UAESalesInvoice.status == status.lower())
     invoices = q.order_by(UAESalesInvoice.invoice_date.desc()).limit(500).all()
-    result = [_invoice_dict(inv, today, db) for inv in invoices]
+    from app.services.einvoicing_service_unified import get_latest_submission_status
+
+    status_map = get_latest_submission_status(db, ws, [inv.id for inv in invoices])
+    result = [_invoice_dict(inv, today, db, status_map.get(inv.id)) for inv in invoices]
     db.commit()
     return {"invoices": result, "count": len(result)}
 
@@ -293,6 +431,12 @@ def ar_aging(
     ws = _ws(request, workspace_id)
     cid = _company_id(request, company_id)
     today = date.today()
+
+    # Preserve existing side effect of this endpoint: auto-flag sent invoices as
+    # overdue and notify AR Manager/CFO on first detection. Kept scoped to this
+    # endpoint only — uae_full_routes and ar_collections never triggered this,
+    # and unifying the bucket math shouldn't spread the notification side effect
+    # to callers that didn't previously have it.
     q = db.query(UAESalesInvoice).filter(
         UAESalesInvoice.tenant_id == ws,
         UAESalesInvoice.status.notin_(["paid"]),
@@ -300,42 +444,96 @@ def ar_aging(
     )
     if cid:
         q = q.filter(UAESalesInvoice.company_id == cid)
-    invoices = q.all()
-
-    bucket_map: dict[str, dict[str, Any]] = {}
-    total_outstanding = 0.0
-    for inv in invoices:
+    for inv in q.all():
         _flag_overdue(inv, today, db)
-        amt = _f(inv.outstanding)
-        if amt <= 0:
-            continue
-        total_outstanding += amt
-        due = inv.due_date or today
-        days = (today - due).days
-        if due >= today:
-            bucket = "Current"
-        elif days <= 30:
-            bucket = "1-30 days"
-        elif days <= 60:
-            bucket = "31-60 days"
-        elif days <= 90:
-            bucket = "61-90 days"
-        else:
-            bucket = "90+ days"
-        if bucket not in bucket_map:
-            bucket_map[bucket] = {"bucket": bucket, "invoice_count": 0, "total_aed": 0.0, "customers": []}
-        bucket_map[bucket]["invoice_count"] += 1
-        bucket_map[bucket]["total_aed"] += amt
-        cust_name = inv.customer.name if inv.customer else "Customer"
-        if cust_name not in bucket_map[bucket]["customers"]:
-            bucket_map[bucket]["customers"].append(cust_name)
-
     db.commit()
-    order = ["Current", "1-30 days", "31-60 days", "61-90 days", "90+ days"]
-    buckets = [bucket_map[b] for b in order if b in bucket_map]
-    for b in buckets:
-        b["total_aed"] = round(b["total_aed"], 2)
-    return {"buckets": buckets, "total_outstanding": round(total_outstanding, 2), "currency": "AED"}
+
+    report = compute_ar_aging(db, ws, cid, today)
+    buckets = [
+        {
+            "bucket": b["label"],
+            "invoice_count": b["invoice_count"],
+            "total_aed": b["amount"],
+            "customers": b["customers"],
+        }
+        for b in report["buckets"]
+        if b["invoice_count"] > 0
+    ]
+    return {"buckets": buckets, "total_outstanding": report["total_outstanding"], "currency": "AED"}
+
+
+@router.get("/customer-risk")
+def ar_customer_risk(
+    request: Request,
+    company_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    risk_tier: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    report = compute_customer_risk(db, ws, cid, date.today())
+    return filter_by_risk_tier(report, risk_tier)
+
+
+@router.post("/classify-invoice", summary="Classify AR sales invoice with GulfTax AI (sale direction)")
+def ar_classify_invoice(body: ARClassifyRequest) -> dict[str, Any]:
+    """
+    Pass an AR sales invoice through GulfTax AI (transaction_type=sale).
+    Returns VAT treatment, confidence, risk decision, and TRN validity.
+    Does not persist — callers store results on uae_sales_invoices.
+    """
+    return classify_ar_invoice_sync(
+        invoice_number=body.invoice_number,
+        customer_name=body.customer_name,
+        total_amount=body.total_amount,
+        invoice_date=body.invoice_date,
+        description=body.description,
+        buyer_trn=body.buyer_trn,
+        company_id=body.company_id,
+        entity_type=body.entity_type,
+    )
+
+
+@router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
+def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
+    """Approve draft/pending AR invoice → JE (1200/4100/2200) + GulfTax output + VAT Classifier."""
+    ws = _ws(request, body.workspace_id)
+    poster = (
+        request.headers.get("x-user-email")
+        or request.headers.get("X-User-Email")
+        or "system"
+    )
+    result = post_sales_invoice_to_gl_and_tax(
+        body.invoice_id,
+        tenant_id=ws,
+        company_id=body.company_id or _company_id(request),
+        db=db,
+        approved_by=poster,
+    )
+    if not result.get("ok") and not result.get("success"):
+        err = result.get("error", "post_failed")
+        err_type = result.get("error_type") or "unknown"
+        status = 404 if err_type == "not_found" else 400
+        raise HTTPException(
+            status_code=status,
+            detail={"error": err, "error_type": err_type, "message": str(err)},
+        )
+    return {
+        "success": True,
+        "ok": True,
+        "invoice_id": result.get("invoice_id") or body.invoice_id,
+        "journal_entry_id": result.get("journal_entry_id") or result.get("je_id"),
+        "gulftax_transaction_id": result.get("gulftax_transaction_id"),
+        "status": result.get("status", "posted"),
+        "invoice_number": result.get("invoice_number"),
+        "je_reference": result.get("je_reference"),
+        "je_posted": result.get("je_posted", True),
+        "skipped": result.get("skipped", False),
+        "gulftax": result.get("gulftax"),
+        "einvoicing": result.get("einvoicing"),
+        "message": result.get("message"),
+    }
 
 
 @router.post("/create-invoice")
@@ -345,89 +543,212 @@ def create_invoice(body: CreateInvoiceIn, request: Request, db: Session = Depend
     if not body.line_items:
         raise HTTPException(status_code=400, detail="At least one line item required")
 
-    customer = _get_or_create_customer(db, ws, body.customer_name.strip(), body.customer_trn)
-    inv_date = date.fromisoformat(body.invoice_date)
-    due_date = date.fromisoformat(body.due_date)
-
-    subtotal = sum(li.qty * li.unit_price for li in body.line_items)
-    vat_amount = sum(li.qty * li.unit_price * li.vat_rate / 100 for li in body.line_items)
-    total = subtotal + vat_amount
-    invoice_number = _next_invoice_number(db, ws, cid)
-
-    inv = UAESalesInvoice(
-        id=str(uuid.uuid4()),
-        tenant_id=ws,
-        company_id=cid,
-        invoice_number=invoice_number,
-        customer_id=customer.id,
-        invoice_date=inv_date,
-        due_date=due_date,
-        period=inv_date.strftime("%Y-%m"),
-        subtotal=subtotal,
-        vat_amount=vat_amount,
-        total_amount=total,
-        paid_amount=0,
-        outstanding=total,
-        status="draft",
-        buyer_trn=body.customer_trn,
-    )
-    db.add(inv)
-    db.flush()
-
-    for li in body.line_items:
-        line_sub = li.qty * li.unit_price
-        line_vat = line_sub * li.vat_rate / 100
-        db.add(UAESalesInvoiceLine(
-            id=str(uuid.uuid4()),
-            invoice_id=inv.id,
+    line_items = [
+        ARLineItemInput(
             description=li.description,
-            quantity=li.qty,
+            qty=li.qty,
             unit_price=li.unit_price,
             vat_rate=li.vat_rate,
-            vat_amount=line_vat,
-            line_total=line_sub + line_vat,
-        ))
-
-    je_lines = [
-        {"account_code": "1200", "account_name": "Trade Receivables",
-         "debit": total, "credit": 0, "description": f"AR {invoice_number}"},
-        {"account_code": "4100", "account_name": "Sales Revenue",
-         "debit": 0, "credit": subtotal, "description": f"Sales {body.customer_name}"},
+        )
+        for li in body.line_items
     ]
-    if vat_amount > 0:
-        je_lines.append({
-            "account_code": "2200", "account_name": "VAT Payable",
-            "debit": 0, "credit": vat_amount, "description": f"VAT {invoice_number}",
-        })
+    result = create_ar_invoice_with_classify(
+        db,
+        tenant_id=ws,
+        company_id=cid,
+        customer_name=body.customer_name.strip(),
+        customer_trn=body.customer_trn,
+        invoice_date=date.fromisoformat(body.invoice_date),
+        due_date=date.fromisoformat(body.due_date),
+        line_items=line_items,
+        skip_on_hard_block=False,
+        commit=True,
+    )
+    if not result.success and not result.skipped_hard_block:
+        err = result.error or "create_failed"
+        if "period" in str(err).lower():
+            raise HTTPException(status_code=422, detail=err) from None
+        raise HTTPException(status_code=400, detail=err)
+    return _result_to_create_response(result)
+
+
+@router.post("/bulk-import", summary="Bulk import AR sales invoices from Excel/CSV")
+async def bulk_import_ar_invoices(
+    request: Request,
+    file: UploadFile = File(...),
+    company_id: Optional[str] = Form(None),
+    workspace_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = company_id or _company_id(request)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id is required")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+
+    lower = file.filename.lower()
+    if not lower.endswith((".xlsx", ".xls", ".csv")):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Upload .xlsx, .xls, or .csv",
+        )
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
     try:
-        je = create_journal_entry(
+        return run_ar_bulk_import(
+            db,
+            content=content,
+            filename=file.filename,
             tenant_id=ws,
-            entry_date=inv_date,
-            description=f"Sales: {body.customer_name} - {invoice_number}",
-            lines=je_lines,
-            reference=invoice_number,
-            source="AR_INVOICE",
             company_id=cid,
-            db=db,
-            auto_post=True,
         )
-    except PeriodControlError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AR bulk import failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Bulk import failed: {exc}") from exc
 
-    inv.journal_entry_id = je.id
-    db.add(inv)
-    _recalc_credit(db, ws, cid, body.customer_name.strip())
-    db.commit()
+
+@router.post("/extract-pdf", summary="Extract AR sales invoice fields from PDF/image via Claude Vision")
+async def extract_ar_pdf(
+    request: Request,
+    file: UploadFile = File(...),
+    workspace_id: Optional[str] = Form(None),
+    company_id: Optional[str] = Form(None),
+):
+    """OCR / Claude Vision extraction for AR — does not create an invoice."""
+    from app.services.ar_pdf_extract_service import extract_ar_document, validate_ar_extract_file
+    from app.services.llm_service import LLMNotConfiguredError, LLMRateLimitError
+
+    _ = _ws(request, workspace_id)
+    _ = company_id or _company_id(request)
+
+    content = await file.read()
+    try:
+        validate_ar_extract_file(file.filename, file.content_type, len(content))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        return extract_ar_document(
+            file_bytes=content,
+            filename=file.filename,
+            content_type=file.content_type,
+        )
+    except LLMNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except LLMRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("AR PDF extract failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {exc}") from exc
+
+
+@router.post("/create-from-extraction", summary="Create AR invoice from reviewed PDF extraction")
+def create_ar_from_extraction(
+    body: CreateFromExtractionIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Map reviewed extraction → create_ar_invoice_with_classify; optional auto approve-and-post."""
+    ws = _ws(request, body.workspace_id)
+    cid = body.company_id or _company_id(request)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id is required")
+
+    data = body.extracted_data
+    customer_name = (data.customer_name or "").strip()
+    if not customer_name:
+        raise HTTPException(status_code=400, detail="customer_name is required")
+
+    if not data.line_items:
+        raise HTTPException(status_code=400, detail="At least one line item is required")
+
+    try:
+        inv_date = date.fromisoformat((data.invoice_date or date.today().isoformat())[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invoice_date must be YYYY-MM-DD") from exc
+
+    if data.due_date:
+        try:
+            due = date.fromisoformat(data.due_date[:10])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="due_date must be YYYY-MM-DD") from exc
+    else:
+        due = inv_date + timedelta(days=30)
+
+    line_items = [
+        ARLineItemInput(
+            description=(li.description or "Line item").strip() or "Line item",
+            qty=float(li.quantity or 1),
+            unit_price=float(li.unit_price or 0),
+            vat_rate=float(li.vat_rate if li.vat_rate is not None else 5),
+        )
+        for li in data.line_items
+    ]
+
+    # Draft first when not auto-approving; post via same path as approve-and-post when true.
+    result = create_ar_invoice_with_classify(
+        db,
+        tenant_id=ws,
+        company_id=cid,
+        customer_name=customer_name,
+        customer_trn=(data.customer_trn or None),
+        invoice_date=inv_date,
+        due_date=due,
+        line_items=line_items,
+        skip_on_hard_block=False,
+        commit=True,
+        auto_post=bool(body.auto_approve),
+    )
+
+    if not result.success and not result.skipped_hard_block:
+        err = result.error or "create_failed"
+        if "period" in str(err).lower():
+            raise HTTPException(status_code=422, detail=err) from None
+        raise HTTPException(status_code=400, detail=err)
+
+    # Prefer extracted invoice number when available (cosmetic / audit trail).
+    if result.invoice_id and data.invoice_number:
+        inv = db.query(UAESalesInvoice).filter_by(id=result.invoice_id, tenant_id=ws).first()
+        if inv and data.invoice_number.strip():
+            inv.invoice_number = data.invoice_number.strip()[:50]
+            if body.vat_treatment:
+                inv.vat_treatment = body.vat_treatment
+            db.add(inv)
+            db.commit()
+            db.refresh(inv)
+            result.invoice_number = inv.invoice_number
+            result.vat_treatment = inv.vat_treatment or result.vat_treatment
+
+    gulftax_tx_id = None
+    if isinstance(result.gulftax, dict):
+        gulftax_tx_id = result.gulftax.get("gulftax_transaction_id") or result.gulftax.get("id")
 
     return {
-        "invoice_id": inv.id,
-        "invoice_number": invoice_number,
-        "subtotal": round(subtotal, 2),
-        "vat_amount": round(vat_amount, 2),
-        "total": round(total, 2),
-        "je_id": je.id,
+        "invoice_id": result.invoice_id,
+        "invoice_number": result.invoice_number,
+        "status": "posted" if result.posted else "draft",
+        "journal_entry_id": result.je_id if result.posted else None,
+        "gulftax_transaction_id": gulftax_tx_id if result.posted else None,
+        "vat_classification": {
+            "vat_treatment": result.vat_treatment or body.vat_treatment,
+            "gulftax_decision": result.gulftax_decision,
+            "gulftax_reasoning": result.gulftax_reasoning,
+            "gulftax_risk_score": result.gulftax_risk_score,
+            "gulftax_confidence": result.gulftax_confidence,
+            "trn_valid": result.trn_valid,
+            "flag_for_review": result.flag_for_review,
+        },
+        "message": result.message,
+        "posted": result.posted,
+        "je_reference": result.je_reference,
+        "gulftax": result.gulftax,
     }
 
 
@@ -437,6 +758,26 @@ def send_invoice(body: SendInvoiceIn, request: Request, db: Session = Depends(ge
     inv = db.query(UAESalesInvoice).filter_by(id=body.invoice_id, tenant_id=ws).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if not inv.journal_entry_id and inv.status == "draft":
+        # Do not auto-post HARD_BLOCK drafts on send
+        if (inv.gulftax_decision or "") == "HARD_BLOCK":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invoice is HARD_BLOCKED by GulfTax and cannot be posted. "
+                    f"{inv.gulftax_reasoning or 'Resolve VAT/TRN issues first.'}"
+                ),
+            )
+        post_result = post_sales_invoice_to_gl_and_tax(
+            inv.id,
+            tenant_id=ws,
+            company_id=inv.company_id,
+            db=db,
+        )
+        if not post_result.get("ok"):
+            raise HTTPException(status_code=400, detail=post_result.get("error", "post_failed"))
+        db.refresh(inv)
 
     company = None
     if inv.company_id:
@@ -684,45 +1025,192 @@ def run_dunning(body: RunDunningIn, request: Request, db: Session = Depends(get_
         )
         .all()
     )
-
-    sent: list[dict[str, Any]] = []
-    summary: list[str] = []
     for inv in overdue:
         _flag_overdue(inv, today, db)
-        days = (today - (inv.due_date or today)).days
-        if days <= 15:
-            level = 1
-        elif days <= 30:
-            level = 2
-        elif days <= 60:
-            level = 3
-        else:
-            level = 4
-        cust = inv.customer
-        email = cust.email if cust else None
-        if email:
-            send_notification(
-                email,
-                f"Payment reminder — {inv.invoice_number}",
-                f"Invoice {inv.invoice_number} for AED {_f(inv.outstanding):,.2f} "
-                f"was due on {inv.due_date}. Please arrange payment.",
-            )
-        inv.last_dunning_level = level
-        inv.last_dunning_sent_at = datetime.utcnow()
-        inv.dunning_count = (inv.dunning_count or 0) + 1
-        db.add(inv)
-        if cust:
-            _recalc_credit(db, ws, body.company_id, cust.name)
-        sent.append({
-            "invoice_number": inv.invoice_number,
-            "customer": cust.name if cust else "Customer",
-            "amount": _f(inv.outstanding),
-            "level": level,
-        })
+    db.flush()
+    return run_dunning_service(db, ws, body.company_id, today)
 
-    db.commit()
-    if sent:
-        summary.append(f"Sent {len(sent)} dunning reminder(s)")
-    else:
-        summary.append("No overdue invoices to chase")
-    return {"sent_count": len(sent), "sent": sent, "summary": summary}
+
+@router.get("/dunning-history")
+def dunning_history(
+    request: Request,
+    company_id: Optional[str] = None,
+    dunning_level: Optional[int] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id required")
+    return get_dunning_history(db, ws, cid, dunning_level=dunning_level)
+
+
+@router.get("/dunning-templates")
+def dunning_templates():
+    return {"templates": get_dunning_templates()}
+
+
+@router.post("/recurring-invoices")
+def create_recurring_invoice(body: CreateRecurringInvoiceIn, request: Request, db: Session = Depends(get_db)):
+    ws = _ws(request, body.workspace_id)
+    try:
+        return create_template(
+            db,
+            tenant_id=ws,
+            company_id=body.company_id,
+            customer_id=body.customer_id,
+            description=body.description,
+            amount=body.amount,
+            vat_rate=body.vat_rate,
+            recurrence_type=body.recurrence_type.strip().lower(),
+            interval=body.interval,
+            start_date=date.fromisoformat(body.start_date),
+            end_date=date.fromisoformat(body.end_date) if body.end_date else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/recurring-invoices")
+def get_recurring_invoices(
+    request: Request,
+    company_id: Optional[str] = None,
+    status: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    return list_templates(db, ws, cid, status)
+
+
+@router.post("/recurring-invoices/generate-due")
+def generate_due_recurring(
+    body: GenerateDueRecurringIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, body.workspace_id)
+    cid = body.company_id or _company_id(request)
+    return generate_due_invoices(db, ws, date.today(), cid)
+
+
+@router.get("/recurring-invoices/{template_id}/generated")
+def recurring_generated_invoices(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return get_generated_invoices(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/pause")
+def pause_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return pause_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/resume")
+def resume_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return resume_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/recurring-invoices/{template_id}/cancel")
+def cancel_recurring_invoice(
+    template_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    try:
+        return cancel_template(db, template_id, ws)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/credit-notes")
+def get_credit_notes(
+    request: Request,
+    company_id: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    status: Optional[str] = None,
+    parent_invoice_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    cid = _company_id(request, company_id)
+    return list_credit_notes(
+        db,
+        ws,
+        company_id=cid,
+        customer_id=customer_id,
+        status=status,
+        parent_invoice_id=parent_invoice_id,
+    )
+
+
+@router.post("/credit-notes/{credit_note_id}/void")
+def void_credit_note_route(
+    credit_note_id: str,
+    request: Request,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, workspace_id)
+    result = void_credit_note(db, credit_note_id, tenant_id=ws)
+    if not result.get("ok"):
+        code = 409 if result.get("error") == "void_blocked_invoice_paid_after_credit_note" else 400
+        raise HTTPException(status_code=code, detail=result)
+    return result
+
+
+@router.post("/{invoice_id}/credit-note")
+def create_credit_note_for_invoice(
+    invoice_id: str,
+    body: IssueCreditNoteIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    ws = _ws(request, body.workspace_id)
+    issued = date.fromisoformat(body.issued_date) if body.issued_date else None
+    result = issue_credit_note(
+        db,
+        invoice_id,
+        body.amount,
+        body.reason or "",
+        tenant_id=ws,
+        company_id=body.company_id or _company_id(request),
+        issued_date=issued,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    cust_name = result.get("credit_note", {}).get("customer_name", "")
+    if cust_name:
+        _recalc_credit(db, ws, body.company_id or _company_id(request), cust_name)
+        db.commit()
+    return result

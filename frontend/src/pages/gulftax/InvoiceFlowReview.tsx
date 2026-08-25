@@ -86,6 +86,8 @@ function ReviewQueueInner() {
   const [overrideTreatment, setOverrideTreatment] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
+  const [einvoiceLoading, setEinvoiceLoading] = useState<number | null>(null);
+  const [einvoiceMsg, setEinvoiceMsg] = useState<Record<number, string>>({});
   const [approvalBanner, setApprovalBanner] = useState<{ invoiceName: string; txCount: number } | null>(null);
   const [vendorProfile, setVendorProfile] = useState<{
     vendor_name: string;
@@ -160,6 +162,33 @@ function ReviewQueueInner() {
       setOverrideModal(null);
       setOverrideTreatment("");
       setOverrideReason("");
+    }
+  };
+
+  const handleGenerateEinvoice = async (invoiceId: number) => {
+    if (einvoiceLoading === invoiceId) return;
+    setEinvoiceLoading(invoiceId);
+    setEinvoiceMsg((prev) => {
+      const next = { ...prev };
+      delete next[invoiceId];
+      return next;
+    });
+    try {
+      const { data } = await apiClient.post(`/api/invoice/${invoiceId}/generate-einvoice`);
+      const sid = data?.submission_id;
+      setEinvoiceMsg((prev) => ({
+        ...prev,
+        [invoiceId]: sid
+          ? `Structured vendor invoice record saved (internal archive · ref ${String(sid).slice(0, 8)}…)`
+          : "Structured vendor invoice record saved (internal archive — not for ASP submission)",
+      }));
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "Failed to generate e-invoice";
+      setEinvoiceMsg((prev) => ({ ...prev, [invoiceId]: String(msg) }));
+    } finally {
+      setEinvoiceLoading(null);
     }
   };
 
@@ -421,6 +450,24 @@ function ReviewQueueInner() {
                         ⚠ Escalate
                       </button>
                     </>
+                  )}
+                </div>
+              )}
+
+              {["approved", "auto_approved", "posted"].includes(inv.status) && (
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border">
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateEinvoice(inv.id)}
+                    disabled={einvoiceLoading === inv.id}
+                    className="px-4 py-1.5 rounded-[8px] text-[12px] font-medium border border-border-g text-gold-lt bg-gold-pale hover:opacity-90 transition disabled:opacity-50"
+                  >
+                    {einvoiceLoading === inv.id ? "Saving…" : "Generate Structured Invoice Record"}
+                  </button>
+                  {einvoiceMsg[inv.id] && (
+                    <span className={`text-[11px] ${einvoiceMsg[inv.id].includes("saved") ? "text-green" : "text-red"}`}>
+                      {einvoiceMsg[inv.id]}
+                    </span>
                   )}
                 </div>
               )}

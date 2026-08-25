@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from services.vat_decision_tree import (
     build_risk_flags,
     classify_with_decision_tree,
+    coerce_box_number,
     is_entertainment_expense,
     map_box_number,
 )
@@ -149,13 +150,15 @@ def enrich_transaction_row(
         vendor_trn=vendor_trn,
     )
 
-    resolved_side = dt["transaction_side"]
+    resolved_side = (tx_type or dt["transaction_side"] or "purchase").lower()
+    if resolved_side not in ("sale", "purchase"):
+        resolved_side = "purchase"
     treatment = getattr(txn, "vat_treatment", None) or dt["vat_treatment"]
     entertainment = dt["entertainment_flag"]
     rc = dt["reverse_charge_flag"]
     import_vat = dt["import_vat_flag"]
     blocked = entertainment
-    box_number = stored_box if stored_box is not None else map_box_number(treatment, resolved_side)
+    box_number = coerce_box_number(resolved_side, treatment, stored_box)
 
     tier = dt["review_tier"]
     if conf is not None and conf < threshold_0_100 and tier == "auto_approve":

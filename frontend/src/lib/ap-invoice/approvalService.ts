@@ -4,7 +4,8 @@ import { notifyApprovalEvent } from '@/lib/ap-invoice/approvalNotifications';
 import { logAction } from '@/lib/ap-invoice/auditService';
 import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
 import { requireCompanyId } from '@/lib/ap-invoice/companyService';
-import { notifyApproverViaWhatsApp } from '@/lib/ap-invoice/whatsappService';
+import { notifyApproverViaWhatsApp, notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
+import type { ApproveAndPostResult } from '@/lib/ap-invoice/glPostService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 export type ApprovalRowStatus = 'pending' | 'approved' | 'rejected';
@@ -15,6 +16,105 @@ function normEmail(s: string) {
 
 export function emailsMatch(a: string, b: string) {
   return normEmail(a) === normEmail(b);
+}
+
+/** Live DBs may lack approval_status / approval_chain_emails until migration is applied. */
+async function updateInvoiceSafe(
+  invoiceId: string,
+  fields: Record<string, unknown>,
+): Promise<{ error: { message: string } | null }> {
+  const optionalKeys = ['approval_status', 'approval_chain_emails', 'approval_total_steps'] as const;
+  const { error } = await supabase.from('invoices').update(fields).eq('id', invoiceId);
+  if (!error) return { error: null };
+
+  const msg = (error.message || '').toLowerCase();
+  const looksLikeMissingCol = optionalKeys.some(
+    (k) => msg.includes(k) || msg.includes('schema cache') || msg.includes('42703'),
+  );
+  if (!looksLikeMissingCol) return { error };
+
+  const fallback = { ...fields };
+  for (const k of optionalKeys) delete fallback[k];
+  const retry = await supabase.from('invoices').update(fallback).eq('id', invoiceId);
+  return { error: retry.error };
+}
+
+/** Finalize a single-step (or last-step) approval onto the invoice + optional GL post. */
+async function finalizeInvoiceApproval(
+  invoice: Invoice,
+  actorEmail: string,
+  now: string,
+): Promise<
+  | { ok: true; fully_approved: true; gl_post?: ApproveAndPostResult }
+  | { ok: false; message: string }
+> {
+  const gulfDecision = String(invoice.gulftax_decision ?? '').toUpperCase();
+  if (gulfDecision === 'HARD_BLOCK') {
+    return {
+      ok: false,
+      message: 'Cannot approve — VAT classification blocked. Fix the invoice first.',
+    };
+  }
+
+  const { data: authData } = await supabase.auth.getUser();
+  const approverUserId = authData.user?.id ?? null;
+
+  const { error: fin } = await updateInvoiceSafe(invoice.id, {
+    approval_status: 'approved',
+    status: 'Approved',
+    approved_by: approverUserId,
+    approved_at: now,
+    updated_at: now,
+  });
+  if (fin) return { ok: false, message: fin.message };
+
+  await supabase.from('audit_logs').insert({
+    invoice_id: invoice.id,
+    action: 'Fully approved',
+    field_changed: 'status',
+    old_value: invoice.status,
+    new_value: 'Approved',
+    user_name: actorEmail.trim(),
+  });
+
+  logAction('approval.approved', 'invoice', invoice.id, actorEmail.trim(), { finalized: true });
+  recalcVendorRiskAsync(invoice.vendor_name);
+
+  if (invoice.approval_submitted_by) {
+    void notifyApprovalEvent({
+      type: 'submitter_notified',
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number,
+      submitter_email: invoice.approval_submitted_by,
+      outcome: 'approved',
+    });
+  }
+
+  let gl_post: ApproveAndPostResult | undefined;
+  try {
+    const cid = invoice.company_id || (await requireCompanyId());
+    const { postApprovedInvoiceToGL, recordGlPostFailure, clearGlPostFailure } = await import('./glPostService');
+    gl_post = await postApprovedInvoiceToGL(invoice, cid);
+    if (!gl_post.ok || (!gl_post.je_posted && !gl_post.skipped)) {
+      recordGlPostFailure(invoice.id, cid);
+    } else {
+      clearGlPostFailure(invoice.id);
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[AP] GL/GulfTax post after full approval failed:', message);
+    try {
+      const cid = invoice.company_id || (await requireCompanyId());
+      const { recordGlPostFailure } = await import('./glPostService');
+      recordGlPostFailure(invoice.id, cid);
+    } catch {
+      /* ignore */
+    }
+    gl_post = { ok: false, je_posted: false, message };
+  }
+
+  void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
+  return { ok: true, fully_approved: true, gl_post };
 }
 
 /** Pick the most specific rule: highest min_amount that still matches amount & department. */
@@ -90,19 +190,16 @@ export async function submitInvoiceForApproval(
   if (insErr) return { ok: false, message: insErr.message };
   const approvalRowId: string = (insData as { id: string }).id;
 
-  const { error: upErr } = await supabase
-    .from('invoices')
-    .update({
-      approval_status: 'pending',
-      current_approver_index: 0,
-      approval_rule_id: rule.id,
-      approval_chain_emails: chain,
-      approval_total_steps: chain.length,
-      submitted_for_approval_at: new Date().toISOString(),
-      approval_submitted_by: submitterEmail.trim(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', invoice.id);
+  const { error: upErr } = await updateInvoiceSafe(invoice.id, {
+    approval_status: 'pending',
+    current_approver_index: 0,
+    approval_rule_id: rule.id,
+    approval_chain_emails: chain,
+    approval_total_steps: chain.length,
+    submitted_for_approval_at: new Date().toISOString(),
+    approval_submitted_by: submitterEmail.trim(),
+    updated_at: new Date().toISOString(),
+  });
   if (upErr) return { ok: false, message: upErr.message };
 
   await supabase.from('audit_logs').insert({
@@ -147,7 +244,10 @@ export async function processApprovalAction(
   actorEmail: string,
   action: 'approved' | 'rejected',
   comment?: string | null
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; fully_approved?: boolean; gl_post?: ApproveAndPostResult }
+  | { ok: false; message: string }
+> {
   const { data: row, error: rowErr } = await supabase
     .from('invoice_approvals')
     .select('*')
@@ -157,6 +257,22 @@ export async function processApprovalAction(
 
   const ar = row as InvoiceApprovalRow;
   if (ar.status !== 'pending') {
+    // Recovery: approval row already approved but invoice update previously failed
+    // (e.g. missing approval_status column) — finish the invoice + GL post.
+    if (ar.status === 'approved' && action === 'approved') {
+      const { data: invStuck, error: invStuckErr } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', ar.invoice_id)
+        .single();
+      if (!invStuckErr && invStuck) {
+        const stuck = invStuck as Invoice;
+        if ((stuck.status || '') !== 'Approved') {
+          return finalizeInvoiceApproval(stuck, actorEmail, new Date().toISOString());
+        }
+        return { ok: true, fully_approved: true };
+      }
+    }
     return { ok: false, message: 'This approval step is no longer pending.' };
   }
   if (!emailsMatch(ar.approver_email, actorEmail)) {
@@ -173,10 +289,14 @@ export async function processApprovalAction(
     const rule = ruleRow as ApprovalRule | null;
     if (rule) resolvedChain = approverList(rule);
   }
+  // Single-approver rules with missing approval_total_steps/chain columns: treat as 1-step.
+  if (resolvedChain.length === 0) {
+    resolvedChain = [ar.approver_email];
+  }
   const totalSteps =
     typeof invoice.approval_total_steps === 'number' && invoice.approval_total_steps > 0
       ? invoice.approval_total_steps
-      : resolvedChain.length;
+      : resolvedChain.length || 1;
 
   const now = new Date().toISOString();
 
@@ -191,15 +311,12 @@ export async function processApprovalAction(
       .eq('id', approvalRowId);
     if (u1) return { ok: false, message: u1.message };
 
-    const { error: u2 } = await supabase
-      .from('invoices')
-      .update({
-        approval_status: 'rejected',
-        status: 'Rejected',
-        rejection_reason: comment?.trim() || 'Rejected in approval chain',
-        updated_at: now,
-      })
-      .eq('id', invoice.id);
+    const { error: u2 } = await updateInvoiceSafe(invoice.id, {
+      approval_status: 'rejected',
+      status: 'Rejected',
+      rejection_reason: comment?.trim() || 'Rejected in approval chain',
+      updated_at: now,
+    });
     if (u2) return { ok: false, message: u2.message };
 
     await supabase.from('audit_logs').insert({
@@ -251,13 +368,10 @@ export async function processApprovalAction(
     });
     if (ins) return { ok: false, message: ins.message };
 
-    const { error: u2 } = await supabase
-      .from('invoices')
-      .update({
-        current_approver_index: nextIndex,
-        updated_at: now,
-      })
-      .eq('id', invoice.id);
+    const { error: u2 } = await updateInvoiceSafe(invoice.id, {
+      current_approver_index: nextIndex,
+      updated_at: now,
+    });
     if (u2) return { ok: false, message: u2.message };
 
     await supabase.from('audit_logs').insert({
@@ -286,53 +400,7 @@ export async function processApprovalAction(
     return { ok: true };
   }
 
-  const { data: authData } = await supabase.auth.getUser();
-  const approverUserId = authData.user?.id ?? null;
-
-  const { error: fin } = await supabase
-    .from('invoices')
-    .update({
-      approval_status: 'approved',
-      status: 'Approved',
-      approved_by: approverUserId,
-      approved_at: now,
-      updated_at: now,
-    })
-    .eq('id', invoice.id);
-  if (fin) return { ok: false, message: fin.message };
-
-  await supabase.from('audit_logs').insert({
-    invoice_id: invoice.id,
-    action: 'Fully approved',
-    field_changed: 'status',
-    old_value: invoice.status,
-    new_value: 'Approved',
-    user_name: actorEmail.trim(),
-  });
-
-  logAction('approval.approved', 'invoice', invoice.id, actorEmail.trim(), { step: ar.step_index });
-  recalcVendorRiskAsync(invoice.vendor_name);
-
-  if (invoice.approval_submitted_by) {
-    void notifyApprovalEvent({
-      type: 'submitter_notified',
-      invoice_id: invoice.id,
-      invoice_number: invoice.invoice_number,
-      submitter_email: invoice.approval_submitted_by,
-      outcome: 'approved',
-    });
-  }
-
-  // Push to GulfTax transaction store (non-blocking)
-  try {
-    const cid = invoice.company_id || (await requireCompanyId());
-    const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-    void syncApprovedInvoiceToGulfTax(invoice.id, cid);
-  } catch {
-    /* sync is best-effort; GL post may also trigger backend sync */
-  }
-
-  return { ok: true };
+  return finalizeInvoiceApproval(invoice, actorEmail, now);
 }
 
 async function loadInvoicesByIds(ids: string[]): Promise<Map<string, Invoice>> {
@@ -387,26 +455,157 @@ export async function fetchMyApprovalHistory(
     .filter((x): x is { approval: InvoiceApprovalRow; invoice: Invoice } => x != null);
 }
 
+/** Format Supabase / unknown throwables for toasts (PostgrestError is often not `instanceof Error`). */
+export function formatSupabaseError(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message;
+  if (e && typeof e === 'object') {
+    const o = e as { message?: string; details?: string; hint?: string; code?: string };
+    const parts = [o.message, o.details, o.hint, o.code ? `code ${o.code}` : ''].filter(Boolean);
+    if (parts.length) return parts.join(' — ');
+  }
+  return String(e || 'Unknown error');
+}
+
+function isMissingColumnError(error: { message?: string; code?: string; details?: string } | null): boolean {
+  if (!error) return false;
+  const msg = `${error.message || ''} ${error.details || ''}`.toLowerCase();
+  return (
+    msg.includes('approver_phones') ||
+    msg.includes('schema cache') ||
+    msg.includes('could not find') ||
+    msg.includes('column') ||
+    error.code === '42703' ||
+    error.code === 'PGRST204'
+  );
+}
+
+/** Keep only E.164-ish phones; drop emails mistakenly pasted into the phones field. */
+export function sanitizeApproverPhones(phones: string[] | null | undefined): string[] | null {
+  if (!phones?.length) return null;
+  const cleaned = phones
+    .map((p) => p.trim())
+    .filter((p) => p && !p.includes('@') && /^\+?[\d\s()-]{7,}$/.test(p));
+  return cleaned.length ? cleaned : null;
+}
+
 export async function saveApprovalRule(rule: Partial<ApprovalRule> & { min_amount: number; required_approvers: number; approver_emails: string[] }) {
-  const company_id = await requireCompanyId();
-  const fields = {
+  let company_id: string;
+  try {
+    // Prefer workspace-synced Supabase company (matches invoices / RLS tenant).
+    const { resolveApSupabaseCompanyId } = await import('./workspaceCompanySync');
+    company_id = await resolveApSupabaseCompanyId();
+  } catch {
+    company_id = await requireCompanyId();
+  }
+
+  const phones = sanitizeApproverPhones(rule.approver_phones);
+  const baseFields: Record<string, unknown> = {
     min_amount: rule.min_amount,
     max_amount: rule.max_amount ?? null,
     required_approvers: rule.required_approvers,
     approver_emails: rule.approver_emails,
-    approver_phones: rule.approver_phones?.length ? rule.approver_phones : null,
     department: rule.department?.trim() || null,
   };
-  if (rule.id) {
-    const { error } = await supabase.from('approval_rules').update(fields).eq('id', rule.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from('approval_rules').insert({ ...fields, company_id });
-    if (error) throw error;
+
+  const tryWrite = async (fields: Record<string, unknown>, mode: 'update' | 'insert') => {
+    if (mode === 'update') {
+      return supabase.from('approval_rules').update(fields).eq('id', rule.id!);
+    }
+    return supabase.from('approval_rules').insert({ ...fields, company_id });
+  };
+
+  const mode = rule.id ? 'update' : 'insert';
+
+  // 1) With phones (only if we have real phone numbers)
+  if (phones) {
+    const first = await tryWrite({ ...baseFields, approver_phones: phones }, mode);
+    if (!first.error) return;
+    if (!isMissingColumnError(first.error)) {
+      // Retry without company_id on insert if FK/RLS company mismatch
+      if (mode === 'insert') {
+        const noCo = await supabase.from('approval_rules').insert(baseFields);
+        if (!noCo.error) return;
+        throw new Error(formatSupabaseError(first.error));
+      }
+      throw new Error(formatSupabaseError(first.error));
+    }
   }
+
+  // 2) Without phones (live schema often lacks approver_phones)
+  const second = await tryWrite(baseFields, mode);
+  if (!second.error) return;
+
+  // 3) Insert without company_id (older schemas / RLS mismatches)
+  if (mode === 'insert') {
+    const third = await supabase.from('approval_rules').insert(baseFields);
+    if (!third.error) return;
+    throw new Error(
+      formatSupabaseError(second.error) +
+        ` | retry: ${formatSupabaseError(third.error)} | company_id=${company_id}`,
+    );
+  }
+
+  throw new Error(formatSupabaseError(second.error));
+}
+
+/** Re-point the current pending approval step to a different email (stuck chain / wrong rule). */
+export async function reassignPendingApprover(
+  invoiceId: string,
+  newApproverEmail: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const email = newApproverEmail.trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    return { ok: false, message: 'Enter a valid approver email.' };
+  }
+
+  const { data: pending, error: findErr } = await supabase
+    .from('invoice_approvals')
+    .select('id')
+    .eq('invoice_id', invoiceId)
+    .eq('status', 'pending')
+    .order('step_index', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (findErr) return { ok: false, message: findErr.message };
+  if (!pending?.id) return { ok: false, message: 'No pending approval step on this invoice.' };
+
+  const { error: upErr } = await supabase
+    .from('invoice_approvals')
+    .update({ approver_email: email })
+    .eq('id', pending.id);
+  if (upErr) return { ok: false, message: upErr.message };
+
+  await updateInvoiceSafe(invoiceId, {
+    approval_status: 'pending',
+    approval_chain_emails: [email],
+    updated_at: new Date().toISOString(),
+  });
+
+  return { ok: true };
+}
+
+/** Clear stuck chain so invoice can be submitted again under the current rule. */
+export async function resetInvoiceApprovalChain(
+  invoiceId: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const { error: delErr } = await supabase.from('invoice_approvals').delete().eq('invoice_id', invoiceId);
+  if (delErr) return { ok: false, message: delErr.message };
+
+  const { error } = await updateInvoiceSafe(invoiceId, {
+    approval_status: 'not_required',
+    current_approver_index: 0,
+    approval_rule_id: null,
+    approval_chain_emails: null,
+    approval_total_steps: null,
+    submitted_for_approval_at: null,
+    approval_submitted_by: null,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) return { ok: false, message: error.message };
+  return { ok: true };
 }
 
 export async function deleteApprovalRule(id: string) {
   const { error } = await supabase.from('approval_rules').delete().eq('id', id);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
 }

@@ -12,6 +12,7 @@ import {
 } from '@/lib/ap-invoice/vendorMasterService';
 import { listBankGuarantees, daysUntilExpiry } from '@/lib/ap-invoice/bankGuaranteeService';
 import { listInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
+import { markEscalationDueIfNeeded } from '@/lib/ap-invoice/threeWayMatchService';
 import { getInvoiceflowWorkEmail } from '@/lib/ap-invoice/auditService';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
 import { useMarket } from '@/contexts/MarketContext';
@@ -132,6 +133,14 @@ function classifyInvoice(inv: Invoice, anomalies: InvoiceAnomaly[]): QueueItem |
     flags.push(`High risk score: ${riskScore}`);
     setPriority('high');
   }
+  if (
+    Array.isArray(inv.risk_flags) &&
+    inv.risk_flags.some((f) => f && typeof f === 'object' && (f as { type?: string }).type === 'sla_escalation')
+  ) {
+    flags.push('SLA escalation due');
+    setPriority('high');
+    action = 'Pending over SLA — prioritize human review';
+  }
 
   const isPending = inv.status === 'Processing' || inv.status === 'On Hold' || inv.status === 'Queried';
   const isApprovedFrozen = inv.status === 'Approved' && isFrozen;
@@ -177,7 +186,7 @@ function classifyBg(bg: BankGuarantee): QueueItem | null {
 }
 
 function isUnpaidInvoice(inv: Invoice): boolean {
-  const ps = (inv.payment_status ?? '').trim().toLowerCase();
+  const ps = String(inv.payment_status ?? '').trim().toLowerCase();
   if (ps === 'paid' || ps === 'cancelled') return false;
   if (inv.status === 'Paid' || inv.status === 'Rejected') return false;
   return true;
@@ -207,7 +216,7 @@ function classifyFallbackInvoice(inv: Invoice): QueueItem | null {
     setPriority('high');
     action = 'Confirm duplicate or clear flag before paying';
   }
-  const rl = (inv.risk_level ?? '').toLowerCase();
+  const rl = String(inv.risk_level ?? '').toLowerCase();
   if (rl === 'critical') {
     flags.push('CRITICAL risk vendor');
     setPriority('critical');
@@ -295,6 +304,9 @@ export function ActionQueue() {
     merged.sort((a, b) => priorityConfig[a.priority].order - priorityConfig[b.priority].order);
     setItems(merged);
     setLoading(false);
+
+    const allForSla = [...(invRes.data ?? []), ...(allInvRes.data ?? [])] as Invoice[];
+    void markEscalationDueIfNeeded(allForSla, activeCompanyId);
   }
 
   useEffect(() => {

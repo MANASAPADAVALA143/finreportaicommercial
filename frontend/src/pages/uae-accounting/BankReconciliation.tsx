@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Landmark, Upload, Zap, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { BankAccount, BankStatement } from '../../services/uaeFullAccounting.service';
+import { getStoredAccessToken } from '../../utils/workspaceHeaders';
 
 const BANKS = ['ENBD', 'FAB', 'ADCB', 'RAKBank', 'DIB'];
 
@@ -55,14 +56,18 @@ export default function BankReconciliation() {
     fd.append('file', file);
     const base = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
     const tenantId = localStorage.getItem('tenantId');
+    const token = getStoredAccessToken();
     const params = new URLSearchParams({
       bank_name: bankName, statement_date: stmtDate,
       opening_balance: opening || '0', closing_balance: closing || '0',
     });
+    const uploadHeaders: Record<string, string> = {};
+    if (tenantId) uploadHeaders['X-Tenant-ID'] = tenantId;
+    if (token) uploadHeaders.Authorization = `Bearer ${token}`;
     try {
       const res = await fetch(
         `${base}/api/uae/full/bank-accounts/${selectedAcct}/import-statement?${params}`,
-        { method: 'POST', headers: { 'X-Tenant-ID': tenantId }, body: fd }
+        { method: 'POST', headers: uploadHeaders, body: fd, credentials: 'include' }
       );
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();

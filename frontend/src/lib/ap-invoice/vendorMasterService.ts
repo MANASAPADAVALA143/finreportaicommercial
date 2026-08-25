@@ -41,20 +41,76 @@ function bankFieldsChanged(prev: VendorRow, next: VendorBankPatch): string[] {
   return changed;
 }
 
+const DEFAULT_VENDOR_RISK_SCORE = 25;
+const DEFAULT_VENDOR_RISK_LEVEL = 'low' as const;
+
+function normalizeVendorRow(v: VendorRow): VendorRow {
+  const hasScore = v.risk_score != null && Number(v.risk_score) > 0;
+  return {
+    ...v,
+    risk_score: hasScore ? Number(v.risk_score) : DEFAULT_VENDOR_RISK_SCORE,
+    risk_level: (v.risk_level ?? DEFAULT_VENDOR_RISK_LEVEL) as VendorRow['risk_level'],
+    risk_flags: v.risk_flags ?? [],
+    total_invoices_amount: Number(v.total_invoices_amount ?? 0),
+  };
+}
+
 export async function listVendorsForCompany(): Promise<VendorRow[]> {
   const companyId = await requireCompanyId();
   const { data, error } = await supabase
     .from('vendors')
     .select('*')
     .eq('company_id', companyId)
-    .order('name', { ascending: true });
+    .order('total_invoices_amount', { ascending: false, nullsFirst: false });
+
+  let rows: VendorRow[] = [];
   if (error) {
-    /* Fallback when company_id column missing */
-    const { data: all, error: e2 } = await supabase.from('vendors').select('*').order('name');
+    const { data: all, error: e2 } = await supabase.from('vendors').select('*');
     if (e2) throw e2;
-    return (all ?? []) as VendorRow[];
+    rows = ((all ?? []) as VendorRow[]).filter((v) => !v.company_id || v.company_id === companyId);
+  } else {
+    rows = (data ?? []) as VendorRow[];
   }
-  return (data ?? []) as VendorRow[];
+
+  const { data: invoiceVendors } = await supabase
+    .from('invoices')
+    .select('vendor_name, total_amount')
+    .eq('company_id', companyId);
+
+  const spendByName = new Map<string, number>();
+  for (const inv of invoiceVendors ?? []) {
+    const name = String(inv.vendor_name ?? '').trim();
+    if (!name) continue;
+    spendByName.set(name, (spendByName.get(name) ?? 0) + Number(inv.total_amount ?? 0));
+  }
+
+  const byName = new Map(rows.map((v) => [v.name.trim().toLowerCase(), v]));
+  for (const [name, spend] of spendByName) {
+    const key = name.toLowerCase();
+    const existing = byName.get(key);
+    if (existing) {
+      if (!existing.total_invoices_amount || Number(existing.total_invoices_amount) < spend) {
+        existing.total_invoices_amount = spend;
+      }
+    } else {
+      const synthetic: VendorRow = {
+        id: `invoice-only-${key.replace(/\s+/g, '-')}`,
+        name,
+        gstin: null,
+        company_id: companyId,
+        total_invoices_amount: spend,
+        risk_score: DEFAULT_VENDOR_RISK_SCORE,
+        risk_level: DEFAULT_VENDOR_RISK_LEVEL,
+        risk_flags: [],
+      };
+      rows.push(synthetic);
+      byName.set(key, synthetic);
+    }
+  }
+
+  return rows
+    .map(normalizeVendorRow)
+    .sort((a, b) => Number(b.total_invoices_amount ?? 0) - Number(a.total_invoices_amount ?? 0));
 }
 
 export async function getVendorById(vendorId: string): Promise<VendorRow | null> {

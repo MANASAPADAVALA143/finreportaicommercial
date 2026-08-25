@@ -1,7 +1,10 @@
 /**
  * Central workspace header helper — never falls back to "demo".
  */
+import { getStoredAccessToken } from './authToken';
 import { getStoredWorkspaceId } from '../services/workspaceService';
+
+export { getStoredAccessToken } from './authToken';
 
 export function getActiveWorkspaceId(): string | null {
   return getStoredWorkspaceId();
@@ -28,8 +31,11 @@ export function workspaceHeaders(
     headers['X-Workspace-ID'] = wsId;
     headers['X-Tenant-ID'] = wsId;
   }
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  // Fall back to stored/memory token (RBAC login or AuthContext) when
+  // supabase.auth.getSession() has no session yet or returns null.
+  const bearer = token ?? getStoredAccessToken();
+  if (bearer) {
+    headers.Authorization = `Bearer ${bearer}`;
   }
   return headers;
 }

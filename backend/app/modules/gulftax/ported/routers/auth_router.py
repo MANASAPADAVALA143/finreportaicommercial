@@ -265,6 +265,10 @@ async def update_company_settings(
     if "annual_revenue_aed" in body.settings:
         company.annual_revenue_aed = body.settings.get("annual_revenue_aed")
 
+    if "asp_provider" in body.settings:
+        provider = str(body.settings.get("asp_provider") or "").strip()
+        company.asp_appointed = bool(provider)
+
     company.settings = merged
     db.commit()
     db.refresh(company)

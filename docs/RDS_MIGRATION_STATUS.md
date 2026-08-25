@@ -73,6 +73,7 @@ These still read/write **Supabase** for data — need backend APIs + frontend li
 - AP InvoiceFlow (`frontend/src/lib/ap-invoice/*.ts`) — ~25 files
 - `gulftax_supabase.py`, `gulftax_sync_service.py`, `ap_company_sync.py`
 - GulfTax ported module (`companies` integer-PK tables) — rename or namespace before sharing RDS with AP `invoices` UUID table
+- AP RDS mirror uses `ap_invoices` / `ap_invoice_line_items` (not `invoices`) so legacy integer-PK `invoices` on RDS does not break `create_all`
 
 **Do not delete Supabase data** until RDS migration is verified and dual-write period completes.
 

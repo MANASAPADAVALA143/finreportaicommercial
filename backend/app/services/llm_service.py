@@ -4,6 +4,8 @@ from pathlib import Path
 
 from anthropic import Anthropic, AuthenticationError, RateLimitError
 
+from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+
 # ── Read the API key directly from backend/.env — works regardless of cwd ─────
 def _read_key_from_file() -> str:
     """Parse ANTHROPIC_API_KEY directly from backend/.env — no dotenv dependency."""
@@ -81,7 +83,7 @@ def invoke(
             "ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart the API server."
         )
     kwargs = {
-        "model": model_id or "claude-sonnet-4-20250514",
+        "model": model_id or DEFAULT_CLAUDE_MODEL,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],

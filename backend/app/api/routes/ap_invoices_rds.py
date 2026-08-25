@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,22 @@ class InvoiceCreateIn(BaseModel):
     vendor_email: Optional[str] = None
     vat_amount: Optional[float] = None
     line_items: list[InvoiceLineIn] = Field(default_factory=list)
+
+
+class BulkApproveIn(BaseModel):
+    invoice_ids: list[str] = Field(..., min_length=1)
+    company_id: str = ""
+    workspace_id: str = ""
+
+
+class BulkUpsertIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    invoices: list[dict[str, Any]] = Field(..., min_length=1)
+
+
+class ListInvoicesIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    limit: int = Field(default=500, ge=1, le=2000)
 
 
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
@@ -79,6 +95,58 @@ def list_invoices(
         .all()
     )
     return {"invoices": [_invoice_dict(r) for r in rows], "count": len(rows)}
+
+
+@router.post("/bulk-upsert")
+def bulk_upsert_invoices(
+    body: BulkUpsertIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Upsert many invoices via service role — bypasses browser RLS for Excel import."""
+    # Soft auth: prefer tenant headers; do not hard-require RBAC for AP Excel path
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import bulk_upsert_invoices as _bulk
+
+    return _bulk(company_id=body.company_id.strip(), rows=body.invoices)
+
+
+@router.post("/list")
+def list_invoices_supabase(
+    body: ListInvoicesIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """List invoices via service role — same tenant path as Excel bulk upsert."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import list_invoices_for_company
+
+    return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
+
+
+@router.post("/bulk-approve")
+def bulk_approve_invoices(
+    body: BulkApproveIn,
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+    company_id_hdr: str = Depends(get_company_id),
+) -> dict[str, Any]:
+    """Approve selected AP invoices and sync each to gulftax_transactions.
+
+    Uses the same shared GulfTax sync helper as single-invoice approval.
+    """
+    assert_write_allowed()
+    from app.services.ap_invoice_post_service import bulk_approve_ap_invoices
+
+    return bulk_approve_ap_invoices(
+        invoice_ids=body.invoice_ids,
+        tenant_id=tenant_id,
+        db=db,
+        company_id=(body.company_id or company_id_hdr or "").strip(),
+        workspace_id=(body.workspace_id or tenant_id).strip(),
+    )
 
 
 @router.get("/{invoice_id}")

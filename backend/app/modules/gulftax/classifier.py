@@ -14,6 +14,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+
 logger = logging.getLogger(__name__)
 
 # ── Optional RAG layer ────────────────────────────────────────────────────────
@@ -227,7 +229,7 @@ Return JSON only:
     try:
         claude = _get_claude()
         message = claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=500,
             temperature=0.1,
             system=_SYSTEM_PROMPT,
@@ -334,7 +336,7 @@ Return ONLY the JSON array. No markdown, no preamble."""
     try:
         claude = _get_claude()
         msg = claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=8192,
             temperature=0.1,
             messages=[{"role": "user", "content": batch_prompt}],

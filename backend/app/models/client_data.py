@@ -60,7 +60,13 @@ class ApCompany(Base):
 
 
 class ApInvoice(Base):
-    __tablename__ = "invoices"
+    """AP InvoiceFlow mirror on RDS.
+
+    Table is ``ap_invoices`` — not ``invoices``. Legacy / GulfTax rows may still
+    occupy ``invoices`` with an integer PK on shared RDS; UUID FK create_all would fail.
+    """
+
+    __tablename__ = "ap_invoices"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), nullable=False, index=True)
@@ -90,17 +96,17 @@ class ApInvoice(Base):
     created_by = Column(String(36), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("tenant_id", "company_id", "invoice_number", name="uq_invoice_tenant_co_num"),
+        UniqueConstraint("tenant_id", "company_id", "invoice_number", name="uq_ap_invoice_tenant_co_num"),
     )
 
 
 class ApInvoiceLineItem(Base):
-    __tablename__ = "invoice_line_items"
+    __tablename__ = "ap_invoice_line_items"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
-    invoice_id = Column(String(36), ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True)
+    invoice_id = Column(String(36), ForeignKey("ap_invoices.id", ondelete="CASCADE"), nullable=False, index=True)
     description = Column(Text, nullable=False)
     quantity = Column(Numeric(10, 2), nullable=False, default=1)
     unit_price = Column(Numeric(15, 2), nullable=False)
@@ -152,7 +158,7 @@ class ApCompanyConfig(Base):
     __tablename__ = "company_config"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     config = Column(_json, nullable=False, default=dict)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -164,7 +170,8 @@ class GulftaxTransaction(Base):
     __tablename__ = "gulftax_transactions"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    # VARCHAR(64): some workspace_ids exceed UUID-36 (legacy 37-char ids).
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     source = Column(String(32), default="ap_invoiceflow")
     ap_invoice_id = Column(String(36), nullable=True, index=True)
@@ -179,6 +186,10 @@ class GulftaxTransaction(Base):
     fta_box = Column(String(8), nullable=True)
     direction = Column(String(16), default="input")
     status = Column(String(16), default="posted")
+    designated_zone = Column(Boolean, default=False)
+    transaction_kind = Column(String(16), default="goods")
+    dz_supplier_location = Column(String(64), nullable=True)
+    dz_customer_location = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -186,7 +197,7 @@ class VatReturnEntry(Base):
     __tablename__ = "vat_return_entries"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     period = Column(String(16), nullable=False)
     source = Column(String(32), nullable=True)
@@ -203,7 +214,7 @@ class PartialExemptionCalculation(Base):
     __tablename__ = "partial_exemption_calculations"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     period = Column(String(16), nullable=False)
     period_type = Column(String(16), default="quarterly")
@@ -214,6 +225,7 @@ class PartialExemptionCalculation(Base):
     recoverable_vat = Column(Numeric(15, 2), nullable=False)
     irrecoverable_vat = Column(Numeric(15, 2), nullable=False)
     breakdown = Column(_json, nullable=True)
+    status = Column(String(32), default="draft")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -222,7 +234,7 @@ class BadDebtReliefClaim(Base):
     __tablename__ = "bad_debt_relief_claims"
 
     id = Column(String(36), primary_key=True, default=_uuid)
-    tenant_id = Column(String(36), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     company_id = Column(String(36), nullable=False, index=True)
     invoice_number = Column(String(128), nullable=False)
     invoice_date = Column(Date, nullable=False)
@@ -232,6 +244,7 @@ class BadDebtReliefClaim(Base):
     status = Column(String(32), default="draft")
     eligible = Column(Boolean, default=False)
     eligibility_reason = Column(Text, nullable=True)
+    claim_period = Column(String(16), nullable=True)
     extra = Column(_json, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -264,3 +277,52 @@ class ApAuditLog(Base):
     user_id = Column(String(36), nullable=True)
     details = Column(_json, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CtReturn(Base):
+    """UAE Corporate Tax return — RDS persistence (draft → approved → filed)."""
+
+    __tablename__ = "gulftax_ct_returns"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id = Column(String(36), nullable=False, index=True)
+    company_id = Column(String(36), nullable=False, index=True)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    revenue = Column(Numeric(15, 2), nullable=True)
+    accounting_profit = Column(Numeric(15, 2), nullable=True)
+    non_deductible_expenses = Column(Numeric(15, 2), default=0)
+    taxable_income = Column(Numeric(15, 2), nullable=True)
+    ct_payable_aed = Column(Numeric(15, 2), nullable=True)
+    sbr_eligible = Column(Boolean, default=False, nullable=False)
+    qfzp_eligible = Column(Boolean, default=False, nullable=False)
+    free_zone_status = Column(String(32), default="mainland")
+    free_zone_income = Column(Numeric(15, 2), default=0)
+    breakdown = Column(_json, nullable=True)
+    status = Column(String(20), default="draft", nullable=False)
+    override_reason = Column(Text, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    filed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class EinvoicingSubmission(Base):
+    """Peppol PINT AE e-invoice submission — persisted on RDS."""
+
+    __tablename__ = "einvoicing_submissions"
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id = Column(String(36), nullable=False, index=True)
+    company_id = Column(String(36), nullable=False, index=True)
+    invoice_id = Column(String(36), nullable=True, index=True)
+    invoice_number = Column(String(128), nullable=False)
+    # outbound_ar = our issued sales invoice; internal_vendor_record = vendor-received AP archive
+    record_type = Column(String(32), default="outbound_ar", nullable=False, index=True)
+    submission_status = Column(String(20), default="pending", nullable=False)
+    xml_payload = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    asp_reference = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

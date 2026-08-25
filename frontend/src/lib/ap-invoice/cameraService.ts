@@ -19,6 +19,13 @@ export type NormalizedExtractedInvoice = {
   net_amount: number | null;
   /** DB + UI: purchase = AP, sales = AR */
   invoice_kind: 'purchase' | 'sales';
+  /** India GST breakup — populated when market === 'india' and the OCR read a clean split */
+  taxable_amount: number | null;
+  cgst_amount: number | null;
+  sgst_amount: number | null;
+  igst_amount: number | null;
+  hsn_sac: string;
+  payment_terms: string;
 };
 
 export type ExtractImageResponse = {
@@ -85,6 +92,13 @@ export function normalizeExtractedInvoice(
   if (rawKind === 'sales' || rawKind === 'ar' || rawKind === 'receivable') invoice_kind = 'sales';
   if (rawKind === 'purchase' || rawKind === 'ap' || rawKind === 'payable') invoice_kind = 'purchase';
 
+  const taxableAmount = pickNumber(inv, ['taxable_amount']);
+  const cgstAmount = pickNumber(inv, ['cgst_amount']);
+  const sgstAmount = pickNumber(inv, ['sgst_amount']);
+  const igstAmount = pickNumber(inv, ['igst_amount']);
+  const hsnSac = pickString(inv, ['hsn_sac', 'hsn', 'sac']);
+  const paymentTerms = pickString(inv, ['payment_terms']);
+
   return {
     invoice_number: invNo,
     invoice_date: invDate,
@@ -101,6 +115,12 @@ export function normalizeExtractedInvoice(
     vat_treatment: vatTreatment || null,
     net_amount: netAmount || null,
     invoice_kind,
+    taxable_amount: taxableAmount || null,
+    cgst_amount: cgstAmount || null,
+    sgst_amount: sgstAmount || null,
+    igst_amount: igstAmount || null,
+    hsn_sac: hsnSac,
+    payment_terms: paymentTerms,
   };
 }
 
@@ -218,7 +238,17 @@ export async function extractInvoiceFromImageFile(
   const uploadFile = await prepareImageForExtract(file);
   const fd = buildExtractImageFormData(uploadFile, market);
   const url = invoiceFlowAgentUrl('/api/agent/extract-image');
-  const res = await fetch(url, { method: 'POST', body: fd });
+  const headers: Record<string, string> = {};
+  try {
+    const token =
+      localStorage.getItem('token')
+      || localStorage.getItem('accessToken')
+      || localStorage.getItem('access_token');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* ignore */
+  }
+  const res = await fetch(url, { method: 'POST', headers, body: fd });
   const text = await res.text();
 
   let parsed: Record<string, unknown> | null = null;

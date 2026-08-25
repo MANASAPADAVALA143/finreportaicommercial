@@ -33,7 +33,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant import get_tenant_id
 from app.models.fpa_master import FpaMasterRow
+from app.services.ap_company_resolver import resolve_ap_company_id
 
 router = APIRouter(prefix="/api/fpa", tags=["FP&A Master Upload"])
 
@@ -407,8 +409,9 @@ def _parse_df(df: pd.DataFrame, company_id: str, upload_id: str) -> list[FpaMast
 @router.post("/upload-master", summary="Upload master FP&A file (one file → all modules)")
 async def upload_master(
     file: UploadFile = File(...),
-    company_id: str = Form(default="default"),
+    company_id: str = Form(...),
     replace_existing: bool = Form(default=True),
+    tenant_id: str = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -420,6 +423,8 @@ async def upload_master(
 
     On success returns section counts and a summary for the UI banner.
     """
+    resolved_company_id = resolve_ap_company_id(db, tenant_id, company_id, required=True)
+
     raw = await file.read()
     filename = file.filename or ""
 
@@ -434,7 +439,7 @@ async def upload_master(
         raise HTTPException(400, "File is empty after removing blank rows.")
 
     upload_id = str(uuid.uuid4())
-    rows = _parse_df(df, company_id, upload_id)
+    rows = _parse_df(df, resolved_company_id, upload_id)
 
     if not rows:
         raise HTTPException(
@@ -445,7 +450,7 @@ async def upload_master(
 
     # Optionally delete previous upload for this company
     if replace_existing:
-        db.query(FpaMasterRow).filter(FpaMasterRow.company_id == company_id).delete()
+        db.query(FpaMasterRow).filter(FpaMasterRow.company_id == resolved_company_id).delete()
 
     db.add_all(rows)
     db.commit()
@@ -474,14 +479,16 @@ async def upload_master(
 def get_master_data(
     section: str | None = None,
     currency: str | None = None,
-    company_id: str = "default",
+    company_id: str = "",
+    tenant_id: str = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
     Return all rows for a given section / currency.
     Used by module frontends instead of their own upload endpoints.
     """
-    q = db.query(FpaMasterRow).filter(FpaMasterRow.company_id == company_id)
+    resolved_company_id = resolve_ap_company_id(db, tenant_id, company_id, required=True)
+    q = db.query(FpaMasterRow).filter(FpaMasterRow.company_id == resolved_company_id)
     if section:
         q = q.filter(FpaMasterRow.section == section.upper())
     if currency:
@@ -526,11 +533,13 @@ def get_master_data(
 
 @router.get("/master-status", summary="Check if master data has been uploaded")
 def master_status(
-    company_id: str = "default",
+    company_id: str = "",
+    tenant_id: str = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ):
     """Quick status check for the UI upload button."""
-    rows = db.query(FpaMasterRow).filter(FpaMasterRow.company_id == company_id).all()
+    resolved_company_id = resolve_ap_company_id(db, tenant_id, company_id, required=True)
+    rows = db.query(FpaMasterRow).filter(FpaMasterRow.company_id == resolved_company_id).all()
     if not rows:
         return {"uploaded": False, "message": "No master data uploaded yet."}
     counts: dict[str, int] = {}

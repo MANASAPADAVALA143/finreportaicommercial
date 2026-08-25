@@ -30,6 +30,9 @@ PUBLIC_PREFIXES = (
     "/api/ap/integrations/zoho/callback",
     "/api/ap/integrations/qbo/callback",
     "/api/connections/zoho/callback",
+    "/api/ap/app-settings",
+    # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
+    "/api/agent/extract-image",
 )
 
 AUTH_ANY_ROLE_PREFIXES = (
@@ -44,6 +47,8 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_client": (
         "/api/gulftax",
         "/api/ap",
+        "/api/uae",
+        "/api/training",
         "/api/ifrs16",
         "/api/vat",
         "/api/invoice",
@@ -56,9 +61,30 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
         "/api/dashboard",
         "/api/automations",
     ),
+    "uae_suite": (
+        "/api/gulftax",
+        "/api/ap",
+        "/api/uae",
+        "/api/training",
+        "/api/ifrs16",
+        "/api/vat",
+        "/api/invoice",
+        "/api/einvoicing",
+        "/api/ct",
+        "/api/corporatetax",
+        "/api/fta",
+        "/api/trn",
+        "/api/tax",
+        "/api/dashboard",
+        "/api/automations",
+        "/api/uae/ar",
+        "/api/ar-collections",
+        "/api/uae-suite",
+    ),
     "uae_full": (
         "/api/gulftax",
         "/api/ap",
+        "/api/training",
         "/api/uae",
         "/api/crm",
         "/api/o2c",
@@ -72,12 +98,24 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
         "/api/tax",
         "/api/dashboard",
         "/api/automations",
+        "/api/uae-suite",
     ),
-    "india_client": ("/api/india", "/api/bank", "/api/fpa", "/api/reports", "/api/excel", "/api/board-pack", "/api/ca"),
-    "india_full": ("/api/india", "/api/ap", "/api/bank", "/api/fpa", "/api/ifrs"),
+    "india_client": ("/api/india", "/api/ap", "/api/training", "/api/bank", "/api/fpa", "/api/reports", "/api/excel", "/api/board-pack", "/api/ca"),
+    "india_full": ("/api/india", "/api/ap", "/api/training", "/api/bank", "/api/fpa", "/api/ifrs"),
     "fpa_client": ("/api/fpa", "/api/reports", "/api/excel", "/api/board-pack"),
     "full_access": None,
 }
+
+# Keep in sync with CORSMiddleware allow_origins in app.main
+_CORS_ORIGINS = frozenset(
+    {
+        "https://finreportai.com",
+        "https://www.finreportai.com",
+        "https://finreportaicommercial.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    }
+)
 
 
 def _is_public(path: str) -> bool:
@@ -101,6 +139,17 @@ def _path_allowed(product_role: str, internal_role: str, path: str) -> bool:
     return any(path == p or path.startswith(f"{p}/") for p in prefixes)
 
 
+def _json_error(request: Request, status_code: int, detail: str) -> JSONResponse:
+    """Return JSON error; attach CORS when Origin is allowed (belt if middleware order regresses)."""
+    headers: dict[str, str] = {}
+    origin = request.headers.get("origin") or ""
+    if origin in _CORS_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    return JSONResponse(status_code=status_code, content={"detail": detail}, headers=headers)
+
+
 class ProductRoleMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
@@ -112,7 +161,11 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         if not auth or not auth.startswith("Bearer "):
-            return JSONResponse(status_code=401, content={"detail": "Missing bearer token"})
+            # Temporary guest mode — frontend login is disabled; restore auth gate later.
+            request.state.user_id = "guest"
+            request.state.user_role = "guest"
+            request.state.product_role = "full_access"
+            return await call_next(request)
 
         token = auth.replace("Bearer ", "", 1).strip()
         internal_role = ""
@@ -134,10 +187,10 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
                 internal_role = internal_role_from_supabase(sb_user)
                 product_role = product_role_from_supabase(sb_user)
             except ValueError as exc:
-                return JSONResponse(status_code=401, content={"detail": str(exc)})
+                return _json_error(request, 401, str(exc))
 
         if not _path_allowed(product_role, internal_role, path):
-            return JSONResponse(status_code=403, content={"detail": "Insufficient product role for this API"})
+            return _json_error(request, 403, "Insufficient product role for this API")
 
         request.state.user_id = user_id
         request.state.user_role = internal_role

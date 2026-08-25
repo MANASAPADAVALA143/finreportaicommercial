@@ -3,9 +3,12 @@
  * Wraps all /api/uae/full/* endpoints.
  */
 
+import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
 function resolveBase(): string {
-  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
-  if (explicit) return `${explicit}/api/uae/full`;
+  const origin = backendOrigin();
+  if (origin) return `${origin}/api/uae/full`;
   // Dev: Vite proxies /api → localhost:8000 (same-origin, avoids connection-reset/CORS issues)
   return '/api/uae/full';
 }
@@ -18,13 +21,7 @@ function companyParams(extra: Record<string, string> = {}): Record<string, strin
 }
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-    ...extra,
-  };
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -34,7 +31,7 @@ async function get<T>(path: string, params?: Record<string, string>): Promise<T>
   if (q) url += '?' + q;
   let res: Response;
   try {
-    res = await fetch(url, { headers: hdrs() });
+    res = await fetch(url, { headers: hdrs(), credentials: 'include' });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
   }
@@ -51,6 +48,7 @@ async function post<T>(path: string, body?: unknown, params?: Record<string, str
     res = await fetch(url, {
       method: 'POST', headers: hdrs(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: 'include',
     });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000 (uvicorn app.main:app --reload --port 8000)');
@@ -65,7 +63,7 @@ async function del<T>(path: string): Promise<T> {
   if (q) url += (path.includes('?') ? '&' : '?') + q;
   let res: Response;
   try {
-    res = await fetch(url, { method: 'DELETE', headers: hdrs() });
+    res = await fetch(url, { method: 'DELETE', headers: hdrs(), credentials: 'include' });
   } catch {
     throw new Error('Cannot reach API — ensure backend is running on port 8000');
   }
@@ -77,6 +75,7 @@ async function patch<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH', headers: hdrs(),
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -220,14 +219,22 @@ export interface JournalImportResult {
 export async function importJournalsCSV(file: File): Promise<JournalImportResult> {
   const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
   const cid = localStorage.getItem('active_company_id');
+  const token = getStoredAccessToken();
   const form = new FormData();
   form.append('file', file);
   let url = `${BASE}/journals/import`;
   if (cid) url += `?company_id=${encodeURIComponent(cid)}`;
+  const uploadHeaders: Record<string, string> = {};
+  if (wsId) {
+    uploadHeaders['X-Workspace-ID'] = wsId;
+    uploadHeaders['X-Tenant-ID'] = wsId;
+  }
+  if (token) uploadHeaders.Authorization = `Bearer ${token}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId },
+    headers: uploadHeaders,
     body: form,
+    credentials: 'include',
   });
   if (!res.ok) {
     const text = await res.text();
@@ -267,6 +274,48 @@ export const createInvoice = (body: {
 }) => post<{ id: string; invoice_number: string; total_amount: number }>('/invoices', body);
 export const postInvoice = (invId: string) =>
   post<{ id: string; status: string; je_id: string }>(`/invoices/${invId}/post`);
+
+/**
+ * Canonical AR approve-and-post — routes through /api/uae/ar/approve-and-post
+ * (same path as AR Suite + CRM) rather than the legacy /full/invoices/{id}/post alias.
+ */
+export async function approveAndPostSalesInvoice(invoiceId: string): Promise<{
+  success: boolean;
+  invoice_id?: string;
+  invoice_number?: string;
+  journal_entry_id?: string;
+  gulftax_transaction_id?: string;
+  status?: string;
+  message?: string;
+}> {
+  const origin = backendOrigin();
+  const base = origin ? `${origin}/api/uae/ar` : '/api/uae/ar';
+  const res = await fetch(`${base}/approve-and-post`, {
+    method: 'POST',
+    headers: hdrs(),
+    credentials: 'include',
+    body: JSON.stringify({
+      invoice_id: invoiceId,
+      company_id: localStorage.getItem('active_company_id'),
+      workspace_id:
+        localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId'),
+    }),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail =
+        typeof err.detail === 'string'
+          ? err.detail
+          : err.detail?.message || err.detail?.error || JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
 export const getARaging = (asOf?: string) =>
   get<{ as_of: string; buckets: Record<string, number>; invoices: unknown[] }>(
     '/ar-aging', asOf ? { as_of: asOf } : undefined
@@ -349,12 +398,13 @@ export async function runFxRevaluation(body: {
   revaluation_date: string;
   exchange_rates: Record<string, number | { current_rate: number; original_rate?: number }>;
 }): Promise<FxRevalueResult> {
-  const explicit = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim().replace(/\/$/, '')) || '';
-  const url = explicit ? `${explicit}/api/uae/fx/revalue` : '/api/uae/fx/revalue';
+  const origin = backendOrigin();
+  const url = origin ? `${origin}/api/uae/fx/revalue` : '/api/uae/fx/revalue';
   const res = await fetch(url, {
     method: 'POST',
     headers: hdrs(),
     body: JSON.stringify(body),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

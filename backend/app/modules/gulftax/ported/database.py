@@ -18,7 +18,20 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base = declarative_base()
+
+class _ExtendExisting:
+    """Tolerate accidental double-import of the same mapped class.
+
+    FinReportAI mounts this package both via sys.path (`from models import …`)
+    and as ``app.modules.gulftax.ported.*``. Without this, SQLAlchemy raises
+    InvalidRequestError f405 (Table already defined for this MetaData).
+    """
+
+    __abstract__ = True
+    __table_args__ = {"extend_existing": True}
+
+
+Base = declarative_base(cls=_ExtendExisting)
 
 
 def get_db():

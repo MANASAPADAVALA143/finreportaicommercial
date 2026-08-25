@@ -4,15 +4,16 @@
  * NOTE: backend wraps list responses in {accounts:[...]} / {trial_balances:[...]} objects.
  */
 
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
 const API_BASE = (import.meta as any).env.VITE_API_URL ?? 'http://localhost:8000';
 
 function tenantHeaders(): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId') ?? 'default';
-  return { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId };
+  return workspaceHeaders(getStoredAccessToken());
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { headers: tenantHeaders() });
+  const res = await fetch(`${API_BASE}${path}`, { headers: tenantHeaders(), credentials: 'include' });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail?.detail ?? `GET ${path} failed: ${res.status}`);
@@ -25,6 +26,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     method: 'POST',
     headers: tenantHeaders(),
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
@@ -37,6 +39,7 @@ async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'DELETE',
     headers: tenantHeaders(),
+    credentials: 'include',
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));

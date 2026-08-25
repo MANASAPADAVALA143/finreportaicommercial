@@ -4,9 +4,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { FileText, Printer, Receipt } from 'lucide-react';
+import { FileText, Printer, Receipt, CheckCircle, Send, History } from 'lucide-react';
 import * as citSvc from '../../services/citReturn.service';
-import type { CITReturnData } from '../../services/citReturn.service';
+import type { CITReturnData, CtReturnRecord } from '../../services/citReturn.service';
 import { listAccounts } from '../../services/uaeFullAccounting.service';
 
 const CT_RATE = 0.09;
@@ -48,12 +48,78 @@ export default function CITReturn() {
   const [taxPayableAcct, setTaxPayableAcct] = useState('3020');
   const [voucherDate, setVoucherDate] = useState(defaults.to);
   const [remarks, setRemarks] = useState('');
+  const [ctReturn, setCtReturn] = useState<CtReturnRecord | null>(null);
+  const [ctHistory, setCtHistory] = useState<CtReturnRecord[]>([]);
+  const [ctLoading, setCtLoading] = useState(false);
+  const [showFileOverride, setShowFileOverride] = useState(false);
+  const [fileOverrideReason, setFileOverrideReason] = useState('');
+  const [fileMsg, setFileMsg] = useState<string | null>(null);
+
+  const loadCtHistory = async () => {
+    try {
+      const items = await citSvc.listCtReturns();
+      setCtHistory(items);
+    } catch {
+      /* optional */
+    }
+  };
+
+  useEffect(() => {
+    void loadCtHistory();
+  }, []);
 
   useEffect(() => {
     void listAccounts().then((r: { accounts?: { code: string; name: string }[] }) => {
       setAccounts(r.accounts ?? []);
     }).catch(() => {});
   }, []);
+
+  const handleGenerateCtReturn = async () => {
+    setCtLoading(true);
+    setFileMsg(null);
+    try {
+      const r = await citSvc.generateCtReturn(fromDate, toDate);
+      setCtReturn(r);
+      await loadCtHistory();
+      toast.success('CT return draft saved');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'CT return generate failed');
+    } finally {
+      setCtLoading(false);
+    }
+  };
+
+  const handleApproveCt = async () => {
+    if (!ctReturn) return;
+    try {
+      const r = await citSvc.approveCtReturn(ctReturn.id);
+      setCtReturn(r);
+      await loadCtHistory();
+      toast.success('CT return approved');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Approve failed');
+    }
+  };
+
+  const handleFileCt = async (overrideReason?: string) => {
+    if (!ctReturn) return;
+    try {
+      const r = await citSvc.fileCtReturn(ctReturn.id, overrideReason);
+      if (r.blocked) {
+        setFileMsg(r.message ?? 'Approve return before filing');
+        setShowFileOverride(true);
+        return;
+      }
+      setCtReturn(r);
+      setShowFileOverride(false);
+      setFileOverrideReason('');
+      setFileMsg(r.warning ? r.message ?? 'Filed with override' : null);
+      await loadCtHistory();
+      toast.success(r.message ?? 'CT return filed');
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'File failed');
+    }
+  };
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -126,6 +192,10 @@ export default function CITReturn() {
             className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">
             {loading ? 'Generating…' : 'Generate Report'}
           </button>
+          <button onClick={() => void handleGenerateCtReturn()} disabled={ctLoading}
+            className="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">
+            {ctLoading ? 'Saving…' : 'Generate CT Return'}
+          </button>
           {data && (
             <button onClick={() => setShowVoucher(true)}
               className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-lg text-sm font-medium">
@@ -135,12 +205,117 @@ export default function CITReturn() {
         </div>
       </div>
 
-      {!data && !loading && (
+      {!data && !loading && !ctReturn && (
         <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-16 text-center">
           <FileText size={40} className="text-blue-400 mx-auto mb-4" />
           <p className="text-white font-semibold">Generate CIT Return from GL</p>
-          <p className="text-gray-400 text-sm mt-2">Select period and click Generate Report</p>
+          <p className="text-gray-400 text-sm mt-2">Select period — Generate Report for Q&A form, or Generate CT Return to persist draft on RDS</p>
         </div>
+      )}
+
+      {ctReturn && (
+        <section className="bg-gray-800/60 border border-indigo-500/40 rounded-xl p-5 mb-6">
+          <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-sm font-bold text-indigo-400 uppercase">CT Return — {ctReturn.status}</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                {ctReturn.period_start} → {ctReturn.period_end} · ID {ctReturn.id.slice(0, 8)}…
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {ctReturn.status === 'draft' && (
+                <button onClick={() => void handleApproveCt()}
+                  className="flex items-center gap-1 bg-teal-700 hover:bg-teal-600 px-3 py-1.5 rounded-lg text-sm">
+                  <CheckCircle size={14} /> Approve
+                </button>
+              )}
+              {ctReturn.status !== 'filed' && (
+                <button onClick={() => void handleFileCt()}
+                  className="flex items-center gap-1 bg-amber-700 hover:bg-amber-600 px-3 py-1.5 rounded-lg text-sm">
+                  <Send size={14} /> File Return
+                </button>
+              )}
+            </div>
+          </div>
+          {fileMsg && <p className="text-xs text-amber-300 mb-3">{fileMsg}</p>}
+          <div className="grid md:grid-cols-2 gap-4 text-sm">
+            <div className="space-y-2">
+              <p><span className="text-gray-500">Revenue:</span> <span className="font-mono">{fmt(ctReturn.revenue)}</span></p>
+              <p><span className="text-gray-500">Taxable income:</span> <span className="font-mono">{fmt(ctReturn.taxable_income)}</span></p>
+              <p><span className="text-gray-500">CT payable:</span> <span className="font-mono text-emerald-400">{fmt(ctReturn.ct_payable_aed)}</span></p>
+              {ctReturn.non_deductible_expenses > 0 && (
+                <p><span className="text-gray-500">Non-deductible add-backs:</span> <span className="font-mono">{fmt(ctReturn.non_deductible_expenses)}</span></p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <p>
+                <span className="text-gray-500">SBR eligible:</span>{' '}
+                <span className={ctReturn.sbr_eligible ? 'text-green-400' : 'text-gray-300'}>{ctReturn.sbr_eligible ? 'Yes' : 'No'}</span>
+              </p>
+              <p>
+                <span className="text-gray-500">QFZP:</span>{' '}
+                <span className={ctReturn.qfzp_eligible ? 'text-green-400' : 'text-gray-300'}>
+                  {ctReturn.qfzp_eligible ? `Yes (${fmt(ctReturn.free_zone_income)} qualifying)` : 'No'}
+                </span>
+              </p>
+              <p><span className="text-gray-500">Zone status:</span> {ctReturn.free_zone_status}</p>
+            </div>
+          </div>
+          {ctReturn.breakdown?.computation?.breakdown && (
+            <table className="w-full text-sm mt-4 border border-gray-700/50 rounded-lg overflow-hidden">
+              <thead className="bg-gray-900/80 text-gray-400 text-xs uppercase">
+                <tr><th className="text-left px-3 py-2">Rate breakdown</th><th className="text-right px-3 py-2">AED</th></tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700/50">
+                {ctReturn.breakdown.computation.breakdown.map((row) => (
+                  <tr key={row.label}>
+                    <td className="px-3 py-2 text-gray-300">{row.label}{row.note ? ` — ${row.note}` : ''}</td>
+                    <td className="px-3 py-2 text-right font-mono">{row.amount_aed.toLocaleString('en-AE', { minimumFractionDigits: 2 })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {ctHistory.length > 0 && (
+        <section className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 mb-6">
+          <h2 className="text-sm font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
+            <History size={14} /> CT Returns History
+          </h2>
+          <table className="w-full text-sm">
+            <thead className="text-gray-500 text-xs">
+              <tr>
+                <th className="text-left py-2">Period</th>
+                <th className="text-right py-2">CT payable</th>
+                <th className="text-center py-2">Status</th>
+                <th className="text-right py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-700/50">
+              {ctHistory.map((h) => (
+                <tr key={h.id} className="cursor-pointer hover:bg-gray-700/30" onClick={() => setCtReturn(h)}>
+                  <td className="py-2">{h.period_start} → {h.period_end}</td>
+                  <td className="py-2 text-right font-mono">{fmt(h.ct_payable_aed)}</td>
+                  <td className="py-2 text-center">
+                    <span className={`px-2 py-0.5 rounded text-xs ${
+                      h.status === 'filed' ? 'bg-green-900/50 text-green-300' :
+                      h.status === 'approved' ? 'bg-teal-900/50 text-teal-300' : 'bg-gray-700 text-gray-300'
+                    }`}>{h.status}</span>
+                  </td>
+                  <td className="py-2 text-right text-gray-500 text-xs">
+                    {h.created_at ? new Date(h.created_at).toLocaleDateString() : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {!data && !loading && ctReturn && (
+        <div className="text-center text-gray-500 text-sm mb-4">Generate Report above for the full FTA Q&A form</div>
       )}
 
       {data && (
@@ -209,6 +384,39 @@ export default function CITReturn() {
               </tbody>
             </table>
           </section>
+        </div>
+      )}
+
+      {/* File override modal (soft gate) */}
+      {showFileOverride && ctReturn && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-amber-500/30 rounded-xl p-6 max-w-md w-full space-y-3">
+            <h3 className="text-lg font-semibold text-white">File without approval?</h3>
+            <p className="text-sm text-gray-400">
+              This return is still in draft. Approve first, or enter a reason to file with override (logged for audit).
+            </p>
+            <textarea
+              value={fileOverrideReason}
+              onChange={(e) => setFileOverrideReason(e.target.value)}
+              rows={4}
+              placeholder="e.g. CFO approved expedited filing"
+              className="w-full bg-gray-950 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+            />
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => void handleFileCt(fileOverrideReason.trim())}
+                disabled={fileOverrideReason.trim().length < 3}
+                className="flex-1 py-2 rounded-lg bg-amber-500 text-gray-900 font-semibold text-sm disabled:opacity-50"
+              >
+                Confirm override &amp; file
+              </button>
+              <button type="button" onClick={() => setShowFileOverride(false)}
+                className="flex-1 py-2 rounded-lg border border-white/10 text-sm text-gray-300">
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

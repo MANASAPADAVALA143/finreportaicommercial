@@ -35,7 +35,12 @@ def compute_ct(
     qualifying_income: Optional[float] = None,
     small_business_relief: bool = False,
 ) -> Dict[str, Any]:
-    """Compute UAE CT liability with mainland, QFZP, and SBR rules."""
+    """Compute UAE CT liability with mainland, QFZP, and SBR rules.
+
+    All monetary inputs are exact AED (not thousands / '000).
+    Example: accounting_profit=1_000_000 → taxable 1_000_000,
+    CT = 9% × (1_000_000 − 375_000) = 56_250.
+    """
     profit = _d(accounting_profit)
     rp = _d(related_party_transactions)
     exempt = _d(exempt_income)

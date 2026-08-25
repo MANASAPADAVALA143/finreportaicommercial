@@ -1,0 +1,26 @@
+# Used when building: docker build -f backend/Dockerfile .  (context = repo root)
+.git
+.github
+**/.venv
+**/.venv-*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+frontend
+infrastructure
+.sync-tmp
+n8n
+logs
+*.md
+!scripts/README.md
+
+# Keep secrets out of the image (runtime uses env_file / -e)
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/uploads
+backend/board_packs
+backend/*.db
+backend/.dockerignore

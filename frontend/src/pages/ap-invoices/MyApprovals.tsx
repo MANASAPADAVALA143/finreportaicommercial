@@ -8,7 +8,6 @@ import {
   fetchMyApprovalHistory,
   processApprovalAction,
 } from '../../lib/ap-invoice/approvalService';
-import { postApprovedInvoiceToGL } from '../../lib/ap-invoice/glPostService';
 import { useCompany } from '../../context/CompanyContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -94,7 +93,10 @@ export function MyApprovals() {
       return;
     }
     if (!email.trim()) return;
-    if (action === 'approved') setApprovingId(approvalId);
+    if (action === 'approved') {
+      if (approvingId) return; // prevent double-click race
+      setApprovingId(approvalId);
+    }
     try {
     const res = await processApprovalAction(approvalId, email.trim(), action, c || null);
     if (!res.ok) {
@@ -103,34 +105,23 @@ export function MyApprovals() {
     }
 
     if (action === 'approved') {
-      const { data: inv, error: invErr } = await supabase
-        .from('invoices')
-        .select('*')
-        .eq('id', invoiceId)
-        .single();
-
-      if (!invErr && inv && inv.approval_status === 'approved' && inv.status === 'Approved') {
-        try {
-          const gl = await postApprovedInvoiceToGL(inv as Invoice, activeCompanyId);
-          if (gl.je_posted) {
-            toast({
-              title: 'Approved — journal entry posted to GL',
-              description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
-            });
-            if (gl.je_reference) {
-              setJePosted((prev) => ({ ...prev, [invoiceId]: { reference: gl.je_reference! } }));
-            }
-          } else {
-            toast({
-              title: 'Approved — GL post incomplete',
-              description: 'Approval saved but journal entry was not posted. Retry from invoice list.',
-              variant: 'destructive',
-            });
-          }
-        } catch (e) {
+      if (res.fully_approved) {
+        const gl = res.gl_post;
+        if ((gl?.ok && gl?.je_posted && gl?.je_id) || (gl?.skipped && gl?.je_posted)) {
           toast({
-            title: 'Approved — GL post failed, retry manually',
-            description: e instanceof Error ? e.message : 'Could not post to UAE GL',
+            title: gl.skipped ? 'Approved — already in GL' : 'Approved — journal entry posted to GL',
+            description: gl.je_reference ? `JE ${gl.je_reference}` : undefined,
+          });
+          if (gl.je_reference) {
+            setJePosted((prev) => ({ ...prev, [invoiceId]: { reference: gl.je_reference! } }));
+          }
+        } else {
+          toast({
+            title: 'Approved — GL post failed',
+            description:
+              gl?.message ||
+              gl?.error ||
+              'Approval saved but no journal entry was written to uae_journal_entries. Do not treat je_reference on the invoice as proof of posting.',
             variant: 'destructive',
           });
         }
@@ -214,11 +205,14 @@ export function MyApprovals() {
                     <div className="flex gap-2">
                       <Button
                         size="sm"
-                        className="bg-green-600"
+                        className="bg-green-600 text-white hover:bg-green-700"
                         disabled={approvingId === approval.id}
-                        onClick={() => void act(approval.id, invoice.id, 'approved')}
+                        onClick={() => {
+                          if (approvingId) return;
+                          void act(approval.id, invoice.id, 'approved');
+                        }}
                       >
-                        {approvingId === approval.id ? 'Approving...' : 'Approve'}
+                        {approvingId === approval.id ? 'Approving…' : 'Approve'}
                       </Button>
                       <Button size="sm" variant="destructive" onClick={() => void act(approval.id, invoice.id, 'rejected')}>
                         Reject
@@ -249,7 +243,9 @@ export function MyApprovals() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Work email</CardTitle>
-          <CardDescription>Must match the approver email on the rule. Stored in this browser.</CardDescription>
+          <CardDescription>
+            Auto-filled from your login when available. Must match the approver email on the rule.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-3 items-end">
           <div className="space-y-2 flex-1 min-w-[220px]">

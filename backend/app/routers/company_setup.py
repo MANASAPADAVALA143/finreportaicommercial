@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from datetime import date
@@ -10,12 +11,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services import company_setup_service as svc
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/company-setup", tags=["Company Setup"])
 
 _LOGO_DIR = Path(__file__).resolve().parent.parent.parent / "uploads" / "logos"
@@ -135,11 +138,38 @@ def save_profile(
     ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    logger.info(
+        "company-setup/profile POST workspace=%s user=%s company_name=%r",
+        ctx.workspace_id,
+        getattr(ctx.user, "id", None),
+        body.company_name,
+    )
     try:
         profile = svc.save_profile_step(db, ctx.workspace_id, body.model_dump())
+        logger.info(
+            "company-setup/profile saved workspace=%s profile_id=%s setup_step=%s",
+            ctx.workspace_id,
+            profile.id,
+            profile.setup_step,
+        )
         return {"profile": svc._profile_dict(profile)}
     except ValueError as e:
+        logger.warning(
+            "company-setup/profile validation failed workspace=%s: %s",
+            ctx.workspace_id,
+            e,
+        )
         raise _handle_value_error(e)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception(
+            "company-setup/profile database error workspace=%s",
+            ctx.workspace_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to save company profile. Please verify workspace access and try again.",
+        )
 
 
 @router.post("/logo")
@@ -259,6 +289,16 @@ def save_controls(
         return svc.save_controls(db, ctx.workspace_id, profile.id, body.model_dump())
     except ValueError as e:
         raise _handle_value_error(e)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception(
+            "company-setup/controls database error workspace=%s",
+            ctx.workspace_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to save accounting controls. Ensure RDS schema is up to date (accounting_controls, accounting_periods).",
+        )
 
 
 @router.get("/controls")
@@ -267,10 +307,17 @@ def get_controls(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     from app.models.company_setup import AccountingControls
-    controls = db.query(AccountingControls).filter_by(workspace_id=ctx.workspace_id).first()
-    if not controls:
+    try:
+        controls = db.query(AccountingControls).filter_by(workspace_id=ctx.workspace_id).first()
+        if not controls:
+            return {"controls": None}
+        return {"controls": svc._controls_dict(controls)}
+    except SQLAlchemyError:
+        logger.exception(
+            "company-setup/controls GET database error workspace=%s",
+            ctx.workspace_id,
+        )
         return {"controls": None}
-    return {"controls": svc._controls_dict(controls)}
 
 
 @router.get("/users")

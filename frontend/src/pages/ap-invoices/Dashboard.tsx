@@ -33,12 +33,16 @@ import { format } from 'date-fns';
 import { formatCurrency } from '../../utils/currency';
 import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
+import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useCompany } from '../../context/CompanyContext';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import { spendByTitle } from '../../services/industryConfig.service';
 import APInsightsPanel from '@/components/ap-invoices/APInsightsPanel';
 import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard';
 import { ExtractionReviewCard } from '@/components/dashboard/ExtractionReviewCard';
 import { GstReconSummaryCard } from '@/components/dashboard/GstReconSummaryCard';
 import { AnomalyDashboardCard } from '@/components/dashboard/AnomalyDashboardCard';
+import { PaymentRunsThisMonthCard } from '@/components/dashboard/PaymentRunsThisMonthCard';
 import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
 import { getMyCompany } from '../../lib/ap-invoice/companyService';
 import { getCashFlowForecast } from '../../lib/ap-invoice/paymentService';
@@ -64,8 +68,10 @@ function getAgentBadgeStyle(action: string): { bg: string; label: string } {
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { baseCurrency, dateFormat } = useCompanySettings();
+  const { dateFormat } = useCompanySettings();
+  const { currency: baseCurrencyDisplay, fmt } = useDisplayCurrency();
   const { activeCompanyId } = useCompany();
+  const { costCenterLabel } = useIndustryConfig();
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
     localStorage.getItem('active_workspace_id') ??
@@ -98,41 +104,55 @@ export function Dashboard() {
     const currentYear = new Date().getFullYear();
     const acc: Record<string, { total: number; tax: number }> = {};
     invoices.forEach((inv) => {
-      const invDate = new Date(inv.created_at);
+      // Filter by the invoice's own date, not when the row was inserted —
+      // bulk imports/seed data all share today's created_at regardless of
+      // their real invoice_date spread, which made this card equal Total Open AP.
+      const invDate = new Date(inv.invoice_date || inv.created_at);
       if (invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear) {
-        const c = (inv.currency || baseCurrency).toUpperCase();
+        const c = (inv.currency || baseCurrencyDisplay).toUpperCase();
         if (!acc[c]) acc[c] = { total: 0, tax: 0 };
         acc[c].total += Number(inv.total_amount);
         acc[c].tax += Number(inv.tax_amount || 0);
       }
     });
     return acc;
-  }, [invoices, baseCurrency]);
+  }, [invoices, baseCurrencyDisplay]);
 
-  const monthTotalInBase = monthTotalsByCurrency[baseCurrency]?.total ?? 0;
-  const monthTaxInBase = monthTotalsByCurrency[baseCurrency]?.tax ?? 0;
+  const monthTotalInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.total ?? 0;
+  const monthTaxInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.tax ?? 0;
   const otherCurrencyTotals = useMemo(
-    () => Object.entries(monthTotalsByCurrency).filter(([c]) => c !== baseCurrency),
-    [monthTotalsByCurrency, baseCurrency]
+    () => Object.entries(monthTotalsByCurrency).filter(([c]) => c !== baseCurrencyDisplay),
+    [monthTotalsByCurrency, baseCurrencyDisplay]
   );
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [activeCompanyId]);
 
   async function fetchData() {
     try {
-      const dashCompany = await getMyCompany();
-      const invQuery = dashCompany?.id
-        ? supabase.from('invoices').select('*').eq('company_id', dashCompany.id).order('created_at', { ascending: false })
-        : supabase.from('invoices').select('*').order('created_at', { ascending: false });
-      const [invoicesRes, auditRes] = await Promise.all([
-        invQuery,
+      const companyId = activeCompanyId || (await getMyCompany())?.id || null;
+      let invoiceData: Invoice[] = [];
+      if (companyId) {
+        try {
+          const { listInvoicesViaApi } = await import('../../lib/ap-invoice/listInvoicesService');
+          invoiceData = await listInvoicesViaApi(companyId, 500);
+        } catch (apiErr) {
+          console.warn('[AP Dashboard] list-invoices API failed, falling back to Supabase:', apiErr);
+          const invQuery = supabase
+            .from('invoices')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('created_at', { ascending: false });
+          const invoicesRes = await invQuery;
+          if (invoicesRes.error) throw invoicesRes.error;
+          invoiceData = invoicesRes.data || [];
+        }
+      }
+      const [auditRes] = await Promise.all([
         supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(4),
       ]);
 
-      if (invoicesRes.error) throw invoicesRes.error;
-      const invoiceData = invoicesRes.data || [];
       setInvoices(invoiceData);
       setSelectedInvoice((prev) => {
         if (!prev) return null;
@@ -143,26 +163,22 @@ export function Dashboard() {
       if (!auditRes.error) setAuditLogs(auditRes.data || []);
 
       try {
-        const co = await getMyCompany();
-        if (co?.id) {
-          const now = new Date();
-          const start = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-          const { data: mrRows } = await supabase
-            .from('match_results')
-            .select('match_status')
-            .eq('company_id', co.id)
-            .gte('created_at', start);
-          const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
-          for (const r of mrRows ?? []) {
-            acc.total += 1;
-            const s = String((r as { match_status?: string }).match_status || '');
-            if (s === 'full_match') acc.full += 1;
-            else if (s === 'partial_match') acc.partial += 1;
-            else if (s === 'amount_variance' || s === 'qty_variance' || s === 'failed') acc.variance += 1;
-            else if (s === 'no_po') acc.noPo += 1;
-          }
-          setMatchMonth(acc);
+        // Aggregate off invoices.match_status directly — the same field the
+        // Invoice List "3-Way Match" column displays — instead of the separate
+        // match_results audit table, which uses different raw engine status
+        // codes (full_match/amount_variance/etc.) that don't line up 1:1 with
+        // what's shown elsewhere, and previously folded "no_po" into "variance".
+        const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
+        for (const inv of invoiceData) {
+          const s = String(inv.match_status || '').toLowerCase();
+          if (!s) continue;
+          acc.total += 1;
+          if (s === 'three_way_matched' || s === 'matched') acc.full += 1;
+          else if (s === 'partial') acc.partial += 1;
+          else if (s === 'no_po') acc.noPo += 1;
+          else if (s === 'mismatch') acc.variance += 1;
         }
+        setMatchMonth(acc);
       } catch {
         setMatchMonth({ full: 0, partial: 0, variance: 0, noPo: 0, total: 0 });
       }
@@ -369,9 +385,9 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {formatCurrency(monthTotalInBase, baseCurrency)}
+              {fmt(monthTotalInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Base currency: {baseCurrency}</p>
+            <p className="text-xs text-gray-500 mt-1">Base currency: {baseCurrencyDisplay}</p>
             {otherCurrencyTotals.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
                 Also this month:{' '}
@@ -392,9 +408,9 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {formatCurrency(monthTaxInBase, baseCurrency)}
+              {fmt(monthTaxInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Tax in {baseCurrency} (same-currency invoices)</p>
+            <p className="text-xs text-gray-500 mt-1">Tax in {baseCurrencyDisplay} (same-currency invoices)</p>
           </CardContent>
         </Card>
 
@@ -416,6 +432,7 @@ export function Dashboard() {
         <DuplicateAlertsCard invoices={invoices} />
         <ExtractionReviewCard invoices={invoices} />
         <AnomalyDashboardCard />
+        <PaymentRunsThisMonthCard />
 
         <Card className={statCard}>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -763,7 +780,7 @@ export function Dashboard() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Cash flow â€” next 30 days</CardTitle>
             <p className="text-xs text-muted-foreground font-normal">
-              By due date, unpaid / overdue vs scheduled ({baseCurrency})
+              By due date, unpaid / overdue vs scheduled ({baseCurrencyDisplay})
             </p>
           </CardHeader>
           <CardContent>
@@ -773,7 +790,7 @@ export function Dashboard() {
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip
-                  formatter={(value: number) => formatCurrency(value, baseCurrency)}
+                  formatter={(value: number) => fmt(value)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Bar dataKey="unpaid" stackId="pay" fill="#f59e0b" name="Unpaid / overdue" />
@@ -815,7 +832,7 @@ export function Dashboard() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold">AP aging</CardTitle>
             <p className="text-xs text-muted-foreground font-normal">
-              Unpaid balances by days past due ({baseCurrency})
+              Unpaid balances by days past due ({baseCurrencyDisplay})
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -843,7 +860,7 @@ export function Dashboard() {
             <div className="text-sm">
               <span className="text-muted-foreground">Total outstanding: </span>
               <span className="font-semibold">
-                {formatCurrency(apAgingWidget.totalOutstanding, baseCurrency)}
+                {fmt(apAgingWidget.totalOutstanding)}
               </span>
             </div>
             {apAgingWidget.d1 + apAgingWidget.d2 + apAgingWidget.d60 > 0 && (
@@ -861,7 +878,7 @@ export function Dashboard() {
                   return (
                     <>
                       {overdueCount} invoices overdue â€”{' '}
-                      {formatCurrency(apAgingWidget.overdueTotal, baseCurrency)} at risk
+                      {fmt(apAgingWidget.overdueTotal)} at risk
                     </>
                   );
                 })()}
@@ -971,7 +988,7 @@ export function Dashboard() {
                       <XAxis type="number" />
                       <YAxis dataKey="name" type="category" width={120} />
                       <Tooltip
-                        formatter={(value: number) => formatCurrency(Number(value), baseCurrency)}
+                        formatter={(value: number) => fmt(Number(value))}
                       />
                       <Bar dataKey="totalSpend" fill="#0A4B8F" />
                     </BarChart>
@@ -988,7 +1005,7 @@ export function Dashboard() {
                         </div>
                         <div className="text-right">
                           <div className="font-semibold">
-                            {formatCurrency(vendor.totalSpend, baseCurrency)}
+                            {fmt(vendor.totalSpend)}
                           </div>
                           <div className="text-xs text-gray-500">
                             {vendor.invoiceCount} invoice{vendor.invoiceCount !== 1 ? 's' : ''}
@@ -1067,7 +1084,7 @@ export function Dashboard() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" angle={-45} textAnchor="end" height={80} />
                     <YAxis />
-                    <Tooltip formatter={(value: number) => formatCurrency(Number(value), baseCurrency)} />
+                    <Tooltip formatter={(value: number) => fmt(Number(value))} />
                     <Legend />
                     {topVendors.map((vendorName, index) => (
                       <Line
@@ -1090,7 +1107,51 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* Spend by GL Account */}
+        {/* Spend by cost center + Spend by GL Account */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              {spendByTitle(costCenterLabel)}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const ccSpend = invoices
+                .filter((inv) => inv.cost_center)
+                .reduce((acc, inv) => {
+                  const key = String(inv.cost_center);
+                  if (!acc[key]) acc[key] = { name: key, totalSpend: 0, invoiceCount: 0 };
+                  acc[key].totalSpend += Number(inv.total_amount);
+                  acc[key].invoiceCount += 1;
+                  return acc;
+                }, {} as Record<string, { name: string; totalSpend: number; invoiceCount: number }>);
+              const top = Object.values(ccSpend)
+                .sort((a, b) => b.totalSpend - a.totalSpend)
+                .slice(0, 5);
+              if (top.length === 0) {
+                return (
+                  <p className="text-sm text-gray-500 text-center py-6">
+                    No {costCenterLabel.toLowerCase()} tagged invoices yet.
+                  </p>
+                );
+              }
+              return (
+                <div className="space-y-3">
+                  {top.map((row) => (
+                    <div key={row.name} className="flex items-center justify-between text-sm">
+                      <span className="font-medium text-slate-800 truncate mr-3">{row.name}</span>
+                      <span className="text-slate-600 shrink-0">
+                        {fmt(row.totalSpend)} · {row.invoiceCount} inv
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -1134,7 +1195,7 @@ export function Dashboard() {
                       <XAxis type="number" />
                       <YAxis dataKey="code" type="category" width={80} />
                       <Tooltip
-                        formatter={(value: number) => formatCurrency(Number(value), baseCurrency)}
+                        formatter={(value: number) => fmt(Number(value))}
                       />
                       <Bar dataKey="totalSpend" fill="#0A4B8F" />
                     </BarChart>
@@ -1152,7 +1213,7 @@ export function Dashboard() {
                         </div>
                         <div className="text-right">
                           <div className="font-semibold">
-                            {formatCurrency(gl.totalSpend, baseCurrency)}
+                            {fmt(gl.totalSpend)}
                           </div>
                           <div className="text-xs text-gray-500">
                             {gl.invoiceCount} invoice{gl.invoiceCount !== 1 ? 's' : ''}
@@ -1205,7 +1266,7 @@ export function Dashboard() {
                   </TableCell>
                   <TableCell>
                     <span className="font-semibold">
-                      {formatCurrency(Number(invoice.total_amount), invoice.currency || baseCurrency)}
+                      {formatCurrency(Number(invoice.total_amount), invoice.currency || baseCurrencyDisplay)}
                     </span>
                   </TableCell>
                   <TableCell>

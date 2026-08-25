@@ -3,6 +3,7 @@ import { supabase } from './supabase';
 import { getMyCompany, getCompanyConfig } from './companyService';
 import { getAgentAutonomyConfig } from './agentConfigService';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
+import { deriveInvoiceRiskDisplayScore } from './invoiceRiskDisplay';
 import type { Invoice } from './supabase';
 
 export interface MatchTolerance {
@@ -115,7 +116,7 @@ function invoiceAmountInInr(
   return null;
 }
 
-/** Net amount for PO match — invoice total_amount is gross; PO po_amount is ex-VAT. */
+/** Net amount for PO match — invoice total_amount is often gross; PO/GRN may be ex-VAT. */
 function netInvoiceAmountForMatch(inv: Invoice): number {
   const gross = Number(inv.total_amount ?? 0);
   const vat = Number((inv as Record<string, unknown>).vat_amount ?? inv.tax_amount ?? 0);
@@ -127,6 +128,27 @@ function netInvoiceAmountForMatch(inv: Invoice): number {
   return gross;
 }
 
+/** True when the larger amount is the smaller × 1.05 (UAE 5% VAT gross vs net). */
+function isUaeVatGrossNetPair(a: number, b: number): boolean {
+  const hi = Math.max(a, b);
+  const lo = Math.min(a, b);
+  if (lo <= 0 || !Number.isFinite(hi) || !Number.isFinite(lo)) return false;
+  return Math.abs(hi / lo - 1.05) < 0.01;
+}
+
+/**
+ * Percent difference after aligning a UAE 5% VAT gross/net pair to the same basis.
+ * e.g. Invoice/PO 33,600 vs GRN 32,000 → 0% (VAT-only), not 4.8%.
+ */
+function pctDiffVatAware(a: number, b: number): number {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 100;
+  if (a === b) return 0;
+  if (isUaeVatGrossNetPair(a, b)) return 0;
+  const base = Math.max(Math.abs(a), Math.abs(b));
+  if (base <= 0) return 100;
+  return (Math.abs(a - b) / base) * 100;
+}
+
 function vendorTokensMatch(a: string, b: string): boolean {
   const av = a.trim().toLowerCase();
   const bv = b.trim().toLowerCase();
@@ -136,10 +158,133 @@ function vendorTokensMatch(a: string, b: string): boolean {
   return av.includes(bv) || bv.includes(av) || (aw.length > 2 && bv.includes(aw)) || (bw.length > 2 && av.includes(bw));
 }
 
+/** Numeric 0–100 risk for agent threshold checks (GulfTax score preferred). */
+function resolveNumericRiskScore(invoice: Invoice): number | null {
+  if (typeof invoice.gulftax_risk_score === 'number' && Number.isFinite(invoice.gulftax_risk_score)) {
+    return Math.round(invoice.gulftax_risk_score);
+  }
+  return deriveInvoiceRiskDisplayScore(invoice);
+}
+
+async function vendorHasPriorApprovedInvoice(
+  companyId: string,
+  vendorName: string,
+  excludeInvoiceId: string,
+): Promise<boolean> {
+  const vn = vendorName?.trim();
+  if (!vn) return false;
+  const { count, error } = await supabase
+    .from('invoices')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('vendor_name', vn)
+    .eq('status', 'Approved')
+    .neq('id', excludeInvoiceId);
+  if (error) {
+    console.warn('[threeWayMatchService] prior vendor history check failed:', error.message);
+    return true;
+  }
+  return (count ?? 0) > 0;
+}
+
+/** Duplicate signals already on the row or a matching approved invoice for same vendor+number. */
+async function invoiceHasDuplicateSignal(invoice: Invoice, companyId: string): Promise<boolean> {
+  if (invoice.duplicate_flag === true) return true;
+  if (invoice.duplicate_of_id) return true;
+
+  const invNum = (invoice.invoice_number || '').trim();
+  const vendor = (invoice.vendor_name || '').trim();
+  if (!invNum || !vendor) return false;
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('invoice_number', invNum)
+    .eq('vendor_name', vendor)
+    .neq('id', invoice.id)
+    .in('status', ['Approved', 'Paid', 'Processing', 'On Hold', 'Queried'])
+    .limit(1);
+  if (error) {
+    console.warn('[threeWayMatchService] duplicate check failed:', error.message);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+const GATE_REASON_MESSAGES: Record<string, string> = {
+  high_value_threshold: 'Invoice exceeds high-value auto-approve threshold',
+  risk_score_exceeds_threshold: 'Risk score exceeds threshold',
+  risk_score_high: 'Risk score is high',
+  new_vendor_requires_human: 'New vendor — first invoice requires human approval',
+  potential_duplicate_detected: 'Potential duplicate detected',
+  duplicate_flag: 'Potential duplicate detected',
+  critical_risk_flag: 'Critical risk flag present',
+  ocr_below_min_confidence: 'OCR confidence below minimum for auto-approve',
+  gulftax_hard_block: 'GulfTax VAT classification HARD_BLOCK',
+};
+
+function gateReasonMessage(code: string | undefined): string {
+  if (!code) return 'Agent rules blocked auto-approve';
+  return GATE_REASON_MESSAGES[code] ?? code.replace(/_/g, ' ');
+}
+
+/**
+ * Flag invoices pending longer than sla_hours_before_escalation (does not block approval).
+ * Natural call sites: InvoiceList.fetchInvoices, ActionQueue.load, MyApprovals refresh.
+ */
+export async function markEscalationDueIfNeeded(
+  invoices: Invoice[],
+  _companyId?: string | null,
+): Promise<void> {
+  const agent = await getAgentAutonomyConfig();
+  const slaHours = agent.sla_hours_before_escalation;
+  if (!slaHours || slaHours <= 0) return;
+
+  const now = Date.now();
+  const due = invoices.filter((inv) => {
+    if (inv.status !== 'Processing' && inv.status !== 'On Hold' && inv.status !== 'Queried') {
+      return false;
+    }
+    if (inv.approval_status === 'approved' || inv.approval_status === 'rejected') return false;
+    const anchor = inv.submitted_for_approval_at || inv.created_at;
+    if (!anchor) return false;
+    const hoursPending = (now - new Date(anchor).getTime()) / 3_600_000;
+    return hoursPending >= slaHours;
+  });
+
+  for (const inv of due) {
+    const existing = Array.isArray(inv.risk_flags) ? inv.risk_flags : [];
+    if (
+      existing.some(
+        (f) => f && typeof f === 'object' && String((f as { type?: string }).type) === 'sla_escalation',
+      )
+    ) {
+      continue;
+    }
+    const nextFlags = [
+      ...existing,
+      {
+        type: 'sla_escalation',
+        severity: 'high' as const,
+        message: `Pending approval over ${slaHours}h — escalation review required`,
+      },
+    ];
+    await supabase
+      .from('invoices')
+      .update({ risk_flags: nextFlags, updated_at: new Date().toISOString() })
+      .eq('id', inv.id);
+  }
+}
+
 async function canAgentAutoApprove(
   invoice: Invoice,
   companyId: string
 ): Promise<{ ok: boolean; reason?: string }> {
+  if (String(invoice.gulftax_decision ?? '').toUpperCase() === 'HARD_BLOCK') {
+    return { ok: false, reason: 'gulftax_hard_block' };
+  }
+
   const agent = await getAgentAutonomyConfig();
   const base = await getCompanyBaseCurrency(companyId);
   const inInr = invoiceAmountInInr(invoice, base);
@@ -147,13 +292,38 @@ async function canAgentAutoApprove(
   if (inInr != null && inInr > agent.high_value_threshold_inr) {
     return { ok: false, reason: 'high_value_threshold' };
   }
-  if (invoice.duplicate_flag) {
-    return { ok: false, reason: 'duplicate_flag' };
+
+  const numericRisk = resolveNumericRiskScore(invoice);
+  if (numericRisk != null && numericRisk > agent.auto_approve_max_risk_score) {
+    return { ok: false, reason: 'risk_score_exceeds_threshold' };
   }
-  const risk = (invoice.risk_score || '').toLowerCase();
-  if (risk === 'high') {
+  // risk_score may be numeric (DB) or legacy tier string ('high'|'medium'|'low')
+  const risk = String(invoice.risk_score ?? '').toLowerCase();
+  const riskLevel = String(invoice.risk_level ?? '').toLowerCase();
+  if (risk === 'high' || riskLevel === 'high') {
     return { ok: false, reason: 'risk_score_high' };
   }
+
+  if (agent.require_human_duplicate) {
+    if (invoice.duplicate_flag) {
+      return { ok: false, reason: 'duplicate_flag' };
+    }
+    if (await invoiceHasDuplicateSignal(invoice, companyId)) {
+      return { ok: false, reason: 'potential_duplicate_detected' };
+    }
+  }
+
+  if (agent.require_human_new_vendor) {
+    const hasPrior = await vendorHasPriorApprovedInvoice(
+      companyId,
+      invoice.vendor_name,
+      invoice.id,
+    );
+    if (!hasPrior) {
+      return { ok: false, reason: 'new_vendor_requires_human' };
+    }
+  }
+
   if (agent.require_human_critical_risk && Array.isArray(invoice.risk_flags)) {
     const critical = invoice.risk_flags.some(
       (f) => f && typeof f === 'object' && String(f.severity).toLowerCase() === 'critical'
@@ -193,6 +363,10 @@ function mapEngineToInvoiceStatus(
 export type RunAutoMatchOptions = {
   /** When true (default), honour `auto_match_on_upload` = false and exit without DB writes. */
   respectUploadSetting?: boolean;
+  /** Invoice already loaded (e.g. via service-role list) — skip browser RLS re-fetch. */
+  invoice?: Invoice;
+  /** Fallback when id lookup fails under RLS — match by invoice_number + company. */
+  invoiceNumber?: string;
 };
 
 /**
@@ -200,9 +374,10 @@ export type RunAutoMatchOptions = {
  * Does not throw on missing tables — logs and rethrows only for unexpected errors.
  */
 export async function runAutoMatch(
-  invoiceId: string,
+  invoiceIdArg: string,
   options: RunAutoMatchOptions = {}
 ): Promise<AutoMatchRunResult> {
+  let invoiceId = invoiceIdArg;
   const respectUploadSetting = options.respectUploadSetting !== false;
   const tolerance = await getMatchTolerance();
   const company = await getMyCompany();
@@ -234,14 +409,64 @@ export async function runAutoMatch(
     };
   }
 
-  const { data: invoice, error: invErr } = await supabase
-    .from('invoices')
-    .select('*')
-    .eq('id', invoiceId)
-    .single();
+  // Prefer the preloaded row from Invoice List (service-role). Browser `.single()`
+  // returns 406 / "Invoice not found" when FinReport JWT has no company_members RLS path.
+  let invoice: Invoice | null =
+    options.invoice && String(options.invoice.id) === String(invoiceId)
+      ? options.invoice
+      : null;
 
-  if (invErr || !invoice) {
-    throw new Error('Invoice not found');
+  if (!invoice) {
+    const { data: byId } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .maybeSingle();
+    invoice = (byId as Invoice) ?? null;
+  }
+
+  const companyHint =
+    invoice?.company_id ?? company?.id ?? null;
+  const invoiceNumberHint =
+    options.invoiceNumber?.trim() ||
+    options.invoice?.invoice_number?.trim() ||
+    invoice?.invoice_number?.trim() ||
+    '';
+
+  if (!invoice && invoiceNumberHint && companyHint) {
+    const { data: byNo } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('company_id', companyHint)
+      .ilike('invoice_number', invoiceNumberHint)
+      .limit(1)
+      .maybeSingle();
+    invoice = (byNo as Invoice) ?? null;
+  }
+
+  if (!invoice && companyHint) {
+    try {
+      const { getInvoiceViaApi } = await import('./matchApiService');
+      invoice = await getInvoiceViaApi(companyHint, {
+        invoiceId,
+        invoiceNumber: invoiceNumberHint || undefined,
+      });
+    } catch (e) {
+      console.warn('[threeWayMatchService] service-role invoice fetch failed:', e);
+    }
+  }
+
+  if (!invoice) {
+    throw new Error(
+      invoiceNumberHint
+        ? `Invoice not found (${invoiceNumberHint})`
+        : 'Invoice not found',
+    );
+  }
+
+  // Keep the caller's invoiceId in sync if we resolved via invoice_number
+  if (invoice.id && String(invoice.id) !== String(invoiceId)) {
+    invoiceId = String(invoice.id);
   }
 
   const inv = invoice as Invoice;
@@ -263,9 +488,16 @@ export async function runAutoMatch(
   let grnAmount = 0;
   let invoiceAmount = netInvoiceAmountForMatch(inv);
 
-  const companyId = company?.id ?? inv.company_id ?? null;
+  // The invoice's own company is authoritative: the list resolves companies from the
+  // active workspace while getMyCompany() resolves from the Supabase session, and the two
+  // diverge for JWT-only sessions — matching on the session company then finds zero POs.
+  const companyId = inv.company_id ?? company?.id ?? null;
 
+  // Explicit invoice.po_number is authoritative — never replace it via vendor/amount fallback.
+  // Same principle as resolvePoIdForGrn: exact → case-insensitive → needs_review (no silent substitute).
   const trimmedPo = String(inv.po_number || '').trim();
+  let poResolvedViaVendorFallback = false;
+
   if (trimmedPo && companyId) {
     const exact = await supabase
       .from('purchase_orders')
@@ -283,9 +515,9 @@ export async function runAutoMatch(
         .limit(1);
       if (ci.data?.[0]) po = ci.data[0] as Record<string, unknown>;
     }
-  }
-
-  if (!po && inv.vendor_name && companyId) {
+    // Literal po_number provided but not found → leave po null (needs_review / no_po).
+    // Do NOT fall through to vendor+amount matching (that previously overwrote 7/100 UAE rows).
+  } else if (!trimmedPo && inv.vendor_name && companyId) {
     const v = escapeIlike(String(inv.vendor_name).trim());
     const { data: vendorPOs } = await supabase
       .from('purchase_orders')
@@ -304,17 +536,58 @@ export async function runAutoMatch(
         const bestDiff = best != null && !Number.isNaN(bAmt) ? Math.abs(bAmt - invoiceAmount) : Infinity;
         return currDiff < bestDiff ? curr : best;
       }, null) as Record<string, unknown> | null;
+      if (po) {
+        poResolvedViaVendorFallback = true;
+        exceptions.push(
+          `Matched by vendor/amount to ${String(po.po_number ?? '')} — no PO number on invoice, verify manually`
+        );
+      }
+    }
+  }
+
+  // Service-role PO lookup when browser RLS returns nothing (same path as Excel-imported invoices).
+  if (!po && companyId) {
+    try {
+      const { listPurchaseOrdersViaApi } = await import('./matchApiService');
+      const allPos = await listPurchaseOrdersViaApi(companyId);
+      if (trimmedPo) {
+        const needle = trimmedPo.toLowerCase();
+        po =
+          allPos.find((r) => String(r.po_number || '').toLowerCase() === needle) ??
+          allPos.find((r) => String(r.po_number || '').toLowerCase().includes(needle)) ??
+          null;
+      } else if (inv.vendor_name) {
+        const vv = String(inv.vendor_name).trim().toLowerCase();
+        const candidates = allPos.filter((r) => {
+          const status = String(r.status || '');
+          if (!MATCHABLE_PO_STATUSES.includes(status)) return false;
+          const vn = String(r.vendor_name || '').toLowerCase();
+          return vn.includes(vv) || vv.includes(vn) || vendorTokensMatch(vv, vn);
+        });
+        if (candidates.length) {
+          po = candidates.reduce<Record<string, unknown> | null>((best, curr) => {
+            const cAmt = Number(curr.po_amount ?? 0);
+            const bAmt = best ? Number(best.po_amount ?? 0) : NaN;
+            const currDiff = Math.abs(cAmt - invoiceAmount);
+            const bestDiff = best != null && !Number.isNaN(bAmt) ? Math.abs(bAmt - invoiceAmount) : Infinity;
+            return currDiff < bestDiff ? curr : best;
+          }, null);
+          if (po) {
+            poResolvedViaVendorFallback = true;
+            exceptions.push(
+              `Matched by vendor/amount to ${String(po.po_number ?? '')} — no PO number on invoice, verify manually`
+            );
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[threeWayMatchService] service-role PO list failed:', e);
     }
   }
 
   if (po) {
     checks.po_exists = true;
     poAmount = Number(po.po_amount ?? 0);
-
-    // UAE: when vat/tax not stored, gross is often exactly PO net + 5% VAT (e.g. 8190 vs 7800).
-    if (poAmount > 0 && invoiceAmount > poAmount && Math.abs(invoiceAmount / poAmount - 1.05) < 0.01) {
-      invoiceAmount = Math.round((invoiceAmount / 1.05) * 100) / 100;
-    }
 
     const invoiceVendor = String(inv.vendor_name ?? '');
     const poVendor = String(po.vendor_name ?? '');
@@ -345,8 +618,9 @@ export async function runAutoMatch(
       grnRows = r2.data;
     }
 
-    // Fallback: if no GRN found by po_id, try by vendor name
-    // (handles case where GRN was imported before PO existed, so po_id is null)
+    // Fallback: if no GRN found by po_id, try by vendor name + closest amount.
+    // Do NOT backfill every orphan GRN onto this PO — that previously attached
+    // all of a vendor's receipts to whichever PO was matched first.
     if ((!grnRows || grnRows.length === 0) && inv.vendor_name && companyId) {
       const vv = escapeIlike(String(inv.vendor_name).trim());
       let qVendor = supabase
@@ -354,21 +628,66 @@ export async function runAutoMatch(
         .select('*, grn_line_items(*)')
         .ilike('vendor_name', `%${vv}%`)
         .order('received_date', { ascending: false })
-        .limit(4);
+        .limit(8);
       qVendor = qVendor.eq('company_id', companyId);
       const { data: vendorGrns } = await qVendor;
       if (vendorGrns?.length) {
-        grnRows = vendorGrns;
-        // Backfill po_id on orphaned GRNs so future lookups work instantly
-        for (const g of vendorGrns) {
-          if (!(g as Record<string, unknown>).po_id && poId) {
+        const targetAmt = poAmount > 0 ? poAmount : invoiceAmount;
+        const scored = [...vendorGrns].sort((a, b) => {
+          const aAmt = Number((a as { received_amount?: number }).received_amount ?? 0);
+          const bAmt = Number((b as { received_amount?: number }).received_amount ?? 0);
+          return Math.abs(aAmt - targetAmt) - Math.abs(bAmt - targetAmt);
+        });
+        const best = scored[0];
+        const bestAmt = Number((best as { received_amount?: number }).received_amount ?? 0);
+        const withinAmt =
+          targetAmt > 0 && pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct;
+        // Only use vendor fallback when amount is plausibly the same receipt
+        if (withinAmt || targetAmt <= 0) {
+          grnRows = [best];
+          const orphan = !(best as Record<string, unknown>).po_id;
+          if (orphan && poId && withinAmt) {
             void supabase
               .from('goods_receipts')
               .update({ po_id: poId })
-              .eq('id', (g as Record<string, unknown>).id as string)
+              .eq('id', (best as Record<string, unknown>).id as string)
+              .is('po_id', null)
               .then(() => null, () => null);
           }
         }
+      }
+    }
+
+    if ((!grnRows || grnRows.length === 0) && companyId) {
+      try {
+        const { listGoodsReceiptsViaApi } = await import('./matchApiService');
+        const apiGrns = await listGoodsReceiptsViaApi(companyId, poId);
+        if (apiGrns.length) {
+          grnRows = apiGrns as typeof grnRows;
+        } else if (inv.vendor_name) {
+          const allGrns = await listGoodsReceiptsViaApi(companyId);
+          const vv = String(inv.vendor_name).trim().toLowerCase();
+          const targetAmt = poAmount > 0 ? poAmount : invoiceAmount;
+          const scored = allGrns
+            .filter((g) => {
+              const vn = String(g.vendor_name || '').toLowerCase();
+              return vn.includes(vv) || vv.includes(vn) || vendorTokensMatch(vv, vn);
+            })
+            .sort(
+              (a, b) =>
+                Math.abs(Number(a.received_amount ?? 0) - targetAmt) -
+                Math.abs(Number(b.received_amount ?? 0) - targetAmt),
+            );
+          const best = scored[0];
+          if (best) {
+            const bestAmt = Number(best.received_amount ?? 0);
+            if (targetAmt <= 0 || pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct) {
+              grnRows = [best] as typeof grnRows;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[threeWayMatchService] service-role GRN list failed:', e);
       }
     }
 
@@ -398,12 +717,17 @@ export async function runAutoMatch(
       checks.grn_exists = grnAmount > 0;
     }
 
+    // Compare Inv / PO / GRN with UAE 5% VAT awareness (gross vs net must not fail the match).
     if (grn && poAmount > 0 && grnAmount > 0) {
-      const grnVsPoPct = Math.abs((grnAmount - poAmount) / poAmount) * 100;
+      const grnVsPoPct = pctDiffVatAware(grnAmount, poAmount);
       checks.grn_matches_po = grnVsPoPct <= tolerance.price_variance_pct;
       if (!checks.grn_matches_po) {
         exceptions.push(
           `GRN total differs from PO by ${grnVsPoPct.toFixed(1)}% (limit ${tolerance.price_variance_pct}%)`
+        );
+      } else if (isUaeVatGrossNetPair(grnAmount, poAmount)) {
+        exceptions.push(
+          `GRN ${grnAmount} vs PO ${poAmount}: treated as match (UAE 5% VAT gross/net).`
         );
       }
     } else {
@@ -414,21 +738,21 @@ export async function runAutoMatch(
       exceptions.push('No confirmed GRN with value — goods receipt required before payment');
     }
 
-    const priceDiffPct =
-      poAmount > 0 ? (Math.abs((invoiceAmount - poAmount) / poAmount) * 100) : 100;
+    const priceDiffPct = poAmount > 0 ? pctDiffVatAware(invoiceAmount, poAmount) : 100;
     checks.within_price_tolerance = priceDiffPct <= tolerance.price_variance_pct;
     checks.amount_match = priceDiffPct === 0;
     if (!checks.within_price_tolerance) {
       exceptions.push(
         `Price variance ${priceDiffPct.toFixed(1)}% exceeds ${tolerance.price_variance_pct}% (Invoice vs PO)`
       );
+    } else if (isUaeVatGrossNetPair(invoiceAmount, poAmount)) {
+      exceptions.push(
+        `Invoice ${invoiceAmount} vs PO ${poAmount}: treated as match (UAE 5% VAT gross/net).`
+      );
     }
 
     if (grn && grnAmount > 0) {
-      const invGrnPct =
-        Math.max(invoiceAmount, grnAmount) > 0
-          ? (Math.abs(invoiceAmount - grnAmount) / Math.max(invoiceAmount, grnAmount)) * 100
-          : 0;
+      const invGrnPct = pctDiffVatAware(invoiceAmount, grnAmount);
       checks.within_qty_tolerance = invGrnPct <= tolerance.qty_variance_pct;
       if (!checks.within_qty_tolerance) {
         exceptions.push(
@@ -439,17 +763,22 @@ export async function runAutoMatch(
       checks.within_qty_tolerance = true;
     }
   } else {
-    exceptions.push(
-      `No PO found for invoice ${inv.invoice_number ?? invoiceId} (${inv.vendor_name ?? 'unknown vendor'})`
-    );
+    if (trimmedPo) {
+      exceptions.push(
+        `Purchase Order "${trimmedPo}" not found — left as-is for review (no vendor substitute)`
+      );
+    } else {
+      exceptions.push(
+        `No PO found for invoice ${inv.invoice_number ?? invoiceId} (${inv.vendor_name ?? 'unknown vendor'})`
+      );
+    }
   }
 
   const passedChecks = Object.values(checks).filter(Boolean).length;
   const totalChecks = Object.keys(checks).length;
   const score = Math.round((passedChecks / totalChecks) * 100);
 
-  const amount_variance_pct =
-    poAmount > 0 ? Math.abs((invoiceAmount - poAmount) / poAmount) * 100 : 0;
+  const amount_variance_pct = poAmount > 0 ? pctDiffVatAware(invoiceAmount, poAmount) : 0;
 
   const withinTolerance =
     !!checks.po_exists &&
@@ -500,13 +829,14 @@ export async function runAutoMatch(
     const gate = await canAgentAutoApprove(inv, companyId);
     if (!gate.ok) {
       autoApproved = false;
-      exceptions.push(`Auto-approve blocked (${gate.reason ?? 'agent rules'})`);
+      exceptions.push(`Auto-approve blocked: ${gateReasonMessage(gate.reason)}`);
     }
   }
 
-  const diff = Math.abs(invoiceAmount - poAmount);
-  const qty_variance_pct =
-    grnAmount > 0 ? (Math.abs(invoiceAmount - grnAmount) / Math.max(invoiceAmount, grnAmount)) * 100 : 0;
+  const diff = isUaeVatGrossNetPair(invoiceAmount, poAmount)
+    ? 0
+    : Math.abs(invoiceAmount - poAmount);
+  const qty_variance_pct = grnAmount > 0 ? pctDiffVatAware(invoiceAmount, grnAmount) : 0;
 
   const checksJson = { ...checks } as Record<string, unknown>;
 
@@ -535,12 +865,24 @@ export async function runAutoMatch(
     console.warn('[threeWayMatchService] match_results insert:', saveErr.message);
   }
 
+  const notesParts = [summary, ...exceptions.filter((e) => e && e !== summary)];
+  const matchNotes = notesParts.filter(Boolean).join('\n');
+
+  // Never overwrite an explicit source po_number with a different PO (vendor fallback bug).
+  // - Explicit value present: keep it (canonical DB casing only when the same PO was found).
+  // - Blank + vendor fallback: may fill from matched PO (already flagged in match_notes).
+  const resolvedPoNumber = trimmedPo
+    ? po && !poResolvedViaVendorFallback
+      ? String(po.po_number ?? trimmedPo)
+      : trimmedPo
+    : ((po?.po_number as string) ?? inv.po_number ?? null);
+
   const updatePayload: Record<string, unknown> = {
-    po_id: (po?.id as string) ?? inv.po_id ?? null,
+    po_id: (po?.id as string) ?? (trimmedPo ? null : inv.po_id ?? null),
     grn_id: (grn?.id as string) ?? null,
     match_status: invoiceMatchStatus,
     match_score: score,
-    match_notes: summary,
+    match_notes: matchNotes,
     match_result_id: savedResult?.id ?? null,
     auto_matched: true,
     match_attempted_at: new Date().toISOString(),
@@ -549,7 +891,7 @@ export async function runAutoMatch(
     match_percentage: Number(amount_variance_pct.toFixed(2)),
     po_amount: poAmount,
     grn_amount: grnAmount > 0 ? grnAmount : null,
-    po_number: (po?.po_number as string) ?? inv.po_number,
+    po_number: resolvedPoNumber,
     updated_at: new Date().toISOString(),
   };
 
@@ -567,12 +909,35 @@ export async function runAutoMatch(
     console.warn('[threeWayMatchService] invoice update:', upErr.message);
   }
 
+  // Always persist via service role when we have a company — browser RLS often
+  // reports success with 0 rows for FinReport-JWT sessions (Excel-imported invoices).
+  if (companyId) {
+    try {
+      const { patchInvoiceViaApi } = await import('./matchApiService');
+      await patchInvoiceViaApi(companyId, invoiceId, updatePayload);
+    } catch (e) {
+      if (upErr) {
+        console.warn('[threeWayMatchService] service-role invoice patch failed:', e);
+      }
+    }
+  }
+
+  // invoiceId is always in scope here — no need for invRow fields for WhatsApp.
+  if (autoApproved && !upErr) {
+    void import('./whatsappService').then(({ notifyVendorStatusByInvoiceId }) => {
+      void notifyVendorStatusByInvoiceId(invoiceId, 'Approved');
+    });
+  }
+
   if (autoApproved && companyId) {
     try {
-      const { syncApprovedInvoiceToGulfTax } = await import('../../services/gulfTaxApi');
-      void syncApprovedInvoiceToGulfTax(invoiceId, companyId);
-    } catch {
-      /* GulfTax sync is best-effort */
+      const { data: invRow } = await supabase.from('invoices').select('*').eq('id', invoiceId).single();
+      if (invRow) {
+        const { awaitGlPostAfterApproval } = await import('./glPostService');
+        await awaitGlPostAfterApproval(invRow as import('./supabase').Invoice, companyId);
+      }
+    } catch (e) {
+      console.warn('[threeWayMatchService] GL post after auto-approve failed:', e);
     }
   }
 
@@ -659,8 +1024,11 @@ export async function createGRN(params: {
   }>;
   notes?: string;
 }): Promise<string> {
-  const company = await getMyCompany();
-  if (!company?.id) throw new Error('No company');
+  const { ensureApMembershipForUpload, resolveApSupabaseCompanyId } = await import(
+    './workspaceCompanySync'
+  );
+  await ensureApMembershipForUpload();
+  const companyId = await resolveApSupabaseCompanyId();
 
   let grnNum: string | null = null;
   const { data: rpcNum, error: rpcErr } = await supabase.rpc('next_grn_number');
@@ -678,7 +1046,7 @@ export async function createGRN(params: {
   const { data: grn, error } = await supabase
     .from('goods_receipts')
     .insert({
-      company_id: company.id,
+      company_id: companyId,
       grn_number: grnNum,
       po_id: params.po_id,
       vendor_name: params.vendor_name,
@@ -759,18 +1127,31 @@ export async function getGRNsForPO(poId: string) {
 }
 
 export async function listGoodsReceiptsForCompany() {
-  const company = await getMyCompany();
-  if (!company?.id) return [];
+  let companyId: string | null = null;
+  try {
+    const { resolveApSupabaseCompanyId } = await import('./workspaceCompanySync');
+    companyId = await resolveApSupabaseCompanyId();
+  } catch {
+    companyId = (await getMyCompany())?.id ?? null;
+  }
+  if (!companyId) return [];
+  try {
+    const { listGoodsReceiptsViaApi } = await import('./bulkUpsertGoodsReceiptsService');
+    const viaApi = await listGoodsReceiptsViaApi(companyId);
+    if (viaApi.ok && Array.isArray(viaApi.goods_receipts)) return viaApi.goods_receipts;
+  } catch {
+    /* fall through to browser client */
+  }
   const nested = await supabase
     .from('goods_receipts')
     .select('*, grn_line_items(*)')
-    .eq('company_id', company.id)
+    .eq('company_id', companyId)
     .order('received_date', { ascending: false });
   if (!nested.error) return nested.data ?? [];
   const flat = await supabase
     .from('goods_receipts')
     .select('*')
-    .eq('company_id', company.id)
+    .eq('company_id', companyId)
     .order('received_date', { ascending: false });
   return flat.data ?? [];
 }
@@ -808,14 +1189,121 @@ export interface BulkImportGRNResult {
   failed: number;
   skipped: number;
   matched: number;
+  /** GRNs saved without a resolved `po_id` (missing po_number or no matching PO) — surfaced separately so orphaned links aren't buried inside "success". */
+  unlinkedPo: number;
+  /** GRNs that linked via vendor/amount only, or had a PO number that did not resolve — must be verified manually. */
+  needsReview: number;
   errors: Array<{ grn_number: string; error: string }>;
+  reviewFlags: Array<{ grn_number: string; reason: string }>;
   results: Array<{
     grn_number: string;
     invoice_number: string;
     match_status: string;
     auto_approved: boolean;
+    needs_review?: boolean;
     warning?: string;
   }>;
+}
+
+export type ResolvePoIdForGrnResult = {
+  po_id: string | null;
+  po_number: string | null;
+  needs_review: boolean;
+  reason?: string;
+};
+
+/**
+ * Resolve purchase_orders.id for a GRN import row.
+ * Priority: exact po_number → case-insensitive po_number → (only if blank) vendor + closest amount (flagged).
+ * Never silently vendor-match when a po_number was provided but not found.
+ */
+export async function resolvePoIdForGrn(
+  grnRow: Pick<GRNImportRow, 'po_number' | 'vendor_name' | 'received_total'>,
+  companyId: string
+): Promise<ResolvePoIdForGrnResult> {
+  const trimmedPoNumber = grnRow.po_number?.trim() ?? '';
+
+  if (trimmedPoNumber) {
+    const exact = await supabase
+      .from('purchase_orders')
+      .select('id, po_number')
+      .eq('company_id', companyId)
+      .eq('po_number', trimmedPoNumber)
+      .maybeSingle();
+
+    if (exact.data) {
+      return {
+        po_id: exact.data.id as string,
+        po_number: String(exact.data.po_number ?? trimmedPoNumber),
+        needs_review: false,
+      };
+    }
+
+    const ci = await supabase
+      .from('purchase_orders')
+      .select('id, po_number')
+      .eq('company_id', companyId)
+      .ilike('po_number', trimmedPoNumber)
+      .limit(1);
+
+    if (ci.data?.length) {
+      return {
+        po_id: ci.data[0].id as string,
+        po_number: String(ci.data[0].po_number ?? trimmedPoNumber),
+        needs_review: false,
+      };
+    }
+
+    return {
+      po_id: null,
+      po_number: trimmedPoNumber,
+      needs_review: true,
+      reason: `PO number "${trimmedPoNumber}" not found`,
+    };
+  }
+
+  const vendor = grnRow.vendor_name?.trim() ?? '';
+  if (!vendor) {
+    return {
+      po_id: null,
+      po_number: null,
+      needs_review: true,
+      reason: 'No PO number and no vendor name — cannot link PO',
+    };
+  }
+
+  const vv = escapeIlike(vendor);
+  const { data: vendorPos } = await supabase
+    .from('purchase_orders')
+    .select('id, po_number, po_amount')
+    .eq('company_id', companyId)
+    .ilike('vendor_name', `%${vv}%`)
+    .in('status', MATCHABLE_PO_STATUSES)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (!vendorPos?.length) {
+    return {
+      po_id: null,
+      po_number: null,
+      needs_review: true,
+      reason: 'No PO number and no vendor match found',
+    };
+  }
+
+  const grnAmt = Number(grnRow.received_total) || 0;
+  const closest = vendorPos.reduce((best, po) => {
+    const diff = Math.abs(Number(po.po_amount ?? 0) - grnAmt);
+    const bestDiff = Math.abs(Number(best.po_amount ?? 0) - grnAmt);
+    return diff < bestDiff ? po : best;
+  });
+
+  return {
+    po_id: closest.id as string,
+    po_number: String(closest.po_number ?? ''),
+    needs_review: true,
+    reason: `Matched by vendor only to ${closest.po_number} — no PO number provided, verify manually`,
+  };
 }
 
 function cellStr(v: unknown): string {
@@ -917,7 +1405,6 @@ function rowToMaster(r: Record<string, unknown>): GRNImportRow | null {
     'GRN Amount',
     'GRN Total',
     'Total Receipt',
-    'Net Amount',
     'Grand Total',
     'Total Value',
     'Total (INR)',
@@ -927,7 +1414,11 @@ function rowToMaster(r: Record<string, unknown>): GRNImportRow | null {
     'total_amount',
     'Total Amount',
     'Total',
-    'Amount'
+    'Amount',
+    // Pre-tax fallback only — a GST invoice's total includes tax, so a "Net Amount"
+    // (taxable value before GST) column must lose to any tax-inclusive total above,
+    // or the match compares pre-tax GRN vs post-tax invoice and false-fails.
+    'Net Amount'
   );
   let received_total = parseImportNumber(totalRaw);
   if (!Number.isFinite(received_total) || received_total <= 0) received_total = 0;
@@ -1244,168 +1735,149 @@ function normalizeLineCondition(c: string): 'good' | 'damaged' | 'partial' | 're
 }
 
 /**
- * Inserts GRNs + line items for the current company. Skips existing `grn_number`.
- * Runs `runAutoMatch` on `invoice_number` when present; otherwise `rerunAutoMatchForPo` when `po_id` resolves.
+ * Inserts GRNs + line items for the **active banner company** via backend service role
+ * (same pattern as invoice / PO Excel upload — works for any company; bypasses browser RLS).
+ * Skips existing `grn_number` within that company. Resolves PO only within the same company.
+ * Runs `runAutoMatch` / `rerunAutoMatchForPo` after successful inserts when possible.
  */
 export async function bulkImportGRNs(
   masterRows: GRNImportRow[],
   lineItemRows: GRNLineImportRow[],
   onProgress?: (current: number, total: number, detail: string) => void
 ): Promise<BulkImportGRNResult> {
-  const company = await getMyCompany();
   const result: BulkImportGRNResult = {
     total: masterRows.length,
     success: 0,
     failed: 0,
     skipped: 0,
     matched: 0,
+    unlinkedPo: 0,
+    needsReview: 0,
     errors: [],
+    reviewFlags: [],
     results: [],
   };
 
-  if (!company?.id) {
+  let companyId: string | null = null;
+  try {
+    const { ensureApMembershipForUpload, resolveApSupabaseCompanyId } = await import(
+      './workspaceCompanySync'
+    );
+    await ensureApMembershipForUpload();
+    companyId = await resolveApSupabaseCompanyId();
+  } catch {
+    const company = await getMyCompany();
+    companyId = company?.id ?? null;
+  }
+
+  if (!companyId) {
     result.errors.push({ grn_number: '—', error: 'No company selected. Set your company in settings.' });
     result.failed = masterRows.length;
     return result;
   }
 
-  const companyId = company.id;
+  onProgress?.(0, masterRows.length, 'Uploading GRNs via API…');
 
-  for (let i = 0; i < masterRows.length; i++) {
-    const grn = masterRows[i];
-    const label = `${grn.grn_number} — ${grn.vendor_name || 'GRN'}`;
-    onProgress?.(i + 1, masterRows.length, `Processing ${label}…`);
+  const { bulkUpsertGoodsReceiptsViaApi } = await import('./bulkUpsertGoodsReceiptsService');
 
-    let warning: string | undefined;
+  const payloads: Record<string, unknown>[] = masterRows.map((grn) => {
+    const grnNum = grn.grn_number.trim();
+    let lines = lineItemRows
+      .filter((l) => l.grn_number.trim() === grnNum)
+      .map((l) => ({
+        description: l.description.trim() || 'Line item',
+        ordered_qty: Number(l.ordered_qty) || 1,
+        received_qty: Number(l.received_qty) || 1,
+        unit_price: Number(l.unit_price) || 0,
+        condition: normalizeLineCondition(l.condition),
+      }));
 
-    try {
-      const grnNum = grn.grn_number.trim();
-      if (!grnNum) {
-        result.failed++;
-        result.errors.push({ grn_number: '(empty)', error: 'Missing grn_number' });
-        continue;
-      }
-
-      const { data: dup } = await supabase
-        .from('goods_receipts')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('grn_number', grnNum)
-        .maybeSingle();
-
-      if (dup) {
-        result.skipped++;
-        result.errors.push({ grn_number: grnNum, error: 'Skipped — GRN number already exists' });
-        result.results.push({
-          grn_number: grnNum,
-          invoice_number: grn.invoice_number,
-          match_status: 'skipped_duplicate',
-          auto_approved: false,
-          warning: 'GRN already in database',
-        });
-        continue;
-      }
-
-      let poId: string | null = null;
-      let resolvedPoNumber = grn.po_number.trim();
-      if (resolvedPoNumber) {
-        const { data: poRows } = await supabase
-          .from('purchase_orders')
-          .select('id, po_number')
-          .eq('company_id', companyId)
-          .ilike('po_number', resolvedPoNumber)
-          .limit(1);
-        if (poRows?.[0]) {
-          poId = poRows[0].id as string;
-          resolvedPoNumber = String(poRows[0].po_number ?? resolvedPoNumber);
-        } else {
-          warning = `PO "${resolvedPoNumber}" not found — GRN saved without PO link`;
-        }
-      } else {
-        warning = warning || 'No PO number — GRN saved without PO link';
-      }
-
-      let lines = lineItemRows
-        .filter((l) => l.grn_number.trim() === grnNum)
-        .map((l) => ({
-          description: l.description.trim() || 'Line item',
-          ordered_qty: Number(l.ordered_qty) || 1,
-          received_qty: Number(l.received_qty) || 1,
-          unit_price: Number(l.unit_price) || 0,
-          condition: normalizeLineCondition(l.condition),
-        }));
-
-      if (lines.length === 0) {
-        lines = [
-          {
+    if (lines.length === 0) {
+      lines = [
+        {
           description: grn.notes.trim() || `${grn.vendor_name || 'Vendor'} — receipt`,
           ordered_qty: 1,
           received_qty: 1,
           unit_price: 0,
           condition: 'good' as const,
-          },
-        ];
+        },
+      ];
+    }
+
+    let lineSum = lines.reduce((s, li) => s + Number(li.received_qty) * Number(li.unit_price), 0);
+    const headerTotal = Number(grn.received_total) || 0;
+    if (lineSum === 0 && headerTotal > 0) {
+      const qtySum = lines.reduce((s, li) => s + Number(li.received_qty), 0);
+      if (qtySum > 0) {
+        const up = headerTotal / qtySum;
+        lines = lines.map((li) => ({ ...li, unit_price: up }));
+        lineSum = headerTotal;
       }
+    }
 
-      let lineSum = lines.reduce((s, li) => s + Number(li.received_qty) * Number(li.unit_price), 0);
-      const headerTotal = Number(grn.received_total) || 0;
-      if (lineSum === 0 && headerTotal > 0) {
-        const qtySum = lines.reduce((s, li) => s + Number(li.received_qty), 0);
-        if (qtySum > 0) {
-          const up = headerTotal / qtySum;
-          lines = lines.map((li) => ({ ...li, unit_price: up }));
-          lineSum = headerTotal;
-        }
-      }
+    return {
+      grn_number: grnNum,
+      po_number: grn.po_number.trim(),
+      vendor_name: grn.vendor_name.trim() || 'Unknown vendor',
+      received_amount: lineSum,
+      received_date: normalizeGrnDate(grn.grn_date),
+      grn_date: grn.grn_date || null,
+      status: grn.status.trim() || 'confirmed',
+      received_by: grn.received_by.trim() || 'Bulk import',
+      notes: grn.notes?.trim() ?? '',
+      invoice_number: grn.invoice_number?.trim() || null,
+      line_items: lines,
+    };
+  });
 
-      const receivedBy = grn.received_by.trim() || 'Bulk import';
-      const vendorName = grn.vendor_name.trim() || 'Unknown vendor';
-      const statusLower = grn.status.trim().toLowerCase();
-      const statusDb = statusLower === 'draft' ? 'draft' : 'confirmed';
+  let apiResult;
+  try {
+    apiResult = await bulkUpsertGoodsReceiptsViaApi(companyId, payloads);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'GRN bulk API failed';
+    result.failed = masterRows.length;
+    result.errors.push({ grn_number: '—', error: msg });
+    return result;
+  }
 
-      const invNumTrim = grn.invoice_number?.trim() ?? '';
+  result.success = apiResult.success;
+  result.failed = apiResult.failed;
+  result.skipped = apiResult.skipped;
+  result.unlinkedPo = apiResult.unlinked_po;
+  result.needsReview = apiResult.needs_review;
 
-      const { data: inserted, error: grnError } = await supabase
-        .from('goods_receipts')
-        .insert({
-          company_id: companyId,
-          grn_number: grnNum,
-          po_id: poId,
-          vendor_name: vendorName,
-          received_amount: lineSum,
-          received_date: normalizeGrnDate(grn.grn_date),
-          status: statusDb,
-          received_by: receivedBy,
-          notes: grn.notes?.trim() ?? '',
-          ...(invNumTrim ? { invoice_number: invNumTrim } : {}),
-          updated_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single();
+  for (const row of apiResult.results) {
+    const grnNum = row.grn_number || '—';
+    if (row.skipped) {
+      result.errors.push({ grn_number: grnNum, error: row.error || 'Skipped — duplicate' });
+      continue;
+    }
+    if (!row.ok) {
+      result.errors.push({ grn_number: grnNum, error: row.error || 'Failed' });
+      continue;
+    }
+    if (row.warning) {
+      result.errors.push({ grn_number: grnNum, error: row.warning });
+      result.reviewFlags.push({ grn_number: grnNum, reason: row.warning });
+    }
+    result.results.push({
+      grn_number: grnNum,
+      invoice_number: masterRows.find((m) => m.grn_number.trim() === grnNum)?.invoice_number || '',
+      match_status: row.po_id ? 'imported' : 'unlinked_po',
+      auto_approved: false,
+      needs_review: !!row.needs_review,
+      warning: row.warning,
+    });
+  }
 
-      if (grnError) throw new Error(grnError.message);
-      const grnId = inserted?.id as string;
+  onProgress?.(masterRows.length, masterRows.length, 'Running 3-way match…');
 
-      const liRows = lines.map((li) => ({
-        grn_id: grnId,
-        description: li.description,
-        ordered_qty: li.ordered_qty,
-        received_qty: li.received_qty,
-        unit_price: li.unit_price,
-        condition: li.condition,
-      }));
-
-      if (liRows.length > 0) {
-        const { error: liErr } = await supabase.from('grn_line_items').insert(liRows);
-        if (liErr) console.warn('[bulkImportGRNs] line items:', liErr.message);
-      }
-
-      result.success++;
-
-      let matchStatus = 'no_invoice';
-      let autoApproved = false;
-
-      const invNum = grn.invoice_number.trim();
+  // Best-effort rematch for rows that linked to a PO (browser may fail — inserts already saved)
+  for (const row of apiResult.results) {
+    if (!row.ok || !row.po_id || !row.grn_number) continue;
+    const master = masterRows.find((m) => m.grn_number.trim() === row.grn_number);
+    const invNum = master?.invoice_number?.trim() || '';
+    try {
       if (invNum) {
         const { data: invRows } = await supabase
           .from('invoices')
@@ -1415,44 +1887,15 @@ export async function bulkImportGRNs(
           .limit(1);
         const invId = invRows?.[0]?.id as string | undefined;
         if (invId) {
-          try {
-            const matchResult = await runAutoMatch(invId, { respectUploadSetting: false });
-            matchStatus = matchResult.engine_status;
-            autoApproved = matchResult.auto_approved;
-            if (matchResult.within_tolerance && !matchResult.skipped) result.matched++;
-          } catch {
-            matchStatus = 'match_error';
-          }
-        } else {
-          matchStatus = 'invoice_not_found';
+          const matchResult = await runAutoMatch(invId, { respectUploadSetting: false });
+          if (matchResult.within_tolerance && !matchResult.skipped) result.matched++;
         }
-      } else if (poId && resolvedPoNumber) {
-        try {
-          const rematch = await rerunAutoMatchForPo(poId, resolvedPoNumber);
-          if (rematch.length > 0) {
-            const first = rematch[0].result;
-            matchStatus = first.engine_status;
-            autoApproved = first.auto_approved;
-            if (first.within_tolerance && !first.skipped) result.matched++;
-          } else {
-            matchStatus = 'no_invoice_on_po';
-          }
-        } catch {
-          matchStatus = 'match_error';
-        }
+      } else {
+        const rematch = await rerunAutoMatchForPo(row.po_id, master?.po_number || '');
+        if (rematch.some((r) => r.result.within_tolerance && !r.result.skipped)) result.matched++;
       }
-
-      result.results.push({
-        grn_number: grnNum,
-        invoice_number: grn.invoice_number,
-        match_status: matchStatus,
-        auto_approved: autoApproved,
-        warning,
-      });
-    } catch (e: unknown) {
-      result.failed++;
-      const msg = e instanceof Error ? e.message : 'Unknown error';
-      result.errors.push({ grn_number: grn.grn_number, error: msg });
+    } catch {
+      /* rematch is best-effort */
     }
   }
 

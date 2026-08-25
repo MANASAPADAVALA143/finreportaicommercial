@@ -12,11 +12,12 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant import get_company_id, get_tenant_id
 from app.modules.gulftax.auth_cfo import get_current_company_id
 from app.modules.gulftax.classifier import classify_batch, classify_transaction
 from app.modules.gulftax.ported_mount import get_ported_db
@@ -253,14 +254,17 @@ def vat_return_boxes(
 def vat_return_all_boxes(
     company_id: str = Query(..., description="Company ID (tenant on invoices)"),
     period: str = Query(...),
+    workspace_id: Optional[str] = Query(None, description="FinReportAI workspace ID"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     """FTA VAT return — boxes 1–12 (sales + purchases)."""
     from app.modules.gulftax.vat_return_service import fetch_all_vat_return_boxes
 
+    ws = (workspace_id or x_workspace_id or "").strip() or company_id
     return fetch_all_vat_return_boxes(
         db,
-        workspace_id=company_id,
+        workspace_id=ws,
         company_id=company_id,
         period=period,
     )
@@ -380,13 +384,121 @@ def vat_return_summary(
 
 
 @router.post("/sync-period")
-def sync_gulftax_period(body: SyncPeriodBody):
+def sync_gulftax_period(body: SyncPeriodBody, db: Session = Depends(get_db)):
     from app.services.gulftax_sync_service import sync_period
 
     cid = body.company_id or body.tenant_id
     if not cid:
         raise HTTPException(400, detail="company_id or tenant_id required")
-    return sync_period(cid, body.tax_period)
+    return sync_period(
+        cid,
+        body.tax_period,
+        db=db,
+        workspace_id=body.tenant_id,
+    )
+
+
+# ── VAT reconciliation (gulftax_transactions source of truth) ─────────────────
+
+class VatReconRunBody(BaseModel):
+    period: str = Field(..., description="Tax period e.g. 2025-Q1")
+    company_id: Optional[str] = None
+    workspace_id: Optional[str] = None
+
+
+class VatReconOverrideBody(BaseModel):
+    period: str
+    reason: str = Field(..., min_length=3, max_length=2000)
+    company_id: Optional[str] = None
+
+
+@router.get("/vat-periods")
+def list_vat_periods(
+    company_id: Optional[str] = Query(None),
+    workspace_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Distinct tax periods from RDS gulftax_transactions."""
+    from app.services.vat_recon_service import get_vat_periods
+
+    cid = company_id or workspace_id
+    if not cid:
+        raise HTTPException(400, detail="company_id or workspace_id required")
+    tenant = workspace_id or cid
+    return {"periods": get_vat_periods(db, tenant_id=tenant, company_id=cid)}
+
+
+@router.post("/recon/run")
+def run_gulftax_recon(
+    body: VatReconRunBody,
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Run VAT recon for a period — aggregates gulftax_transactions, compares to vat_returns."""
+    from app.modules.gulftax.vat_return_service import parse_period
+    from app.services.vat_recon_service import run_vat_recon
+
+    cid = body.company_id or company_id
+    tenant = body.workspace_id or cid
+    period_start, period_end = parse_period(body.period)
+    try:
+        return run_vat_recon(
+            db,
+            ported_db,
+            tenant_id=tenant,
+            company_id=cid,
+            period_start=period_start,
+            period_end=period_end,
+            tax_period=body.period,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Reconciliation failed: {exc}") from exc
+
+
+@router.get("/recon/status")
+def gulftax_recon_status(
+    period: str = Query(...),
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Latest recon status for a period (filing gate)."""
+    from app.services.vat_recon_service import get_recon_status
+
+    return get_recon_status(ported_db, company_id=company_id, period=period)
+
+
+@router.get("/recon/history")
+def gulftax_recon_history(
+    limit: int = Query(20, ge=1, le=100),
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Past reconciliation runs for the company."""
+    from app.services.vat_recon_service import get_recon_history
+
+    return {"items": get_recon_history(ported_db, company_id=company_id, limit=limit)}
+
+
+@router.post("/recon/override")
+def gulftax_recon_override(
+    body: VatReconOverrideBody,
+    company_id: str = Depends(get_current_company_id),
+    ported_db: Session = Depends(get_ported_db),
+):
+    """Log override reason when filing despite recon mismatches."""
+    from app.services.vat_recon_service import set_recon_override
+
+    cid = body.company_id or company_id
+    try:
+        return set_recon_override(
+            ported_db,
+            company_id=cid,
+            period=body.period,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ── Advance Payment VAT (FTA two-step rule) ───────────────────────────────────
@@ -434,72 +546,25 @@ class PintAeValidateRequest(BaseModel):
 
 @router.post("/einvoicing/validate-pint-ae")
 def validate_pint_ae_invoice(body: PintAeValidateRequest):
-    """15-rule Peppol PINT AE compliance check for an AP invoice."""
-    try:
-        from app.modules.gulftax.advance_vat import trn_mod97_valid
+    """15+ rule Peppol PINT AE compliance check — unified validator."""
+    from app.services.einvoicing_service_unified import validate_pint_ae
 
-        rules: List[Dict[str, Any]] = []
-
-        def rule(rid: str, label: str, passed: bool, fix: str = "") -> None:
-            rules.append({"id": rid, "label": label, "passed": passed, "fix": fix if not passed else ""})
-
-        inv_no = (body.invoice_number or "").strip()
-        rule("inv_number", "Invoice number present", bool(inv_no), "Add a valid invoice / tax invoice number")
-
-        inv_date = (body.invoice_date or "").strip()
-        rule("inv_date", "Invoice date present", bool(inv_date), "Set invoice date (YYYY-MM-DD)")
-
-        vendor = (body.vendor_name or "").strip()
-        rule("supplier_name", "Supplier legal name", len(vendor) >= 2, "Add supplier legal name as on TRN certificate")
-
-        trn = (body.vendor_trn or "").strip().replace(" ", "")
-        rule("supplier_trn", "Supplier TRN (15 digits)", trn_mod97_valid(trn), "TRN must be 15 digits starting with 1")
-
-        buyer_trn = (body.buyer_trn or "").strip().replace(" ", "")
-        rule("buyer_trn", "Buyer TRN (B2B)", not buyer_trn or trn_mod97_valid(buyer_trn), "Buyer TRN must be 15 digits")
-
-        net = float(body.subtotal_amount if body.subtotal_amount is not None else body.total_amount or 0)
-        rule("net_amount", "Taxable amount > 0", net > 0, "Net / taxable amount must be positive")
-
-        vat = float(body.vat_amount or 0)
-        rule("vat_present", "VAT amount declared", vat > 0, "Declare VAT amount on the invoice")
-
-        expected_vat = round(net * (float(body.vat_rate or 5) / 100), 2)
-        vat_ok = abs(vat - expected_vat) <= 0.05 or (vat > 0 and net > 0)
-        rule("vat_rate", "VAT at standard 5%", vat_ok, f"Expected VAT ~AED {expected_vat:,.2f} at 5%")
-
-        curr = (body.currency or "AED").upper()
-        rule("currency", "Currency is AED", curr in ("AED", "د.إ"), "UAE e-invoices must use AED")
-
-        treatment = (body.vat_treatment or "standard").lower()
-        rule("vat_category", "VAT category code (standard)", treatment in ("standard", "standard-rated", "s"), "Map to Peppol tax category S (standard 5%)")
-
-        total = float(body.total_amount or 0)
-        rule("total", "Total = net + VAT", total <= 0 or abs(total - (net + vat)) <= 0.1, "Total must equal net + VAT")
-
-        rule("doc_type", "Document type code 380 (tax invoice)", True, "")
-
-        rule("line_items", "Line item detail implied", net > 0, "Include line items with description, qty, unit price")
-
-        rule("tax_total", "Tax total block present", vat > 0, "Include TaxTotal in UBL XML")
-
-        rule("monetary_total", "Legal monetary total present", total > 0, "Include LegalMonetaryTotal in UBL XML")
-
-        rule("issue_time", "Issue date ISO format", bool(inv_date and len(inv_date) >= 8), "Use ISO date YYYY-MM-DD")
-
-        rule("peppol_profile", "Peppol PINT AE profile", trn_mod97_valid(trn) and inv_no and vat > 0, "Complete TRN, invoice no, and VAT for PINT AE")
-
-        failed = [r for r in rules if not r["passed"]]
-        return {
-            "compliant": len(failed) == 0,
-            "rules_passed": len(rules) - len(failed),
-            "rules_total": len(rules),
-            "rules": rules,
-            "issues_found": len(failed),
-            "standard": "Peppol PINT AE",
-        }
-    except Exception as e:
-        raise HTTPException(500, f"PINT AE validation failed: {e}") from e
+    net = float(body.subtotal_amount if body.subtotal_amount is not None else body.total_amount or 0)
+    vat = float(body.vat_amount or 0)
+    return validate_pint_ae({
+        "invoice_number": body.invoice_number,
+        "invoice_date": body.invoice_date,
+        "vendor_name": body.vendor_name,
+        "seller_trn": body.vendor_trn,
+        "buyer_trn": body.buyer_trn,
+        "net_amount": net,
+        "vat_amount": vat,
+        "gross_amount": float(body.total_amount or 0),
+        "vat_rate": float(body.vat_rate or 5),
+        "vat_treatment": body.vat_treatment,
+        "currency": body.currency,
+        "is_b2b": True,
+    })
 
 
 @router.post("/vat/extract-pdf-invoices")
@@ -554,23 +619,29 @@ class PeppolXmlValidateRequest(BaseModel):
 @router.post("/peppol/phase")
 def peppol_phase_calculator(body: PeppolPhaseRequest):
     """
-    UAE e-invoicing phase calculator (FTA timeline).
-    Phase 1 (>AED 50M): Jul 2026 | Phase 2 (>AED 20M): Jan 2027 | Phase 3: Jul 2027
+    Legacy alias — delegates to einvoicing_constants.calculate_phase (FTA timeline).
+    Prefer POST /api/gulftax/einvoicing/calculate-phase for new integrations.
     """
-    rev = body.annual_revenue_aed
-    if rev >= 50_000_000:
-        phase, deadline = 1, "2026-07-01"
-    elif rev >= 20_000_000:
-        phase, deadline = 2, "2027-01-01"
-    else:
-        phase, deadline = 3, "2027-07-01"
+    from app.services import einvoicing_service_unified as einv_svc
+
+    result = einv_svc.calculate_phase(body.annual_revenue_aed)
+    phase_num = result["phase_num"]
+    mandatory = result["mandatory_date"]
+    asp_deadline = result["asp_registration_deadline"]
     return {
         "trn": body.trn,
-        "annual_revenue_aed": rev,
-        "phase": phase,
-        "mandatory_from": deadline,
+        "annual_revenue_aed": result["annual_revenue_aed"],
+        "phase": phase_num,
+        "phase_key": result["phase"],
+        "mandatory_from": mandatory,
+        "mandatory_date": mandatory,
+        "asp_registration_deadline": asp_deadline,
+        "voluntary_pilot_start": result["voluntary_pilot_start"],
         "standard": "Peppol PINT AE",
-        "message": f"TRN {body.trn} — Phase {phase} e-invoicing from {deadline}",
+        "message": (
+            f"TRN {body.trn} — Phase {phase_num} mandatory e-invoicing from {mandatory}; "
+            f"ASP appointment by {asp_deadline}"
+        ),
     }
 
 
@@ -610,30 +681,6 @@ def peppol_validate_xml(body: PeppolXmlValidateRequest):
 
 # ── FTA Audit Risk Checklist ───────────────────────────────────────────────────
 
-def _checklist_item(
-    item_id: str,
-    category: str,
-    title: str,
-    description: str,
-    status: str,
-    risk_level: str,
-    detail: str,
-    count: int | None = None,
-) -> dict:
-    row = {
-        "id": item_id,
-        "category": category,
-        "title": title,
-        "description": description,
-        "status": status,
-        "risk_level": risk_level,
-        "detail": detail,
-    }
-    if count is not None:
-        row["count"] = count
-    return row
-
-
 @router.get("/fta/audit-checklist")
 def fta_audit_checklist(
     period_start: date = Query(...),
@@ -645,242 +692,235 @@ def fta_audit_checklist(
     FTA pre-audit risk checklist — validates TRN, VAT data completeness,
     classification quality, and return reconciliation for the selected period.
     """
-    from sqlalchemy import and_
-    from models import Transaction, Company, Invoice as GulfInvoice, VATReturn
+    from app.modules.gulftax.ported_mount import _alias_ported_orm_modules
+    from app.services.fta_audit_checklist_service import build_fta_audit_checklist
 
-    company = db.query(Company).filter(Company.id == company_id).first()
-    trn = (getattr(company, "trn", None) or "").strip().replace(" ", "")
-    trn_valid = trn.isdigit() and len(trn) == 15
+    _alias_ported_orm_modules()
+    return build_fta_audit_checklist(db, company_id, period_start, period_end)
 
-    txns = db.query(Transaction).filter(
-        and_(
-            Transaction.company_id == company_id,
-            Transaction.date >= period_start,
-            Transaction.date <= period_end,
-        )
-    ).all()
 
-    purchases = [t for t in txns if t.transaction_type == "purchase"]
-    sales = [t for t in txns if t.transaction_type == "sale"]
+# ── ESR (also mounted via esr_filing router) ──────────────────────────────────
 
-    unclassified = [t for t in txns if not (t.vat_treatment or "").strip()]
-    low_confidence = [
-        t for t in txns
-        if t.confidence_score is not None and t.confidence_score < 70
-    ]
-    unverified = [t for t in txns if not t.is_verified]
-    missing_party = [t for t in txns if not (t.vendor_or_customer or "").strip()]
+@router.get("/esr/status")
+def gulftax_esr_status():
+    from app.modules.gulftax.esr_filing import esr_status
 
-    inv_nums: dict[str, int] = {}
-    for t in purchases:
-        num = (t.invoice_number or "").strip().lower()
-        if num:
-            inv_nums[num] = inv_nums.get(num, 0) + 1
-    duplicate_invoices = sum(1 for c in inv_nums.values() if c > 1)
+    return esr_status()
 
-    std_sales = [t for t in sales if t.vat_treatment == "standard_rated"]
-    std_purch = [t for t in purchases if t.vat_treatment == "standard_rated"]
-    box2 = round(sum(t.vat_amount_aed or 0 for t in std_sales), 2)
-    box7 = round(sum(t.vat_amount_aed or 0 for t in std_purch), 2)
-    box8 = round(box2 - box7, 2)
 
-    vat_return = (
-        db.query(VATReturn)
-        .filter(
-            VATReturn.company_id == company_id,
-            VATReturn.period_start <= period_end,
-            VATReturn.period_end >= period_start,
-        )
-        .order_by(VATReturn.created_at.desc())
-        .first()
+@router.post("/esr/calculate")
+def gulftax_esr_calculate(
+    body: dict[str, Any],
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
+
+    try:
+        req = ESRCalculateRequest(**body)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return esr_calculate(req, tenant_id=tenant_id, company_id=company_id, db=db)
+
+
+# ── Designated Zones log ──────────────────────────────────────────────────────
+
+class DesignatedZoneLogIn(BaseModel):
+    transaction_type: str
+    supplier_location: str
+    customer_location: str
+    vat_treatment: str
+    vat_rate: float = 0
+    supplier_zone: Optional[str] = None
+    supplier_zone_name: Optional[str] = None
+    customer_zone: Optional[str] = None
+    customer_zone_name: Optional[str] = None
+    explanation: Optional[str] = None
+    warning: Optional[str] = None
+    company_id: Optional[str] = None
+
+
+@router.post("/designated-zones/log", status_code=201)
+def gulftax_designated_zones_log(
+    body: DesignatedZoneLogIn,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    """Log a designated-zone VAT evaluation to designated_zone_transactions."""
+    from app.api.routes.vat_advanced_rds import DesignatedZoneIn, save_dz
+
+    zone = body.supplier_zone or body.supplier_zone_name
+    cust_zone = body.customer_zone or body.customer_zone_name
+    tx = (body.transaction_type or "").strip()
+    tx_norm = tx.lower() if tx.lower() in ("goods", "services") else tx
+
+    explanation = body.explanation or (
+        f"{body.vat_treatment} at {body.vat_rate}% "
+        f"({tx_norm}: {body.supplier_location} → {body.customer_location})"
     )
-
-    ap_invoices = db.query(GulfInvoice).filter(GulfInvoice.company_id == company_id).all()
-    ap_missing_trn = sum(
-        1 for inv in ap_invoices
-        if inv.status in ("pending", "review", "approved")
-        and not (inv.vendor_trn or "").strip()
+    payload = DesignatedZoneIn(
+        supplier_location=body.supplier_location,
+        customer_location=body.customer_location,
+        transaction_type=tx_norm,
+        vat_treatment=body.vat_treatment,
+        vat_rate=body.vat_rate,
+        explanation=explanation,
+        warning=body.warning,
+        supplier_zone_name=zone,
+        customer_zone_name=cust_zone,
     )
-    ap_high_risk = sum(1 for inv in ap_invoices if (inv.overall_risk or "") == "escalate")
+    cid = (body.company_id or company_id or "").strip() or company_id
+    return save_dz(payload, tenant_id=tenant_id, company_id=cid, db=db)
 
-    blocked_flags = 0
-    for inv in ap_invoices:
-        for flag in (inv.risk_flags or []):
-            fid = str(flag.get("flag", "")).lower()
-            if "blocked" in fid or "entertainment" in fid:
-                blocked_flags += 1
 
-    items: list[dict] = []
+# ── Bad Debt claim (duplicate by invoice + company) ───────────────────────────
 
-    items.append(_checklist_item(
-        "trn_registered",
-        "Registration",
-        "Valid 15-digit TRN on file",
-        "FTA requires a valid Tax Registration Number for all VAT-registered entities.",
-        "pass" if trn_valid else "fail",
-        "high" if not trn_valid else "low",
-        f"TRN: {trn or 'Not set'}" + (" — valid format" if trn_valid else " — invalid or missing"),
-    ))
+class BadDebtClaimIn(BaseModel):
+    invoice_number: str
+    invoice_date: str
+    due_date: str
+    invoice_amount: float
+    vat_amount: float
+    status: Optional[str] = "draft"
+    eligible: bool = False
+    eligibility_reason: Optional[str] = None
+    company_id: Optional[str] = None
+    extra: Optional[dict[str, Any]] = None
+    vat_return_period: Optional[str] = None
+    written_off_date: Optional[str] = None
+    recovery_steps: Optional[str] = None
+    connected_party: Optional[bool] = None
+    claim_period: Optional[str] = None
 
-    items.append(_checklist_item(
-        "transactions_loaded",
-        "Data completeness",
-        "Transactions recorded for period",
-        "VAT Classifier should contain all sales and purchase transactions for the audit period.",
-        "pass" if len(txns) > 0 else "fail",
-        "high" if len(txns) == 0 else "low",
-        f"{len(txns)} transaction(s) in {period_start} → {period_end}",
-        len(txns),
-    ))
 
-    items.append(_checklist_item(
-        "vat_treatment_classified",
-        "Classification",
-        "All transactions VAT-classified",
-        "Every transaction must have a VAT treatment (standard, zero, exempt, reverse charge, out of scope).",
-        "pass" if len(unclassified) == 0 else ("warning" if len(unclassified) <= 3 else "fail"),
-        "high" if len(unclassified) > 3 else ("medium" if unclassified else "low"),
-        f"{len(unclassified)} unclassified transaction(s)",
-        len(unclassified),
-    ))
+@router.post("/bad-debt/claim", status_code=201)
+def gulftax_bad_debt_claim(
+    body: BadDebtClaimIn,
+    tenant_id: str = Depends(get_tenant_id),
+    company_id: str = Depends(get_company_id),
+    db: Session = Depends(get_db),
+):
+    """Save a bad debt claim — rejects duplicate invoice_number + company_id."""
+    from datetime import date as date_cls
+    from datetime import datetime
+    from uuid import uuid4
 
-    items.append(_checklist_item(
-        "ai_confidence_review",
-        "Classification",
-        "Low-confidence items reviewed",
-        "Transactions with AI confidence below 70% should be manually verified before filing.",
-        "pass" if len(low_confidence) == 0 else "warning",
-        "medium" if low_confidence else "low",
-        f"{len(low_confidence)} transaction(s) below 70% confidence",
-        len(low_confidence),
-    ))
+    from app.api.routes.vat_advanced_rds import _sb_insert, _sb_list
+    from app.core.tenant import assert_write_allowed
+    from app.models.client_data import BadDebtReliefClaim
 
-    items.append(_checklist_item(
-        "manual_verification",
-        "Classification",
-        "Unverified transactions cleared",
-        "All transactions should be marked verified after review.",
-        "pass" if len(unverified) == 0 else "warning",
-        "medium" if len(unverified) > 5 else "low",
-        f"{len(unverified)} unverified transaction(s)",
-        len(unverified),
-    ))
+    assert_write_allowed()
+    cid = (body.company_id or company_id or "").strip() or company_id
+    inv = (body.invoice_number or "").strip()
+    if not inv:
+        raise HTTPException(400, "invoice_number is required")
 
-    items.append(_checklist_item(
-        "vendor_customer_present",
-        "Documentation",
-        "Vendor/customer name on all transactions",
-        "FTA Tax Audit File requires vendor or customer identification on each line.",
-        "pass" if len(missing_party) == 0 else "warning",
-        "medium" if missing_party else "low",
-        f"{len(missing_party)} transaction(s) missing vendor/customer",
-        len(missing_party),
-    ))
-
-    items.append(_checklist_item(
-        "duplicate_invoices",
-        "AP Controls",
-        "No duplicate purchase invoice numbers",
-        "Duplicate invoice numbers may indicate double-claiming of input VAT.",
-        "pass" if duplicate_invoices == 0 else "fail",
-        "high" if duplicate_invoices else "low",
-        f"{duplicate_invoices} duplicate invoice number(s) detected",
-        duplicate_invoices,
-    ))
-
-    items.append(_checklist_item(
-        "supplier_trn_ap",
-        "AP Controls",
-        "Supplier TRN on AP invoices",
-        "Input VAT recovery requires valid supplier TRN on tax invoices.",
-        "pass" if ap_missing_trn == 0 else ("warning" if ap_missing_trn <= 2 else "fail"),
-        "high" if ap_missing_trn > 2 else ("medium" if ap_missing_trn else "low"),
-        f"{ap_missing_trn} AP invoice(s) missing supplier TRN",
-        ap_missing_trn,
-    ))
-
-    items.append(_checklist_item(
-        "blocked_input_vat",
-        "AP Controls",
-        "Blocked input VAT identified",
-        "Entertainment and other blocked categories must not be claimed as input VAT.",
-        "pass" if blocked_flags == 0 else "warning",
-        "high" if blocked_flags > 0 else "low",
-        f"{blocked_flags} blocked-input-VAT flag(s) on AP invoices",
-        blocked_flags,
-    ))
-
-    items.append(_checklist_item(
-        "ap_escalations",
-        "AP Controls",
-        "High-risk AP invoices escalated",
-        "Invoices flagged escalate should be resolved before period close.",
-        "pass" if ap_high_risk == 0 else "warning",
-        "medium" if ap_high_risk else "low",
-        f"{ap_high_risk} escalated AP invoice(s)",
-        ap_high_risk,
-    ))
-
-    return_reconciled = True
-    return_detail = "No VAT return filed for this period — reconcile before submission."
-    if vat_return:
-        ret_box8 = round(float(vat_return.box8_vat_payable_or_refundable or 0), 2)
-        diff = abs(ret_box8 - box8)
-        return_reconciled = diff <= 1.0
-        return_detail = (
-            f"Computed Box 8: AED {box8:,.2f} · Return Box 8: AED {ret_box8:,.2f} · Diff: AED {diff:,.2f}"
+    try:
+        existing = (
+            db.query(BadDebtReliefClaim)
+            .filter_by(company_id=cid, invoice_number=inv)
+            .first()
         )
+        if existing:
+            raise HTTPException(409, "Claim for this invoice already exists.")
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
 
-    items.append(_checklist_item(
-        "vat_return_reconciled",
-        "VAT Return",
-        "Box 8 reconciles to transaction data",
-        "Net VAT payable (Box 8) must match the sum of classified transactions.",
-        "pass" if return_reconciled else "warning",
-        "high" if not return_reconciled and vat_return else "medium",
-        return_detail,
-    ))
+    for r in _sb_list("bad_debt_relief_claims", tenant_id, 200):
+        if str(r.get("company_id") or "") == str(cid) and str(r.get("invoice_number") or "").strip() == inv:
+            raise HTTPException(409, "Claim for this invoice already exists.")
 
-    items.append(_checklist_item(
-        "vat_return_filed",
-        "VAT Return",
-        "VAT return submitted for period",
-        "FTA requires timely VAT return submission for each tax period.",
-        "pass" if vat_return and (vat_return.submission_status or "") in ("submitted", "filed") else "warning",
-        "medium",
-        (
-            f"Return status: {(vat_return.submission_status if vat_return else 'not found')}"
-            if vat_return
-            else "No return record — create and file in VAT Return module"
-        ),
-    ))
+    extra = dict(body.extra or {})
+    if body.vat_return_period:
+        extra["vat_return_period"] = body.vat_return_period
+    if body.written_off_date:
+        extra["written_off_date"] = body.written_off_date
+    if body.recovery_steps is not None:
+        extra["recovery_steps"] = body.recovery_steps
+    if body.connected_party is not None:
+        extra["connected_party"] = body.connected_party
+    if body.claim_period:
+        extra["claim_period"] = body.claim_period
 
-    summary = {"pass": 0, "warning": 0, "fail": 0}
-    for item in items:
-        summary[item["status"]] = summary.get(item["status"], 0) + 1
+    inv_date = date_cls.fromisoformat(body.invoice_date[:10])
+    due = date_cls.fromisoformat(body.due_date[:10])
+    claim_period = extra.get("claim_period")
+    status_val = body.status or ("eligible" if body.eligible else "ineligible")
 
-    scorable = [i for i in items if i["status"] != "na"]
-    pass_count = sum(1 for i in scorable if i["status"] == "pass")
-    overall_score = round((pass_count / len(scorable)) * 100) if scorable else 0
+    try:
+        row = BadDebtReliefClaim(
+            tenant_id=tenant_id,
+            company_id=cid,
+            invoice_number=inv,
+            invoice_date=inv_date,
+            due_date=due,
+            invoice_amount=body.invoice_amount,
+            vat_amount=body.vat_amount,
+            status=status_val,
+            eligible=body.eligible,
+            eligibility_reason=body.eligibility_reason,
+            claim_period=claim_period,
+            extra=extra,
+            created_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {
+            "id": row.id,
+            "invoice_number": row.invoice_number,
+            "invoice_date": row.invoice_date.isoformat(),
+            "due_date": row.due_date.isoformat(),
+            "invoice_amount": float(row.invoice_amount),
+            "vat_amount": float(row.vat_amount),
+            "status": row.status,
+            "eligible": row.eligible,
+            "eligibility_reason": row.eligibility_reason,
+            "claim_period": row.claim_period,
+            "extra": row.extra,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
 
-    fail_high = sum(1 for i in items if i["status"] == "fail" and i["risk_level"] == "high")
-    warn_count = summary.get("warning", 0)
-    if fail_high > 0:
-        overall_risk = "high"
-    elif warn_count >= 3 or summary.get("fail", 0) > 0:
-        overall_risk = "medium"
-    else:
-        overall_risk = "low"
-
+    sb_row = _sb_insert(
+        "bad_debt_relief_claims",
+        {
+            "id": str(uuid4()),
+            "workspace_id": tenant_id,
+            "company_id": cid,
+            "invoice_number": inv,
+            "invoice_date": inv_date.isoformat(),
+            "due_date": due.isoformat(),
+            "invoice_amount": body.invoice_amount,
+            "vat_amount": body.vat_amount,
+            "vat_return_period": extra.get("vat_return_period"),
+            "written_off_date": extra.get("written_off_date"),
+            "recovery_steps": extra.get("recovery_steps"),
+            "connected_party": bool(extra.get("connected_party")),
+            "eligible": body.eligible,
+            "eligibility_reason": body.eligibility_reason,
+            "claim_period": claim_period,
+            "status": status_val,
+        },
+    )
     return {
-        "company_name": company.name if company else "Unknown",
-        "trn": trn or None,
-        "period_start": period_start.isoformat(),
-        "period_end": period_end.isoformat(),
-        "generated_at": datetime.utcnow().isoformat(),
-        "overall_score_pct": overall_score,
-        "overall_risk": overall_risk,
-        "summary": summary,
-        "transaction_count": len(txns),
-        "items": items,
+        "id": sb_row.get("id"),
+        "invoice_number": sb_row.get("invoice_number"),
+        "invoice_date": sb_row.get("invoice_date"),
+        "due_date": sb_row.get("due_date"),
+        "invoice_amount": float(sb_row.get("invoice_amount") or 0),
+        "vat_amount": float(sb_row.get("vat_amount") or 0),
+        "status": sb_row.get("status"),
+        "eligible": bool(sb_row.get("eligible")),
+        "eligibility_reason": sb_row.get("eligibility_reason"),
+        "claim_period": sb_row.get("claim_period"),
+        "extra": extra,
+        "created_at": sb_row.get("created_at"),
     }

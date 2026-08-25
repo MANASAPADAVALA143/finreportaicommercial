@@ -388,6 +388,12 @@ This project is proprietary software. All rights reserved.
 - **Issues**: GitHub Issues
 - **Email**: support@finreportai.com
 
+### AWS SES email intake IAM
+
+Attach `deploy/iam/ses-s3-policy.json` to your IAM user (or EC2 instance role)
+for email intake to work (`finreportai-email-intake` S3 + optional SES send).
+Intake address: `invoices@finreportai.com`.
+
 ## 🎯 Roadmap
 
 - [ ] Multi-currency support

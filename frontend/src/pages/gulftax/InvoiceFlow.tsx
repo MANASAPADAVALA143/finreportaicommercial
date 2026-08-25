@@ -2,6 +2,10 @@
 
 import { useRef, useState } from "react";
 import { apiClient } from '../../services/gulfTaxClient';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
+import { getActiveCompanyId } from '../../context/CompanyContext';
+import { getStoredAccessToken } from '../../utils/authToken';
+import { supabase } from '../../lib/supabase';
 import { Link } from 'react-router-dom';
 
 type Stage = "idle" | "uploading" | "extracting" | "classifying" | "done" | "error";
@@ -66,6 +70,8 @@ export default function InvoiceFlowPage() {
   const [results, setResults] = useState<ProcessedInvoice[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [einvoiceLoading, setEinvoiceLoading] = useState<number | null>(null);
+  const [einvoiceMsg, setEinvoiceMsg] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false); // prevents double-submit race condition
 
@@ -82,6 +88,59 @@ export default function InvoiceFlowPage() {
   const removeFile = (idx: number) =>
     setFiles((prev) => prev.filter((_, i) => i !== idx));
 
+  const extractInvoiceFile = async (file: File) => {
+    // Native fetch + FormData — never set Content-Type (browser adds boundary).
+    const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") || "";
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    const headers: Record<string, string> = {};
+    const ws =
+      localStorage.getItem("active_workspace_id") ||
+      getStoredWorkspaceId() ||
+      localStorage.getItem("tenantId") ||
+      "";
+    const cid = getActiveCompanyId() || localStorage.getItem("gulftax_company_id") || "";
+    if (ws) headers["X-Workspace-Id"] = ws;
+    if (cid) headers["X-Company-Id"] = cid;
+
+    let token = getStoredAccessToken();
+    if (!token) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        token = data.session?.access_token ?? null;
+      } catch {
+        token = null;
+      }
+    }
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(`${API}/api/invoice/extract`, {
+      method: "POST",
+      headers,
+      body: form,
+      credentials: "include",
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const err = await res.json();
+        detail =
+          typeof err.detail === "string"
+            ? err.detail
+            : Array.isArray(err.detail)
+              ? err.detail.map((d: { msg?: string }) => d.msg).join(", ")
+              : JSON.stringify(err.detail ?? err);
+      } catch {
+        /* ignore */
+      }
+      throw Object.assign(new Error(detail || `Extract failed (${res.status})`), {
+        response: { data: { detail }, status: res.status },
+      });
+    }
+    return { data: await res.json() };
+  };
+
   const handleProcess = async () => {
     if (!files.length) return;
     // Prevent double-submission (ref is synchronous, unlike state)
@@ -97,12 +156,7 @@ export default function InvoiceFlowPage() {
       try {
         // Step 1: Extract
         setStage("extracting");
-        const form = new FormData();
-        form.append("file", file);
-        const extractRes = await apiClient.post("/api/invoice/extract", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-          timeout: 60_000,
-        });
+        const extractRes = await extractInvoiceFile(file);
         const { invoice_id, extracted } = extractRes.data;
 
         // Step 2: Classify + risk
@@ -147,6 +201,33 @@ export default function InvoiceFlowPage() {
     setResults(processed);
     setStage("done");
     processingRef.current = false;
+  };
+
+  const handleGenerateEinvoice = async (invoiceId: number) => {
+    if (!invoiceId || einvoiceLoading === invoiceId) return;
+    setEinvoiceLoading(invoiceId);
+    setEinvoiceMsg((prev) => {
+      const next = { ...prev };
+      delete next[invoiceId];
+      return next;
+    });
+    try {
+      const res = await apiClient.post(`/api/invoice/${invoiceId}/generate-einvoice`);
+      const sid = res.data?.submission_id;
+      setEinvoiceMsg((prev) => ({
+        ...prev,
+        [invoiceId]: sid
+          ? `Structured vendor invoice record saved (internal archive · ref ${String(sid).slice(0, 8)}…)`
+          : "Structured vendor invoice record saved (internal archive — not for ASP submission)",
+      }));
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "Failed to generate e-invoice";
+      setEinvoiceMsg((prev) => ({ ...prev, [invoiceId]: String(msg) }));
+    } finally {
+      setEinvoiceLoading(null);
+    }
   };
 
   const STAGES = ["uploading", "extracting", "classifying", "done"];
@@ -346,13 +427,30 @@ export default function InvoiceFlowPage() {
                       <p className="text-[11px] text-muted2 mt-0.5">Risk score {inv.risk_score}/100 — below threshold · no human review needed</p>
                     </div>
                   </div>
-                  <Link
-                    href="/dashboard/vat-classifier"
-                    className="text-[12px] text-gold-lt hover:underline font-medium flex-shrink-0"
-                  >
-                    View in VAT Classifier →
-                  </Link>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {inv.invoice_id > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateEinvoice(inv.invoice_id)}
+                        disabled={einvoiceLoading === inv.invoice_id}
+                        className="px-3 py-1.5 rounded-[8px] text-[12px] font-medium border border-border-g text-gold-lt bg-gold-pale hover:opacity-90 transition disabled:opacity-50"
+                      >
+                        {einvoiceLoading === inv.invoice_id ? "Saving…" : "Generate Structured Invoice Record"}
+                      </button>
+                    )}
+                    <Link
+                      href="/dashboard/vat-classifier"
+                      className="text-[12px] text-gold-lt hover:underline font-medium"
+                    >
+                      View in VAT Classifier →
+                    </Link>
+                  </div>
                 </div>
+              )}
+              {inv.invoice_id > 0 && einvoiceMsg[inv.invoice_id] && (
+                <p className={`text-[11px] ${einvoiceMsg[inv.invoice_id].includes("saved") ? "text-green" : "text-red"}`}>
+                  {einvoiceMsg[inv.invoice_id]}
+                </p>
               )}
 
               {inv.invoice_id > 0 && (

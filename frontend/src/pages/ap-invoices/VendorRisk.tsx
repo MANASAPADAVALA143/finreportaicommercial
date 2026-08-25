@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatCurrency } from '@/utils/currency';
+import { useDisplayCurrency } from '@/hooks/useDisplayCurrency';
 import { cn } from '@/lib/ap-invoice/utils';
 import { AlertTriangle, Shield } from 'lucide-react';
 import { VendorRiskDetailDialog } from '@/components/vendors/VendorRiskDetailDialog';
@@ -42,6 +42,7 @@ function riskGauge(score: number): string {
 }
 
 export function VendorRisk() {
+  const { fmt } = useDisplayCurrency();
   const [detailVendor, setDetailVendor] = useState<Vendor | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -77,11 +78,15 @@ export function VendorRisk() {
     return m;
   }, [bgs]);
 
-  const filtered = vendors.filter((v) => {
-    if (riskFilter !== 'all' && (v.risk_level ?? 'low') !== riskFilter) return false;
-    if (search && !v.name.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  const filtered = vendors
+    .filter((v) => {
+      if (riskFilter !== 'all' && (v.risk_level ?? 'low') !== riskFilter) return false;
+      if (search && !v.name.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    })
+    .sort(
+      (a, b) => Number(b.total_invoices_amount ?? 0) - Number(a.total_invoices_amount ?? 0),
+    );
 
   const attention = filtered.filter((v) => ['critical', 'high'].includes(v.risk_level ?? 'low'));
 
@@ -157,7 +162,7 @@ export function VendorRisk() {
               </TableHeader>
               <TableBody>
                 {filtered.map((v) => {
-                  const score = Math.round(Number(v.risk_score ?? 0));
+                  const score = Math.round(Number(v.risk_score ?? 25));
                   const flags = (v.risk_flags ?? []) as string[];
                   return (
                     <TableRow key={v.id} className="border-slate-700 hover:bg-slate-800/40">
@@ -172,7 +177,7 @@ export function VendorRisk() {
                       </TableCell>
                       <TableCell className="text-slate-400 text-sm">{flags.length || '—'}</TableCell>
                       <TableCell className="text-right text-slate-200">
-                        {formatCurrency(Number(v.total_invoices_amount ?? 0), 'AED')}
+                        {fmt(Number(v.total_invoices_amount ?? 0))}
                       </TableCell>
                       <TableCell className="text-slate-400">{v.last_invoice_date ?? '—'}</TableCell>
                       <TableCell>
@@ -184,7 +189,7 @@ export function VendorRisk() {
                               : 'border-amber-700 text-amber-400'
                           }
                         >
-                          {v.bank_verification_status ?? 'unknown'}
+                          {v.bank_verification_status?.trim() || 'unknown'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-slate-300">
@@ -200,7 +205,7 @@ export function VendorRisk() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="border-slate-600 text-slate-200"
+                          className="border-slate-500 bg-slate-800 text-white hover:bg-slate-700 hover:text-white"
                           onClick={() => {
                             setDetailVendor(v);
                             setDetailOpen(true);

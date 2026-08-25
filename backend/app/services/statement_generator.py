@@ -132,34 +132,62 @@ STATEMENT_STRUCTURE: dict[str, dict[str, Any]] = {
             ("Profit for the period", 1),
             ("Adjustments for depreciation", 2),
             ("Adjustments for amortisation", 3),
-            ("Changes in trade receivables", 4),
-            ("Changes in inventories", 5),
-            ("Changes in trade payables", 6),
-            ("Income tax paid", 7),
-            ("NET CASH FROM OPERATING", 8, True),
+            ("Adjustments for IFRS 16 depreciation", 4),
+            ("Adjustments for IFRS 16 interest", 5),
+            ("Adjustments for IFRS 9 impairment", 6),
+            ("Changes in trade receivables", 7),
+            ("Changes in inventories", 8),
+            ("Changes in trade payables", 9),
+            ("Changes in contract assets", 10),
+            ("Changes in deferred revenue", 11),
+            ("Income tax paid", 12),
+            ("NET CASH FROM OPERATING", 13, True),
         ],
         "Investing Activities": [
-            ("Purchase of property plant equipment", 9),
-            ("Purchase of intangible assets", 10),
-            ("NET CASH FROM INVESTING", 11, True),
+            ("Purchase of property plant equipment", 14),
+            ("Proceeds from disposal of PPE", 15),
+            ("Purchase of intangible assets", 16),
+            ("NET CASH FROM INVESTING", 17, True),
         ],
         "Financing Activities": [
-            ("Proceeds from borrowings", 12),
-            ("Repayment of lease liabilities", 13),
-            ("Dividends paid", 14),
-            ("NET CASH FROM FINANCING", 15, True),
+            ("Proceeds from borrowings", 18),
+            ("Repayment of borrowings", 19),
+            ("Repayment of lease liabilities", 20),
+            ("Dividends paid", 21),
+            ("NET CASH FROM FINANCING", 22, True),
         ],
-        "NET INCREASE IN CASH": (16, True),
+        "Cash reconciliation": [
+            ("Opening cash and cash equivalents", 23),
+            ("Net increase/(decrease) in cash", 24),
+            ("Closing cash and cash equivalents", 25),
+            ("Balance sheet cash and cash equivalents", 26),
+            ("Cash reconciling difference", 27),
+        ],
+        "NET INCREASE IN CASH": (28, True),
     },
     "equity": {
-        "Equity Components": [
+        "Share capital": [
             ("Share capital - opening", 1),
             ("Share capital - closing", 2),
-            ("Retained earnings - opening", 3),
-            ("Profit for the period", 4),
-            ("Dividends", 5),
-            ("Retained earnings - closing", 6),
-            ("TOTAL EQUITY", 7, True),
+        ],
+        "Share premium": [
+            ("Share premium - opening", 3),
+            ("Share premium - closing", 4),
+        ],
+        "Retained earnings": [
+            ("Retained earnings - opening", 5),
+            ("Profit for the period", 6),
+            ("Dividends", 7),
+            ("Retained earnings - closing", 8),
+        ],
+        "OCI reserve": [
+            ("OCI reserve - opening", 9),
+            ("OCI for the period", 10),
+            ("OCI reserve - closing", 11),
+        ],
+        "Total": [
+            ("TOTAL EQUITY - opening", 12),
+            ("TOTAL EQUITY", 13),
         ],
     },
 }
@@ -317,10 +345,468 @@ def _derived_amount(
     return Decimal("0.00")
 
 
-def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any]:
+_PRIOR_COL_READY = False
+
+
+def ensure_prior_tb_column(db: Session) -> None:
+    """Additive schema patch — prior_trial_balance_id on trial_balances."""
+    global _PRIOR_COL_READY
+    if _PRIOR_COL_READY:
+        return
+    from sqlalchemy import inspect, text
+
+    bind = db.get_bind()
+    try:
+        cols = {c["name"] for c in inspect(bind).get_columns("trial_balances")}
+        if "prior_trial_balance_id" in cols:
+            _PRIOR_COL_READY = True
+            return
+    except Exception:
+        pass
+    try:
+        dialect = getattr(bind.dialect, "name", "")
+        if dialect == "sqlite":
+            db.execute(text("ALTER TABLE trial_balances ADD COLUMN prior_trial_balance_id INTEGER"))
+        else:
+            db.execute(text("ALTER TABLE trial_balances ADD COLUMN IF NOT EXISTS prior_trial_balance_id INTEGER"))
+        db.commit()
+        _PRIOR_COL_READY = True
+    except Exception:
+        db.rollback()
+        logger.exception("Could not add trial_balances.prior_trial_balance_id")
+
+
+def _pres_asset(v: Any) -> Decimal:
+    return _to_decimal(v)
+
+
+def _pres_credit_normal(v: Any) -> Decimal:
+    d = _to_decimal(v)
+    return -d if d < 0 else d
+
+
+def _amt(totals: dict[str, Decimal], *names: str) -> Decimal:
+    for n in names:
+        v = _lookup_line_total(totals, n)
+        if v != 0:
+            return v
+    return Decimal("0.00")
+
+
+def _map_tb_to_ifrs_totals(trial_balance_id: int, db: Session, mappings: list[GLMapping] | None = None) -> dict[str, Decimal]:
+    """Roll TB lines into IFRS line items using current-period mappings (match prior by gl_code)."""
+    if mappings is None:
+        raw = (
+            db.query(GLMapping)
+            .filter(GLMapping.trial_balance_id == trial_balance_id)
+            .order_by(GLMapping.trial_balance_line_id, GLMapping.id.desc())
+            .all()
+        )
+        seen: set[int] = set()
+        mappings = []
+        for m in raw:
+            if m.trial_balance_line_id in seen:
+                continue
+            seen.add(m.trial_balance_line_id)
+            mappings.append(m)
+    lines = (
+        db.query(TrialBalanceLine)
+        .filter(TrialBalanceLine.trial_balance_id == trial_balance_id)
+        .all()
+    )
+    by_code = {ln.gl_code: _to_decimal(ln.net_amount or 0) for ln in lines}
+    totals: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    for m in mappings:
+        totals[m.ifrs_line_item] += by_code.get(m.gl_code, Decimal("0.00"))
+    return dict(totals)
+
+
+def check_balance(financial_position: dict[str, Any]) -> dict[str, Any]:
+    """Honest IAS 1 check — never plug equity or inflate TLE."""
+    total_assets = float(financial_position.get("total_assets") or 0)
+    total_liabilities = float(financial_position.get("total_liabilities") or 0)
+    total_equity = float(financial_position.get("total_equity") or 0)
+    total_liab_equity = total_liabilities + total_equity
+    difference = abs(total_assets - total_liab_equity)
+    gap_section = None
+    if difference >= 1.0:
+        if abs(total_assets) < 0.005:
+            gap_section = "Assets appear empty — check GL mapping to financial position"
+        elif abs(total_equity) < 0.005:
+            gap_section = "Equity section"
+        elif abs(total_liabilities) < 0.005 and difference > 1:
+            gap_section = "Liabilities or equity mapping"
+        else:
+            gap_section = "Assets vs liabilities + equity"
+    return {
+        "balanced": difference < 1.0,
+        "difference": round(difference, 2),
+        "total_assets": round(total_assets, 2),
+        "total_liabilities": round(total_liabilities, 2),
+        "total_equity": round(total_equity, 2),
+        "total_liabilities_and_equity": round(total_liab_equity, 2),
+        "gap_section": gap_section,
+    }
+
+
+def integrity_from_grouped_statements(grouped: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild badges from persisted statement line items (refresh-safe)."""
+
+    def _exact(stmt_key: str, name: str) -> float:
+        block = grouped.get(stmt_key) or {}
+        items = block.get("line_items") or block or []
+        if isinstance(items, dict):
+            items = items.get("line_items") or []
+        for li in items:
+            label = li.get("ifrs_line_item") or li.get("line_item") or ""
+            if label == name:
+                return float(li.get("amount") or 0)
+        return 0.0
+
+    fp = {
+        "total_assets": _exact("financial_position", "TOTAL ASSETS"),
+        "total_liabilities": _exact("financial_position", "TOTAL LIABILITIES"),
+        "total_equity": _exact("financial_position", "TOTAL EQUITY"),
+    }
+    # TOTAL EQUITY on FP is a section subtotal name; fall back to equity statement.
+    if abs(fp["total_equity"]) < 0.005:
+        fp["total_equity"] = _exact("equity", "TOTAL EQUITY")
+    closing_cf = _exact("cash_flows", "Closing cash and cash equivalents")
+    bs_cash = _exact("cash_flows", "Balance sheet cash and cash equivalents") or _exact(
+        "financial_position", "Cash and cash equivalents"
+    )
+    cash_diff = abs(closing_cf - bs_cash)
+    soce_eq = _exact("equity", "TOTAL EQUITY")
+    eq_diff = abs(soce_eq - fp["total_equity"])
+    return {
+        "balance_check": check_balance(fp),
+        "cash_flow_reconciliation": {
+            "closing_cash": closing_cf,
+            "balance_sheet_cash": bs_cash,
+            "difference": round(cash_diff, 2),
+            "ties": cash_diff < 1.0,
+            "opening_cash": _exact("cash_flows", "Opening cash and cash equivalents"),
+            "net_movement": _exact("cash_flows", "NET INCREASE IN CASH")
+            or _exact("cash_flows", "Net increase/(decrease) in cash"),
+        },
+        "soce_check": {
+            "closing_equity": soce_eq,
+            "balance_sheet_equity": fp["total_equity"],
+            "difference": round(eq_diff, 2),
+            "ties": eq_diff < 1.0,
+        },
+    }
+
+
+def generate_cash_flow_statement(
+    tb_lines: dict[str, Decimal],
+    prior_period_tb_lines: dict[str, Decimal] | None,
+    ifrs16_adjustments: list[dict[str, Any]] | None,
+    company_id: str,
+    period: str,
+    db: Session,
+    *,
+    profit_for_period: Decimal | None = None,
+    has_prior: bool = False,
+) -> dict[str, Decimal]:
+    """IAS 7 indirect method. Amounts are presentation-signed (cash in +, cash out −)."""
+    del company_id, db  # signature stability for callers / tests
+    cur = tb_lines or {}
+    prior = prior_period_tb_lines or {}
+    adj = ifrs16_adjustments or []
+
+    def _adj_amount(*needles: str) -> Decimal:
+        total = Decimal("0.00")
+        for row in adj:
+            blob = " ".join(
+                str(row.get(k) or "")
+                for k in ("gl_code", "ifrs_line_item", "module", "gl_description")
+            ).lower()
+            if any(n.lower() in blob for n in needles):
+                total += abs(_to_decimal(row.get("net_amount") or 0))
+        return total
+
+    dep_ppe = abs(_amt(cur, "Depreciation — PPE"))
+    dep_rou = abs(_amt(cur, "Depreciation — right-of-use assets"))
+    amort = abs(_amt(cur, "Amortisation of intangibles"))
+    ifrs16_dep = _adj_amount("IFRS16-DEP", "Depreciation — right-of-use") or dep_rou
+    ifrs16_int = _adj_amount("IFRS16-INT", "interest on leases") or abs(
+        _amt(cur, "Finance costs — interest on leases")
+    )
+    ifrs9_imp = _adj_amount("IFRS9-IMP", "Expected credit loss") or abs(
+        _amt(cur, "Expected credit loss charge")
+    )
+    lease_pay = _adj_amount("IFRS16-PAY", "Repayment of lease")
+    if lease_pay == 0:
+        lease_pay = abs(_amt(cur, "Repayment of lease liabilities"))
+
+    ar = _pres_asset(_amt(cur, "Trade and other receivables (gross)", "Trade receivables"))
+    inv = _pres_asset(_amt(cur, "Inventories"))
+    ap = _pres_credit_normal(_amt(cur, "Trade and other payables", "Trade payables"))
+    ca = _pres_asset(_amt(cur, "Contract assets"))
+    dr = _pres_credit_normal(_amt(cur, "Contract liabilities"))
+    tax_pay = _pres_credit_normal(_amt(cur, "Income tax payable"))
+    cash = _pres_asset(_amt(cur, "Cash and cash equivalents"))
+    ppe = _pres_asset(_amt(cur, "Property plant and equipment (gross)", "Property plant and equipment"))
+    intang = _pres_asset(_amt(cur, "Other intangible assets", "Intangible assets"))
+    borrow = _pres_credit_normal(
+        _amt(cur, "Borrowings — current") + _amt(cur, "Borrowings — non-current")
+    )
+    tax_exp = abs(
+        _amt(cur, "Income tax expense — current")
+        + _amt(cur, "Income tax expense — deferred")
+        + _amt(cur, "Income tax expense")
+    )
+    dividends = abs(_amt(cur, "Dividends", "Dividends paid"))
+
+    if has_prior:
+        ar_p = _pres_asset(_amt(prior, "Trade and other receivables (gross)", "Trade receivables"))
+        inv_p = _pres_asset(_amt(prior, "Inventories"))
+        ap_p = _pres_credit_normal(_amt(prior, "Trade and other payables", "Trade payables"))
+        ca_p = _pres_asset(_amt(prior, "Contract assets"))
+        dr_p = _pres_credit_normal(_amt(prior, "Contract liabilities"))
+        tax_p = _pres_credit_normal(_amt(prior, "Income tax payable"))
+        cash_p = _pres_asset(_amt(prior, "Cash and cash equivalents"))
+        ppe_p = _pres_asset(_amt(prior, "Property plant and equipment (gross)", "Property plant and equipment"))
+        intang_p = _pres_asset(_amt(prior, "Other intangible assets", "Intangible assets"))
+        borrow_p = _pres_credit_normal(
+            _amt(prior, "Borrowings — current") + _amt(prior, "Borrowings — non-current")
+        )
+        ch_ar = ar_p - ar
+        ch_inv = inv_p - inv
+        ch_ap = ap - ap_p
+        ch_ca = ca_p - ca
+        ch_dr = dr - dr_p
+        tax_paid = -(tax_exp - (tax_pay - tax_p))
+        ppe_add = min(Decimal("0.00"), ppe_p - ppe)
+        if ppe > ppe_p:
+            ppe_add = -(ppe - ppe_p)
+            ppe_disp = Decimal("0.00")
+        else:
+            ppe_add = Decimal("0.00")
+            ppe_disp = ppe_p - ppe
+        intang_add = -(max(Decimal("0.00"), intang - intang_p))
+        borrow_delta = borrow - borrow_p
+        proceeds_b = borrow_delta if borrow_delta > 0 else Decimal("0.00")
+        repay_b = borrow_delta if borrow_delta < 0 else Decimal("0.00")
+        opening_cash = cash_p
+    else:
+        ch_ar = ch_inv = ch_ap = ch_ca = ch_dr = Decimal("0.00")
+        tax_paid = -tax_exp
+        ppe_add = Decimal("0.00")
+        ppe_disp = Decimal("0.00")
+        intang_add = Decimal("0.00")
+        proceeds_b = Decimal("0.00")
+        repay_b = Decimal("0.00")
+        opening_cash = Decimal("0.00")
+
+    profit = profit_for_period if profit_for_period is not None else Decimal("0.00")
+    if profit < 0:
+        # Credit-normal P&L net profit arrives negative.
+        profit = -profit
+
+    dep_total = dep_ppe + (dep_rou if ifrs16_dep == 0 else Decimal("0.00"))
+    out: dict[str, Decimal] = {
+        "Profit for the period": profit,
+        "Adjustments for depreciation": dep_total,
+        "Adjustments for amortisation": amort,
+        "Adjustments for IFRS 16 depreciation": ifrs16_dep,
+        "Adjustments for IFRS 16 interest": ifrs16_int,
+        "Adjustments for IFRS 9 impairment": ifrs9_imp,
+        "Changes in trade receivables": ch_ar,
+        "Changes in inventories": ch_inv,
+        "Changes in trade payables": ch_ap,
+        "Changes in contract assets": ch_ca,
+        "Changes in deferred revenue": ch_dr,
+        "Income tax paid": tax_paid,
+        "Purchase of property plant equipment": ppe_add,
+        "Proceeds from disposal of PPE": ppe_disp,
+        "Purchase of intangible assets": intang_add,
+        "Proceeds from borrowings": proceeds_b,
+        "Repayment of borrowings": repay_b,
+        "Repayment of lease liabilities": -abs(lease_pay),
+        "Dividends paid": -abs(dividends),
+        "Opening cash and cash equivalents": opening_cash,
+        "Balance sheet cash and cash equivalents": cash,
+    }
+    operating = (
+        profit
+        + dep_total
+        + amort
+        + ifrs16_dep
+        + ifrs16_int
+        + ifrs9_imp
+        + ch_ar
+        + ch_inv
+        + ch_ap
+        + ch_ca
+        + ch_dr
+        + tax_paid
+    )
+    investing = ppe_add + ppe_disp + intang_add
+    financing = proceeds_b + repay_b - abs(lease_pay) - abs(dividends)
+    net = operating + investing + financing
+    closing = opening_cash + net
+    recon = cash - closing
+    out["NET CASH FROM OPERATING"] = operating
+    out["NET CASH FROM INVESTING"] = investing
+    out["NET CASH FROM FINANCING"] = financing
+    out["Net increase/(decrease) in cash"] = net
+    out["NET INCREASE IN CASH"] = net
+    out["Closing cash and cash equivalents"] = closing
+    out["Cash reconciling difference"] = recon if abs(recon) >= Decimal("1.00") else Decimal("0.00")
+    logger.info("IAS 7 cash flow %s profit=%s net=%s closing=%s bs_cash=%s", period, profit, net, closing, cash)
+    return out
+
+
+def generate_equity_statement(
+    tb_lines: dict[str, Decimal],
+    prior_period_tb_lines: dict[str, Decimal] | None,
+    *,
+    profit_for_period: Decimal,
+    oci_for_period: Decimal,
+    has_prior: bool,
+    prior_period_end: str | None = None,
+) -> dict[str, Decimal]:
+    """SOCE — opening from prior TB when available; never hardcode zero as if it were a fact."""
+    cur = tb_lines or {}
+    prior = prior_period_tb_lines or {}
+
+    sc_c = _pres_credit_normal(_amt(cur, "Share capital"))
+    sp_c = _pres_credit_normal(_amt(cur, "Share premium"))
+    re_c = _pres_credit_normal(_amt(cur, "Retained earnings"))
+    oci_c = _pres_credit_normal(
+        _amt(cur, "Other comprehensive income reserve")
+        + _amt(cur, "Foreign currency translation reserve")
+        + _amt(cur, "Revaluation reserve")
+    )
+    div = abs(_amt(cur, "Dividends", "Dividends paid"))
+
+    profit = profit_for_period
+    if profit < 0:
+        profit = -profit
+    oci = oci_for_period
+
+    if has_prior:
+        sc_o = _pres_credit_normal(_amt(prior, "Share capital"))
+        sp_o = _pres_credit_normal(_amt(prior, "Share premium"))
+        re_o = _pres_credit_normal(_amt(prior, "Retained earnings"))
+        oci_o = _pres_credit_normal(
+            _amt(prior, "Other comprehensive income reserve")
+            + _amt(prior, "Foreign currency translation reserve")
+            + _amt(prior, "Revaluation reserve")
+        )
+    else:
+        # Opening = closing − period movements when prior TB missing (not a silent zero).
+        sc_o = sc_c
+        sp_o = sp_c
+        re_o = re_c - profit + div
+        oci_o = oci_c - oci
+
+    re_close = re_o + profit - div
+    oci_close = oci_o + oci
+    # Prefer BS closing figures when mapped.
+    if re_c != 0:
+        re_close = re_c
+    if oci_c != 0:
+        oci_close = oci_c
+    if sc_c != 0:
+        sc_c_out = sc_c
+    else:
+        sc_c_out = sc_o
+    if sp_c != 0:
+        sp_c_out = sp_c
+    else:
+        sp_c_out = sp_o
+
+    total_open = sc_o + sp_o + re_o + oci_o
+    total_close = sc_c_out + sp_c_out + re_close + oci_close
+    _ = prior_period_end
+    return {
+        "Share capital - opening": sc_o,
+        "Share capital - closing": sc_c_out,
+        "Share premium - opening": sp_o,
+        "Share premium - closing": sp_c_out,
+        "Retained earnings - opening": re_o,
+        "Profit for the period": profit,
+        "Dividends": -div,
+        "Retained earnings - closing": re_close,
+        "OCI reserve - opening": oci_o,
+        "OCI for the period": oci,
+        "OCI reserve - closing": oci_close,
+        "TOTAL EQUITY - opening": total_open,
+        "TOTAL EQUITY": total_close,
+    }
+
+
+def inject_ifrs_module_adjustments(
+    company_id: str,
+    period: str,
+    tb_id: str,
+    db: Session,
+    *,
+    apply_ifrs16: bool = True,
+    apply_ifrs15: bool = True,
+    apply_ifrs9: bool = True,
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Before generating statements, pull IFRS 16/15/9
+    calculated balances and inject as adjustment lines
+    into trial_balance_lines so statement generator
+    picks them up automatically.
+    """
+    from app.services.ifrs_module_bridge import inject_ifrs_module_adjustments as _inject
+
+    return _inject(
+        company_id,
+        period,
+        tb_id,
+        db,
+        apply_ifrs16=apply_ifrs16,
+        apply_ifrs15=apply_ifrs15,
+        apply_ifrs9=apply_ifrs9,
+        workspace_id=workspace_id,
+    )
+
+
+def generate_all_statements(
+    trial_balance_id: int,
+    db: Session,
+    *,
+    apply_ifrs16: bool = True,
+    apply_ifrs15: bool = True,
+    apply_ifrs9: bool = True,
+    company_id: str | None = None,
+    workspace_id: str | None = None,
+    prior_trial_balance_id: int | None = None,
+) -> dict[str, Any]:
+    ensure_prior_tb_column(db)
     tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
     if not tb:
         raise ValueError("Trial balance not found")
+    linked_prior = prior_trial_balance_id or getattr(tb, "prior_trial_balance_id", None)
+
+    ifrs_adj_summary: dict[str, Any] = {
+        "applied_count": 0,
+        "message": "No IFRS module adjustments applied",
+        "adjustments": [],
+        "skipped": [],
+    }
+    try:
+        period = str(tb.period_end or tb.period_start or "")
+        ifrs_adj_summary = inject_ifrs_module_adjustments(
+            company_id or tb.tenant_id,
+            period,
+            str(trial_balance_id),
+            db,
+            apply_ifrs16=apply_ifrs16,
+            apply_ifrs15=apply_ifrs15,
+            apply_ifrs9=apply_ifrs9,
+            workspace_id=workspace_id or tb.tenant_id,
+        )
+    except Exception:
+        logger.exception("IFRS module adjustment injection failed for tb=%s", trial_balance_id)
 
     from app.services.mapping_validator import assert_ready_for_statement_generation
 
@@ -397,6 +883,27 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
 
     generated: dict[str, list[dict[str, Any]]] = {}
     fp_rollups: dict[str, Decimal] = {}
+    prior_totals: dict[str, Decimal] = {}
+    has_prior = False
+    if linked_prior:
+        try:
+            prior_totals = _map_tb_to_ifrs_totals(int(linked_prior), db, mappings)
+            has_prior = True
+        except Exception:
+            logger.exception("Prior TB %s could not be rolled into IFRS totals", linked_prior)
+            has_prior = False
+
+    cf_amounts: dict[str, Decimal] = {}
+    soce_amounts: dict[str, Decimal] = {}
+    balance_check: dict[str, Any] = {
+        "balanced": False,
+        "difference": 0,
+        "total_assets": 0,
+        "total_liabilities": 0,
+        "total_equity": 0,
+        "gap_section": None,
+    }
+    cash_flow_reconciliation: dict[str, Any] = {}
 
     for stmt_type in (
         "financial_position",
@@ -405,6 +912,57 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
         "cash_flows",
         "equity",
     ):
+        if stmt_type == "cash_flows":
+            profit = Decimal("0.00")
+            for r in generated.get("profit_loss") or []:
+                if r.get("line_item") == "PROFIT FOR THE PERIOD":
+                    profit = _to_decimal(r.get("amount") or 0)
+                    break
+            cf_amounts = generate_cash_flow_statement(
+                line_totals,
+                prior_totals if has_prior else None,
+                list(ifrs_adj_summary.get("adjustments") or []),
+                company_id or tb.tenant_id,
+                str(tb.period_end or tb.period_start or ""),
+                db,
+                profit_for_period=profit,
+                has_prior=has_prior,
+            )
+            closing_cf = float(cf_amounts.get("Closing cash and cash equivalents") or 0)
+            bs_cash = float(cf_amounts.get("Balance sheet cash and cash equivalents") or 0)
+            cash_diff = abs(closing_cf - bs_cash)
+            cash_flow_reconciliation = {
+                "has_prior_period": has_prior,
+                "opening_cash": float(cf_amounts.get("Opening cash and cash equivalents") or 0),
+                "net_movement": float(cf_amounts.get("NET INCREASE IN CASH") or 0),
+                "closing_cash": closing_cf,
+                "balance_sheet_cash": bs_cash,
+                "difference": round(cash_diff, 2),
+                "ties": cash_diff < 1.0,
+                "note": (
+                    None
+                    if has_prior
+                    else "Prior period TB not uploaded — opening balances not available"
+                ),
+            }
+        elif stmt_type == "equity":
+            profit = Decimal("0.00")
+            oci = Decimal("0.00")
+            for r in generated.get("profit_loss") or []:
+                if r.get("line_item") == "PROFIT FOR THE PERIOD":
+                    profit = _to_decimal(r.get("amount") or 0)
+            for r in generated.get("other_comprehensive_income") or []:
+                if r.get("line_item") == "TOTAL OTHER COMPREHENSIVE INCOME":
+                    oci = _to_decimal(r.get("amount") or 0)
+            soce_amounts = generate_equity_statement(
+                line_totals,
+                prior_totals if has_prior else None,
+                profit_for_period=profit,
+                oci_for_period=oci,
+                has_prior=has_prior,
+                prior_period_end=str(tb.period_end or ""),
+            )
+
         stmt = GeneratedStatement(
             tenant_id=tb.tenant_id,
             trial_balance_id=trial_balance_id,
@@ -432,6 +990,12 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
                 flagged_total = len(line_def) > 2 and bool(line_def[2])
                 if flagged_total:
                     amount = section_total
+                    if stmt_type == "financial_position" and section in (
+                        "Equity",
+                        "Non-current Liabilities",
+                        "Current Liabilities",
+                    ):
+                        amount = _pres_credit_normal(section_total)
                     li = _create_line(
                         db,
                         stmt.id,
@@ -444,9 +1008,14 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
                         indent_level=0,
                     )
                 else:
-                    amount = _lookup_line_total(line_totals, name)
-                    if amount == 0:
-                        amount = _derived_amount(stmt_type, name, line_totals, mappings)
+                    if stmt_type == "cash_flows" and name in cf_amounts:
+                        amount = cf_amounts[name]
+                    elif stmt_type == "equity" and name in soce_amounts:
+                        amount = soce_amounts[name]
+                    else:
+                        amount = _lookup_line_total(line_totals, name)
+                        if amount == 0:
+                            amount = _derived_amount(stmt_type, name, line_totals, mappings)
                     section_total += amount
                     li = _create_line(
                         db,
@@ -490,14 +1059,21 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
             total_assets = fp_rollups.get("Current Assets", Decimal("0.00")) + fp_rollups.get(
                 "Non-current Assets", Decimal("0.00")
             )
-            total_liabilities = fp_rollups.get(
-                "Current Liabilities", Decimal("0.00")
-            ) + fp_rollups.get("Non-current Liabilities", Decimal("0.00"))
-            total_equity = fp_rollups.get("Equity", Decimal("0.00"))
+            raw_liab = fp_rollups.get("Current Liabilities", Decimal("0.00")) + fp_rollups.get(
+                "Non-current Liabilities", Decimal("0.00")
+            )
+            raw_equity = fp_rollups.get("Equity", Decimal("0.00"))
+            # Presentation: credit-normal liability/equity nets are negative — flip for IAS 1 totals only.
+            total_liabilities = _pres_credit_normal(raw_liab)
+            total_equity = _pres_credit_normal(raw_equity)
             tle = total_liabilities + total_equity
-            if total_assets != tle:
-                total_equity += total_assets - tle
-                tle = total_liabilities + total_equity
+            balance_check = check_balance(
+                {
+                    "total_assets": float(total_assets),
+                    "total_liabilities": float(total_liabilities),
+                    "total_equity": float(total_equity),
+                }
+            )
 
             fp_total_lookup = {
                 "TOTAL ASSETS": total_assets,
@@ -527,7 +1103,7 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
                 )
                 order += 1
         elif stmt_type == "cash_flows":
-            net_cash = (
+            net_cash = cf_amounts.get("NET INCREASE IN CASH") or (
                 section_rollups.get("Operating Activities", Decimal("0.00"))
                 + section_rollups.get("Investing Activities", Decimal("0.00"))
                 + section_rollups.get("Financing Activities", Decimal("0.00"))
@@ -620,10 +1196,30 @@ def generate_all_statements(trial_balance_id: int, db: Session) -> dict[str, Any
             commentary_texts=ai_commentary,
         )
 
+    soce_close = float(soce_amounts.get("TOTAL EQUITY") or 0)
+    fp_equity = float(balance_check.get("total_equity") or 0)
+    soce_check = {
+        "closing_equity": soce_close,
+        "balance_sheet_equity": fp_equity,
+        "difference": round(abs(soce_close - fp_equity), 2),
+        "ties": abs(soce_close - fp_equity) < 1.0,
+        "has_prior_period": has_prior,
+        "opening_note": (
+            None
+            if has_prior
+            else "Opening as per prior TB — not uploaded"
+        ),
+    }
+
     return {
         "trial_balance_id": trial_balance_id,
         "statements": generated,
         "generated_at": datetime.utcnow().isoformat(),
+        "ifrs_module_adjustments": ifrs_adj_summary,
+        "balance_check": balance_check,
+        "cash_flow_reconciliation": cash_flow_reconciliation,
+        "soce_check": soce_check,
+        "prior_trial_balance_id": int(linked_prior) if linked_prior else None,
     }
 
 
@@ -645,6 +1241,9 @@ def build_tb_data_from_db(
     tb = db.query(TrialBalance).filter(TrialBalance.id == trial_balance_id).first()
     if not tb:
         raise ValueError("Trial balance not found")
+
+    if prior_trial_balance_id is None:
+        prior_trial_balance_id = getattr(tb, "prior_trial_balance_id", None)
 
     lines = (
         db.query(TrialBalanceLine)
@@ -820,5 +1419,12 @@ def build_tb_data_from_db(
             else:
                 out[key] = v
         out["has_comparative"] = True
+
+    try:
+        from app.services.ifrs_module_bridge import enrich_tb_data_from_ifrs_modules
+
+        out = enrich_tb_data_from_ifrs_modules(out, db, trial_balance_id)
+    except Exception:
+        logger.exception("IFRS module note enrichment failed for tb=%s", trial_balance_id)
 
     return out

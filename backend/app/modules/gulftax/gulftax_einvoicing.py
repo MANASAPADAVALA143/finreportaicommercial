@@ -1,22 +1,25 @@
-"""GulfTax E-Invoicing — Peppol PINT AE (embedded in FinReportAI)."""
+"""GulfTax E-Invoicing — unified Peppol PINT AE API."""
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.models.client_data import EinvoicingSubmission
+from app.models.company_setup import UaeCompanyProfile
+from app.services import einvoicing_service_unified as svc
 
 router = APIRouter(prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"])
 
 IntegrationStatus = Literal["not_started", "planning", "testing", "live"]
-AspSubmissionStatus = Literal["pending", "accepted", "rejected"]
-
-# In-memory ASP submission store (keyed by workspace_id or "default")
-_asp_submissions: dict[str, list[dict[str, Any]]] = {}
+AspSubmissionStatus = Literal["pending", "accepted", "rejected", "error"]
 
 
 class CalculatePhaseRequest(BaseModel):
@@ -28,13 +31,25 @@ class CalculatePhaseRequest(BaseModel):
 
 
 class ValidateInvoiceRequest(BaseModel):
-    invoice_number: str
-    supplier_trn: str = ""
-    buyer_trn: str = ""
-    net_amount: float = Field(..., ge=0)
-    vat_amount: float = Field(..., ge=0)
+    invoice_number: str = ""
     invoice_date: str = ""
+    supplier_trn: str = ""
+    seller_trn: str = ""
+    buyer_trn: str = ""
+    supplier_name: str = ""
+    vendor_name: str = ""
+    buyer_name: str = ""
+    net_amount: float = Field(default=0, ge=0)
+    vat_amount: float = Field(default=0, ge=0)
+    gross_amount: float = Field(default=0, ge=0)
+    vat_category: str = "S"
+    vat_rate: float = 5.0
+    vat_treatment: str = "standard"
+    currency: str = "AED"
     xml_content: str = ""
+    is_b2b: bool = True
+    is_credit_note: bool = False
+    document_type_code: str = "380"
     workspace_id: Optional[str] = None
 
 
@@ -48,220 +63,31 @@ class ReadinessRequest(BaseModel):
     invoices_per_month: int = Field(default=0, ge=0)
     business_type: Literal["B2B", "B2G", "B2C"] = "B2B"
     workspace_id: Optional[str] = None
+    # Honest demo checklist (Fix 5)
+    trn_recorded: bool = False
+    vat_registered: bool = True
+    has_company_profile: bool = True
+    has_einvoice_submissions_period: bool = False
 
 
 class GenerateXmlRequest(BaseModel):
     invoice_number: str
     supplier_name: str
     supplier_trn: str
+    supplier_address: str = ""
     buyer_name: str = ""
     buyer_trn: str = ""
+    buyer_address: str = ""
     net_amount: float = Field(..., gt=0)
     vat_amount: float = Field(..., ge=0)
+    gross_amount: Optional[float] = None
     currency: str = "AED"
     invoice_date: str = ""
+    vat_category: str = "S"
+    vat_rate: float = 5.0
+    is_credit_note: bool = False
+    lines: list[dict[str, Any]] = Field(default_factory=list)
     workspace_id: Optional[str] = None
-
-
-def _phase_from_revenue(revenue: float) -> tuple[int, str, str]:
-    if revenue >= 50_000_000:
-        return 1, "2026-07-01", "Phase 1 — Revenue ≥ AED 50M (mandatory Jul 2026)"
-    if revenue >= 20_000_000:
-        return 2, "2027-01-01", "Phase 2 — Revenue ≥ AED 20M (mandatory Jan 2027)"
-    return 3, "2027-07-01", "Phase 3 — All remaining businesses (Jul 2027)"
-
-
-def _compute_readiness(params: ReadinessRequest) -> Dict[str, Any]:
-    rev = params.annual_revenue_aed
-    phase, deadline, phase_label = _phase_from_revenue(rev)
-
-    score = 100
-    gaps: List[Dict[str, str]] = []
-    if not params.asp_appointed:
-        score -= 35
-        gaps.append({"level": "critical", "text": "No accredited ASP appointed"})
-    if params.invoice_format in ("PDF", "Paper", "Email"):
-        score -= 25
-        gaps.append({"level": "high", "text": "Invoice format not Peppol / PINT AE ready"})
-    if params.integration_status == "not_started":
-        score -= 15
-        gaps.append({"level": "high", "text": "ERP / ASP integration not started"})
-    if params.master_data_clean in ("NO", "PARTIAL"):
-        score -= 12
-        gaps.append({"level": "high", "text": "Master data not clean for e-invoicing"})
-    if not params.budget_confirmed:
-        score -= 8
-        gaps.append({"level": "medium", "text": "ERP upgrade budget not confirmed"})
-    if params.invoices_per_month > 500 and params.integration_status != "live":
-        score -= 5
-        gaps.append({"level": "medium", "text": "High invoice volume without live integration"})
-    if params.business_type == "B2C" and rev < 50_000_000:
-        score -= 5
-
-    score = max(0, min(100, score))
-    today = date.today()
-    asp_deadline = date(2026, 7, 31)
-    go_live = date.fromisoformat(deadline)
-    days_asp = (asp_deadline - today).days
-    days_live = (go_live - today).days
-
-    urgency = "GREEN"
-    if phase == 1 and score < 40:
-        urgency = "RED"
-    elif phase == 1 or score < 55:
-        urgency = "AMBER"
-
-    return {
-        "phase": phase,
-        "phase_label": phase_label,
-        "mandatory_from": deadline,
-        "readiness_score": score,
-        "urgency": urgency,
-        "gaps": gaps,
-        "days_to_asp_deadline": days_asp,
-        "days_to_go_live": days_live,
-        "standard": "Peppol PINT AE",
-        "penalty_exposure_aed": 60_000 if (not params.asp_appointed and rev >= 50_000_000) else 5_000,
-    }
-
-
-@router.post("/calculate-phase")
-def calculate_phase(body: CalculatePhaseRequest):
-    """UAE e-invoicing phase calculator (FTA timeline)."""
-    trn = body.trn.strip().replace(" ", "")
-    phase, deadline, label = _phase_from_revenue(body.annual_revenue_aed)
-    return {
-        "trn": trn or None,
-        "annual_revenue_aed": body.annual_revenue_aed,
-        "phase": phase,
-        "mandatory_from": deadline,
-        "phase_label": label,
-        "standard": "Peppol PINT AE",
-        "transaction_profile": body.transaction_profile,
-        "entity_type": body.entity_type,
-        "workspace_id": body.workspace_id,
-        "message": f"E-invoicing Phase {phase} from {deadline}",
-    }
-
-
-@router.post("/validate")
-def validate_invoice(body: ValidateInvoiceRequest):
-    """Validate invoice fields + optional UBL XML for Peppol PINT AE compliance."""
-    errors: List[str] = []
-    warnings: List[str] = []
-    passed: List[str] = []
-
-    trn = body.supplier_trn.strip().replace(" ", "")
-    if trn:
-        if len(trn) == 15 and trn.isdigit():
-            passed.append("Supplier TRN format valid (15 digits)")
-        else:
-            errors.append("Supplier TRN must be 15 numeric digits")
-    else:
-        warnings.append("Supplier TRN missing")
-
-    if body.net_amount <= 0:
-        errors.append("Net amount must be positive")
-    else:
-        passed.append("Net amount present")
-
-    expected_vat = round(body.net_amount * 0.05, 2)
-    if abs(body.vat_amount - expected_vat) > 0.05 and body.vat_amount > 0:
-        warnings.append(f"VAT amount {body.vat_amount} differs from expected 5% ({expected_vat})")
-    elif body.vat_amount > 0:
-        passed.append("VAT amount consistent with 5% standard rate")
-
-    if body.invoice_date:
-        passed.append("Invoice date provided")
-    else:
-        warnings.append("Invoice date missing")
-
-    xml_valid = True
-    if body.xml_content.strip():
-        required = ["Invoice", "cbc:ID", "cac:AccountingSupplierParty", "cac:TaxTotal"]
-        missing = [t for t in required if t not in body.xml_content]
-        if missing:
-            xml_valid = False
-            errors.extend([f"XML missing tag: {t}" for t in missing])
-        else:
-            passed.append("UBL 2.1 structure present")
-
-    score = max(0, min(100, 100 - len(errors) * 20 - len(warnings) * 5))
-    return {
-        "valid": len(errors) == 0,
-        "compliance_score": score,
-        "passed": passed,
-        "errors": errors,
-        "warnings": warnings,
-        "xml_valid": xml_valid,
-        "standard": "Peppol PINT AE / UBL 2.1",
-        "workspace_id": body.workspace_id,
-    }
-
-
-@router.post("/readiness")
-def readiness_assessment(body: ReadinessRequest):
-    """Full Peppol readiness score with gap analysis."""
-    result = _compute_readiness(body)
-    return {"workspace_id": body.workspace_id, **result}
-
-
-@router.post("/generate-xml")
-def generate_xml(body: GenerateXmlRequest):
-    """Generate minimal UBL 2.1 Peppol PINT AE invoice XML."""
-    inv_date = body.invoice_date or date.today().isoformat()
-    trn = body.supplier_trn.strip().replace(" ", "")
-    if not trn or len(trn) != 15 or not trn.isdigit():
-        raise HTTPException(400, "Valid 15-digit supplier TRN required for Peppol XML")
-
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
-         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
-         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
-  <cbc:ID>{body.invoice_number}</cbc:ID>
-  <cbc:IssueDate>{inv_date}</cbc:IssueDate>
-  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
-  <cbc:DocumentCurrencyCode>{body.currency}</cbc:DocumentCurrencyCode>
-  <cac:AccountingSupplierParty>
-    <cac:Party>
-      <cac:PartyName><cbc:Name>{body.supplier_name}</cbc:Name></cac:PartyName>
-      <cac:PartyTaxScheme>
-        <cbc:CompanyID>{trn}</cbc:CompanyID>
-        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-      </cac:PartyTaxScheme>
-    </cac:Party>
-  </cac:AccountingSupplierParty>
-  <cac:AccountingCustomerParty>
-    <cac:Party>
-      <cac:PartyName><cbc:Name>{body.buyer_name or 'Buyer'}</cbc:Name></cac:PartyName>
-    </cac:Party>
-  </cac:AccountingCustomerParty>
-  <cac:TaxTotal>
-    <cbc:TaxAmount currencyID="{body.currency}">{body.vat_amount:.2f}</cbc:TaxAmount>
-    <cac:TaxSubtotal>
-      <cbc:TaxableAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:TaxableAmount>
-      <cbc:TaxAmount currencyID="{body.currency}">{body.vat_amount:.2f}</cbc:TaxAmount>
-      <cac:TaxCategory>
-        <cbc:ID>S</cbc:ID>
-        <cbc:Percent>5</cbc:Percent>
-        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-      </cac:TaxCategory>
-    </cac:TaxSubtotal>
-  </cac:TaxTotal>
-  <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:LineExtensionAmount>
-    <cbc:TaxExclusiveAmount currencyID="{body.currency}">{body.net_amount:.2f}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="{body.currency}">{(body.net_amount + body.vat_amount):.2f}</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="{body.currency}">{(body.net_amount + body.vat_amount):.2f}</cbc:PayableAmount>
-  </cac:LegalMonetaryTotal>
-</Invoice>"""
-    return {
-        "invoice_number": body.invoice_number,
-        "xml_content": xml,
-        "standard": "Peppol PINT AE / UBL 2.1",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "workspace_id": body.workspace_id,
-    }
 
 
 class AspSubmitRequest(BaseModel):
@@ -273,6 +99,9 @@ class AspSubmitRequest(BaseModel):
     vat_amount: float = Field(..., ge=0)
     gross_amount: float = Field(..., ge=0)
     xml_content: str = ""
+    invoice_id: Optional[str] = None
+    submission_id: Optional[str] = None
+    company_id: Optional[str] = None
     workspace_id: Optional[str] = None
 
 
@@ -280,9 +109,10 @@ class AspInboundRequest(BaseModel):
     submission_id: str
     status: AspSubmissionStatus
     rejection_reason: str = ""
+    asp_reference: str = ""
 
 
-def _ws_key(workspace_id: Optional[str]) -> str:
+def _tenant(workspace_id: Optional[str]) -> str:
     return (workspace_id or "default").strip() or "default"
 
 
@@ -294,63 +124,561 @@ async def _trigger_asp_webhook(payload: dict[str, Any]) -> None:
         await client.post(url, json=payload)
 
 
-@router.post("/asp/submit")
-async def submit_to_asp(body: AspSubmitRequest):
-    """Submit validated invoice to ASP via n8n/webhook trigger."""
-    if body.net_amount <= 0:
-        raise HTTPException(400, "net_amount must be positive")
-    sub_id = str(uuid.uuid4())
-    ws = _ws_key(body.workspace_id)
-    record = {
-        "id": sub_id,
+def _asp_appointed_from_company(company: Any) -> bool:
+    if bool(getattr(company, "asp_appointed", False)):
+        return True
+    settings = getattr(company, "settings", None) or {}
+    return bool(str(settings.get("asp_provider") or "").strip())
+
+
+def _invoice_format_from_company(company: Any) -> str:
+    settings = getattr(company, "settings", None) or {}
+    explicit = str(settings.get("invoice_format") or "").strip()
+    if explicit:
+        return explicit
+    if str(settings.get("peppol_participant_id") or "").strip():
+        return "Peppol PINT AE"
+    return "PDF"
+
+
+def _integration_status_from_company(
+    company: Any,
+    *,
+    submission_count: int = 0,
+    accepted_count: int = 0,
+) -> IntegrationStatus:
+    settings = getattr(company, "settings", None) or {}
+    explicit = settings.get("integration_status")
+    if explicit in ("not_started", "planning", "testing", "live"):
+        return explicit  # type: ignore[return-value]
+    if accepted_count > 0:
+        return "live"
+    if submission_count > 0:
+        return "testing"
+    if str(settings.get("peppol_participant_id") or "").strip():
+        return "planning"
+    return "not_started"
+
+
+def readiness_request_from_company(
+    company: Any,
+    *,
+    submission_count: int = 0,
+    accepted_count: int = 0,
+    trn_recorded: bool = False,
+    vat_registered: bool | None = None,
+    has_company_profile: bool = True,
+    has_einvoice_submissions_period: bool = False,
+) -> ReadinessRequest:
+    settings = getattr(company, "settings", None) or {}
+    revenue = float(
+        getattr(company, "annual_revenue_aed", None)
+        or settings.get("annual_revenue_aed")
+        or 0
+    )
+    master = settings.get("master_data_clean")
+    if master not in ("YES", "PARTIAL", "NO"):
+        master = "PARTIAL"
+    trn = str(getattr(company, "trn", None) or settings.get("trn") or "").strip()
+    vat_reg = (
+        bool(vat_registered)
+        if vat_registered is not None
+        else bool(getattr(company, "vat_registered", True))
+    )
+    return ReadinessRequest(
+        annual_revenue_aed=revenue,
+        asp_appointed=_asp_appointed_from_company(company),
+        invoice_format=_invoice_format_from_company(company),
+        integration_status=_integration_status_from_company(
+            company,
+            submission_count=submission_count,
+            accepted_count=accepted_count,
+        ),
+        master_data_clean=master,
+        budget_confirmed=bool(settings.get("budget_confirmed")),
+        # Caller-supplied trn_recorded wins (profile TRN only — ignore synthetic ported TRN)
+        trn_recorded=bool(trn_recorded),
+        vat_registered=vat_reg,
+        has_company_profile=has_company_profile,
+        has_einvoice_submissions_period=has_einvoice_submissions_period
+        or submission_count > 0,
+    )
+
+
+def resolve_gulftax_company(ported_db: Session, company_id: str | None, tenant_id: str):
+    """Map FinReport company / workspace id to GulfTax companies row."""
+    try:
+        # Same import path as ported routers — avoid double-registering
+        # Company on MetaData (InvalidRequestError: Table 'companies'…).
+        from app.modules.gulftax.ported_mount import _ensure_ported_path
+
+        _ensure_ported_path()
+        from models import Company
+    except Exception:
+        return None
+
+    if company_id:
+        row = ported_db.query(Company).filter(Company.id == company_id).first()
+        if row:
+            return row
+        row = ported_db.query(Company).filter(Company.external_id == company_id).first()
+        if row:
+            return row
+
+    return (
+        ported_db.query(Company)
+        .filter(Company.workspace_id == tenant_id)
+        .order_by(Company.created_at.desc())
+        .first()
+    )
+
+
+def _einvoicing_submission_counts(
+    db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> tuple[int, int]:
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR
+
+    q = db.query(EinvoicingSubmission).filter(EinvoicingSubmission.tenant_id == tenant_id)
+    if company_id:
+        q = q.filter(EinvoicingSubmission.company_id == company_id)
+    rows = [
+        r
+        for r in q.all()
+        if (getattr(r, "record_type", None) or "outbound_ar") != RECORD_TYPE_INTERNAL_VENDOR
+    ]
+    accepted = sum(1 for r in rows if (r.submission_status or "").lower() == "accepted")
+    return len(rows), accepted
+
+
+def _einvoicing_submissions_this_quarter(
+    db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> int:
+    """Count outbound AR e-invoice submissions created in the current calendar quarter."""
+    from sqlalchemy import or_
+
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR, RECORD_TYPE_OUTBOUND_AR
+
+    today = date.today()
+    qtr = (today.month - 1) // 3 + 1
+    start_month = 3 * (qtr - 1) + 1
+    start = date(today.year, start_month, 1)
+    q = db.query(EinvoicingSubmission).filter(
+        EinvoicingSubmission.tenant_id == tenant_id,
+        EinvoicingSubmission.created_at >= datetime(start.year, start.month, start.day),
+        or_(
+            EinvoicingSubmission.record_type == RECORD_TYPE_OUTBOUND_AR,
+            EinvoicingSubmission.record_type.is_(None),
+            EinvoicingSubmission.record_type == "",
+        ),
+    )
+    # Explicitly exclude vendor-received internal archives
+    q = q.filter(
+        or_(
+            EinvoicingSubmission.record_type.is_(None),
+            EinvoicingSubmission.record_type != RECORD_TYPE_INTERNAL_VENDOR,
+        )
+    )
+    if company_id:
+        q = q.filter(EinvoicingSubmission.company_id == company_id)
+    return q.count()
+
+
+def compute_company_readiness(
+    db: Session,
+    ported_db: Session,
+    tenant_id: str,
+    company_id: str | None,
+) -> dict[str, Any]:
+    """Shared readiness path for UAE Suite dashboard and GulfTax E-Invoicing page."""
+    profile = (
+        db.query(UaeCompanyProfile)
+        .filter(UaeCompanyProfile.workspace_id == tenant_id)
+        .order_by(UaeCompanyProfile.created_at.asc())
+        .first()
+    )
+    if company_id and (
+        not profile or (profile and profile.id != company_id)
+    ):
+        by_id = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == company_id).first()
+        if by_id:
+            profile = by_id
+
+    company = resolve_gulftax_company(ported_db, company_id, tenant_id)
+
+    # Tenant-wide outbound submissions this quarter (company_id filters often miss)
+    period_subs = _einvoicing_submissions_this_quarter(db, tenant_id, None)
+    sub_count, accepted = _einvoicing_submission_counts(db, tenant_id, None)
+
+    trn_recorded = bool((getattr(profile, "trn", None) or "").strip())
+    # Do not trust ported companies.trn — auto-provision often stamps a synthetic TRN.
+    vat_registered = True
+    if company is not None and hasattr(company, "vat_registered"):
+        vat_registered = bool(company.vat_registered)
+    has_profile = profile is not None
+
+    if company:
+        params = readiness_request_from_company(
+            company,
+            submission_count=sub_count,
+            accepted_count=accepted,
+            trn_recorded=trn_recorded,
+            vat_registered=vat_registered,
+            has_company_profile=has_profile,
+            has_einvoice_submissions_period=period_subs > 0 or sub_count > 0,
+        )
+        result = _compute_readiness(params)
+        result["inputs"] = {
+            "annual_revenue_aed": params.annual_revenue_aed,
+            "asp_appointed": params.asp_appointed,
+            "trn_recorded": params.trn_recorded,
+            "vat_registered": params.vat_registered,
+            "has_company_profile": params.has_company_profile,
+            "has_einvoice_submissions_period": params.has_einvoice_submissions_period,
+            "invoice_format": params.invoice_format,
+            "integration_status": params.integration_status,
+        }
+        return result
+
+    revenue = 5_000_000.0
+    if profile:
+        revenue = float(getattr(profile, "annual_revenue_aed", None) or revenue)
+    params = ReadinessRequest(
+        annual_revenue_aed=revenue,
+        asp_appointed=False,
+        invoice_format="PDF",
+        integration_status="not_started",
+        master_data_clean="PARTIAL",
+        budget_confirmed=False,
+        trn_recorded=trn_recorded,
+        vat_registered=vat_registered,
+        has_company_profile=has_profile,
+        has_einvoice_submissions_period=period_subs > 0 or sub_count > 0,
+    )
+    result = _compute_readiness(params)
+    result["inputs"] = params.model_dump()
+    return result
+
+
+def _compute_readiness(params: ReadinessRequest) -> dict[str, Any]:
+    """Honest Fix-5 checklist score (0–100). Replaces phase-bracket stub."""
+    phase = svc.calculate_phase(params.annual_revenue_aed)
+    score = 100
+    gaps: list[dict[str, str]] = []
+
+    if not params.asp_appointed:
+        score -= 20
+        gaps.append(
+            {
+                "level": "critical",
+                "text": "ASP provider not configured — required before Oct 30 2026",
+            }
+        )
+    if not params.trn_recorded:
+        score -= 15
+        gaps.append({"level": "critical", "text": "Company TRN not recorded"})
+    if not params.has_einvoice_submissions_period:
+        score -= 10
+        gaps.append(
+            {
+                "level": "high",
+                "text": "No AR e-invoice XML generated this period",
+            }
+        )
+    if not params.vat_registered:
+        score -= 15
+        gaps.append({"level": "critical", "text": "Company not VAT-registered"})
+    if not params.has_company_profile:
+        score -= 10
+        gaps.append({"level": "high", "text": "UAE company profile not set up"})
+
+    score = max(0, min(100, score))
+    if score >= 80:
+        urgency = "GREEN"
+    elif score >= 50:
+        urgency = "AMBER"
+    else:
+        urgency = "RED"
+    return {
+        **phase,
+        "readiness_score": score,
+        "urgency": urgency,
+        "gaps": gaps,
+        "days_to_go_live": phase["days_to_mandatory"],
+        "asp_appointed": params.asp_appointed,
+    }
+
+
+@router.get("/calculate-phase")
+@router.post("/calculate-phase")
+def calculate_phase_endpoint(
+    body: CalculatePhaseRequest | None = None,
+    annual_revenue_aed: float | None = Query(None, ge=0),
+):
+    """Unified FTA phase calculator — Phase 1 mandatory Jan 2027 for ≥ AED 50M."""
+    revenue = annual_revenue_aed
+    if body:
+        revenue = body.annual_revenue_aed
+    if revenue is None:
+        raise HTTPException(400, "annual_revenue_aed required")
+    result = svc.calculate_phase(revenue)
+    if body:
+        result["trn"] = body.trn.strip() or None
+        result["transaction_profile"] = body.transaction_profile
+        result["entity_type"] = body.entity_type
+        result["workspace_id"] = body.workspace_id
+    return result
+
+
+@router.post("/validate")
+def validate_invoice(body: ValidateInvoiceRequest):
+    """Unified PINT AE validation (15+ rules)."""
+    payload = body.model_dump()
+    payload["seller_trn"] = body.seller_trn or body.supplier_trn
+    payload["supplier_name"] = body.supplier_name or body.vendor_name
+    return svc.validate_pint_ae(payload)
+
+
+@router.post("/validate-xml")
+async def validate_xml_upload(
+    file: UploadFile = File(...),
+    is_b2b: bool = Form(default=True),
+):
+    content = await file.read()
+    try:
+        xml_content = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "File must be UTF-8 encoded XML") from exc
+    return svc.validate_pint_ae({"xml_content": xml_content, "is_b2b": is_b2b})
+
+
+@router.post("/readiness")
+def readiness_assessment(body: ReadinessRequest):
+    result = _compute_readiness(body)
+    return {"workspace_id": body.workspace_id, "inputs": body.model_dump(), **result}
+
+
+def _ported_db():
+    from app.modules.gulftax.ported_mount import get_ported_db
+
+    yield from get_ported_db()
+
+
+@router.get("/readiness/company")
+def company_readiness_assessment(
+    workspace_id: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
+    x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(_ported_db),
+):
+    """Readiness from persisted GulfTax company settings (same path as UAE Suite dashboard)."""
+    tenant = (x_workspace_id or workspace_id or "demo").strip() or "demo"
+    cid = (company_id or x_company_id or "").strip() or None
+    result = compute_company_readiness(db, ported_db, tenant, cid)
+    return {"workspace_id": tenant, "company_id": cid, **result}
+
+
+@router.get("/{invoice_id}/download-xml")
+def download_stored_einvoice_xml(
+    invoice_id: str,
+    workspace_id: Optional[str] = Query(None),
+    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
+    db: Session = Depends(get_db),
+):
+    """Download stored PINT AE XML for an AR invoice (outbound only)."""
+    from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR
+
+    tenant = _tenant(x_workspace_id or workspace_id)
+    row = (
+        db.query(EinvoicingSubmission)
+        .filter(
+            EinvoicingSubmission.tenant_id == tenant,
+            EinvoicingSubmission.invoice_id == invoice_id,
+        )
+        .order_by(EinvoicingSubmission.created_at.desc())
+        .first()
+    )
+    if not row or not (row.xml_payload or "").strip():
+        row = (
+            db.query(EinvoicingSubmission)
+            .filter(EinvoicingSubmission.invoice_id == invoice_id)
+            .order_by(EinvoicingSubmission.created_at.desc())
+            .first()
+        )
+    if not row or not (row.xml_payload or "").strip():
+        raise HTTPException(404, "No e-invoice XML found for this invoice")
+    if (getattr(row, "record_type", None) or "") == RECORD_TYPE_INTERNAL_VENDOR:
+        raise HTTPException(
+            400,
+            "Vendor-received internal records cannot be downloaded as outbound e-invoices",
+        )
+    filename = f"pint-ae-{(row.invoice_number or invoice_id).replace('/', '-')}.xml"
+    return Response(
+        content=row.xml_payload,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/generate-xml")
+def generate_xml(body: GenerateXmlRequest):
+    gross = body.gross_amount if body.gross_amount is not None else round(body.net_amount + body.vat_amount, 2)
+    xml = svc.generate_pint_ae_xml({
         "invoice_number": body.invoice_number,
-        "invoice_date": body.invoice_date,
-        "seller_trn": body.seller_trn,
+        "invoice_date": body.invoice_date or date.today().isoformat(),
+        "supplier_name": body.supplier_name,
+        "supplier_address": body.supplier_address,
+        "seller_trn": body.supplier_trn,
+        "buyer_name": body.buyer_name,
+        "buyer_address": body.buyer_address,
         "buyer_trn": body.buyer_trn,
         "net_amount": body.net_amount,
         "vat_amount": body.vat_amount,
-        "gross_amount": body.gross_amount,
-        "status": "pending",
-        "rejection_reason": None,
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "workspace_id": ws,
+        "gross_amount": gross,
+        "currency": body.currency,
+        "vat_category": body.vat_category,
+        "vat_rate": body.vat_rate,
+        "is_credit_note": body.is_credit_note,
+        "lines": body.lines,
+    })
+    return {
+        "invoice_number": body.invoice_number,
+        "xml_content": xml,
+        "standard": "Peppol PINT AE / UBL 2.1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "workspace_id": body.workspace_id,
     }
-    _asp_submissions.setdefault(ws, []).insert(0, record)
+
+
+@router.post("/generate-xml/download")
+def generate_xml_download(body: GenerateXmlRequest):
+    gross = body.gross_amount if body.gross_amount is not None else round(body.net_amount + body.vat_amount, 2)
+    xml = svc.generate_pint_ae_xml({
+        "invoice_number": body.invoice_number,
+        "invoice_date": body.invoice_date or date.today().isoformat(),
+        "supplier_name": body.supplier_name,
+        "supplier_address": body.supplier_address,
+        "seller_trn": body.supplier_trn,
+        "buyer_name": body.buyer_name,
+        "buyer_trn": body.buyer_trn,
+        "net_amount": body.net_amount,
+        "vat_amount": body.vat_amount,
+        "gross_amount": gross,
+        "currency": body.currency,
+        "lines": body.lines,
+    })
+    filename = f"invoice_{body.invoice_number.replace('/', '-')}.xml"
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/asp/submit")
+async def submit_to_asp(
+    body: AspSubmitRequest,
+    db: Session = Depends(get_db),
+    ported_db: Session = Depends(_ported_db),
+):
+    if body.net_amount <= 0:
+        raise HTTPException(400, "net_amount must be positive")
+    tenant = _tenant(body.workspace_id)
+    company_id = body.company_id or tenant
+    company_trn: str | None = None
+    prof = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == company_id).first()
+    if prof and prof.trn:
+        company_trn = prof.trn
+    else:
+        gulf_co = resolve_gulftax_company(ported_db, company_id, tenant)
+        if gulf_co and getattr(gulf_co, "trn", None):
+            company_trn = gulf_co.trn
+    xml = body.xml_content
+    if not xml.strip():
+        xml = svc.generate_pint_ae_xml({
+            "invoice_number": body.invoice_number,
+            "invoice_date": body.invoice_date,
+            "seller_trn": body.seller_trn,
+            "buyer_trn": body.buyer_trn,
+            "net_amount": body.net_amount,
+            "vat_amount": body.vat_amount,
+            "gross_amount": body.gross_amount,
+        })
+    try:
+        if not body.submission_id:
+            svc.assert_outbound_asp_seller(body.seller_trn, company_trn)
+        row = svc.submit_to_asp(
+            db,
+            tenant_id=tenant,
+            company_id=company_id,
+            invoice_number=body.invoice_number,
+            xml_payload=xml,
+            invoice_id=body.invoice_id,
+            submission_id=body.submission_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    record = svc._serialize_submission(row)
     await _trigger_asp_webhook({"event": "asp_submit", "submission": record})
-    return {"submission_id": sub_id, "status": "pending", "message": "Submitted to ASP — awaiting response"}
+    return {
+        "submission_id": row.id,
+        "status": row.submission_status,
+        "message": "Submitted to ASP — awaiting response",
+    }
 
 
 @router.get("/asp/submissions")
-def list_asp_submissions(workspace_id: Optional[str] = None, limit: int = 20):
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])[:limit]
-    return {"items": rows}
+def list_asp_submissions(
+    workspace_id: Optional[str] = None,
+    company_id: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    tenant = _tenant(workspace_id)
+    items = svc.list_submissions(db, tenant, company_id=company_id, limit=limit)
+    return {"items": items}
 
 
 @router.post("/asp/{submission_id}/redrive")
-async def redrive_asp_submission(submission_id: str, workspace_id: Optional[str] = None):
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])
-    rec = next((r for r in rows if r["id"] == submission_id), None)
-    if not rec:
+async def redrive_asp_submission(
+    submission_id: str,
+    workspace_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    tenant = _tenant(workspace_id)
+    row = db.query(EinvoicingSubmission).filter_by(id=submission_id).first()
+    if not row or row.tenant_id != tenant:
         raise HTTPException(404, "Submission not found")
-    rec["status"] = "pending"
-    rec["rejection_reason"] = None
-    rec["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await _trigger_asp_webhook({"event": "asp_redrive", "submission": rec})
+    try:
+        svc.assert_asp_submittable(row)
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    row = svc.update_submission_status(db, submission_id, status="pending", error_message="")
+    if not row:
+        raise HTTPException(404, "Submission not found")
+    record = svc._serialize_submission(row)
+    await _trigger_asp_webhook({"event": "asp_redrive", "submission": record})
     return {"submission_id": submission_id, "status": "pending"}
 
 
 @router.post("/asp/inbound")
-def asp_inbound_status(body: AspInboundRequest, workspace_id: Optional[str] = None):
-    """n8n callback to update ASP submission status (accepted/rejected)."""
-    ws = _ws_key(workspace_id)
-    rows = _asp_submissions.get(ws, [])
-    rec = next((r for r in rows if r["id"] == body.submission_id), None)
-    if not rec:
+def asp_inbound_status(body: AspInboundRequest, db: Session = Depends(get_db)):
+    """n8n callback to update ASP submission status."""
+    status = body.status
+    if status == "rejected" and not body.rejection_reason:
+        body.rejection_reason = "Rejected by ASP"
+    row = svc.update_submission_status(
+        db,
+        body.submission_id,
+        status=status,
+        asp_reference=body.asp_reference or None,
+        error_message=body.rejection_reason or None,
+    )
+    if not row:
         raise HTTPException(404, "Submission not found")
-    rec["status"] = body.status
-    rec["rejection_reason"] = body.rejection_reason or None
-    rec["updated_at"] = datetime.now(timezone.utc).isoformat()
-    return {"submission_id": body.submission_id, "status": body.status}
+    return {"submission_id": body.submission_id, "status": row.submission_status}

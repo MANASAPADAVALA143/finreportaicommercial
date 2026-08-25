@@ -11,17 +11,44 @@ import { clearCompanyCache } from './companyService';
 let _accessToken: string | null = null;
 let _syncInFlight: Promise<Company | null> | null = null;
 const _syncedByWorkspace: Record<string, Company> = {};
+/** Cooldown after failed sync so 503s don't tight-loop from fetchInvoices / modal onUpdate. */
+const _failedUntilByWorkspace: Record<string, number> = {};
+const FAIL_COOLDOWN_MS = 60_000;
+const FAIL_COOLDOWN_503_MS = 120_000;
+
+export type ApCompanySyncStatus = 'idle' | 'syncing' | 'synced' | 'pending' | 'error';
+
+let _syncStatus: ApCompanySyncStatus = 'idle';
+let _syncStatusDetail = '';
 
 export function setApSyncAccessToken(token: string | null) {
   _accessToken = token;
+}
+
+export function getApCompanySyncStatus(): { status: ApCompanySyncStatus; detail: string } {
+  return { status: _syncStatus, detail: _syncStatusDetail };
 }
 
 export function getCachedSyncedCompany(workspaceId: string): Company | null {
   return _syncedByWorkspace[workspaceId] ?? null;
 }
 
+function setSyncStatus(status: ApCompanySyncStatus, detail = '') {
+  _syncStatus = status;
+  _syncStatusDetail = detail;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('ap-company-sync-status', { detail: { status, detail } }),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
 function cacheCompany(workspaceId: string, company: Company) {
   _syncedByWorkspace[workspaceId] = company;
+  delete _failedUntilByWorkspace[workspaceId];
+  setSyncStatus('synced');
   try {
     localStorage.setItem(`ap_company_${workspaceId}`, company.id);
   } catch {
@@ -34,48 +61,124 @@ function cacheCompany(workspaceId: string, company: Company) {
   }
 }
 
+function markSyncFailed(workspaceId: string, status: number, text: string) {
+  const cooldown = status === 503 ? FAIL_COOLDOWN_503_MS : FAIL_COOLDOWN_MS;
+  _failedUntilByWorkspace[workspaceId] = Date.now() + cooldown;
+  setSyncStatus(
+    status === 503 ? 'pending' : 'error',
+    status === 503
+      ? 'Company sync pending — will retry shortly'
+      : `Company sync failed (${status})`,
+  );
+  console.warn('[AP] sync-ap-company failed:', status, text);
+}
+
 async function findCompanyByWorkspaceId(workspaceId: string): Promise<Company | null> {
   const cached = getCachedSyncedCompany(workspaceId);
   if (cached) return cached;
 
+  const activeId =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) || null;
+  if (activeId) {
+    const byId = await supabase.from('companies').select('*').eq('id', activeId).limit(1).maybeSingle();
+    if (byId.data) {
+      cacheCompany(workspaceId, byId.data as Company);
+      return byId.data as Company;
+    }
+  }
+
+  // Multiple companies can share a workspace — never use maybeSingle on workspace_id alone.
   const { data, error } = await supabase
     .from('companies')
     .select('*')
     .eq('workspace_id', workspaceId)
-    .maybeSingle();
+    .order('created_at', { ascending: true })
+    .limit(20);
   if (error) {
     console.warn('[AP] companies lookup by workspace_id:', error.message);
     return null;
   }
-  if (data) {
-    cacheCompany(workspaceId, data as Company);
-    return data as Company;
-  }
-  return null;
+  const rows = (data || []) as Company[];
+  if (!rows.length) return null;
+  const picked =
+    (activeId && rows.find((r) => r.id === activeId)) ||
+    rows[0]!;
+  cacheCompany(workspaceId, picked);
+  return picked;
 }
 
-async function syncViaBackend(workspaceId: string, token: string): Promise<Company | null> {
+async function syncViaBackend(
+  workspaceId: string,
+  token: string,
+  opts?: { finreportCompanyId?: string; companyName?: string },
+): Promise<Company | null> {
   const base = backendOrigin();
   if (!base) {
     console.warn('[AP] VITE_API_URL not set — cannot sync company via backend');
+    markSyncFailed(workspaceId, 0, 'VITE_API_URL not set');
     return null;
   }
+
+  // Supabase auth user must be in company_members for invoices RLS inserts
+  let supabaseUserId: string | null = null;
+  let email: string | null = null;
+  let name: string | null = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    supabaseUserId = data.user?.id ?? null;
+    email = data.user?.email ?? null;
+    const meta = data.user?.user_metadata as Record<string, unknown> | undefined;
+    name = typeof meta?.name === 'string' ? meta.name : email;
+  } catch {
+    /* ignore */
+  }
+
   const res = await fetch(`${base}/api/workspaces/${workspaceId}/sync-ap-company`, {
     method: 'POST',
-    headers: workspaceHeaders(token),
+    headers: {
+      ...workspaceHeaders(token),
+      'Content-Type': 'application/json',
+    },
     credentials: 'include',
+    body: JSON.stringify({
+      supabase_user_id: supabaseUserId,
+      email,
+      name,
+      finreport_company_id: opts?.finreportCompanyId || undefined,
+      company_name: opts?.companyName || undefined,
+    }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    console.warn('[AP] sync-ap-company failed:', res.status, text);
+    markSyncFailed(workspaceId, res.status, text);
     return null;
   }
   const body = (await res.json()) as { company?: Company };
   if (body.company?.id) {
+    // Cache per profile when multi-company; still keep workspace cache for legacy callers
     cacheCompany(workspaceId, body.company);
+    if (opts?.finreportCompanyId) {
+      try {
+        localStorage.setItem(`ap_company_profile_${opts.finreportCompanyId}`, body.company.id);
+      } catch {
+        /* ignore */
+      }
+    }
     clearCompanyCache();
+    // Align JWT active_company_id so get_effective_company_id() matches inserts
+    if (supabaseUserId) {
+      try {
+        await supabase.auth.updateUser({
+          data: { active_company_id: body.company.id },
+        });
+        await supabase.auth.refreshSession();
+      } catch (e) {
+        console.warn('[AP] could not set active_company_id metadata:', e);
+      }
+    }
     return body.company;
   }
+  markSyncFailed(workspaceId, 502, 'empty company payload');
   return null;
 }
 
@@ -137,6 +240,7 @@ export async function syncApCompanyFromWorkspace(ws: Workspace): Promise<Company
 
 /**
  * Read active workspace from localStorage, ensure Supabase company exists via backend.
+ * Failed syncs enter a cooldown so callers (list refresh, detail modal) do not hammer 503.
  */
 export async function ensureApCompanySynced(accessToken?: string | null): Promise<Company | null> {
   const token = accessToken ?? _accessToken;
@@ -146,6 +250,11 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
   const existing = await findCompanyByWorkspaceId(workspaceId);
   if (existing) return existing;
 
+  const failedUntil = _failedUntilByWorkspace[workspaceId] ?? 0;
+  if (failedUntil > Date.now()) {
+    return getCachedSyncedCompany(workspaceId);
+  }
+
   if (!token) {
     console.warn('[AP] workspace selected but not logged in — cannot sync AP company');
     return null;
@@ -153,12 +262,14 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
 
   if (_syncInFlight) return _syncInFlight;
 
+  setSyncStatus('syncing');
   _syncInFlight = (async () => {
     try {
       const viaBackend = await syncViaBackend(workspaceId, token);
       return viaBackend;
     } catch (e) {
       console.warn('[AP] ensureApCompanySynced:', e instanceof Error ? e.message : e);
+      markSyncFailed(workspaceId, 0, e instanceof Error ? e.message : String(e));
       return null;
     } finally {
       _syncInFlight = null;
@@ -169,11 +280,78 @@ export async function ensureApCompanySynced(accessToken?: string | null): Promis
 }
 
 /**
- * Supabase AP `companies.id` for the active workspace — NOT FinReportAI `active_company_id`.
- * Using the wrong ID causes invoice inserts to fail FK checks and list queries to miss rows.
+ * Force company sync + company_members for the current Supabase user.
+ * Call before Excel / PDF bulk inserts so invoices RLS WITH CHECK passes.
+ */
+export async function ensureApMembershipForUpload(
+  accessToken?: string | null,
+): Promise<Company | null> {
+  const token = accessToken ?? _accessToken;
+  const workspaceId = getStoredWorkspaceId();
+  if (!workspaceId || !token) {
+    return ensureApCompanySynced(accessToken);
+  }
+  delete _failedUntilByWorkspace[workspaceId];
+  if (_syncInFlight) {
+    await _syncInFlight.catch(() => null);
+  }
+  setSyncStatus('syncing');
+  _syncInFlight = (async () => {
+    try {
+      const activeId =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) ||
+        undefined;
+      const activeName =
+        (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_name')) ||
+        undefined;
+      return await syncViaBackend(workspaceId, token, {
+        finreportCompanyId: activeId || undefined,
+        companyName: activeName || undefined,
+      });
+    } catch (e) {
+      console.warn('[AP] ensureApMembershipForUpload:', e);
+      markSyncFailed(workspaceId, 0, e instanceof Error ? e.message : String(e));
+      return findCompanyByWorkspaceId(workspaceId);
+    } finally {
+      _syncInFlight = null;
+    }
+  })();
+  return _syncInFlight;
+}
+
+/**
+ * Supabase AP `companies.id` for the **selected banner company**.
+ * Multi-company workspaces must stamp invoices to that company — not the first
+ * company found by workspace_id (that wrongly put Gnanova uploads onto Al Noor).
  */
 export async function resolveApSupabaseCompanyId(accessToken?: string | null): Promise<string> {
   const workspaceId = getStoredWorkspaceId();
+  const activeId =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_id')) ||
+    null;
+  const activeName =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('active_company_name')) ||
+    null;
+
+  if (activeId && workspaceId) {
+    const token = accessToken ?? _accessToken;
+    if (token) {
+      try {
+        const synced = await syncViaBackend(workspaceId, token, {
+          finreportCompanyId: activeId,
+          companyName: activeName || undefined,
+        });
+        if (synced?.id) return synced.id;
+      } catch (e) {
+        console.warn('[AP] profile company sync failed, using active_company_id:', e);
+      }
+    }
+    // Direct lookup — profile id is intended to equal AP company id
+    const { data } = await supabase.from('companies').select('id').eq('id', activeId).maybeSingle();
+    if (data?.id) return data.id;
+    return activeId;
+  }
+
   if (workspaceId) {
     const byWorkspace = await findCompanyByWorkspaceId(workspaceId);
     if (byWorkspace?.id) return byWorkspace.id;

@@ -57,6 +57,23 @@ export function invoiceHasRiskSignal(inv: Invoice): boolean {
   );
 }
 
+/**
+ * Invoice list "Anomaly" tab — match rows that have real anomaly evidence.
+ * Numeric risk_score (new engine) and risk_flags / High|Medium tiers all count;
+ * plain Low with no flags does not.
+ */
+export function invoiceMatchesAnomalyTab(inv: Invoice): boolean {
+  if (flagCount(inv) > 0) return true;
+  const tier = invoiceRiskTierForFilter(inv);
+  if (tier === 'high' || tier === 'medium') return true;
+  if (typeof inv.risk_score === 'number' && inv.risk_score >= 30) return true;
+  const rs = String(inv.risk_score ?? '').toLowerCase();
+  if (rs === 'high' || rs === 'medium' || rs === 'critical') return true;
+  const rl = String(inv.risk_level ?? '').toLowerCase();
+  if (rl === 'high' || rl === 'medium' || rl === 'critical') return true;
+  return false;
+}
+
 /** Aligns list risk filter with `risk_level`, string `risk_score`, or numeric bands. */
 export function invoiceRiskTierForFilter(inv: Invoice): 'high' | 'medium' | 'low' {
   const rl = String(inv.risk_level ?? '').toLowerCase();

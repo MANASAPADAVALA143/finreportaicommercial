@@ -22,8 +22,8 @@ except ImportError:
     pass
 
 TARGET_TABLES = [
-    "invoices",
-    "invoice_line_items",
+    "ap_invoices",
+    "ap_invoice_line_items",
     "vendors",
     "purchase_orders",
     "goods_receipts",

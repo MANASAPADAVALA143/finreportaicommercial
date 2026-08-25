@@ -13,13 +13,109 @@ import {
   ShoppingCart,
   Shield,
   Receipt,
+  Settings,
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
 import { useAuth } from '../../context/AuthContext';
-import { isUaeFinanceSuiteOnly } from '../../config/productRole';
+import { useMarket } from '../../contexts/MarketContext';
+import { isUaeFinanceSuiteOnly, canAccessPath } from '../../config/productRole';
 
-const UAE_FINANCE_SUITE_MODULES = [
+type DashboardModule = {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  link: string;
+  bgColor: string;
+  badge?: string;
+};
+
+/** UAE dashboard: pin these modules first; all others keep their original relative order. */
+const UAE_MODULE_PRIORITY: readonly string[] = [
+  '/ap-invoices',
+  '/gulftax',
+  '/uae-suite',
+  '/uae-full',
+  '/fpa',
+  '/ifrs-statement',
+  '/cfo',
+  '/r2r-pattern',
+];
+
+function sortModulesForUae(modules: DashboardModule[]): DashboardModule[] {
+  const priorityIndex = new Map(UAE_MODULE_PRIORITY.map((link, i) => [link, i]));
+  const originalIndex = new Map(modules.map((m, i) => [m.link, i]));
+  return [...modules].sort((a, b) => {
+    const pa = priorityIndex.get(a.link);
+    const pb = priorityIndex.get(b.link);
+    if (pa !== undefined && pb !== undefined) return pa - pb;
+    if (pa !== undefined) return -1;
+    if (pb !== undefined) return 1;
+    return (originalIndex.get(a.link) ?? 0) - (originalIndex.get(b.link) ?? 0);
+  });
+}
+
+/** Show only the regional accounting suite that matches the active market toggle. */
+function filterModulesByMarket(modules: DashboardModule[], isUAE: boolean): DashboardModule[] {
+  return modules.filter((m) => {
+    if (m.link === '/uae-full') return isUAE;
+    if (m.link === '/india-full') return !isUAE;
+    return true;
+  });
+}
+
+/** Top-level UAE sections — separate cards like the main FinReport hub. */
+const UAE_PRIMARY_HUB: DashboardModule[] = [
+  {
+    icon: <ShoppingCart className="w-16 h-16 text-teal-400" />,
+    title: 'AP InvoiceFlow',
+    description: 'Upload invoices, approvals, VAT recon, Zoho/QBO integrations',
+    link: '/ap-invoices',
+    bgColor: 'bg-teal-500/10',
+    badge: 'AP',
+  },
+  {
+    icon: <Shield className="w-16 h-16 text-amber-400" />,
+    title: 'UAE Tax (GulfTax)',
+    description: 'VAT classifier, VAT return, corporate tax, FTA reports, reconciliation',
+    link: '/gulftax',
+    bgColor: 'bg-amber-500/10',
+    badge: 'GulfTax',
+  },
+  {
+    icon: <Receipt className="w-16 h-16 text-teal-300" />,
+    title: 'UAE Finance Suite',
+    description: 'Combined AP, AR, VAT/CT compliance, and Peppol e-invoicing — unified operations dashboard',
+    link: '/uae-suite',
+    bgColor: 'bg-teal-500/10',
+    badge: 'Suite',
+  },
+  {
+    icon: <Globe className="w-16 h-16 text-blue-400" />,
+    title: '🇦🇪 UAE Accounting',
+    description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
+    link: '/uae-full',
+    bgColor: 'bg-blue-500/10',
+    badge: 'UAE',
+  },
+  {
+    icon: <Settings className="w-16 h-16 text-slate-300" />,
+    title: 'Industry & Workspace',
+    description: 'Choose your industry — Real Estate, Construction, Manufacturing, and more',
+    link: '/ap-invoices/industry',
+    bgColor: 'bg-slate-500/10',
+    badge: 'Settings',
+  },
+  {
+    icon: <BarChart3 className="w-16 h-16 text-green-400" />,
+    title: 'FP&A Suite',
+    description: 'Comprehensive planning, budgeting, and forecasting',
+    link: '/fpa',
+    bgColor: 'bg-green-500/10',
+  },
+];
+
+const UAE_FINANCE_SUITE_MODULES: DashboardModule[] = [
   {
     icon: <ShoppingCart className="w-14 h-14 text-teal-400" />,
     title: 'AP InvoiceFlow',
@@ -44,7 +140,26 @@ const UAE_FINANCE_SUITE_MODULES = [
     bgColor: 'bg-blue-500/10',
     badge: 'Peppol',
   },
-] as const;
+  {
+    icon: <Settings className="w-14 h-14 text-slate-300" />,
+    title: 'Industry & Workspace',
+    description: 'Choose Real Estate, Construction, etc. — labels and cost centers update for your industry',
+    link: '/ap-invoices/industry',
+    bgColor: 'bg-slate-500/10',
+    badge: 'Settings',
+  },
+];
+
+/**
+ * AP InvoiceFlow and Industry & Workspace are market-agnostic (they branch
+ * internally on the market toggle — see GstRecon.tsx). GulfTax and Peppol
+ * e-invoicing are UAE-only (VAT/CT, FTA), so they're dropped from this
+ * quick-access strip when India is active — showing them there was what
+ * made the banner read as "UAE" even after switching to India.
+ */
+const INDIA_QUICK_ACCESS_MODULES: DashboardModule[] = UAE_FINANCE_SUITE_MODULES.filter(
+  (m) => m.link !== '/gulftax' && m.link !== '/gulftax/e-invoicing'
+);
 
 const AGENT_DEFS: { id: AgentId; name: string; route: string; description: string }[] = [
   { id: 'r2r', name: 'R2R Anomaly Agent', route: '/r2r-pattern', description: 'Analyses journal entries, detects fraud patterns, scores risk using Isolation Forest + LLM' },
@@ -56,7 +171,8 @@ const AGENT_DEFS: { id: AgentId; name: string; route: string; description: strin
 
 export const Dashboard: React.FC = () => {
   const nav = useNavigate();
-  const { productRole } = useAuth();
+  const { productRole, user } = useAuth();
+  const { isUAE } = useMarket();
   const uaeOnly = isUaeFinanceSuiteOnly(productRole);
   const { actions, activeAgents, markActive } = useAgentActivity();
 
@@ -64,7 +180,7 @@ export const Dashboard: React.FC = () => {
     if (uaeOnly) nav('/gulftax', { replace: true });
   }, [uaeOnly, nav]);
 
-  const modules = [
+  const modules: DashboardModule[] = [
     {
       icon: <Brain className="w-16 h-16 text-violet-400" />,
       title: 'AGENTIC Command Center',
@@ -183,6 +299,21 @@ export const Dashboard: React.FC = () => {
     },
   ];
 
+  const marketModules = filterModulesByMarket(modules, isUAE);
+  const hubLinks = new Set(UAE_PRIMARY_HUB.map((m) => m.link));
+  const uaeHubCards = UAE_PRIMARY_HUB.filter((m) =>
+    canAccessPath(productRole, m.link, user?.role),
+  );
+  const extraModules = marketModules.filter((m) => !hubLinks.has(m.link));
+  const displayModules = isUAE
+    ? [
+        ...uaeHubCards,
+        ...(productRole === 'full_access'
+          ? sortModulesForUae(extraModules)
+          : []),
+      ]
+    : marketModules;
+
   if (uaeOnly) return null;
 
   return (
@@ -197,35 +328,39 @@ export const Dashboard: React.FC = () => {
         </p>
       </nav>
 
-      {/* UAE Finance Suite — primary entry for UAE clients */}
-      <div className="border-b border-teal-800/40 bg-teal-950/30">
-        <div className="container mx-auto px-6 py-8">
-          <div className="text-center mb-6">
-            <h2 className="text-2xl font-bold text-white">🇦🇪 UAE Finance Suite</h2>
-            <p className="text-sm text-teal-200/80 mt-1">
-              AP invoices, GulfTax VAT/CT, and Peppol e-invoicing for UAE entities
-            </p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-4 max-w-5xl mx-auto">
-            {UAE_FINANCE_SUITE_MODULES.map((mod) => (
-              <Link
-                key={mod.link}
-                to={mod.link}
-                className="bg-slate-800/50 rounded-xl p-5 border border-teal-700/40 hover:border-teal-500/60 hover:bg-slate-800/70 transition-all group"
-              >
-                <span className="inline-block px-2 py-0.5 mb-3 text-[10px] font-bold rounded-full bg-teal-700/50 text-teal-200">
-                  {mod.badge}
-                </span>
-                <div className={`${mod.bgColor} w-14 h-14 rounded-lg flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
-                  {mod.icon}
-                </div>
-                <h3 className="text-lg font-semibold text-white mb-1">{mod.title}</h3>
-                <p className="text-sm text-slate-400 leading-snug">{mod.description}</p>
-              </Link>
-            ))}
+      {/* Quick access strip — India view only (UAE merges these into the main grid below).
+          Shows only market-agnostic modules (AP InvoiceFlow, Industry & Workspace) so it
+          doesn't read as a UAE-only section while India is toggled on. */}
+      {!isUAE && (
+        <div className="border-b border-teal-800/40 bg-teal-950/30">
+          <div className="container mx-auto px-6 py-8">
+            <div className="text-center mb-6">
+              <h2 className="text-2xl font-bold text-white">⚡ Quick Access</h2>
+              <p className="text-sm text-teal-200/80 mt-1">
+                AP invoices, approvals, GST recon, and Zoho/QBO integrations
+              </p>
+            </div>
+            <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto">
+              {INDIA_QUICK_ACCESS_MODULES.map((mod) => (
+                <Link
+                  key={mod.link}
+                  to={mod.link}
+                  className="bg-slate-800/50 rounded-xl p-5 border border-teal-700/40 hover:border-teal-500/60 hover:bg-slate-800/70 transition-all group"
+                >
+                  <span className="inline-block px-2 py-0.5 mb-3 text-[10px] font-bold rounded-full bg-teal-700/50 text-teal-200">
+                    {mod.badge}
+                  </span>
+                  <div className={`${mod.bgColor} w-14 h-14 rounded-lg flex items-center justify-center mb-3 group-hover:scale-105 transition-transform`}>
+                    {mod.icon}
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-1">{mod.title}</h3>
+                  <p className="text-sm text-slate-400 leading-snug">{mod.description}</p>
+                </Link>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Agent Network Header */}
       <div className="border-b border-slate-700 bg-slate-800/30">
@@ -281,9 +416,9 @@ export const Dashboard: React.FC = () => {
 
         {/* Features Grid */}
         <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto relative">
-          {modules.map((module, index) => (
+          {displayModules.map((module) => (
             <Link
-              key={index}
+              key={module.link}
               to={module.link}
               className="bg-slate-800/40 backdrop-blur-sm rounded-2xl p-8 hover:bg-slate-800/60 transition-all duration-300 border border-slate-700 hover:border-slate-600 group relative"
             >

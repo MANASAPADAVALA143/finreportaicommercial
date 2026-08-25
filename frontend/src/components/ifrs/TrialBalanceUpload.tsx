@@ -13,6 +13,8 @@ type PreviewRow = { gl_code: string; gl_description: string; debit: number; cred
 
 type Props = {
   onUploaded: (trialBalanceId: number) => void;
+  linkAsPriorFor?: number;
+  title?: string;
 };
 
 function normalize(row: Record<string, unknown>): PreviewRow | null {
@@ -37,7 +39,7 @@ function normalize(row: Record<string, unknown>): PreviewRow | null {
   };
 }
 
-export default function TrialBalanceUpload({ onUploaded }: Props) {
+export default function TrialBalanceUpload({ onUploaded, linkAsPriorFor, title }: Props) {
   useSyncIfrsTenant();
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -73,9 +75,16 @@ export default function TrialBalanceUpload({ onUploaded }: Props) {
     if (!file) return;
     setLoading(true);
     try {
-      const res = await ifrsService.uploadTrialBalance(file, "FinReport AI");
+      const res = await ifrsService.uploadTrialBalance(file, linkAsPriorFor ? "Prior period TB" : "FinReport AI", {
+        linkAsPriorFor,
+        autoMap: !linkAsPriorFor,
+      });
       setSummary({ lines: res.lines_count, id: res.trial_balance_id });
-      toast.success("Trial balance uploaded. AI mapping started.");
+      toast.success(
+        linkAsPriorFor
+          ? "Prior period TB uploaded — will be used for Cash Flow + SOCE"
+          : "Trial balance uploaded. AI mapping started."
+      );
       onUploaded(res.trial_balance_id);
     } catch (e: unknown) {
       toast.error(formatApiError(e) || "Upload failed");
@@ -95,7 +104,10 @@ export default function TrialBalanceUpload({ onUploaded }: Props) {
       const sampleFile = new File([blob], SAMPLE_TB_FILENAME, { type: "text/csv" });
       setFile(sampleFile);
       await parsePreview(sampleFile);
-      const res = await ifrsService.uploadTrialBalance(sampleFile, SAMPLE_TB_COMPANY_NAME);
+      const res = await ifrsService.uploadTrialBalance(sampleFile, SAMPLE_TB_COMPANY_NAME, {
+        linkAsPriorFor,
+        autoMap: !linkAsPriorFor,
+      });
       setSummary({ lines: res.lines_count, id: res.trial_balance_id });
       toast.success("Sample trial balance uploaded via server pipeline. AI mapping started.");
       onUploaded(res.trial_balance_id);
@@ -108,6 +120,7 @@ export default function TrialBalanceUpload({ onUploaded }: Props) {
 
   return (
     <div className="space-y-5">
+      {title && <p className="text-sm font-semibold text-slate-800">{title}</p>}
       <div
         className="rounded-xl border-2 border-dashed border-slate-300 bg-white p-8 text-center"
         onDragOver={(e) => e.preventDefault()}

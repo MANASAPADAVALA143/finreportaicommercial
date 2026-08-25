@@ -18,8 +18,7 @@ import {
 } from '../../utils/varianceUtils';
 import type { PeriodType, CompareType, DepartmentType, CurrencyType, CurrencyFormatLocale } from '../../types/fpa';
 import { postCfoAgentRun } from '../../services/cfoAgents';
-import { useClient } from '../../context/ClientContext';
-import { useCompany } from '../../context/CompanyContext';
+import { getActiveCompanyId, useCompany } from '../../context/CompanyContext';
 import PeriodSelector from '../../components/PeriodSelector';
 import { fetchGLSummary, glSummaryToVarianceRows, getCurrentPeriod } from '../../services/glSummary.service';
 import { exportVarianceExcelWithAI } from '../../utils/fpa/excelExport';
@@ -132,9 +131,8 @@ function WhyPanel({ data, currency, currencyFormat }: { data: any[]; currency: s
 
 export const VarianceAnalysis = () => {
   const navigate = useNavigate();
-  const { activeClient } = useClient();
-  const { activeCompanyId } = useCompany();
-  const tenantId = activeClient?.companyId || 'default';
+  const { activeCompanyId, activeCompany } = useCompany();
+  const tenantId = activeCompanyId || getActiveCompanyId() || '';
   const workspaceId = localStorage.getItem('gnanova_workspace_id');
 
   const [uploadedDataOnly, setUploadedDataOnly] = useState<any[]>([]);
@@ -1117,7 +1115,7 @@ export const VarianceAnalysis = () => {
             <AICommentary
               varianceData={currentVarianceData}
               period={periodLabel}
-              entityName={activeClient?.name || 'FinReport AI'}
+              entityName={activeCompany?.name || 'FinReport AI'}
               currency={currency}
               currencyFormat={currencyFormat}
             />

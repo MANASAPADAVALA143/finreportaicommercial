@@ -4,7 +4,7 @@ import { supabase } from '../../lib/ap-invoice/supabase';
 import { useMarket } from '../../contexts/MarketContext';
 import { validateTaxId, VAT_TREATMENT_OPTIONS } from '../../lib/ap-invoice/marketConfig';
 import { calculateAdvanceVat } from '../../lib/ap-invoice/uaeVatService';
-import { detectAnomalies } from '../../utils/anomalyDetection';
+import { scanInvoiceAnomalies } from '../../lib/ap-invoice/anomalyService';
 import { getRequiredApprovalLevel } from '../../utils/approvalWorkflow';
 import { formatCurrency } from '../../utils/currency';
 import { toStorageFormat } from '../../utils/dateUtils';
@@ -13,11 +13,16 @@ import { CurrencyCombobox } from '../../components/ap-invoice/CurrencyCombobox';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { resolveGLAccount, invoiceGlFieldsFromResult } from '../../utils/coaMapping';
 import { runAutoMatch, autoMatchToastMessage } from '../../lib/ap-invoice/threeWayMatchService';
+import { awaitGlPostAfterApproval, retryPendingGlPosts } from '../../lib/ap-invoice/glPostService';
+import { syncAfterPdfExtract } from '../../lib/ap-invoice/syncAfterExtractService';
 import { checkInvoiceLimit, requireCompanyId, getMyCompany, clearCompanyCache } from '../../lib/ap-invoice/companyService';
-import { ensureApCompanySynced, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
+import { ensureApCompanySynced, ensureApMembershipForUpload, resolveApSupabaseCompanyId } from '../../lib/ap-invoice/workspaceCompanySync';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { useAuth } from '../../context/AuthContext';
+import { getStoredAccessToken } from '../../utils/authToken';
+import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
+import { bulkUpsertInvoicesViaApi } from '../../lib/ap-invoice/bulkUpsertService';
 import { invoiceFlowAgentUrl } from '../../lib/ap-invoice/apiBase';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
@@ -103,6 +108,7 @@ export function InvoiceUpload() {
   const { toast } = useToast();
   const { baseCurrency } = useCompanySettings();
   const { isUAE, config } = useMarket();
+  const marketCurrency = isUAE ? 'AED' : (config.currency || 'INR');
 
   const resolveApCompanyId = async (): Promise<string> => {
     return resolveApSupabaseCompanyId(accessToken);
@@ -121,6 +127,7 @@ export function InvoiceUpload() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadMethod, setUploadMethod] = useState<'scan' | 'single' | 'bulk' | 'multi-pdf'>('scan');
   const [extracting, setExtracting] = useState(false);
   const [apiEndpoint, setApiEndpoint] = useState<string | null>(null);
   const [apiEndpointClassifyJson, setApiEndpointClassifyJson] = useState<string | null>(null);
@@ -134,16 +141,24 @@ export function InvoiceUpload() {
     vendor_phone: '',
     vendor_address: '',
     total_amount: '',
-    currency: 'USD',
+    currency: marketCurrency,
     taxCode: 'NONE',
     tax_type: 'None' as 'None' | 'VAT' | 'GST' | 'Sales Tax' | 'Withholding Tax',
     tax_rate: '',
     po_number: '',
+    cost_center: '',
   });
 
   const [lineItems, setLineItems] = useState<LineItem[]>([
     { id: '1', description: '', quantity: 1, unit_price: 0, total: 0 },
   ]);
+
+  // Keep form currency aligned with India/UAE market toggle
+  useEffect(() => {
+    setFormData((prev) =>
+      prev.currency === marketCurrency ? prev : { ...prev, currency: marketCurrency },
+    );
+  }, [marketCurrency]);
 
   // IFRS Classification data from n8n extraction
   const [ifrsData, setIfrsData] = useState<{
@@ -254,6 +269,10 @@ export function InvoiceUpload() {
   };
 
   // Load the n8n (or other) API endpoint configured in Settings
+  useEffect(() => {
+    void retryPendingGlPosts();
+  }, []);
+
   useEffect(() => {
     const applyWebhookSettings = (apiEndpointVal: string, classifyVal: string) => {
       const envWebhook = import.meta.env.VITE_N8N_WEBHOOK_URL?.trim();
@@ -451,9 +470,13 @@ export function InvoiceUpload() {
       const proxyUrl = invoiceFlowAgentUrl('/api/agent/extract-image');
       const formPayload = new FormData();
       formPayload.append('file', file, file.name);
+      formPayload.append('market', isUAE ? 'uae' : 'india');
 
       console.log('ðŸ“¤ Calling Anthropic proxy:', proxyUrl);
-      const response = await fetch(proxyUrl, { method: 'POST', body: formPayload });
+      const headers: Record<string, string> = {};
+      const token = getStoredAccessToken() || accessToken;
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(proxyUrl, { method: 'POST', headers, body: formPayload });
 
       if (!response.ok) {
         const errText = await response.text();
@@ -688,7 +711,11 @@ export function InvoiceUpload() {
     }
   };
 
-  /** Called when user clicks "Save to invoice list" in the scan review modal */
+  /**
+   * Called when user clicks "Save to invoice list" in the scan review modal.
+   * All markets (UAE and India) save to the same Invoice List — one consolidated
+   * list per entity, regardless of upload method (Scan, Single, Bulk, Multiple PDFs).
+   */
   const handleSaveFromScanPreview = async (values: NormalizedExtractedInvoice, vatTreatment?: string) => {
     setSavingFromScan(true);
     try {
@@ -812,7 +839,7 @@ export function InvoiceUpload() {
       vendor_phone: '',
       vendor_address: '',
       total_amount: '',
-      currency: baseCurrency || 'USD',
+      currency: baseCurrency || marketCurrency,
       taxCode: 'NONE',
       tax_type: 'None',
       tax_rate: '',
@@ -1101,35 +1128,26 @@ export function InvoiceUpload() {
           }
         }
 
-        // Run anomaly detection
+        // Full anomaly pipeline
         try {
-          const { data: existingInvoices } = await supabase
-            .from('invoices')
-            .select('invoice_number, vendor_name, total_amount, invoice_date, due_date, vendor_email')
-            .neq('id', invoice.id);
-
-          if (existingInvoices) {
-            const anomalyResult = await detectAnomalies(
-              {
-                invoice_number: invoiceData.invoice_number,
-                invoice_date: invoiceDate ?? '',
-                due_date: dueDate ?? '',
-                vendor_name: invoiceData.vendor_name,
-                vendor_email: invoiceData.vendor_email || null,
-                total_amount: totalAmount,
-              },
-              existingInvoices
-            );
-
-            await supabase
-              .from('invoices')
-              .update({
-                risk_score: anomalyResult.risk_score,
-                risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', invoice.id);
-          }
+          await scanInvoiceAnomalies(
+            {
+              id: invoice.id,
+              company_id: companyId,
+              invoice_number: String(invoiceData.invoice_number),
+              invoice_date: invoiceDate ?? '',
+              due_date: dueDate ?? '',
+              vendor_name: String(invoiceData.vendor_name),
+              vendor_email: invoiceData.vendor_email || null,
+              vendor_trn: invoiceData.vendor_trn || null,
+              gstin: invoiceData.gstin || null,
+              total_amount: totalAmount,
+              po_number: invoiceData.po_number || null,
+              description: descriptionFromBatchRow(invoiceData as Record<string, unknown>),
+              created_at: invoice.created_at ?? null,
+            },
+            'invoice-upload',
+          );
         } catch (anomalyError) {
           console.error(`Anomaly detection failed for invoice ${i + 1}:`, anomalyError);
         }
@@ -1155,6 +1173,12 @@ export function InvoiceUpload() {
           } catch (matchError) {
             console.error(`Auto match failed for invoice ${i + 1}:`, matchError);
           }
+        }
+
+        if (initialStatus === 'Approved') {
+          await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+            toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+          );
         }
 
         // Create audit log
@@ -1216,7 +1240,7 @@ export function InvoiceUpload() {
           vendor_phone: '',
           vendor_address: '',
           total_amount: '',
-          currency: baseCurrency || 'USD',
+          currency: baseCurrency || marketCurrency,
           taxCode: 'NONE',
           tax_type: 'None',
           tax_rate: '',
@@ -1411,7 +1435,7 @@ export function InvoiceUpload() {
         vendor_phone: '+1-555-1234',
         vendor_address: '123 Main St, City, State 12345',
         total_amount: '1250.00',
-        currency: 'USD',
+        currency: marketCurrency,
         description: 'Office Supplies - Paper, Pens, Staplers',
       },
       {
@@ -1423,7 +1447,7 @@ export function InvoiceUpload() {
         vendor_phone: '+1-555-5678',
         vendor_address: '456 Tech Ave, City, State 54321',
         total_amount: '3500.00',
-        currency: 'USD',
+        currency: marketCurrency,
         description: 'Software License - Annual Subscription',
       },
     ];
@@ -1542,6 +1566,9 @@ export function InvoiceUpload() {
             currency: rowNorm.currency ? String(rowNorm.currency).trim().toUpperCase() : defaultCurrency,
             description: rowNorm.description ? String(rowNorm.description).trim() : '',
             gl_code: rowNorm.gl_code ? String(rowNorm.gl_code).trim() : null,
+            gl_name: rowNorm.gl_name ? String(rowNorm.gl_name).trim() : null,
+            property_ref: rowNorm.property_ref ? String(rowNorm.property_ref).trim() : null,
+            cost_center: rowNorm.cost_center ? String(rowNorm.cost_center).trim() : null,
             reference: rowNorm.reference ? String(rowNorm.reference).trim() : null,
             // 3-way match fields
             po_number: rowNorm.po_number ? String(rowNorm.po_number).trim() : null,
@@ -1552,6 +1579,13 @@ export function InvoiceUpload() {
             vat_treatment: rowNorm.vat_treatment ? String(rowNorm.vat_treatment).trim() : null,
             // India GST fields
             gstin: rowNorm.gstin ? String(rowNorm.gstin).trim() : null,
+            buyer_gstin: rowNorm.buyer_gstin ? String(rowNorm.buyer_gstin).trim() : null,
+            hsn_sac: rowNorm.hsn_sac ? String(rowNorm.hsn_sac).trim() : null,
+            taxable_value: rowNorm.taxable_value ? parseAmount(rowNorm.taxable_value) : null,
+            cgst_amount: rowNorm.cgst_amount ? parseAmount(rowNorm.cgst_amount) : null,
+            sgst_amount: rowNorm.sgst_amount ? parseAmount(rowNorm.sgst_amount) : null,
+            igst_amount: rowNorm.igst_amount ? parseAmount(rowNorm.igst_amount) : null,
+            total_tax: rowNorm.total_tax ? parseAmount(rowNorm.total_tax) : null,
           };
           parsedData.push(parsedRow);
         }
@@ -1651,9 +1685,9 @@ export function InvoiceUpload() {
     }> = [];
 
     try {
-      // Clear cache so we always get a fresh company lookup
+      // Clear cache so we always get a fresh company lookup + company_members (RLS)
       clearCompanyCache();
-      await ensureApCompanySynced(accessToken);
+      await ensureApMembershipForUpload(accessToken);
       const companyId = await resolveApCompanyId();
       const limBulk = await checkInvoiceLimit();
       if (!limBulk.allowed) {
@@ -1671,10 +1705,19 @@ export function InvoiceUpload() {
         return;
       }
 
-      // Fetch existing invoices for anomaly detection
-      const { data: existingInvoices } = await supabase
-        .from('invoices')
-        .select('invoice_number, vendor_name, total_amount, invoice_date, due_date, vendor_email');
+      const prepared: Array<{
+        rowNum: number;
+        invoiceData: (typeof bulkData)[number];
+        upsertPayload: Record<string, unknown>;
+        initialStatus: string;
+      }> = [];
+
+      const authToken = getStoredAccessToken();
+      let gulfTaxWarned = false;
+      if (isUAE && !authToken) {
+        console.warn('[AP] GulfTax classify skipped for bulk import — no bearer token (log out and log in)');
+        gulfTaxWarned = true;
+      }
 
       for (let i = 0; i < bulkData.length; i++) {
         const invoiceData = bulkData[i];
@@ -1687,7 +1730,7 @@ export function InvoiceUpload() {
 
           // UAE: classify each invoice with embedded GulfTax before insert
           let gulfTaxFields: Record<string, unknown> = {};
-          if (isUAE) {
+          if (isUAE && authToken) {
             try {
               const gt = await classifyAPInvoiceEmbedded({
                 invoice_number: invoiceData.invoice_number,
@@ -1711,13 +1754,14 @@ export function InvoiceUpload() {
               };
               setBulkGulfTaxCount((c) => c + 1);
             } catch (gtErr) {
-              console.warn('GulfTax classify skipped for row', rowNum, gtErr);
+              if (!gulfTaxWarned) {
+                console.warn('GulfTax classify skipped (further rows silent):', gtErr);
+                gulfTaxWarned = true;
+              }
             }
           }
 
-          // Upsert invoice (re-upload same invoice_number updates instead of failing unique constraint)
-          // jsonb columns need arrays, not strings â€” risk_flags: [] not '[]'
-          const upsertPayload = {
+          const upsertPayload: Record<string, unknown> = {
             company_id: companyId,
             invoice_number: invoiceData.invoice_number,
             invoice_date: invoiceData.invoice_date,
@@ -1727,7 +1771,7 @@ export function InvoiceUpload() {
             vendor_phone: invoiceData.vendor_phone || null,
             vendor_address: invoiceData.vendor_address || null,
             total_amount: invoiceData.total_amount,
-            subtotal_amount: invoiceData.total_amount, // Assume no tax for bulk upload
+            subtotal_amount: invoiceData.total_amount,
             invoice_language: 'en',
             exchange_rate_to_base: 1,
             tax_type: 'None',
@@ -1743,43 +1787,108 @@ export function InvoiceUpload() {
             risk_flags: [] as unknown[],
             risk_score: null,
             risk_level: null,
-            // UAE VAT fields (passed through if present in Excel)
+            source: 'excel',
             ...(invoiceData.vendor_trn ? { vendor_trn: String(invoiceData.vendor_trn) } : {}),
-            ...(invoiceData.vat_amount ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) } : {}),
+            ...(invoiceData.vat_amount
+              ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) }
+              : {}),
             ...(invoiceData.vat_rate ? { vat_rate: parseAmount(invoiceData.vat_rate) } : {}),
             ...(invoiceData.vat_treatment ? { vat_treatment: String(invoiceData.vat_treatment) } : {}),
             ...gulfTaxFields,
-            // India GST fields
-            ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin) } : {}),
+            ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin), vendor_gstin: String(invoiceData.gstin) } : {}),
+            ...(invoiceData.hsn_sac ? { hsn_sac: String(invoiceData.hsn_sac) } : {}),
+            ...(invoiceData.taxable_value ? { taxable_amount: invoiceData.taxable_value } : {}),
+            ...(invoiceData.cgst_amount ? { cgst_amount: invoiceData.cgst_amount } : {}),
+            ...(invoiceData.sgst_amount ? { sgst_amount: invoiceData.sgst_amount } : {}),
+            ...(invoiceData.igst_amount ? { igst_amount: invoiceData.igst_amount } : {}),
+            ...(invoiceData.total_tax
+              ? { tax_amount: invoiceData.total_tax, tax_type: 'GST' }
+              : {}),
             ...(invoiceData.description ? { description: String(invoiceData.description) } : {}),
-            ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number) } : {}),
+            ...(invoiceData.po_number ? { po_number: String(invoiceData.po_number).trim() } : {}),
+            ...(invoiceData.gl_code
+              ? {
+                  gl_code: String(invoiceData.gl_code).trim(),
+                  gl_account_code: String(invoiceData.gl_code).trim(),
+                }
+              : {}),
+            ...(invoiceData.gl_name
+              ? {
+                  gl_name: String(invoiceData.gl_name).trim(),
+                  gl_account_name: String(invoiceData.gl_name).trim(),
+                }
+              : {}),
+            ...(invoiceData.property_ref
+              ? { property_ref: String(invoiceData.property_ref).trim() }
+              : {}),
+            ...(invoiceData.cost_center
+              ? { cost_center: String(invoiceData.cost_center).trim() }
+              : {}),
           };
 
-          console.log('Inserting row:', JSON.stringify(upsertPayload, null, 2));
+          prepared.push({ rowNum, invoiceData, upsertPayload, initialStatus });
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          results.failed++;
+          results.errors.push({
+            row: rowNum,
+            invoice_number: invoiceData.invoice_number,
+            error: msg,
+          });
+        }
+      }
 
-          const { data: invoice, error: invoiceError } = await upsertInvoiceRow(upsertPayload);
+      // Service-role upsert bypasses browser RLS (fixes Excel import failures)
+      let apiResults: Awaited<ReturnType<typeof bulkUpsertInvoicesViaApi>> | null = null;
+      try {
+        apiResults = await bulkUpsertInvoicesViaApi(
+          companyId,
+          prepared.map((p) => p.upsertPayload),
+        );
+      } catch (apiErr) {
+        console.warn('[AP] bulk-upsert API failed, falling back to client upsert:', apiErr);
+      }
 
-          if (invoiceError) {
-            logSupabaseInvoiceError(`ROW FAILED: ${invoiceData.invoice_number}`, invoiceError, upsertPayload);
-            console.error(
-              'ROW FAILED:',
-              invoiceData.invoice_number,
-              '| Error:',
-              invoiceError.message,
-              '| Code:',
-              invoiceError.code,
-              '| Details:',
-              invoiceError.details,
-              '| Hint:',
-              invoiceError.hint
-            );
-            results.failed++;
-            results.errors.push({
-              row: rowNum,
-              invoice_number: invoiceData.invoice_number,
-              error: [invoiceError.message, invoiceError.details].filter(Boolean).join(' â€” '),
-            });
-            continue;
+      let canWriteAuditLogs = false;
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        canWriteAuditLogs = !!sess?.session?.access_token;
+      } catch {
+        canWriteAuditLogs = false;
+      }
+
+      for (let i = 0; i < prepared.length; i++) {
+        const { rowNum, invoiceData, upsertPayload, initialStatus } = prepared[i];
+        try {
+          let invoice: import('../../lib/ap-invoice/supabase').Invoice | null = null;
+
+          if (apiResults) {
+            const rowRes = apiResults.results[i];
+            if (!rowRes?.ok || !rowRes.invoice) {
+              results.failed++;
+              results.errors.push({
+                row: rowNum,
+                invoice_number: invoiceData.invoice_number,
+                error: rowRes?.error || 'Bulk upsert failed',
+              });
+              continue;
+            }
+            invoice = rowRes.invoice as import('../../lib/ap-invoice/supabase').Invoice;
+          } else {
+            const { data, error: invoiceError } = await upsertInvoiceRow(upsertPayload);
+            if (invoiceError || !data?.id) {
+              logSupabaseInvoiceError(`ROW FAILED: ${invoiceData.invoice_number}`, invoiceError || {}, upsertPayload);
+              results.failed++;
+              results.errors.push({
+                row: rowNum,
+                invoice_number: invoiceData.invoice_number,
+                error:
+                  invoiceError?.message ||
+                  'Upsert returned no invoice row (RLS?). Deploy backend /api/uae/ap/bulk-upsert.',
+              });
+              continue;
+            }
+            invoice = data;
           }
 
           savedInvoices.push({
@@ -1787,64 +1896,72 @@ export function InvoiceUpload() {
             invoice_number: invoice.invoice_number,
             vendor_name: invoice.vendor_name,
             total_amount: Number(invoice.total_amount),
-            description: invoiceData.description ?? invoice.description ?? null,
+            description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
             invoice_date: invoice.invoice_date,
             due_date: invoice.due_date,
             po_number: invoiceData.po_number ?? invoice.po_number ?? null,
             currency: invoice.currency ?? invoiceData.currency ?? null,
           });
 
-          // Run anomaly detection
-          if (existingInvoices) {
-            try {
-              const anomalyResult = await detectAnomalies(
-                {
-                  invoice_number: invoiceData.invoice_number,
-                  invoice_date: invoiceData.invoice_date,
-                  due_date: invoiceData.due_date,
-                  vendor_name: invoiceData.vendor_name,
-                  vendor_email: invoiceData.vendor_email || null,
-                  total_amount: invoiceData.total_amount,
-                },
-                existingInvoices
-              );
+          try {
+            await scanInvoiceAnomalies(
+              {
+                id: invoice.id,
+                company_id: companyId,
+                invoice_number: String(invoice.invoice_number),
+                invoice_date: String(invoice.invoice_date),
+                due_date: invoice.due_date ?? invoiceData.due_date,
+                vendor_name: String(invoice.vendor_name),
+                vendor_email: invoice.vendor_email ?? invoiceData.vendor_email ?? null,
+                vendor_trn: (invoice as { vendor_trn?: string }).vendor_trn ?? invoiceData.vendor_trn ?? null,
+                gstin: (invoice as { gstin?: string }).gstin ?? invoiceData.gstin ?? null,
+                total_amount: Number(invoice.total_amount),
+                po_number: invoiceData.po_number ?? invoice.po_number ?? null,
+                po_id: (invoice as { po_id?: string }).po_id ?? null,
+                description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
+                created_at: invoice.created_at ?? null,
+              },
+              'bulk-import',
+            );
+          } catch (anomalyError) {
+            console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
+          }
 
-              const { error: riskUpdateError } = await supabase
-                .from('invoices')
-                .update({
-                  risk_score: anomalyResult.risk_score,
-                  risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', invoice.id);
-              if (riskUpdateError) {
-                logSupabaseInvoiceError(
-                  `Anomaly PATCH failed: ${invoiceData.invoice_number}`,
-                  riskUpdateError,
-                  { id: invoice.id, company_id: companyId },
-                );
-              }
-            } catch (anomalyError) {
-              console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
+          if (invoiceData.po_number?.trim() || invoiceData.vendor_name?.trim()) {
+            try {
+              await runAutoMatch(invoice.id);
+            } catch (matchError) {
+              console.warn(`Auto match failed for invoice ${invoiceData.invoice_number}:`, matchError);
             }
           }
 
-          // Create audit log
-          await supabase.from('audit_logs').insert({
-            invoice_id: invoice.id,
-            action: 'Created',
-            user_name: 'System User',
-          });
+          if (initialStatus === 'Approved') {
+            await awaitGlPostAfterApproval(invoice, companyId, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
+          }
+
+          try {
+            if (canWriteAuditLogs) {
+              await supabase.from('audit_logs').insert({
+                invoice_id: invoice.id,
+                action: 'Created',
+                user_name: 'System User',
+              });
+            }
+          } catch {
+            /* audit may also hit RLS — non-fatal after successful insert */
+          }
 
           results.success++;
-        } catch (error: any) {
+        } catch (error: unknown) {
           results.failed++;
           results.errors.push({
             row: rowNum,
             invoice_number: invoiceData.invoice_number,
-            error: error.message || 'Unknown error',
+            error: error instanceof Error ? error.message : 'Unknown error',
           });
-          console.error('ROW FAILED (catch):', invoiceData.invoice_number, '|', error?.message);
+          console.error('ROW FAILED (catch):', invoiceData.invoice_number, error);
         }
       }
 
@@ -1903,7 +2020,7 @@ export function InvoiceUpload() {
           title: 'Bulk Upload Error',
           description:
             msg ||
-            'Could not link workspace to AP company. Ensure backend is running on :8001 and run supabase/migrations/003_companies_workspace_id.sql',
+            'Could not link workspace to AP company. Ensure backend is running and SUPABASE_SERVICE_ROLE_KEY is set.',
           variant: 'destructive',
         });
       }
@@ -2011,8 +2128,13 @@ export function InvoiceUpload() {
     const url = invoiceFlowAgentUrl('/api/agent/extract-image');
     const payload = new FormData();
     payload.append('file', file, file.name);
+    payload.append('market', isUAE ? 'uae' : 'india');
 
-    const response = await fetch(url, { method: 'POST', body: payload });
+    const headers: Record<string, string> = {};
+    const token = getStoredAccessToken() || accessToken;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetch(url, { method: 'POST', headers, body: payload });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -2122,9 +2244,27 @@ export function InvoiceUpload() {
 
           const taxRate = invoiceData.tax_rate ? Number(invoiceData.tax_rate) : 0;
           const taxType = invoiceData.tax_type || 'None';
-          const subtotalAmount = lineItemsTotal;
-          const taxAmount = taxType !== 'None' && taxRate > 0 ? (subtotalAmount * taxRate) / 100 : 0;
-          const totalAmount = subtotalAmount + taxAmount;
+          // India GST OCR returns cgst_amount/sgst_amount/igst_amount + tax_amount/total_amount
+          // directly (no tax_rate/tax_type) — prefer those extracted values over recomputing
+          // from a rate that the GST prompt never sets, which previously zeroed out GST entirely.
+          const cgstAmount = Number(invoiceData.cgst_amount) || 0;
+          const sgstAmount = Number(invoiceData.sgst_amount) || 0;
+          const igstAmount = Number(invoiceData.igst_amount) || 0;
+          const extractedTaxAmount = Number(invoiceData.tax_amount) || (cgstAmount + sgstAmount + igstAmount);
+          const extractedTotalAmount = Number(invoiceData.total_amount) || 0;
+          const hasGstSplit = cgstAmount > 0 || sgstAmount > 0 || igstAmount > 0;
+
+          const subtotalAmount =
+            hasGstSplit || extractedTaxAmount > 0
+              ? Number(invoiceData.taxable_amount) || Math.max(0, extractedTotalAmount - extractedTaxAmount) || lineItemsTotal
+              : lineItemsTotal;
+          const taxAmount =
+            hasGstSplit || extractedTaxAmount > 0
+              ? extractedTaxAmount
+              : taxType !== 'None' && taxRate > 0
+                ? (subtotalAmount * taxRate) / 100
+                : 0;
+          const totalAmount = extractedTotalAmount > 0 ? extractedTotalAmount : subtotalAmount + taxAmount;
 
           const approvalLevel = getRequiredApprovalLevel(totalAmount);
           const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
@@ -2157,11 +2297,17 @@ export function InvoiceUpload() {
             vendor_phone: invoiceData.vendor_phone || null,
             vendor_address: invoiceData.vendor_address || null,
             subtotal_amount: subtotalAmount,
+            taxable_amount: subtotalAmount,
             tax_type: taxType,
             tax_rate: taxType !== 'None' ? taxRate : 0,
             tax_amount: taxAmount,
+            cgst_amount: cgstAmount || null,
+            sgst_amount: sgstAmount || null,
+            igst_amount: igstAmount || null,
+            vendor_gstin: invoiceData.vendor_gstin || invoiceData.gstin || null,
+            hsn_sac: invoiceData.hsn_sac || null,
             total_amount: totalAmount,
-            currency: invoiceData.currency || 'USD',
+            currency: invoiceData.currency || 'INR',
             status: initialStatus,
             file_url: `queue-${item.file.name}`,
             file_type: item.file.type,
@@ -2210,32 +2356,28 @@ export function InvoiceUpload() {
             await supabase.from('invoice_line_items').insert(lineItemsData);
           }
 
-          // Run anomaly detection
-          if (existingInvoices) {
-            try {
-              const anomalyResult = await detectAnomalies(
-                {
-                  invoice_number: invoiceData.invoice_number || `AUTO-${Date.now()}`,
-                  invoice_date: invoiceDate ?? '',
-                  due_date: dueDate ?? '',
-                  vendor_name: invoiceData.vendor_name || 'Unknown',
-                  vendor_email: invoiceData.vendor_email || null,
-                  total_amount: totalAmount,
-                },
-                existingInvoices
-              );
-
-              await supabase
-                .from('invoices')
-                .update({
-                  risk_score: anomalyResult.risk_score,
-                  risk_flags: Array.isArray(anomalyResult.risk_flags) ? anomalyResult.risk_flags : [],
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', invoice.id);
-            } catch (anomalyError) {
-              console.error(`Anomaly detection failed for ${item.file.name}:`, anomalyError);
-            }
+          // Full anomaly pipeline
+          try {
+            await scanInvoiceAnomalies(
+              {
+                id: invoice.id,
+                company_id: companyIdQ,
+                invoice_number: invoiceData.invoice_number || `AUTO-${Date.now()}`,
+                invoice_date: invoiceDate ?? '',
+                due_date: dueDate ?? '',
+                vendor_name: invoiceData.vendor_name || 'Unknown',
+                vendor_email: invoiceData.vendor_email || null,
+                vendor_trn: invoiceData.vendor_trn || null,
+                gstin: invoiceData.gstin || null,
+                total_amount: totalAmount,
+                po_number: invoiceData.po_number || null,
+                description: descriptionFromBatchRow(invoiceData as Record<string, unknown>),
+                created_at: invoice.created_at ?? null,
+              },
+              'invoice-upload-queue',
+            );
+          } catch (anomalyError) {
+            console.error(`Anomaly detection failed for ${item.file.name}:`, anomalyError);
           }
 
           const ifrsCat = invoiceData.ifrs_category ?? invoiceData.category;
@@ -2258,6 +2400,28 @@ export function InvoiceUpload() {
               await runAutoMatch(invoice.id);
             } catch (matchError) {
               console.error(`Auto match failed for ${item.file.name}:`, matchError);
+            }
+          }
+
+          if (initialStatus === 'Approved') {
+            await awaitGlPostAfterApproval(invoice as import('../../lib/ap-invoice/supabase').Invoice, companyIdQ, (opts) =>
+              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+            );
+          }
+
+          if (companyIdQ) {
+            try {
+              await syncAfterPdfExtract(
+                {
+                  ...invoice,
+                  ocr_confidence: ocrConfQ,
+                  vat_treatment: invoiceData.vat_treatment || invoice.vat_treatment || null,
+                } as import('../../lib/ap-invoice/supabase').Invoice,
+                companyIdQ,
+                ocrConfQ,
+              );
+            } catch (e) {
+              console.warn('[AP] multi-pdf sync-after-extract failed:', e);
             }
           }
 
@@ -2447,6 +2611,7 @@ export function InvoiceUpload() {
           invoice_date: invoiceDate,
           due_date: dueDate,
           po_number: String((dataToUse as Record<string, unknown>).po_number ?? '').trim() || null,
+          cost_center: String((dataToUse as Record<string, unknown>).cost_center ?? formData.cost_center ?? '').trim() || null,
           currency: dataToUse.currency || 'INR',
           exchange_rate_to_base: 1,
           tax_code: (dataToUse as { taxCode?: string }).taxCode ?? formData.taxCode,
@@ -2563,6 +2728,32 @@ export function InvoiceUpload() {
           updated_at: new Date().toISOString(),
         })
         .eq('id', newInvoice.id);
+
+      if (totalAmount < 500 && companyId) {
+        await awaitGlPostAfterApproval(newInvoice as import('../../lib/ap-invoice/supabase').Invoice, companyId, (opts) =>
+          toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+        );
+      }
+
+      // High-confidence PDF extract → gulftax_transactions (shared backend helper)
+      if (companyId) {
+        try {
+          const syncRes = await syncAfterPdfExtract(
+            {
+              ...newInvoice,
+              ocr_confidence: ocrConfidenceSaved,
+              vat_treatment: (uaeAdvanceFields.vat_treatment as string) || vatTreatment || null,
+            } as import('../../lib/ap-invoice/supabase').Invoice,
+            companyId,
+            ocrConfidenceSaved,
+          );
+          if (syncRes.synced) {
+            console.log('[AP] PDF extract auto-synced to GulfTax', syncRes.fta_box);
+          }
+        } catch (e) {
+          console.warn('[AP] sync-after-extract failed:', e);
+        }
+      }
 
       // STEP 6: Duplicate detection
       const { data: dupes } = await supabase
@@ -2765,7 +2956,7 @@ export function InvoiceUpload() {
                       vendor_phone: '',
                       vendor_address: '',
                       total_amount: '',
-                      currency: baseCurrency || 'USD',
+                      currency: baseCurrency || marketCurrency,
                       taxCode: 'NONE',
                       tax_type: 'None',
                       tax_rate: '',
@@ -2829,27 +3020,19 @@ export function InvoiceUpload() {
         </div>
       )}
 
-      <Tabs defaultValue="scan" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 h-auto gap-1">
-          <TabsTrigger value="scan" className="text-xs sm:text-sm py-2">
-            <Camera className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Scan</span>
-            <span className="hidden sm:inline">Scan Invoice</span>
+      <Tabs value={uploadMethod} onValueChange={(v) => setUploadMethod(v as typeof uploadMethod)} className="w-full">
+        <TabsList className="mb-4 grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4">
+          <TabsTrigger value="scan" className="text-sm">
+            Scan Invoice
           </TabsTrigger>
-          <TabsTrigger value="single" className="text-xs sm:text-sm py-2">
-            <Upload className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Upload</span>
-            <span className="hidden sm:inline">Single Upload</span>
+          <TabsTrigger value="single" className="text-sm">
+            Single Upload
           </TabsTrigger>
-          <TabsTrigger value="bulk" className="text-xs sm:text-sm py-2">
-            <FileSpreadsheet className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Excel</span>
-            <span className="hidden sm:inline">Bulk (Excel/CSV)</span>
+          <TabsTrigger value="bulk" className="text-sm">
+            Bulk Excel/CSV
           </TabsTrigger>
-          <TabsTrigger value="multi-pdf" className="text-xs sm:text-sm py-2">
-            <FileText className="h-4 w-4 shrink-0" />
-            <span className="sm:hidden">Multi PDF</span>
-            <span className="hidden sm:inline">Multiple PDFs</span>
+          <TabsTrigger value="multi-pdf" className="text-sm">
+            Multiple PDFs
           </TabsTrigger>
         </TabsList>
 
@@ -3080,6 +3263,11 @@ export function InvoiceUpload() {
               </div>
             </div>
 
+            <CostCenterSelect
+              value={formData.cost_center}
+              onChange={(v) => setFormData({ ...formData, cost_center: v })}
+            />
+
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="vendor_phone">Vendor Phone</Label>
@@ -3273,7 +3461,7 @@ export function InvoiceUpload() {
                 />
                 {vendorTrn && (
                   <p className={`text-xs font-medium ${validateTaxId(vendorTrn, 'uae') ? 'text-green-700' : 'text-red-600'}`}>
-                    {validateTaxId(vendorTrn, 'uae') ? 'âœ“ Valid TRN format' : 'âœ— TRN must be 15 digits starting with 1'}
+                    {validateTaxId(vendorTrn, 'uae') ? 'Valid TRN format' : 'TRN must be 15 digits starting with 1'}
                   </p>
                 )}
               </div>
@@ -3659,7 +3847,7 @@ export function InvoiceUpload() {
                                       {errors.join(', ')}
                                     </div>
                                   ) : (
-                                    <span className="text-xs text-green-600">âœ“ Valid</span>
+                                    <span className="text-xs text-green-600">Valid</span>
                                   )}
                                 </TableCell>
                               </TableRow>
@@ -3933,7 +4121,7 @@ export function InvoiceUpload() {
                                     </div>
                                   </div>
                                   {item.extractedData._saved && (
-                                    <p className="text-xs text-green-600">âœ“ Saved successfully</p>
+                                    <p className="text-xs text-green-600">Saved successfully</p>
                                   )}
                                 </div>
                               )}

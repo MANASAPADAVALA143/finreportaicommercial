@@ -62,11 +62,5 @@ ALTER TABLE public.vendor_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ap_intelligence ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.training_uploads ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS vendor_profiles_public_all ON public.vendor_profiles;
-CREATE POLICY vendor_profiles_public_all ON public.vendor_profiles FOR ALL TO public USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS ap_intelligence_public_all ON public.ap_intelligence;
-CREATE POLICY ap_intelligence_public_all ON public.ap_intelligence FOR ALL TO public USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS training_uploads_public_all ON public.training_uploads;
-CREATE POLICY training_uploads_public_all ON public.training_uploads FOR ALL TO public USING (true) WITH CHECK (true);
+-- RLS policies: apply via 028_ap_tenant_rls_fix.sql (tenant-scoped).
+-- Do NOT add *_public_all policies here — they override tenant isolation.

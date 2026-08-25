@@ -1,3 +1,7 @@
+# NOTE: This file is synced from the standalone GulfTax repo.
+# User/auth models are intentionally excluded — see scripts/sync_gulftax.sh.
+# Do not add auth models here; use app.models.users.User (RbacUser).
+
 """SQLAlchemy database models for GulfTax AI"""
 from datetime import datetime
 
@@ -42,7 +46,7 @@ class Company(Base):
 
 
 class UserCompany(Base):
-    """Links Supabase auth users (UUID string) to companies."""
+    """Links Supabase auth users (UUID string) to companies — no separate User ORM table."""
     __tablename__ = "user_companies"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -66,7 +70,7 @@ class Transaction(Base):
     vendor_or_customer = Column(String(255))
     invoice_number = Column(String(100))
     vat_treatment = Column(String(50), nullable=True)  # standard_rated / zero_rated / exempt / out_of_scope / reverse_charge
-    transaction_type = Column(String(20), nullable=False, default="sale")  # sale | purchase
+    transaction_type = Column(String(20), nullable=False, default="purchase")  # sale | purchase
     vat_amount_aed = Column(Float, default=0.0)
     confidence_score = Column(Float)  # AI confidence score (0-100)
     ai_reasoning = Column(Text)  # AI reasoning text
@@ -80,7 +84,8 @@ class Transaction(Base):
     source_file_name = Column(String(255), nullable=True)
     source_metadata = Column(JSON, nullable=True)  # Original PDF extraction payload
     vendor_trn = Column(String(50), nullable=True)
-    source_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True, index=True)
+    # gulftax_invoices — NOT shared FinReportAI AP `invoices` table
+    source_invoice_id = Column(Integer, ForeignKey("gulftax_invoices.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     company = relationship("Company", back_populates="transactions")
@@ -124,12 +129,18 @@ class ReconciliationResult(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)
     vat_return_id = Column(Integer, ForeignKey("vat_returns.id"), nullable=True, index=True)
+    tax_period = Column(String(16), nullable=True, index=True)
+    period_start = Column(Date, nullable=True)
+    period_end = Column(Date, nullable=True)
     total_invoices_aed = Column(Float, default=0.0)
     total_output_vat_aed = Column(Float, default=0.0)
     vat_return_output_aed = Column(Float, default=0.0)
     difference_aed = Column(Float, default=0.0)
     mismatches = Column(JSON)  # JSON array of mismatch details
-    status = Column(String(50), default="matched")  # matched / mismatch_found
+    box_breakdown = Column(JSON, nullable=True)
+    status = Column(String(50), default="matched")  # matched / mismatch_found / no_return
+    source = Column(String(64), nullable=True)
+    override_reason = Column(String(2000), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     company = relationship("Company", back_populates="reconciliation_results")
@@ -190,8 +201,13 @@ class FTASubmissionLog(Base):
 
 
 class AuditLog(Base):
-    """Append-only activity log for dashboard and compliance trail."""
-    __tablename__ = "audit_logs"
+    """Append-only activity log for dashboard and compliance trail.
+
+    Table is `gulftax_audit_logs` — FinReportAI already owns `audit_logs`
+    (user_id / resource / details) on the shared RDS; colliding names caused
+    UndefinedColumn crashes on GET /api/dashboard/summary.
+    """
+    __tablename__ = "gulftax_audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=True, index=True)
@@ -209,8 +225,12 @@ class AuditLog(Base):
 
 
 class Invoice(Base):
-    """AI-extracted and classified invoice for AP review queue."""
-    __tablename__ = "invoices"
+    """AI-extracted and classified invoice for GulfTax invoice-flow queue.
+
+    Table is `gulftax_invoices` — FinReportAI AP already owns `invoices`
+    (UUID PK, tenant_id, total_amount, …) on the shared RDS.
+    """
+    __tablename__ = "gulftax_invoices"
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(String(255), ForeignKey("companies.id"), nullable=False, index=True)

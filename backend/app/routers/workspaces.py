@@ -13,7 +13,7 @@ from app.middleware.auth import get_current_user, require_role
 from app.middleware.workspace import WorkspaceContext, validate_workspace, require_workspace_role
 from app.models.users import User, UserRole
 from app.models.workspace import Workspace, WorkspaceMember, WorkspaceRole, WorkspaceVATSettings
-from app.services.ap_company_sync import sync_ap_company_for_workspace
+from app.services.ap_company_sync import sync_ap_company_for_workspace, upsert_ap_company_rds
 from app.services.workspace_service import (
     add_workspace_member,
     create_workspace,
@@ -50,6 +50,19 @@ class WorkspaceUpdate(BaseModel):
 class MemberAdd(BaseModel):
     user_id: str
     role: str = "accountant"
+
+
+class SyncApCompanyBody(BaseModel):
+    """Optional Supabase auth user — ensures company_members so invoice inserts pass RLS.
+
+    When finreport_company_id is set, upserts that exact AP company (1:1 with the
+    banner company). Workspace-only sync is wrong when a workspace has multiple companies.
+    """
+    supabase_user_id: str | None = None
+    email: str | None = None
+    name: str | None = None
+    finreport_company_id: str | None = None
+    company_name: str | None = None
 
 
 @router.get("")
@@ -137,20 +150,50 @@ def delete_workspace(
 @router.post("/{workspace_id}/sync-ap-company")
 def sync_ap_company(
     workspace_id: str,
+    body: SyncApCompanyBody | None = None,
     ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Link this workspace to a Supabase AP companies row (service role)."""
+    """Link this workspace to a Supabase AP companies row (service role).
+
+    Pass supabase_user_id so the browser user is added to company_members
+    (required for invoices RLS on Excel / PDF uploads).
+    """
     if ctx.workspace_id != workspace_id:
         raise HTTPException(status_code=403, detail="Workspace mismatch")
-    company = sync_ap_company_for_workspace(ctx.workspace)
+    payload = body or SyncApCompanyBody()
+    sb_uid = (payload.supabase_user_id or "").strip() or None
+    fin_cid = (payload.finreport_company_id or "").strip() or None
+    if fin_cid:
+        from app.services.ap_company_sync import sync_ap_company_for_profile
+
+        company = sync_ap_company_for_profile(
+            ctx.workspace,
+            company_id=fin_cid,
+            company_name=(payload.company_name or "").strip() or None,
+            supabase_user_id=sb_uid,
+            user_email=(payload.email or user.email or None),
+            user_name=(payload.name or user.name or None),
+        )
+    else:
+        company = sync_ap_company_for_workspace(
+            ctx.workspace,
+            supabase_user_id=sb_uid,
+            user_email=(payload.email or user.email or None),
+            user_name=(payload.name or user.name or None),
+        )
     if not company:
         raise HTTPException(
             status_code=503,
             detail="Could not sync AP company. Check SUPABASE_URL/SUPABASE_KEY and run migrations/003_companies_workspace_id.sql",
         )
-    return {"company": company, "company_id": company.get("id")}
-
+    upsert_ap_company_rds(db, ctx.workspace, company)
+    return {
+        "company": company,
+        "company_id": company.get("id"),
+        "membership_ensured": bool(sb_uid),
+    }
 
 @router.get("/{workspace_id}/dashboard")
 def workspace_dashboard(

@@ -31,7 +31,7 @@ export const INDIA_CONFIG: MarketConfig = {
 export const UAE_CONFIG: MarketConfig = {
   market: 'uae',
   currency: 'AED',
-  currencySymbol: 'AED',
+  currencySymbol: 'د.إ',
   taxLabel: 'VAT',
   taxIdLabel: 'TRN',
   taxIdPlaceholder: '100234567890123',

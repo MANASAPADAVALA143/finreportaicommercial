@@ -1,5 +1,6 @@
 import { getStoredWorkspaceId } from './workspaceService';
 import { getActiveCompanyId } from '../context/CompanyContext';
+import { getStoredAccessToken } from '../utils/authToken';
 
 /** Empty string = use Vite proxy (/api → localhost:8001) in dev */
 const API = import.meta.env.VITE_API_URL || '';
@@ -25,6 +26,8 @@ function headers(): Record<string, string> {
   if (ws) h['X-Workspace-Id'] = ws;
   const cid = companyId();
   if (cid) h['X-Company-Id'] = cid;
+  const token = getStoredAccessToken();
+  if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 
@@ -165,6 +168,94 @@ export async function syncGulfTaxPeriod(period: string, companyIdParam?: string)
   });
 }
 
+export type VatPeriodOption = {
+  tax_period: string;
+  transaction_count: number;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export type VatReconStatus = {
+  id?: number;
+  status: 'matched' | 'mismatch_found' | 'no_return' | 'never_run';
+  tax_period: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  difference_aed: number | null;
+  box_breakdown?: Record<string, number>;
+  mismatches: Array<{
+    invoice_number?: string;
+    issue: string;
+    transaction_amount?: number;
+    return_amount?: number;
+    difference?: number;
+  }>;
+  override_reason?: string | null;
+  last_run_at?: string | null;
+  source?: string | null;
+};
+
+export type VatReconRunResult = VatReconStatus & {
+  recommendation: string;
+  transaction_count: number;
+  computed_boxes?: Record<string, unknown>;
+  vat_return_id?: number | null;
+};
+
+export type VatReconHistoryItem = {
+  id: number;
+  status: string;
+  tax_period: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  difference_aed: number;
+  transaction_count: number;
+  override_reason: string | null;
+  source: string | null;
+  created_at: string | null;
+};
+
+export async function fetchVatPeriods(companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<{ periods: VatPeriodOption[] }>('/api/gulftax/vat-periods', { company_id: cid });
+}
+
+export async function runVatRecon(period: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return post<VatReconRunResult>('/api/gulftax/recon/run', {
+    period,
+    company_id: cid,
+    workspace_id: workspaceId(),
+  });
+}
+
+export async function fetchVatReconStatus(period: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<VatReconStatus>('/api/gulftax/recon/status', { period, company_id: cid });
+}
+
+export async function fetchVatReconHistory(companyIdParam?: string, limit = 20) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return get<{ items: VatReconHistoryItem[] }>('/api/gulftax/recon/history', {
+    company_id: cid,
+    limit: String(limit),
+  });
+}
+
+export async function submitVatReconOverride(period: string, reason: string, companyIdParam?: string) {
+  const cid = companyIdParam || companyId();
+  if (!cid) throw new Error('company_id is required');
+  return post<{ id: number; override_reason: string }>('/api/gulftax/recon/override', {
+    period,
+    reason,
+    company_id: cid,
+  });
+}
+
 export async function syncApprovedInvoiceToGulfTax(invoiceId: string, companyIdParam?: string) {
   const cid = companyIdParam || companyId();
   if (!cid) throw new Error('company_id is required');
@@ -225,6 +316,10 @@ export async function calculateEInvoicingPhase(annualRevenue: number, trn = '') 
 
 export async function assessEInvoicingReadiness(params: Record<string, unknown>) {
   return post('/api/gulftax/einvoicing/readiness', params);
+}
+
+export async function fetchCompanyEInvoicingReadiness() {
+  return get<Record<string, unknown>>('/api/gulftax/einvoicing/readiness/company');
 }
 
 export async function validateEInvoice(params: Record<string, unknown>) {
@@ -386,21 +481,87 @@ export async function triggerEInvoicingAutomation(companyId: string) {
 }
 
 // ── ASP submission (n8n webhook) ─────────────────────────────────────────────
-export type AspSubmissionStatus = 'pending' | 'accepted' | 'rejected';
+export type AspSubmissionStatus = 'pending' | 'accepted' | 'rejected' | 'error';
 
 export interface AspSubmission {
   id: string;
+  invoice_id?: string | null;
   invoice_number: string;
-  invoice_date: string;
-  seller_trn?: string;
-  buyer_trn?: string;
-  net_amount: number;
-  vat_amount: number;
-  gross_amount: number;
+  record_type?: 'outbound_ar' | 'internal_vendor_record';
+  submission_status: AspSubmissionStatus;
   status: AspSubmissionStatus;
-  rejection_reason: string | null;
-  submitted_at: string;
-  updated_at: string;
+  xml_payload?: string | null;
+  asp_reference?: string | null;
+  error_message?: string | null;
+  rejection_reason?: string | null;
+  submitted_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Vendor-received internal archives — never ASP-submittable as outbound e-invoices. */
+export function isInternalVendorSubmission(row: AspSubmission): boolean {
+  return (
+    row.record_type === 'internal_vendor_record' ||
+    (row.invoice_id?.startsWith('gulftax-flow-') ?? false)
+  );
+}
+
+/** AP invoices we received from vendors — not outbound e-invoices we issued. */
+export function isApVendorReceivedInvoice(invoice: {
+  vendor_name?: string | null;
+  vendor_trn?: string | null;
+}): boolean {
+  return Boolean(String(invoice.vendor_name ?? invoice.vendor_trn ?? '').trim());
+}
+
+export function parseAspXmlAmounts(xml: string | null | undefined): {
+  net: number;
+  vat: number;
+  gross: number;
+} {
+  if (!xml) return { net: 0, vat: 0, gross: 0 };
+  const pick = (tag: string) => {
+    const m =
+      xml.match(new RegExp(`<cbc:${tag}[^>]*>([\\d.]+)<`, 'i')) ||
+      xml.match(new RegExp(`${tag}[^>]*>([\\d.]+)<`, 'i'));
+    return m ? parseFloat(m[1]) : 0;
+  };
+  const net = pick('TaxExclusiveAmount');
+  const vat = pick('TaxAmount');
+  const gross = pick('PayableAmount') || (net > 0 ? net + vat : 0);
+  return { net, vat, gross };
+}
+
+/** One-click ASP submit for an existing pending submission row (reuses POST /asp/submit). */
+export async function submitAspSubmissionRow(row: AspSubmission) {
+  if (isInternalVendorSubmission(row)) {
+    throw new Error('Internal vendor records cannot be submitted to ASP');
+  }
+  const { net, vat, gross } = parseAspXmlAmounts(row.xml_payload);
+  const netAmount = net > 0 ? net : gross > vat ? gross - vat : gross;
+  return submitToAsp({
+    submission_id: row.id,
+    invoice_id: row.invoice_id ?? undefined,
+    invoice_number: row.invoice_number,
+    net_amount: netAmount > 0 ? netAmount : 1,
+    vat_amount: vat,
+    gross_amount: gross > 0 ? gross : netAmount + vat,
+    xml_content: row.xml_payload ?? '',
+  });
+}
+
+export async function validateEInvoiceXml(file: File, isB2b = true) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('is_b2b', String(isB2b));
+  const res = await fetch(`${API}/api/gulftax/einvoicing/validate-xml`, {
+    method: 'POST',
+    headers: { 'X-Workspace-ID': workspaceId(), 'X-Tenant-ID': workspaceId() },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function submitToAsp(params: {
@@ -412,14 +573,146 @@ export async function submitToAsp(params: {
   vat_amount: number;
   gross_amount: number;
   xml_content?: string;
+  invoice_id?: string;
+  submission_id?: string;
+  company_id?: string;
 }): Promise<{ submission_id: string; status: AspSubmissionStatus; message: string }> {
-  return post('/api/gulftax/einvoicing/asp/submit', params);
+  return post('/api/gulftax/einvoicing/asp/submit', {
+    ...params,
+    workspace_id: workspaceId(),
+    company_id: params.company_id || companyId(),
+  });
 }
 
 export async function fetchAspSubmissions(limit = 20): Promise<{ items: AspSubmission[] }> {
-  return get('/api/gulftax/einvoicing/asp/submissions', { limit: String(limit) });
+  const cid = companyId();
+  return get('/api/gulftax/einvoicing/asp/submissions', {
+    limit: String(limit),
+    ...(cid ? { company_id: cid, workspace_id: workspaceId() } : {}),
+  });
 }
 
 export async function redriveAspSubmission(submissionId: string): Promise<{ submission_id: string; status: AspSubmissionStatus }> {
   return post(`/api/gulftax/einvoicing/asp/${submissionId}/redrive`, {});
 }
+
+// ── Audit-ready period exports ────────────────────────────────────────────────
+
+export type AuditPeriod = {
+  tax_period: string;
+  transaction_count: number;
+  period_start: string | null;
+  period_end: string | null;
+};
+
+export type AuditManifestArtifact = {
+  sheet: string;
+  description: string;
+  row_count: number;
+};
+
+export type AuditManifest = {
+  company_name: string;
+  trn: string;
+  tax_period: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  generated_by: string;
+  excel_filename: string;
+  artifacts: AuditManifestArtifact[];
+  excel_sha256?: string;
+  preview?: boolean;
+};
+
+export async function fetchAuditPeriods(): Promise<{ items: AuditPeriod[] }> {
+  return get('/api/gulftax/audit/periods');
+}
+
+export async function fetchAuditManifest(taxPeriod: string): Promise<AuditManifest> {
+  return get(`/api/gulftax/audit/manifest/${encodeURIComponent(taxPeriod)}`);
+}
+
+export async function downloadAuditPack(taxPeriod: string): Promise<void> {
+  const qs = new URLSearchParams({
+    workspace_id: workspaceId(),
+    ...(companyId() ? { company_id: companyId() } : {}),
+  });
+  const res = await fetch(
+    `${API}/api/gulftax/audit/pack/${encodeURIComponent(taxPeriod)}?${qs}`,
+    { headers: headers() },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `audit_pack_${taxPeriod.replace(/\//g, '-')}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+// ── Tax Compliance / Audit checklist ─────────────────────────────────────────
+export type FtaChecklistItem = {
+  id: string;
+  category: string;
+  title: string;
+  description: string;
+  status: 'pass' | 'warning' | 'fail' | 'na';
+  risk_level: 'low' | 'medium' | 'high';
+  detail: string;
+  count?: number;
+};
+
+export type FtaAuditChecklist = {
+  company_name: string;
+  trn: string | null;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  overall_score_pct: number;
+  overall_risk: 'low' | 'medium' | 'high';
+  summary: { pass: number; warning: number; fail: number };
+  transaction_count: number;
+  items: FtaChecklistItem[];
+};
+
+export function taxPeriodToDateRange(period: string): { start: string; end: string } {
+  const m = /^(\d{4})-Q([1-4])$/i.exec(period.trim());
+  if (m) {
+    const year = Number(m[1]);
+    const q = Number(m[2]);
+    const startMonth = (q - 1) * 3 + 1;
+    const endMonth = startMonth + 2;
+    const start = `${year}-${String(startMonth).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, endMonth, 0).getDate();
+    const end = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    return { start, end };
+  }
+  const ym = /^(\d{4})-(\d{2})$/.exec(period.trim());
+  if (ym) {
+    const year = Number(ym[1]);
+    const month = Number(ym[2]);
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    return { start, end };
+  }
+  const y = new Date().getFullYear();
+  return { start: `${y}-01-01`, end: `${y}-12-31` };
+}
+
+export async function fetchFtaAuditChecklist(
+  periodStart: string,
+  periodEnd: string,
+): Promise<FtaAuditChecklist> {
+  return get<FtaAuditChecklist>('/api/gulftax/fta/audit-checklist', {
+    period_start: periodStart,
+    period_end: periodEnd,
+  });
+}
+

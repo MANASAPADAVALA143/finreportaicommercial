@@ -1,11 +1,45 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { Sparkles, Video, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, ArrowRight } from 'lucide-react';
 import { LandingNovaBot } from './LandingNovaBot';
+import { pinIndiaSuiteMarket, pinUaeSuiteMarket } from '../../config/productRole';
+import { useMarket } from '../../contexts/MarketContext';
 
 export const LandingPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { market, setMarket } = useMarket();
+
+  const openAp = (next: 'uae' | 'india') => {
+    if (next === 'uae') pinUaeSuiteMarket();
+    else pinIndiaSuiteMarket();
+    void setMarket(next);
+    navigate('/ap-invoices');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900 relative overflow-hidden">
+      <div className="absolute top-6 right-6 z-10 flex items-center gap-0.5 rounded-full bg-white/10 p-0.5">
+        <button
+          type="button"
+          onClick={() => openAp('uae')}
+          title="UAE — VAT, TRN, AED"
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
+            market === 'uae' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          🇦🇪 UAE
+        </button>
+        <button
+          type="button"
+          onClick={() => openAp('india')}
+          title="India — GST, GSTIN, INR"
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
+            market === 'india' ? 'bg-orange-600 text-white' : 'text-slate-300 hover:text-white'
+          }`}
+        >
+          🇮🇳 India
+        </button>
+      </div>
       {/* Animated Grid Background */}
       <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSAxMCAwIEwgMCAwIDAgMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgxNDgsIDE2MywgMTg0LCAwLjA1KSIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-20"></div>
       
@@ -36,15 +70,24 @@ export const LandingPage: React.FC = () => {
             predictive analytics
           </p>
 
-          {/* CTA Buttons */}
-          <div className="flex gap-6 justify-center items-center">
-            <Link
-              to="/dashboard"
+          {/* CTA — open AP by market (login restored later) */}
+          <div className="flex gap-6 justify-center items-center flex-wrap">
+            <button
+              type="button"
+              onClick={() => openAp('india')}
+              className="group relative px-8 py-4 bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-500 text-white rounded-xl font-semibold hover:shadow-2xl hover:shadow-orange-500/40 transition-all duration-300 transform hover:scale-105 flex items-center gap-2"
+            >
+              🇮🇳 Open India AP (INR · GST)
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+            </button>
+            <button
+              type="button"
+              onClick={() => openAp('uae')}
               className="group relative px-8 py-4 bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 text-white rounded-xl font-semibold hover:shadow-2xl hover:shadow-cyan-500/50 transition-all duration-300 transform hover:scale-105 flex items-center gap-2"
             >
-              Launch Dashboard
+              🇦🇪 Open UAE AP (AED · VAT)
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-            </Link>
+            </button>
           </div>
         </div>
       </div>

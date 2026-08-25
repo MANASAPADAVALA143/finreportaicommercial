@@ -16,16 +16,18 @@ from middleware.auth import get_current_company_id
 
 # pgvector-backed RAG service — import never fails; returns [] on any error
 from services.uae_tax_rag_pg import uae_tax_rag  # type: ignore
-from services.vat_decision_tree import classify_with_decision_tree
+from services.vat_decision_tree import classify_with_decision_tree, coerce_box_number
 from services.vat_enrichment import apply_post_classification_rules, enrich_transaction_row
 from services.pdf_invoice_extractor import extract_and_classify_invoice, MAX_FILES
 
 from database import get_db
 from models import Transaction, Company, AuditLog
+import logging
 
 load_dotenv()
 
 router = APIRouter(prefix="/api/vat", tags=["VAT Classification"])
+logger = logging.getLogger(__name__)
 # Classification: POST /classify-transaction (single JSON) and POST /classify-bulk (multipart file) only.
 
 # Temp Excel files from bulk classify (job_id -> absolute path)
@@ -75,7 +77,7 @@ class TransactionResponse(BaseModel):
     vendor_or_customer: Optional[str]
     invoice_number: Optional[str]
     vat_treatment: Optional[str]
-    transaction_type: str = "sale"
+    transaction_type: str = "purchase"
     vat_amount_aed: float
     confidence_score: Optional[float]
     ai_reasoning: Optional[str]
@@ -143,6 +145,8 @@ def _vat_amount_for_treatment(amount_aed: float, treatment: Optional[str]) -> fl
 def _save_classification_fields(
     classification: Dict[str, Any],
     amount_aed: float,
+    *,
+    transaction_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Normalize classification dict from decision tree or AI+rules."""
     conf_0_100 = classification.get("confidence_score_0_100")
@@ -150,12 +154,24 @@ def _save_classification_fields(
         raw = classification.get("confidence_score", 0.85)
         conf_0_100 = raw * 100 if raw <= 1 else raw
 
+    side = (
+        (transaction_type or "").lower()
+        if (transaction_type or "").lower() in ("sale", "purchase")
+        else (
+            classification.get("transaction_side")
+            or classification.get("transaction_type_resolved")
+            or "purchase"
+        )
+    )
+    treatment = classification.get("vat_treatment", "standard_rated")
+    box = coerce_box_number(side, treatment, classification.get("box_number"))
+
     return {
-        "vat_treatment": classification.get("vat_treatment", "standard_rated"),
+        "vat_treatment": treatment,
         "vat_rate": int(classification.get("vat_rate", 5)),
         "vat_amount_aed": float(
             classification.get("vat_amount_aed")
-            or _vat_amount_for_treatment(amount_aed, classification.get("vat_treatment"))
+            or _vat_amount_for_treatment(amount_aed, treatment)
         ),
         "confidence_score_0_100": float(conf_0_100),
         "confidence_score_0_1": float(conf_0_100) / 100.0,
@@ -165,13 +181,47 @@ def _save_classification_fields(
         "blocked_input_vat": bool(classification.get("blocked_input_vat", False)),
         "blocked_reason": classification.get("blocked_reason"),
         "blocked_vat_amount": float(classification.get("blocked_vat_amount", 0.0)),
-        "box_number": classification.get("box_number"),
+        "box_number": box,
         "flags": classification.get("flags") or [],
         "review_tier": classification.get("review_tier", "review_required"),
-        "transaction_side": classification.get("transaction_side") or classification.get("transaction_type_resolved", "purchase"),
+        "transaction_side": side,
         "entertainment_flag": bool(classification.get("entertainment_flag", False)),
         "reverse_charge_flag": bool(classification.get("reverse_charge_flag", False)),
         "import_vat_flag": bool(classification.get("import_vat_flag", False)),
+    }
+
+
+def _fix_akk_and_purchase_boxes(db: Session, company_id: str) -> Dict[str, Any]:
+    """Enforce treatment-aware AP/AR boxes for every tenant (incl. AKK Consulting)."""
+    akk_fixed = 0
+    purchase_box_fixed = 0
+    fixed_txns: List[Transaction] = []
+
+    all_rows = db.query(Transaction).filter(Transaction.company_id == company_id).all()
+    for t in all_rows:
+        side = (t.transaction_type or "purchase").lower()
+        if side not in ("sale", "purchase"):
+            side = "purchase"
+            t.transaction_type = "purchase"
+        expected = coerce_box_number(side, t.vat_treatment, t.box_number)
+        vendor = (t.vendor_or_customer or "").lower()
+
+        # Normalize "no box" sentinel
+        current = t.box_number if t.box_number is not None else 0
+        if current != expected:
+            prev = t.box_number
+            t.box_number = expected if expected != 0 else None
+            if t not in fixed_txns:
+                fixed_txns.append(t)
+            if "akk consulting" in vendor:
+                akk_fixed += 1
+            elif side == "purchase" or prev in (1, 2, 3, 4, 5):
+                purchase_box_fixed += 1
+
+    return {
+        "akk_fixed": akk_fixed,
+        "purchase_box_fixed": purchase_box_fixed,
+        "fixed_txns": fixed_txns,
     }
 
 
@@ -412,7 +462,9 @@ async def classify_transaction(
         transaction_type=request.transaction_type,
         entity_type=entity_type
     )
-    saved = _save_classification_fields(classification, request.amount_aed)
+    saved = _save_classification_fields(
+        classification, request.amount_aed, transaction_type=request.transaction_type
+    )
     
     # Save to database — always use the verified company_id from auth
     transaction = Transaction(
@@ -424,7 +476,7 @@ async def classify_transaction(
         invoice_number=request.invoice_number,
         vendor_trn=None,
         vat_treatment=saved["vat_treatment"],
-        transaction_type=saved.get("transaction_side", request.transaction_type),
+        transaction_type=request.transaction_type,
         vat_amount_aed=saved["vat_amount_aed"],
         confidence_score=saved["confidence_score_0_100"],
         ai_reasoning=saved["reasoning"],
@@ -641,7 +693,11 @@ def classify_bulk(
                 vendor_trn=spec.get("vendor_trn"),
                 vendor_country=spec.get("vendor_country"),
             )
-            classifications.append(_save_classification_fields(raw, spec["amount"]))
+            classifications.append(
+                _save_classification_fields(
+                    raw, spec["amount"], transaction_type=spec["row_tx_type"]
+                )
+            )
 
         # ── Build DB objects and response rows ────────────────────────────────
         db_transactions: List[Transaction] = []
@@ -657,7 +713,7 @@ def classify_bulk(
                 vendor_or_customer=spec["vendor"],
                 invoice_number=spec["invoice_num"],
                 vat_treatment=classification["vat_treatment"],
-                transaction_type=classification.get("transaction_side", spec["row_tx_type"]),
+                transaction_type=spec["row_tx_type"],
                 vat_amount_aed=classification["vat_amount_aed"],
                 confidence_score=classification["confidence_score_0_100"],
                 ai_reasoning=classification["reasoning"],
@@ -681,7 +737,7 @@ def classify_bulk(
                     "needs_review": classification["flag_for_review"],
                     "flag_reason": classification.get("flag_reason"),
                     "review_tier": classification["review_tier"],
-                    "transaction_type": classification.get("transaction_side", spec["row_tx_type"]),
+                    "transaction_type": spec["row_tx_type"],
                 }
             )
             excel_rows.append(excel_row)
@@ -861,7 +917,9 @@ async def add_pdf_invoices_to_transactions(
 
         classification = inv.classification or {}
         if classification:
-            saved_fields = _save_classification_fields(classification, amount)
+            saved_fields = _save_classification_fields(
+                classification, amount, transaction_type="purchase"
+            )
         else:
             raw = classify_with_decision_tree(
                 description=inv.description or f"Invoice {inv.invoice_number or inv.file_name}",
@@ -870,7 +928,9 @@ async def add_pdf_invoices_to_transactions(
                 transaction_type="purchase",
                 vendor_trn=inv.vendor_trn,
             )
-            saved_fields = _save_classification_fields(raw, amount)
+            saved_fields = _save_classification_fields(
+                raw, amount, transaction_type="purchase"
+            )
 
         trans_date = date.today()
         if inv.parsed_date:
@@ -942,10 +1002,42 @@ async def add_pdf_invoices_to_transactions(
         )
     db.commit()
 
+    # BUG 1 Invoice Flow: PDF → gulftax_transactions immediately (pending)
+    gulftax_pending = 0
+    gulftax_pending_errors = 0
+    if saved:
+        try:
+            from app.core.database import SessionLocal as MainSessionLocal
+            from app.services.vat_classifier_sync_service import sync_pdf_txn_to_gulftax_pending
+
+            ids = [s["id"] for s in saved]
+            fresh = db.query(Transaction).filter(Transaction.id.in_(ids)).all()
+            main_db = MainSessionLocal()
+            try:
+                for txn in fresh:
+                    res = sync_pdf_txn_to_gulftax_pending(
+                        main_db,
+                        txn,
+                        ported_company=company,
+                    )
+                    if res.get("ok") and not res.get("skipped"):
+                        gulftax_pending += 1
+                    elif not res.get("ok"):
+                        gulftax_pending_errors += 1
+            finally:
+                main_db.close()
+        except Exception:
+            gulftax_pending_errors += 1
+            logger.exception(
+                "PDF→gulftax pending sync failed for company=%s", company_id
+            )
+
     return {
         "saved_count": len(saved),
         "skipped_count": skipped,
         "transactions": saved,
+        "gulftax_pending": gulftax_pending,
+        "gulftax_pending_errors": gulftax_pending_errors,
     }
 
 
@@ -1099,7 +1191,12 @@ async def bulk_approve_high_confidence(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
-    """Approve all unverified transactions with confidence >= threshold (default 0.85)."""
+    """Approve all unverified transactions with confidence >= threshold (default 0.85).
+
+    Also syncs approved classifier rows into gulftax_transactions for VAT Return.
+    """
+    box_fixes = _fix_akk_and_purchase_boxes(db, company_id)
+
     threshold_pct = body.min_confidence * 100
     rows = (
         db.query(Transaction)
@@ -1112,17 +1209,27 @@ async def bulk_approve_high_confidence(
     )
     approved = 0
     skipped_blocked = 0
+    approved_txns: List[Transaction] = []
     for t in rows:
         enriched = enrich_transaction_row(t, threshold_0_100=threshold_pct)
         if enriched["review_tier"] == "blocked":
             skipped_blocked += 1
             continue
+        # Coerce box before approve (purchase must not stay on Box 1)
+        t.box_number = coerce_box_number(
+            t.transaction_type or "purchase", t.vat_treatment, t.box_number
+        )
         t.is_verified = True
         _append_verification_history(
             t,
-            {"type": "bulk_approve_high_confidence", "min_confidence": body.min_confidence, "verified_by": body.verified_by},
+            {
+                "type": "bulk_approve_high_confidence",
+                "min_confidence": body.min_confidence,
+                "verified_by": body.verified_by,
+            },
         )
         approved += 1
+        approved_txns.append(t)
 
     if approved:
         db.add(
@@ -1134,10 +1241,75 @@ async def bulk_approve_high_confidence(
             )
         )
     db.commit()
+
+    # Sync verified classifier rows → gulftax_transactions (VAT Return source)
+    synced = 0
+    sync_skipped = 0
+    sync_errors = 0
+    try:
+        from app.services.vat_classifier_sync_service import (
+            sync_approved_classifier_transactions_to_gulftax,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        sync_ids = {t.id for t in approved_txns}
+        for t in box_fixes.get("fixed_txns") or []:
+            if getattr(t, "is_verified", False):
+                sync_ids.add(t.id)
+
+        # Classifier / Invoice Flow origins only — do NOT re-sync AR/AP mirrors
+        origin_rows = (
+            db.query(Transaction)
+            .filter(
+                Transaction.company_id == company_id,
+                Transaction.is_verified == True,  # noqa: E712
+                Transaction.source.in_(
+                    (
+                        "vat_classifier",
+                        "manual",
+                        "pdf_invoice",
+                        "invoice_flow_auto",
+                        "invoice_flow_reviewed",
+                    )
+                ),
+            )
+            .all()
+        )
+        for t in origin_rows:
+            sync_ids.add(t.id)
+
+        # Re-query after commit so we don't pass expired ORM instances into a new Session
+        fresh = (
+            db.query(Transaction).filter(Transaction.id.in_(list(sync_ids))).all()
+            if sync_ids
+            else []
+        )
+
+        sync_result = sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=fresh,
+            ported_company=company,
+        )
+        synced = int(sync_result.get("synced") or 0)
+        sync_skipped = int(sync_result.get("skipped") or 0)
+        sync_errors = int(sync_result.get("errors") or 0)
+    except Exception as exc:
+        # Approval already committed — surface sync failure without rolling back approve
+        sync_errors = 1
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Bulk approve gulftax sync failed for company=%s: %s", company_id, exc
+        )
+
     return {
         "approved_count": approved,
         "skipped_blocked": skipped_blocked,
         "min_confidence": body.min_confidence,
+        "akk_fixed": box_fixes.get("akk_fixed", 0),
+        "purchase_box_fixed": box_fixes.get("purchase_box_fixed", 0),
+        "gulftax_synced": synced,
+        "gulftax_skipped": sync_skipped,
+        "gulftax_errors": sync_errors,
     }
 
 
@@ -1219,10 +1391,39 @@ async def verify_transaction(
     db.commit()
     db.refresh(transaction)
 
+    gulftax_synced = 0
+    gulftax_error = None
+    if request.is_verified:
+        try:
+            from app.services.vat_classifier_sync_service import (
+                sync_classifier_transaction_to_gulftax,
+            )
+
+            company = db.query(Company).filter(Company.id == company_id).first()
+            # Re-load after commit for a clean object graph
+            fresh = (
+                db.query(Transaction)
+                .filter(Transaction.id == transaction_id, Transaction.company_id == company_id)
+                .first()
+            )
+            if fresh:
+                sync_res = sync_classifier_transaction_to_gulftax(
+                    classifier_txn=fresh,
+                    ported_company=company,
+                )
+                if sync_res.get("ok") and not sync_res.get("skipped"):
+                    gulftax_synced = 1
+                elif not sync_res.get("ok"):
+                    gulftax_error = sync_res.get("error")
+        except Exception as exc:
+            gulftax_error = str(exc)
+
     return {
         "status": "success",
         "message": "Transaction updated",
         "transaction": TransactionResponse.model_validate(transaction),
+        "gulftax_synced": gulftax_synced,
+        "gulftax_error": gulftax_error,
     }
 
 
@@ -1232,7 +1433,7 @@ async def bulk_verify_transactions(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
-    """Mark many transactions as verified."""
+    """Mark many transactions as verified and sync to gulftax_transactions."""
     unique_ids = list(dict.fromkeys(body.transaction_ids))
     # Filter by both IDs and company_id — prevents cross-tenant access
     rows = (
@@ -1243,6 +1444,9 @@ async def bulk_verify_transactions(
     if len(rows) != len(unique_ids):
         raise HTTPException(status_code=404, detail="One or more transaction IDs not found")
     for t in rows:
+        t.box_number = coerce_box_number(
+            t.transaction_type or "purchase", t.vat_treatment, t.box_number
+        )
         t.is_verified = True
         _append_verification_history(
             t,
@@ -1259,7 +1463,42 @@ async def bulk_verify_transactions(
     )
     db.commit()
 
-    return {"verified_count": len(rows)}
+    gulftax_synced = 0
+    gulftax_skipped = 0
+    gulftax_errors = 0
+    try:
+        from app.services.vat_classifier_sync_service import (
+            sync_approved_classifier_transactions_to_gulftax,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        fresh = (
+            db.query(Transaction).filter(Transaction.id.in_(unique_ids)).all()
+            if unique_ids
+            else []
+        )
+        sync_result = sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=fresh,
+            ported_company=company,
+        )
+        gulftax_synced = int(sync_result.get("synced") or 0)
+        gulftax_skipped = int(sync_result.get("skipped") or 0)
+        gulftax_errors = int(sync_result.get("errors") or 0)
+    except Exception:
+        gulftax_errors = 1
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Bulk verify gulftax sync failed for company=%s", company_id
+        )
+
+    return {
+        "verified_count": len(rows),
+        "approved_count": len(rows),
+        "gulftax_synced": gulftax_synced,
+        "gulftax_skipped": gulftax_skipped,
+        "gulftax_errors": gulftax_errors,
+    }
 
 
 @router.post("/reclassify-exempt")

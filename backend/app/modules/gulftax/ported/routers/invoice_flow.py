@@ -15,12 +15,90 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.auth import get_current_company_id
-from models import Invoice, Transaction
+from models import Company, Invoice, Transaction
+import logging
+
+try:
+    from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+except Exception:  # pragma: no cover — ported package may load without app package
+    DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
 
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 claude_client = Anthropic(api_key=anthropic_api_key) if anthropic_api_key else None
+
+
+def _sync_invoice_flow_txns_to_gulftax(
+    db: Session,
+    *,
+    company_id: str,
+    invoice_id: int,
+) -> Dict[str, Any]:
+    """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return).
+
+    1) All lines → gulftax with source=invoice_flow_pdf, status=pending (immediate).
+    2) Verified lines → also sync as vat_classifier_approved / posted for VAT Return.
+    """
+    try:
+        from app.core.database import SessionLocal as MainSessionLocal
+        from app.services.vat_classifier_sync_service import (
+            sync_approved_classifier_transactions_to_gulftax,
+            sync_pdf_txn_to_gulftax_pending,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        all_txns = (
+            db.query(Transaction)
+            .filter(
+                Transaction.company_id == company_id,
+                Transaction.source_invoice_id == invoice_id,
+            )
+            .all()
+        )
+        pending_synced = 0
+        pending_errors = 0
+        main_db = MainSessionLocal()
+        try:
+            for t in all_txns:
+                side = (t.transaction_type or "purchase").lower()
+                from app.services.vat_box_mapping import assign_box_number
+
+                t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 9
+                res = sync_pdf_txn_to_gulftax_pending(
+                    main_db, t, ported_company=company
+                )
+                if res.get("ok") and not res.get("skipped"):
+                    pending_synced += 1
+                elif not res.get("ok"):
+                    pending_errors += 1
+            if all_txns:
+                db.commit()
+        finally:
+            main_db.close()
+
+        verified = [t for t in all_txns if getattr(t, "is_verified", False)]
+        approve_res = sync_approved_classifier_transactions_to_gulftax(
+            classifier_txns=verified,
+            ported_company=company,
+        )
+        return {
+            "ok": approve_res.get("ok", True) and pending_errors == 0,
+            "pending_synced": pending_synced,
+            "pending_errors": pending_errors,
+            "synced": approve_res.get("synced", 0),
+            "skipped": approve_res.get("skipped", 0),
+            "errors": approve_res.get("errors", 0),
+        }
+    except Exception:
+        logger.exception(
+            "Invoice Flow gulftax sync failed company=%s invoice=%s",
+            company_id,
+            invoice_id,
+        )
+        return {"ok": False, "synced": 0, "skipped": 0, "errors": 1}
 
 # ── UAE TRN: 15 digits, starts with 1 ─────────────────────────────────────────
 UAE_TRN_VALID = re.compile(r"^1\d{14}$")
@@ -787,7 +865,7 @@ def extract_invoice(
 
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=1200,
             temperature=0,
             messages=[{"role": "user", "content": user_content}],
@@ -929,7 +1007,7 @@ Return JSON only:
     print(f"[classify-and-risk] calling Claude for VAT classification", flush=True)
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=300,
             temperature=0.1,
             messages=[{"role": "user", "content": classify_prompt}],
@@ -983,7 +1061,9 @@ Return JSON only:
         vat_treatment = inv.vat_treatment or "standard_rated"
         line_items = inv.line_items or []
 
-        if not line_items and inv.total_aed:
+        def _add_header_total_txn(*, source: str, reasoning: str) -> int:
+            if not inv.total_aed:
+                return 0
             subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
@@ -993,33 +1073,36 @@ Return JSON only:
                     Transaction.amount_aed == round(subtotal, 2),
                 )
             ).first()
-            if not exists:
-                vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
-                db.add(Transaction(
-                    company_id=company_id,
-                    date=inv_date,
-                    description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
-                    vendor_or_customer=inv.vendor_name,
-                    invoice_number=inv.invoice_number,
-                    transaction_type="purchase",
-                    vat_treatment=vat_treatment,
-                    amount_aed=round(subtotal, 2),
-                    vat_amount_aed=vat_amount,
-                    confidence_score=round((inv.confidence or 0.9) * 100, 1),
-                    is_verified=True,
-                    source="invoice_flow_auto",
-                    source_invoice_id=inv.id,
-                    ai_reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
-                ))
-                transactions_created += 1
-        else:
+            if exists:
+                return 0
+            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            db.add(Transaction(
+                company_id=company_id,
+                date=inv_date,
+                description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
+                vendor_or_customer=inv.vendor_name,
+                invoice_number=inv.invoice_number,
+                transaction_type="purchase",
+                vat_treatment=vat_treatment,
+                amount_aed=round(subtotal, 2),
+                vat_amount_aed=vat_amount,
+                box_number=9,
+                confidence_score=round((inv.confidence or 0.9) * 100, 1),
+                is_verified=True,
+                source=source,
+                source_invoice_id=inv.id,
+                ai_reasoning=reasoning,
+            ))
+            return 1
+
+        if line_items:
             for li in line_items:
                 desc = (li.get("description") or "").strip() or inv.vendor_name or "Invoice line item"
-                qty = float(li.get("quantity", 1) or 1)
-                unit_price = float(li.get("unit_price", 0) or 0)
+                qty = float(li.get("quantity") or li.get("qty") or 1)
+                unit_price = float(li.get("unit_price") or li.get("unitPrice") or 0)
                 amount = round(qty * unit_price, 2)
                 if amount <= 0:
-                    amount = round(float(li.get("amount", 0) or 0), 2)
+                    amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
                 exists = db.query(Transaction).filter(
@@ -1044,6 +1127,7 @@ Return JSON only:
                     vat_treatment=vat_treatment,
                     amount_aed=amount,
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_auto",
@@ -1051,6 +1135,13 @@ Return JSON only:
                     ai_reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
                 ))
                 transactions_created += 1
+
+        # Fallback: empty line_items OR all lines had zero/missing amounts
+        if transactions_created == 0:
+            transactions_created += _add_header_total_txn(
+                source="invoice_flow_auto",
+                reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
+            )
 
     elif risk.risk_score < 30 and len(high_flags) > 0:
         # Low score but a serious flag (e.g. exact duplicate) — must go to review
@@ -1066,6 +1157,49 @@ Return JSON only:
 
     db.commit()
 
+    # Always push pending gulftax row from the Invoice (even review/escalated).
+    # Previously only auto-approve (transactions_created > 0) synced — so most
+    # PDF extracts never produced source=invoice_flow_pdf.
+    gulftax_synced = 0
+    gulftax_pending = 0
+    gulftax_pending_error = None
+    try:
+        from app.core.database import SessionLocal as MainSessionLocal
+        from app.services.vat_classifier_sync_service import (
+            sync_invoice_record_to_gulftax_pending,
+        )
+
+        company = db.query(Company).filter(Company.id == company_id).first()
+        main_db = MainSessionLocal()
+        try:
+            pending_res = sync_invoice_record_to_gulftax_pending(
+                main_db, inv, ported_company=company
+            )
+            if pending_res.get("ok") and not pending_res.get("skipped"):
+                gulftax_pending = 1
+            elif not pending_res.get("ok"):
+                gulftax_pending_error = pending_res.get("error")
+                logger.warning(
+                    "invoice_flow_pdf pending sync failed invoice=%s err=%s",
+                    inv.id,
+                    gulftax_pending_error,
+                )
+        finally:
+            main_db.close()
+    except Exception as exc:
+        gulftax_pending_error = str(exc)
+        logger.exception(
+            "invoice_flow_pdf pending sync exception invoice=%s", inv.id
+        )
+
+    if transactions_created > 0:
+        sync_res = _sync_invoice_flow_txns_to_gulftax(
+            db, company_id=company_id, invoice_id=inv.id
+        )
+        gulftax_synced = int(sync_res.get("synced") or 0) + int(
+            sync_res.get("pending_synced") or 0
+        )
+
     return {
         "invoice_id": inv.id,
         "vat_result": vat_result,
@@ -1075,6 +1209,9 @@ Return JSON only:
         "recommendation": risk.recommendation,
         "auto_approved": auto_approved,
         "transactions_created": transactions_created,
+        "gulftax_synced": gulftax_synced,
+        "gulftax_pending": gulftax_pending,
+        "gulftax_pending_error": gulftax_pending_error,
     }
 
 
@@ -1156,8 +1293,9 @@ def review_invoice(
         vat_treatment = inv.vat_treatment or "standard_rated"
         line_items = inv.line_items or []
 
-        # If no line items, create one transaction from the invoice total
-        if not line_items and inv.total_aed:
+        def _add_header_total_txn(*, source: str, reasoning: str) -> int:
+            if not inv.total_aed:
+                return 0
             subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
@@ -1167,39 +1305,39 @@ def review_invoice(
                     Transaction.amount_aed == round(subtotal, 2),
                 )
             ).first()
-            if not exists:
-                vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
-                tx = Transaction(
-                    company_id=company_id,
-                    date=inv_date,
-                    description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
-                    vendor_or_customer=inv.vendor_name,
-                    invoice_number=inv.invoice_number,
-                    transaction_type="purchase",
-                    vat_treatment=vat_treatment,
-                    amount_aed=round(subtotal, 2),
-                    vat_amount_aed=vat_amount,
-                    confidence_score=round((inv.confidence or 0.9) * 100, 1),
-                    is_verified=True,
-                    source="invoice_flow_reviewed",
-                    source_invoice_id=inv.id,
-                    ai_reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
-                )
-                db.add(tx)
-                transactions_created += 1
-        else:
+            if exists:
+                return 0
+            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            db.add(Transaction(
+                company_id=company_id,
+                date=inv_date,
+                description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
+                vendor_or_customer=inv.vendor_name,
+                invoice_number=inv.invoice_number,
+                transaction_type="purchase",
+                vat_treatment=vat_treatment,
+                amount_aed=round(subtotal, 2),
+                vat_amount_aed=vat_amount,
+                box_number=9,
+                confidence_score=round((inv.confidence or 0.9) * 100, 1),
+                is_verified=True,
+                source=source,
+                source_invoice_id=inv.id,
+                ai_reasoning=reasoning,
+            ))
+            return 1
+
+        if line_items:
             for li in line_items:
-                desc = li.get("description", "").strip() or inv.vendor_name or "Invoice line item"
-                qty = float(li.get("quantity", 1) or 1)
-                unit_price = float(li.get("unit_price", 0) or 0)
+                desc = (li.get("description") or "").strip() or inv.vendor_name or "Invoice line item"
+                qty = float(li.get("quantity") or li.get("qty") or 1)
+                unit_price = float(li.get("unit_price") or li.get("unitPrice") or 0)
                 amount = round(qty * unit_price, 2)
-                # Fallback: use total from line item dict if available
                 if amount <= 0:
-                    amount = round(float(li.get("amount", 0) or 0), 2)
+                    amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
 
-                # Dedup: skip if identical line already exists
                 exists = db.query(Transaction).filter(
                     and_(
                         Transaction.company_id == company_id,
@@ -1214,7 +1352,7 @@ def review_invoice(
                 vat_rate = float(li.get("vat_rate", 5) or 5)
                 vat_amount = round(amount * vat_rate / 100, 2) if vat_treatment == "standard_rated" else 0.0
 
-                tx = Transaction(
+                db.add(Transaction(
                     company_id=company_id,
                     date=inv_date,
                     description=desc,
@@ -1224,17 +1362,30 @@ def review_invoice(
                     vat_treatment=vat_treatment,
                     amount_aed=amount,
                     vat_amount_aed=vat_amount,
+                    box_number=9,
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_reviewed",
                     source_invoice_id=inv.id,
                     ai_reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
-                )
-                db.add(tx)
+                ))
                 transactions_created += 1
+
+        if transactions_created == 0:
+            transactions_created += _add_header_total_txn(
+                source="invoice_flow_reviewed",
+                reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
+            )
 
     db.commit()
     db.refresh(inv)
+
+    gulftax_synced = 0
+    if transactions_created > 0:
+        sync_res = _sync_invoice_flow_txns_to_gulftax(
+            db, company_id=company_id, invoice_id=inv.id
+        )
+        gulftax_synced = int(sync_res.get("synced") or 0)
 
     return {
         "invoice_id": inv.id,
@@ -1242,8 +1393,55 @@ def review_invoice(
         "vat_treatment": inv.vat_treatment,
         "approved": inv.status == "approved",
         "transactions_created": transactions_created,
+        "gulftax_synced": gulftax_synced,
         "zoho_ready": True,
     }
+
+
+@router.post("/{invoice_id}/generate-einvoice")
+def generate_einvoice(
+    invoice_id: int,
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Generate PINT AE-shaped internal archive for an approved vendor-received invoice (not outbound e-invoicing)."""
+    inv = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.company_id == company_id,
+    ).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.status not in ("approved", "auto_approved", "posted"):
+        raise HTTPException(
+            status_code=400,
+            detail="Invoice must be approved or auto-approved before generating e-invoice",
+        )
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    tenant_id = (company.workspace_id if company and company.workspace_id else company_id)
+
+    from app.core.database import SessionLocal
+    from app.services.einvoicing_service_unified import (
+        build_invoice_data_from_gulftax_flow,
+        generate_and_store_gulftax_flow_einvoice,
+    )
+
+    invoice_data = build_invoice_data_from_gulftax_flow(inv, company)
+    main_db = SessionLocal()
+    try:
+        result = generate_and_store_gulftax_flow_einvoice(
+            main_db,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            flow_invoice_id=invoice_id,
+            invoice_data=invoice_data,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"E-invoice generation failed: {exc}") from exc
+    finally:
+        main_db.close()
+
+    return result
 
 
 @router.get("/vendors")

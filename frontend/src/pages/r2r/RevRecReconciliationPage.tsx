@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -15,6 +15,13 @@ import { Link } from 'react-router-dom';
 import { useCompany } from '../../context/CompanyContext';
 import { MatchRateGauge } from '../../components/rev-rec/MatchRateGauge';
 import { R2RServiceNav } from '../../components/rev-rec/R2RServiceNav';
+import { RevenueLeakageCard, RevenueLeakagePill } from '../../components/rev-rec/RevenueLeakageCard';
+import {
+  computeLeakageSummary,
+  type LeakageSummary,
+  type ThreeWayMatchItem,
+} from '../../utils/revRecLeakage';
+import { fetchIFRS15Contracts } from '../../services/ifrs15.service';
 import {
   REV_REC_BLUE,
   REV_REC_NAVY,
@@ -42,6 +49,26 @@ async function callRevRec<T = unknown>(endpoint: string, body: unknown, companyI
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
+}
+
+async function fetchLeakageSnapshot(period: string, companyId?: string | null): Promise<LeakageSummary | null> {
+  const cid = companyId ?? localStorage.getItem('active_company_id');
+  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+  const headers: Record<string, string> = {
+    'X-Workspace-ID': wsId,
+    'X-Tenant-ID': wsId,
+  };
+  if (cid) headers['X-Company-ID'] = cid;
+  try {
+    const res = await fetch(`${API_BASE}/api/rev-rec/leakage-snapshot?period=${encodeURIComponent(period)}`, {
+      headers,
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    return res.json() as Promise<LeakageSummary>;
+  } catch {
+    return null;
+  }
 }
 
 function yyyymm(d = new Date()): string {
@@ -183,6 +210,7 @@ export default function RevRecReconciliationPage() {
   });
   const [threeWayResult, setThreeWayResult] = useState<Record<string, unknown> | null>(null);
   const [threeWayLoading, setThreeWayLoading] = useState(false);
+  const [leakageSummary, setLeakageSummary] = useState<LeakageSummary | null>(null);
 
   const [anomalyFile, setAnomalyFile] = useState<File | null>(null);
   const [anomalyThreshold, setAnomalyThreshold] = useState(10000);
@@ -239,6 +267,7 @@ export default function RevRecReconciliationPage() {
   const resetAllResults = useCallback(() => {
     setRollForwardResult(null);
     setThreeWayResult(null);
+    setLeakageSummary(null);
     setAnomalyResult(null);
     setRpoResult(null);
     setCommissionResult(null);
@@ -270,6 +299,16 @@ export default function RevRecReconciliationPage() {
     resetAllResults();
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchLeakageSnapshot(period, activeCompanyId).then((snap) => {
+      if (!cancelled) setLeakageSummary(snap);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, activeCompanyId]);
+
   const modulesCompleteCount = useMemo(() => {
     let n = 0;
     if (rollForwardResult) n += 1;
@@ -289,8 +328,9 @@ export default function RevRecReconciliationPage() {
     if (anomalyResult && Number(anomalyResult.flagged_count || 0) > 0) return true;
     if (rpoResult && rpoResult.reconciled === false) return true;
     if (commissionResult && commissionResult.reconciled === false) return true;
+    if (leakageSummary && leakageSummary.item_count > 0) return true;
     return false;
-  }, [rollForwardResult, threeWayResult, anomalyResult, rpoResult, commissionResult]);
+  }, [rollForwardResult, threeWayResult, anomalyResult, rpoResult, commissionResult, leakageSummary]);
 
   const rollPillDetail = useMemo(() => {
     if (!rollForwardResult || rollForwardResult.reconciled === true) return undefined;
@@ -368,6 +408,17 @@ export default function RevRecReconciliationPage() {
         contract_schedules,
       });
       setThreeWayResult(data);
+      const items = (data.items as ThreeWayMatchItem[]) || [];
+      try {
+        const saved = await callRevRec<LeakageSummary>(
+          'leakage-snapshot',
+          { period, items },
+          activeCompanyId,
+        );
+        setLeakageSummary(saved);
+      } catch {
+        setLeakageSummary(computeLeakageSummary(items, period));
+      }
       toast.success('Three-way match complete');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Three-way match failed');
@@ -491,6 +542,31 @@ export default function RevRecReconciliationPage() {
 
   const autoFillFromResults = () => {
     const items: Record<string, unknown>[] = [];
+    if (commentaryType === 'Revenue Leakage' && leakageSummary) {
+      if (leakageSummary.item_count === 0) {
+        items.push({
+          item_description: `Revenue leakage — period ${period}`,
+          amount: 0,
+          detail: 'No under-billed or unbilled revenue leakage identified from three-way match.',
+        });
+      } else {
+        leakageSummary.items.forEach((row) => {
+          items.push({
+            item_description: `Contract ${row.contract_id} — ${row.status}`,
+            amount: row.leakage_amount,
+            detail: `Leakage $${row.leakage_amount.toLocaleString()}; billing ${row.billing_amount ?? '—'}, GL ${row.gl_amount ?? '—'}, schedule ${row.schedule_amount ?? '—'}`,
+          });
+        });
+        items.unshift({
+          item_description: `Revenue leakage summary — period ${period}`,
+          amount: leakageSummary.leakage_total,
+          detail: `Total leakage $${leakageSummary.leakage_total.toLocaleString()} (${leakageSummary.leakage_pct}% of expected revenue); ${leakageSummary.item_count} contract(s)`,
+        });
+      }
+      setCommentaryItemsText(JSON.stringify(items, null, 2));
+      toast.success('Reconciling items filled from revenue leakage summary');
+      return;
+    }
     if (rollForwardResult && rollForwardResult.reconciled === false) {
       items.push({
         item_description: `Deferred revenue roll-forward — period ${period}`,
@@ -549,6 +625,7 @@ export default function RevRecReconciliationPage() {
         anomaly_result: anomalyResult,
         rpo_result: rpoResult,
         commission_result: commissionResult,
+        leakage_result: leakageSummary,
       });
       setPeriodCloseResult(data);
       toast.success('Period close summary generated');
@@ -566,22 +643,52 @@ export default function RevRecReconciliationPage() {
     }
     setPeriodCloseExcelLoading(true);
     try {
+      const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Workspace-ID': wsId ?? '',
+        'X-Tenant-ID': wsId ?? '',
+      };
+      if (activeCompanyId) headers['X-Company-ID'] = activeCompanyId;
+
+      let ifrs15ContractIds: string[] = [];
+      if (activeCompanyId) {
+        try {
+          const contracts = await fetchIFRS15Contracts(activeCompanyId);
+          ifrs15ContractIds = contracts
+            .filter((c) => c.has_calculation || (c.calculation_results && Object.keys(c.calculation_results).length > 0))
+            .map((c) => c.id);
+        } catch {
+          /* non-fatal — backend will auto-include calculated contracts */
+        }
+      }
+
       const response = await fetch(`${API_BASE}/api/rev-rec/download-excel`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           period,
+          company_id: activeCompanyId,
+          workspace_id: wsId,
+          include_ifrs15_calculated: true,
+          ifrs15_contract_ids: ifrs15ContractIds,
           roll_forward_result: rollForwardResult,
           three_way_match_result: threeWayResult,
           anomaly_result: anomalyResult,
           rpo_result: rpoResult,
           commission_result: commissionResult,
           period_close_result: periodCloseResult,
+          leakage_result: leakageSummary,
         }),
       });
       if (!response.ok) throw new Error(await response.text());
-      const data = (await response.json()) as { file_id: string; filename: string; sheets: number };
-      const dlResponse = await fetch(`${API_BASE}/api/rev-rec/download-file/${encodeURIComponent(data.file_id)}`);
+      const data = (await response.json()) as {
+        file_id: string;
+        filename: string;
+        sheets: number;
+        ifrs15_sheets?: number;
+      };
+      const dlResponse = await fetch(`${API_BASE}/api/rev-rec/download-file/${encodeURIComponent(data.file_id)}`, { headers });
       if (!dlResponse.ok) throw new Error(await dlResponse.text());
       const blob = await dlResponse.blob();
       const url = window.URL.createObjectURL(blob);
@@ -592,7 +699,8 @@ export default function RevRecReconciliationPage() {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-      toast.success(`Period close pack downloaded (${data.sheets} sheets) ✓`);
+      const ifrs15Note = data.ifrs15_sheets ? ` incl. ${data.ifrs15_sheets} IFRS 15` : '';
+      toast.success(`Period close pack downloaded (${data.sheets} sheets${ifrs15Note}) ✓`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Download failed — try again');
     } finally {
@@ -704,6 +812,7 @@ export default function RevRecReconciliationPage() {
           <Pill label="Anomalies" state={anomalyPill(anomalyResult)} detail={anomalyPillDetail} />
           <Pill label="RPO" state={simpleReconPill(rpoResult)} detail={rpoPillDetail} />
           <Pill label="Commission" state={simpleReconPill(commissionResult)} detail={commPillDetail} />
+          <RevenueLeakagePill summary={leakageSummary} />
         </div>
 
         {/* Module 1 */}
@@ -921,6 +1030,11 @@ export default function RevRecReconciliationPage() {
                     </p>
                   </div>
                 </div>
+                {leakageSummary ? (
+                  <div className="lg:col-span-3">
+                    <RevenueLeakageCard summary={leakageSummary} />
+                  </div>
+                ) : null}
                 <div className="lg:col-span-3 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -1310,7 +1424,7 @@ export default function RevRecReconciliationPage() {
                 value={commentaryType}
                 onChange={(e) => setCommentaryType(e.target.value)}
               >
-                {['Deferred Revenue', 'Three-Way Match', 'RPO Movement', 'Commission Asset', 'Custom'].map((o) => (
+                {['Deferred Revenue', 'Three-Way Match', 'Revenue Leakage', 'RPO Movement', 'Commission Asset', 'Custom'].map((o) => (
                   <option key={o} value={o}>
                     {o}
                   </option>
@@ -1745,7 +1859,7 @@ export default function RevRecReconciliationPage() {
                 </div>
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
                   <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-semibold px-3 py-1 border border-slate-200 w-fit">
-                    6 sheets
+                    7+ sheets (IFRS 15 engine sheets auto-included when calculated)
                   </span>
                   <button
                     type="button"

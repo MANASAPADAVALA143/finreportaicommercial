@@ -2,8 +2,9 @@
  * Company Setup wizard API — /api/company-setup/*
  */
 
-import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredWorkspaceId, workspaceHeaders } from './workspaceService';
+import { backendOrigin, joinApiUrl } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+import { getStoredWorkspaceId } from './workspaceService';
 
 export interface CompanyProfile {
   id: string;
@@ -18,6 +19,7 @@ export interface CompanyProfile {
   reporting_standard: string;
   financial_year_start: number;
   industry?: string | null;
+  industry_label?: string | null;
   address?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -47,18 +49,42 @@ export interface SetupStatus {
 }
 
 function hdrs(token: string | null, extra: Record<string, string> = {}): Record<string, string> {
-  return workspaceHeaders(token, extra);
+  return workspaceHeaders(token ?? getStoredAccessToken(), extra);
+}
+
+function parseApiError(text: string, fallback: string): string {
+  if (!text) return fallback;
+  try {
+    const json = JSON.parse(text) as { detail?: unknown };
+    const detail = json.detail;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && 'msg' in item) {
+            const loc = 'loc' in item && Array.isArray(item.loc) ? item.loc.join('.') : 'field';
+            return `${loc}: ${String((item as { msg: unknown }).msg)}`;
+          }
+          return String(item);
+        })
+        .join('; ');
+    }
+  } catch {
+    // not JSON — use raw text
+  }
+  return text;
 }
 
 async function api<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${backendOrigin()}${path}`, {
+  const res = await fetch(joinApiUrl(path), {
     ...init,
     headers: hdrs(token, Object.fromEntries(new Headers(init?.headers || {}).entries())),
     credentials: 'include',
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || res.statusText);
+    throw new Error(parseApiError(text, res.statusText));
   }
   return res.json();
 }
@@ -75,19 +101,37 @@ export const getProfile = (token: string | null) =>
 export const saveProfile = (token: string | null, body: Partial<CompanyProfile>) =>
   api<{ profile: CompanyProfile }>('/api/company-setup/profile', token, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      company_name: body.company_name?.trim() ?? '',
+      trade_name: body.trade_name?.trim() || null,
+      legal_type: body.legal_type?.trim() || null,
+      trn: body.trn?.trim() || null,
+      license_number: body.license_number?.trim() || null,
+      license_authority: body.license_authority?.trim() || null,
+      base_currency: body.base_currency || 'AED',
+      reporting_standard: body.reporting_standard || 'IFRS',
+      financial_year_start: body.financial_year_start ?? 1,
+      industry: body.industry?.trim() || null,
+      address: body.address?.trim() || null,
+      phone: body.phone?.trim() || null,
+      email: body.email?.trim() || null,
+      website: body.website?.trim() || null,
+      logo_url: body.logo_url || null,
+    }),
   });
 
 export const uploadLogo = async (token: string | null, file: File): Promise<string> => {
   const form = new FormData();
   form.append('file', file);
   const wsId = getStoredWorkspaceId();
-  const headers: Record<string, string> = {
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${backendOrigin()}/api/company-setup/logo`, {
+  const headers: Record<string, string> = {};
+  if (wsId) {
+    headers['X-Workspace-ID'] = wsId;
+    headers['X-Tenant-ID'] = wsId;
+  }
+  const bearer = token ?? getStoredAccessToken();
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  const res = await fetch(joinApiUrl('/api/company-setup/logo'), {
     method: 'POST',
     headers,
     body: form,

@@ -2,21 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from 'react-router-dom';
-import { apiClient } from '../../services/gulfTaxClient';
 import {
   fetchGulfTaxTransactions,
+  fetchVatPeriods,
+  fetchVatReconHistory,
+  runVatRecon,
   syncGulfTaxPeriod,
   type GulfTaxTransaction,
+  type VatPeriodOption,
+  type VatReconHistoryItem,
+  type VatReconRunResult,
 } from '../../services/gulfTaxApi';
 import { useCompany } from '../../context/CompanyContext';
-
-const STORAGE_RETURNS = "gulftax_vat_returns";
-
-interface StoredReturn {
-  return_id: number;
-  period_start: string;
-  period_end: string;
-}
 
 interface MismatchRow {
   invoice_number?: string;
@@ -25,23 +22,6 @@ interface MismatchRow {
   transaction_amount?: number;
   return_amount?: number;
   difference?: number;
-}
-
-interface ReconcileResult {
-  status: string;
-  difference_aed: number;
-  mismatches: MismatchRow[];
-  recommendation: string;
-}
-
-function loadReturns(): StoredReturn[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_RETURNS);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
 }
 
 function fmtAed(n: number | undefined): string {
@@ -64,26 +44,37 @@ function currentQuarter(): string {
 export default function ReconPage() {
   const { activeCompanyId } = useCompany();
   const [taxPeriod, setTaxPeriod] = useState(currentQuarter());
+  const [periodOptions, setPeriodOptions] = useState<VatPeriodOption[]>([]);
   const [txRows, setTxRows] = useState<GulfTaxTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [options, setOptions] = useState<StoredReturn[]>([]);
-  const [selectedId, setSelectedId] = useState<string>("");
-  const [manualId, setManualId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ReconcileResult | null>(null);
+  const [result, setResult] = useState<VatReconRunResult | null>(null);
+  const [history, setHistory] = useState<VatReconHistoryItem[]>([]);
 
-  const refreshOptions = useCallback(() => {
-    setOptions(loadReturns());
-  }, []);
+  const loadPeriods = useCallback(async () => {
+    if (!activeCompanyId) return;
+    try {
+      const res = await fetchVatPeriods(activeCompanyId);
+      setPeriodOptions(res.periods || []);
+      if (res.periods?.length && !res.periods.some((p) => p.tax_period === taxPeriod)) {
+        setTaxPeriod(res.periods[0].tax_period);
+      }
+    } catch {
+      setPeriodOptions([]);
+    }
+  }, [activeCompanyId, taxPeriod]);
 
-  useEffect(() => {
-    refreshOptions();
-    const onFocus = () => refreshOptions();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refreshOptions]);
+  const loadHistory = useCallback(async () => {
+    if (!activeCompanyId) return;
+    try {
+      const res = await fetchVatReconHistory(activeCompanyId);
+      setHistory(res.items || []);
+    } catch {
+      setHistory([]);
+    }
+  }, [activeCompanyId]);
 
   const loadTransactions = useCallback(async () => {
     if (!activeCompanyId) return;
@@ -99,14 +90,22 @@ export default function ReconPage() {
   }, [taxPeriod, activeCompanyId]);
 
   useEffect(() => {
+    void loadPeriods();
+    void loadHistory();
+  }, [loadPeriods, loadHistory]);
+
+  useEffect(() => {
     void loadTransactions();
   }, [loadTransactions]);
 
   useEffect(() => {
-    const onSync = () => { void loadTransactions(); };
+    const onSync = () => {
+      void loadTransactions();
+      void loadPeriods();
+    };
     window.addEventListener('gulftax:transaction_added', onSync);
     return () => window.removeEventListener('gulftax:transaction_added', onSync);
-  }, [loadTransactions]);
+  }, [loadTransactions, loadPeriods]);
 
   const handleSyncPeriod = async () => {
     if (!activeCompanyId) return;
@@ -115,31 +114,26 @@ export default function ReconPage() {
       const r = await syncGulfTaxPeriod(taxPeriod, activeCompanyId);
       setSyncMsg(`Synced ${r.synced} invoice(s), skipped ${r.skipped} already in GulfTax.`);
       await loadTransactions();
+      await loadPeriods();
     } catch (e) {
       setSyncMsg(e instanceof Error ? e.message : 'Sync failed');
     }
   };
 
-  const effectiveReturnId = selectedId || manualId.trim();
-
   const handleReconcile = async () => {
-    const id = parseInt(effectiveReturnId, 10);
-    if (!Number.isFinite(id) || id < 1) {
-      setError("Select a VAT return from the list or enter a valid return ID.");
+    if (!activeCompanyId || !taxPeriod.trim()) {
+      setError("Select a tax period.");
       return;
     }
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const { data } = await apiClient.post<ReconcileResult>(
-        `/api/vat/reconcile/${id}`
-      );
+      const data = await runVatRecon(taxPeriod, activeCompanyId);
       setResult(data);
+      await loadHistory();
     } catch (e: unknown) {
-      const err = e as Error & { response?: { data?: { detail?: string } } };
-      const msg = err.response?.data?.detail || err.message || "Reconciliation failed";
-      setError(typeof msg === "string" ? msg : "Reconciliation failed");
+      setError(e instanceof Error ? e.message : "Reconciliation failed");
     } finally {
       setLoading(false);
     }
@@ -167,7 +161,7 @@ export default function ReconPage() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `reconciliation_${effectiveReturnId || "export"}.csv`;
+    a.download = `reconciliation_${taxPeriod || "export"}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -182,8 +176,7 @@ export default function ReconPage() {
         </div>
         <h2 className="font-playfair text-[26px] font-bold">VAT return reconciliation</h2>
         <p className="text-[13px] text-muted mt-1">
-          Returns generated in this browser are listed below; you can also enter a return ID from
-          the API.
+          Compare GulfTax transactions against filed VAT returns for each tax period.
         </p>
       </div>
 
@@ -191,9 +184,23 @@ export default function ReconPage() {
         <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
           <div>
             <h3 className="text-sm font-semibold text-teal-300">AP → GulfTax transactions</h3>
-            <p className="text-xs text-muted mt-1">Live rows from approved AP invoices for this tax period</p>
+            <p className="text-xs text-muted mt-1">Live rows from gulftax_transactions for this tax period</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={taxPeriod}
+              onChange={(e) => setTaxPeriod(e.target.value)}
+              className="rounded-[8px] bg-[rgba(4,12,30,0.85)] border border-border px-3 py-2 text-white text-sm min-w-[7rem]"
+            >
+              {periodOptions.length === 0 && (
+                <option value={taxPeriod}>{taxPeriod}</option>
+              )}
+              {periodOptions.map((p) => (
+                <option key={p.tax_period} value={p.tax_period}>
+                  {p.tax_period} ({p.transaction_count})
+                </option>
+              ))}
+            </select>
             <input
               value={taxPeriod}
               onChange={(e) => setTaxPeriod(e.target.value)}
@@ -255,7 +262,7 @@ export default function ReconPage() {
                           : 'bg-white/5 text-muted border border-border'
                       }`}
                     >
-                      {row.source === 'ap_invoiceflow' ? 'AP InvoiceFlow' : 'Manual'}
+                      {row.source === 'ap_invoiceflow' ? 'AP InvoiceFlow' : row.source || 'Manual'}
                     </span>
                   </td>
                 </tr>
@@ -266,48 +273,24 @@ export default function ReconPage() {
       </div>
 
       <div className="bg-gradient-to-br from-card to-[#071228] border border-border rounded-2xl p-8 mb-6 space-y-5">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">
-              VAT return
-            </label>
-            <select
-              value={selectedId}
-              onChange={(e) => {
-                setSelectedId(e.target.value);
-                if (e.target.value) setManualId("");
-              }}
-              className="w-full rounded-[10px] bg-[rgba(4,12,30,0.85)] border border-border px-4 py-2.5 text-white text-sm focus:border-border-g focus:outline-none"
-            >
-              <option value="">— Select —</option>
-              {options.map((o) => (
-                <option key={o.return_id} value={String(o.return_id)}>
-                  #{o.return_id} · {o.period_start} → {o.period_end}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">
-              Or return ID
-            </label>
-            <input
-              value={manualId}
-              onChange={(e) => {
-                setManualId(e.target.value);
-                if (e.target.value) setSelectedId("");
-              }}
-              placeholder="e.g. 12"
-              className="w-full rounded-[10px] bg-[rgba(4,12,30,0.85)] border border-border px-4 py-2.5 text-white text-sm font-mono focus:border-border-g focus:outline-none"
-            />
-          </div>
+        <div>
+          <label className="block text-[12px] text-muted2 uppercase tracking-wide mb-2">
+            Tax period to reconcile
+          </label>
+          <p className="text-xs text-muted mb-3">
+            Periods are loaded from <code className="text-gold-lt">gulftax_transactions</code>.
+            {' '}
+            <button type="button" onClick={() => void loadPeriods()} className="text-gold-lt underline">
+              Refresh periods
+            </button>
+          </p>
         </div>
 
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={handleReconcile}
-            disabled={loading || !effectiveReturnId}
+            onClick={() => void handleReconcile()}
+            disabled={loading || !taxPeriod.trim() || !activeCompanyId}
             className="px-6 py-2.5 rounded-[10px] text-sm font-medium bg-gradient-to-br from-gold to-gold-lt text-deep shadow-[0_4px_18px_rgba(201,168,76,0.38)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "Running…" : "Run reconciliation"}
@@ -320,22 +303,15 @@ export default function ReconPage() {
           >
             Export CSV
           </button>
-          <button
-            type="button"
-            onClick={refreshOptions}
-            className="px-4 py-2.5 rounded-[10px] text-sm text-muted border border-border hover:border-border-g"
-          >
-            Refresh list
-          </button>
         </div>
 
-        {options.length === 0 && (
+        {periodOptions.length === 0 && (
           <p className="text-[12px] text-muted2">
-            No returns in memory yet. Generate one on{" "}
+            No periods in GulfTax yet. Sync AP invoices or add transactions, then run recon from{" "}
             <Link to="/gulftax/vat-return" className="text-gold-lt underline">
               VAT Return
-            </Link>{" "}
-            or type a return ID.
+            </Link>
+            .
           </p>
         )}
 
@@ -347,7 +323,7 @@ export default function ReconPage() {
       </div>
 
       {result && (
-        <div className="space-y-4">
+        <div className="space-y-4 mb-8">
           <div className="flex flex-wrap gap-6 text-sm">
             <div>
               <span className="text-muted2 uppercase text-[11px]">Status</span>
@@ -355,7 +331,11 @@ export default function ReconPage() {
             </div>
             <div>
               <span className="text-muted2 uppercase text-[11px]">Total difference</span>
-              <div className="font-mono text-white">{fmtAed(result.difference_aed)}</div>
+              <div className="font-mono text-white">{fmtAed(result.difference_aed ?? 0)}</div>
+            </div>
+            <div>
+              <span className="text-muted2 uppercase text-[11px]">Transactions</span>
+              <div className="font-mono text-white">{result.transaction_count}</div>
             </div>
           </div>
 
@@ -372,7 +352,9 @@ export default function ReconPage() {
                 {rows.length === 0 ? (
                   <tr>
                     <td colSpan={3} className="px-4 py-6 text-muted text-center">
-                      No mismatches above threshold — return aligns with invoices.
+                      {result.status === 'no_return'
+                        ? 'No filed VAT return for this period — computed boxes saved for reference.'
+                        : 'No mismatches above threshold — return aligns with GulfTax transactions.'}
                     </td>
                   </tr>
                 ) : (
@@ -392,12 +374,44 @@ export default function ReconPage() {
             </table>
           </div>
 
-          <div className="rounded-xl border border-border bg-[rgba(4,12,30,0.5)] px-5 py-4">
-            <div className="text-[11px] text-muted2 uppercase mb-2">Recommendation</div>
-            <p className="text-[13px] text-muted leading-relaxed whitespace-pre-wrap">
-              {result.recommendation}
-            </p>
+          {result.recommendation && (
+            <div className="rounded-xl border border-border bg-[rgba(4,12,30,0.5)] px-5 py-4">
+              <div className="text-[11px] text-muted2 uppercase mb-2">Recommendation</div>
+              <p className="text-[13px] text-muted leading-relaxed whitespace-pre-wrap">
+                {result.recommendation}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="rounded-xl border border-border overflow-hidden">
+          <div className="px-5 py-3 border-b border-border bg-[rgba(4,12,30,0.5)]">
+            <h3 className="text-sm font-semibold text-white">Reconciliation history</h3>
           </div>
+          <table className="w-full text-sm">
+            <thead className="text-muted2 text-[11px] uppercase">
+              <tr>
+                <th className="px-4 py-2 text-left">When</th>
+                <th className="px-4 py-2 text-left">Period</th>
+                <th className="px-4 py-2 text-left">Status</th>
+                <th className="px-4 py-2 text-right">Diff</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.id} className="border-t border-border/50">
+                  <td className="px-4 py-2 font-mono text-xs text-muted">
+                    {h.created_at ? new Date(h.created_at).toLocaleString() : '—'}
+                  </td>
+                  <td className="px-4 py-2 font-mono">{h.tax_period ?? '—'}</td>
+                  <td className="px-4 py-2">{h.status}</td>
+                  <td className="px-4 py-2 text-right font-mono">{fmtAed(h.difference_aed)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </>

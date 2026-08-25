@@ -21,6 +21,18 @@ export default defineConfig(({ mode }) => ({
       : mode === 'github-pages'
         ? '/finreportaicommercial/'
         : '/',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('/src/pages/gulftax/') || id.includes('/src/pages/audit/')) {
+            return 'gulftax-suite';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   // Static Office Add-in is served from `public/addin/` → http://localhost:3006/addin/taskpane.html
   server: {
     port: 3006,

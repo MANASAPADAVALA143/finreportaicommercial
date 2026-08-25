@@ -1,14 +1,29 @@
-"""IFRS 15 contract register — CRUD, recognition, JE posting."""
+"""IFRS 15 contract register — CRUD, recognition, JE posting, full 5-step engine."""
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.ifrs15_contract import IFRS15Contract
+from app.modules.ifrs15.ifrs15_adapter import (
+    contract_row_to_ifrs15_input,
+    serialize_calculation_results,
+)
+from app.modules.ifrs15.ifrs15_calculator import IFRS15Calculator
+from app.modules.ifrs15.ifrs15_repository import (
+    contract_to_dict,
+    create_contract,
+    get_contract,
+    list_contracts,
+    portfolio_summary,
+    save_calculation_results,
+    update_contract,
+)
 from app.services.uae_journal_service import create_journal_entry
+
+# Re-export for rev_rec_recon backward compatibility
+_contract_dict = contract_to_dict
 
 
 def _f(v: Any) -> float:
@@ -46,112 +61,30 @@ def calculate_percentage_complete(method: str, data: dict) -> float:
     return 0.0
 
 
-def _parse_obligations(raw: str | None) -> list[dict]:
-    if not raw:
-        return []
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return []
+def calculate_full_contract(
+    db: Session,
+    contract_id: str,
+    workspace_id: str,
+    company_id: str | None = None,
+    *,
+    cash_received: float = 0,
+    persist: bool = False,
+) -> dict[str, Any]:
+    """Run the ported IFRS 15 5-step calculator for a stored contract."""
+    contract = get_contract(db, contract_id, workspace_id, company_id)
+    if not contract:
+        raise ValueError("Contract not found")
+    calc_input = contract_row_to_ifrs15_input(contract)
+    if not calc_input.performance_obligations:
+        raise ValueError("Contract has no performance obligations")
+    calculator = IFRS15Calculator()
+    from decimal import Decimal
 
-
-def _contract_dict(c: IFRS15Contract) -> dict[str, Any]:
-    obs = _parse_obligations(c.performance_obligations)
-    return {
-        "id": c.id,
-        "workspace_id": c.workspace_id,
-        "company_id": c.company_id,
-        "contract_number": c.contract_number,
-        "customer_name": c.customer_name,
-        "contract_date": c.contract_date,
-        "contract_value_aed": _f(c.contract_value_aed),
-        "performance_obligations": obs,
-        "total_recognised_aed": _f(c.total_recognised_aed),
-        "total_remaining_aed": _f(c.total_remaining_aed),
-        "contract_liability_aed": _f(c.contract_liability_aed),
-        "contract_asset_aed": _f(c.contract_asset_aed),
-        "status": c.status,
-        "je_posted": bool(c.je_posted),
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
-    }
-
-
-def list_contracts(db: Session, workspace_id: str, company_id: str | None = None) -> list[dict]:
-    q = db.query(IFRS15Contract).filter(IFRS15Contract.workspace_id == workspace_id)
-    if company_id:
-        q = q.filter(IFRS15Contract.company_id == company_id)
-    return [_contract_dict(c) for c in q.order_by(IFRS15Contract.created_at.desc()).all()]
-
-
-def get_contract(db: Session, contract_id: str, workspace_id: str, company_id: str | None = None) -> IFRS15Contract | None:
-    q = db.query(IFRS15Contract).filter(IFRS15Contract.id == contract_id, IFRS15Contract.workspace_id == workspace_id)
-    if company_id:
-        q = q.filter(IFRS15Contract.company_id == company_id)
-    return q.first()
-
-
-def create_contract(db: Session, data: dict[str, Any]) -> IFRS15Contract:
-    obs = data.get("performance_obligations") or []
-    total_val = _f(data.get("contract_value_aed"))
-    recognised = sum(_f(o.get("revenue_recognised_aed")) for o in obs)
-    remaining = total_val - recognised
-    c = IFRS15Contract(
-        workspace_id=data["workspace_id"],
-        company_id=data.get("company_id"),
-        contract_number=data.get("contract_number") or f"CTR-{datetime.utcnow().strftime('%Y%m%d%H%M')}",
-        customer_name=data.get("customer_name", ""),
-        contract_date=data.get("contract_date"),
-        contract_value_aed=total_val,
-        performance_obligations=json.dumps(obs, default=str),
-        total_recognised_aed=recognised,
-        total_remaining_aed=remaining,
-        contract_liability_aed=_f(data.get("contract_liability_aed")),
-        contract_asset_aed=_f(data.get("contract_asset_aed")),
-        status=data.get("status", "active"),
-    )
-    db.add(c)
-    db.commit()
-    db.refresh(c)
-    return c
-
-
-def update_contract(db: Session, contract: IFRS15Contract, updates: dict[str, Any]) -> IFRS15Contract:
-    if "performance_obligations" in updates:
-        obs = updates["performance_obligations"]
-        contract.performance_obligations = json.dumps(obs, default=str)
-        contract.total_recognised_aed = sum(_f(o.get("revenue_recognised_aed")) for o in obs)
-        contract.total_remaining_aed = _f(contract.contract_value_aed) - _f(contract.total_recognised_aed)
-    for k in ("customer_name", "status", "contract_liability_aed", "contract_asset_aed", "je_posted"):
-        if k in updates:
-            setattr(contract, k, updates[k])
-    contract.updated_at = datetime.utcnow()
-    db.add(contract)
-    db.commit()
-    db.refresh(contract)
-    return contract
-
-
-def portfolio_summary(db: Session, workspace_id: str, company_id: str | None = None) -> dict[str, Any]:
-    contracts = list_contracts(db, workspace_id, company_id)
-    active = [c for c in contracts if c.get("status") == "active"]
-    ot = pt = 0
-    for c in active:
-        for o in c.get("performance_obligations") or []:
-            if o.get("satisfaction_method") == "over_time":
-                ot += 1
-            else:
-                pt += 1
-    return {
-        "total_contracts": len(contracts),
-        "total_contract_value_aed": round(sum(_f(c["contract_value_aed"]) for c in active), 2),
-        "total_recognised_ytd_aed": round(sum(_f(c["total_recognised_aed"]) for c in active), 2),
-        "total_remaining_aed": round(sum(_f(c["total_remaining_aed"]) for c in active), 2),
-        "contract_liabilities_aed": round(sum(_f(c["contract_liability_aed"]) for c in active), 2),
-        "contract_assets_aed": round(sum(_f(c["contract_asset_aed"]) for c in active), 2),
-        "over_time_contracts": ot,
-        "point_in_time_contracts": pt,
-    }
+    results = calculator.calculate_full_ifrs15(calc_input, cash_received=Decimal(str(cash_received)))
+    serialized = serialize_calculation_results(results)
+    if persist:
+        save_calculation_results(db, contract, serialized)
+    return serialized
 
 
 def calculate_recognition(
@@ -163,14 +96,53 @@ def calculate_recognition(
     workspace_id: str,
     company_id: str | None,
 ) -> dict[str, Any]:
+    if (method or "").strip().lower() == "engine":
+        cash_received = _f(method_data.get("cash_received_aed"))
+        results = calculate_full_contract(
+            db,
+            contract_id,
+            workspace_id,
+            company_id,
+            cash_received=cash_received,
+            persist=True,
+        )
+        contract = get_contract(db, contract_id, workspace_id, company_id)
+        balances = results.get("contract_balances") or {}
+        revenue_to_date = _f(balances.get("revenue_recognized_to_date"))
+        already = _f(contract.total_recognised_aed) if contract else 0
+        incremental = max(revenue_to_date - already, 0)
+        liability = _f(balances.get("contract_liability_amount"))
+        asset = _f(balances.get("contract_asset_amount"))
+        return {
+            "method": "engine",
+            "calculation_results": results,
+            "transaction_price": _f(results.get("transaction_price")),
+            "percentage_complete": None,
+            "revenue_to_recognise": round(revenue_to_date, 2),
+            "revenue_recognized_to_date": round(revenue_to_date, 2),
+            "journal_entry_amount": round(incremental, 2),
+            "incremental_recognition": round(incremental, 2),
+            "contract_asset_or_liability": (
+                "contract_liability" if liability >= asset else "contract_asset"
+            ),
+            "contract_balances": balances,
+        }
+
     contract = get_contract(db, contract_id, workspace_id, company_id)
     if not contract:
         raise ValueError("Contract not found")
-    obs = _parse_obligations(contract.performance_obligations)
+    import json
+
+    try:
+        obs = json.loads(contract.performance_obligations or "[]")
+    except json.JSONDecodeError:
+        obs = []
     if obligation_index < 0 or obligation_index >= len(obs):
         raise ValueError("Invalid obligation index")
     ob = obs[obligation_index]
-    pct = calculate_percentage_complete(method, {**method_data, "start_date": ob.get("start_date"), "end_date": ob.get("end_date")})
+    pct = calculate_percentage_complete(
+        method, {**method_data, "start_date": ob.get("start_date"), "end_date": ob.get("end_date")}
+    )
     allocated = _f(ob.get("allocated_transaction_price_aed"))
     already = _f(ob.get("revenue_recognised_aed"))
     revenue = (pct / 100) * allocated
@@ -205,7 +177,12 @@ def post_recognition_je(
     contract = get_contract(db, contract_id, workspace_id, company_id)
     if not contract:
         raise ValueError("Contract not found")
-    obs = _parse_obligations(contract.performance_obligations)
+    import json
+
+    try:
+        obs = json.loads(contract.performance_obligations or "[]")
+    except json.JSONDecodeError:
+        obs = []
     ob = obs[obligation_index] if 0 <= obligation_index < len(obs) else {}
     desc = ob.get("description", "Performance obligation")
     customer = contract.customer_name
@@ -229,7 +206,6 @@ def post_recognition_je(
         je_ids.append(je1.id)
 
     if billed_amount > amount_aed + 0.01:
-        diff = billed_amount - amount_aed
         je2 = create_journal_entry(
             tenant_id=workspace_id,
             company_id=company_id,

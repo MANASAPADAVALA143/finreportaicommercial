@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
-# Build: cd backend && docker build -t finreportai-backend .
-# Run:   docker compose up -d
+# Build from REPO ROOT (so scripts/ is in context):
+#   docker build -f backend/Dockerfile -t finreportai-backend .
+# Or via compose (backend/docker-compose.yml uses context: ..)
 
 FROM python:3.11-slim AS builder
 
@@ -21,7 +22,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 RUN pip install --upgrade pip wheel setuptools
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Pre-install heavy numeric stack as wheels only (avoids OOM compile on small EC2)
 RUN pip install --only-binary=:all: \
@@ -53,10 +54,12 @@ COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
 
-COPY app ./app
-COPY excel_addin ./excel_addin
-COPY alembic ./alembic
-COPY alembic.ini ./
+COPY backend/app ./app
+COPY backend/excel_addin ./excel_addin
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./
+# Gnanova AP cron / WhatsApp scripts (repo-root scripts/)
+COPY scripts ./scripts
 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser

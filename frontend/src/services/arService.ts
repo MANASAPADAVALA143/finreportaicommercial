@@ -1,16 +1,12 @@
 /** UAE AR — /api/uae/ar endpoints */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/uae/ar`;
 
-function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+function hdrs(extra: Record<string, string> = {}): Record<string, string> {
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 function companyParams(extra: Record<string, string> = {}): Record<string, string> {
@@ -26,7 +22,7 @@ function companyParams(extra: Record<string, string> = {}): Record<string, strin
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
   const q = new URLSearchParams(companyParams(params ?? {})).toString();
   const url = `${BASE}${path}${q ? `?${q}` : ''}`;
-  const res = await fetch(url, { headers: hdrs() });
+  const res = await fetch(url, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -36,6 +32,18 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: hdrs(),
     body: JSON.stringify(body),
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function patch<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: hdrs(),
+    body: JSON.stringify(body),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -62,12 +70,49 @@ export interface ARInvoice {
   total: number;
   amount_due: number;
   status: string;
+  einvoicing_status?: string | null;
   is_overdue: boolean;
   je_reference?: string | null;
   sent_at?: string | null;
   paid_date?: string | null;
   payment_reference?: string | null;
   line_items: ARLineItem[];
+  cost_center?: string | null;
+  vat_treatment?: string | null;
+  gulftax_decision?: 'AUTO_APPROVE' | 'REVIEW_QUEUE' | 'HARD_BLOCK' | string | null;
+  gulftax_risk_score?: number | null;
+  gulftax_confidence?: number | null;
+  trn_valid?: boolean | null;
+  flag_for_review?: boolean;
+  gulftax_reasoning?: string | null;
+}
+
+export interface ARCustomerRiskRow {
+  customer_id: string | null;
+  customer_name: string;
+  risk_tier: 'low' | 'medium' | 'high' | 'critical';
+  total_outstanding: number;
+  total_overdue: number;
+  worst_bucket: string;
+  credit_notes_count: number;
+  total_credited: number;
+  avg_days_to_pay: number | null;
+  open_invoice_count: number;
+}
+
+export interface ARCreditNote {
+  id: string;
+  credit_note_number: string;
+  parent_invoice_id: string;
+  invoice_number?: string | null;
+  customer_id?: string | null;
+  customer_name: string;
+  company_id?: string | null;
+  amount: number;
+  reason?: string | null;
+  status: string;
+  issued_date?: string | null;
+  created_at?: string | null;
 }
 
 export interface ARAgingBucket {
@@ -85,6 +130,7 @@ export interface CreateInvoicePayload {
   line_items: ARLineItem[];
   company_id: string;
   workspace_id?: string;
+  cost_center?: string;
 }
 
 export const listARInvoices = (status?: string) =>
@@ -93,11 +139,241 @@ export const listARInvoices = (status?: string) =>
 export const getARAging = () =>
   get<{ buckets: ARAgingBucket[]; total_outstanding: number; currency: string }>('/aging');
 
+export const getARCustomerRisk = (risk_tier?: string) =>
+  get<{
+    as_of: string;
+    currency: string;
+    total_outstanding: number;
+    total_overdue: number;
+    customer_count: number;
+    customers: ARCustomerRiskRow[];
+    risk_tier_filter?: string;
+  }>('/customer-risk', risk_tier ? { risk_tier } : undefined);
+
 export const createARInvoice = (body: CreateInvoicePayload) =>
-  post<{ invoice_id: string; invoice_number: string; subtotal: number; vat_amount: number; total: number; je_id: string }>(
+  post<{
+    invoice_id: string;
+    invoice_number: string;
+    subtotal: number;
+    vat_amount: number;
+    total: number;
+    status: string;
+    posted?: boolean;
+    needs_manual_review?: boolean;
+    je_id?: string | null;
+    je_reference?: string | null;
+    gulftax?: Record<string, unknown> | null;
+    gulftax_decision?: string | null;
+    gulftax_reasoning?: string | null;
+    flag_for_review?: boolean;
+    vat_treatment?: string | null;
+    gulftax_risk_score?: number | null;
+    gulftax_confidence?: number | null;
+    trn_valid?: boolean | null;
+    message?: string | null;
+  }>(
     '/create-invoice',
     body,
   );
+
+export interface ARBulkImportResult {
+  total_rows: number;
+  imported: number;
+  posted: number;
+  flagged_review: number;
+  skipped_hard_block: Array<{ row: number; customer: string; reason: string }>;
+  skipped_errors: Array<{ row: number; error: string }>;
+  column_map?: Record<string, string | null>;
+}
+
+export async function bulkImportARInvoices(
+  file: File,
+  company_id: string,
+  workspace_id?: string,
+): Promise<ARBulkImportResult> {
+  if (!(file instanceof File)) {
+    throw new Error('No file selected for import');
+  }
+
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('company_id', company_id);
+  if (workspace_id) form.append('workspace_id', workspace_id);
+
+  // Do NOT set Content-Type — browser must set multipart/form-data with boundary.
+  // workspaceHeaders() defaults to application/json, which strips the file from the body.
+  const headers = workspaceHeaders(getStoredAccessToken());
+  delete headers['Content-Type'];
+
+  const res = await fetch(`${BASE}/bulk-import`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || 'Bulk import failed');
+  }
+  return res.json();
+}
+
+export interface ARExtractedLineItem {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  vat_rate: number;
+  line_total: number;
+}
+
+export interface ARExtractedData {
+  document_type?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  due_date?: string | null;
+  customer_name?: string | null;
+  customer_trn?: string | null;
+  seller_name?: string | null;
+  seller_trn?: string | null;
+  line_items: ARExtractedLineItem[];
+  subtotal?: number | null;
+  vat_amount?: number | null;
+  total_amount?: number | null;
+  currency?: string | null;
+  payment_terms?: string | null;
+  notes?: string | null;
+}
+
+export interface ARExtractPdfResult {
+  extraction_status: 'success' | 'partial' | 'failed' | string;
+  extracted_data: ARExtractedData;
+  vat_treatment: string;
+  confidence_notes: string;
+  raw_text?: string;
+}
+
+export async function extractARPdf(
+  file: File,
+  company_id: string,
+  workspace_id?: string,
+): Promise<ARExtractPdfResult> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('company_id', company_id);
+  if (workspace_id) form.append('workspace_id', workspace_id);
+
+  const headers = workspaceHeaders(getStoredAccessToken());
+  delete headers['Content-Type'];
+
+  const res = await fetch(`${BASE}/extract-pdf`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      detail = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail ?? err);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || 'PDF extraction failed');
+  }
+  return res.json();
+}
+
+export interface ARCreateFromExtractionResult {
+  invoice_id: string | null;
+  invoice_number?: string | null;
+  status: 'draft' | 'posted' | string;
+  journal_entry_id?: string | null;
+  gulftax_transaction_id?: string | null;
+  vat_classification?: Record<string, unknown>;
+  message?: string | null;
+  posted?: boolean;
+  je_reference?: string | null;
+}
+
+export async function createARFromExtraction(body: {
+  workspace_id: string;
+  company_id: string;
+  extracted_data: ARExtractedData;
+  vat_treatment: string;
+  auto_approve: boolean;
+}): Promise<ARCreateFromExtractionResult> {
+  return post<ARCreateFromExtractionResult>('/create-from-extraction', body);
+}
+
+export const approveAndPostARInvoice = (invoice_id: string, company_id?: string) =>
+  post<{
+    success: boolean;
+    ok: boolean;
+    skipped?: boolean;
+    je_posted: boolean;
+    je_id?: string;
+    journal_entry_id?: string;
+    gulftax_transaction_id?: string;
+    je_reference?: string;
+    status?: string;
+    invoice_id?: string;
+    invoice_number?: string;
+    gulftax?: Record<string, unknown>;
+    message?: string;
+  }>('/approve-and-post', {
+    invoice_id,
+    company_id: company_id ?? localStorage.getItem('active_company_id'),
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+/** Shared success copy for all AR approve-and-post entry points */
+export function arPostedToastMessage(invoiceNumber: string): string {
+  return `Invoice ${invoiceNumber} posted → GL entry created + VAT recorded in GulfTax`;
+}
+
+export const listARCreditNotes = (params?: {
+  status?: string;
+  customer_id?: string;
+  parent_invoice_id?: string;
+}) =>
+  get<{ credit_notes: ARCreditNote[]; count: number }>(
+    '/credit-notes',
+    params as Record<string, string> | undefined,
+  );
+
+export const issueARCreditNote = (
+  invoiceId: string,
+  body: { amount: number; reason?: string; company_id?: string; issued_date?: string },
+) =>
+  post<{
+    ok: boolean;
+    credit_note: ARCreditNote;
+    outstanding_after: number;
+    invoice_status: string;
+    je_id?: string;
+    je_reference?: string;
+  }>(`/${invoiceId}/credit-note`, {
+    ...body,
+    company_id: body.company_id ?? localStorage.getItem('active_company_id'),
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const voidARCreditNote = (creditNoteId: string) =>
+  post<{
+    ok: boolean;
+    credit_note: ARCreditNote;
+    outstanding_after: number;
+    invoice_status: string;
+  }>(`/credit-notes/${creditNoteId}/void`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
 
 export const sendARInvoice = (invoice_id: string, customer_email: string) =>
   post<{ sent: boolean; invoice_number: string; warning?: string }>('/send-invoice', {
@@ -137,11 +413,122 @@ export const autoMatchPayments = (body: { company_id: string; bank_account_code?
     workspace_id: localStorage.getItem('gnanova_workspace_id'),
   });
 
+export interface ARDunningHistoryRow {
+  invoice_id: string;
+  invoice_number: string;
+  customer_name: string;
+  last_dunning_level: number;
+  last_dunning_sent_at: string | null;
+  dunning_count: number;
+  outstanding: number;
+  days_overdue: number;
+  due_date?: string | null;
+}
+
+export interface ARDunningTemplate {
+  level: number;
+  label: string;
+  days_overdue_range: string;
+  subject: string;
+  body: string;
+}
+
+export const getARDunningHistory = (dunning_level?: number) =>
+  get<{ as_of: string; count: number; invoices: ARDunningHistoryRow[]; dunning_level_filter?: number }>(
+    '/dunning-history',
+    dunning_level != null ? { dunning_level: String(dunning_level) } : undefined,
+  );
+
+export const getARDunningTemplates = () =>
+  get<{ templates: ARDunningTemplate[] }>('/dunning-templates');
+
 export const runCollectionsDunning = (company_id: string) =>
-  post<{ sent_count: number; sent: Array<{ invoice_number: string; customer: string; amount: number; level: number }>; summary: string[] }>(
+  post<{
+    sent_count: number;
+    skipped_count: number;
+    sent: Array<{ invoice_number: string; customer: string; amount: number; level: number; email?: string }>;
+    skipped: Array<{ invoice_number: string; customer: string; amount: number; level: number; reason: string }>;
+    summary: string[];
+  }>(
     '/run-dunning',
     { company_id, workspace_id: localStorage.getItem('gnanova_workspace_id') },
   );
+
+export interface ARRecurringTemplate {
+  id: string;
+  customer_id: string;
+  customer_name: string;
+  description: string;
+  amount: number;
+  vat_rate: number;
+  recurrence_type: 'weekly' | 'monthly' | 'quarterly' | 'annually';
+  interval: number;
+  start_date: string;
+  next_due_date: string;
+  end_date: string | null;
+  status: 'active' | 'paused' | 'cancelled';
+  last_generated_at: string | null;
+  generated_count: number;
+}
+
+export interface ARGeneratedInvoice {
+  invoice_id: string;
+  invoice_number: string;
+  invoice_date: string | null;
+  due_date: string | null;
+  subtotal: number;
+  vat_amount: number;
+  total: number;
+  status: string;
+}
+
+export const listARRecurringTemplates = (status?: string) =>
+  get<{ count: number; templates: ARRecurringTemplate[] }>(
+    '/recurring-invoices',
+    status ? { status } : undefined,
+  );
+
+export const createARRecurringTemplate = (body: {
+  customer_id: string;
+  description: string;
+  amount: number;
+  vat_rate: number;
+  recurrence_type: string;
+  interval: number;
+  start_date: string;
+  end_date?: string;
+  company_id: string;
+}) =>
+  post<ARRecurringTemplate>('/recurring-invoices', {
+    ...body,
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const generateDueARRecurring = (company_id?: string) =>
+  post<{ as_of: string; generated_count: number; generated: Array<Record<string, unknown>> }>(
+    '/recurring-invoices/generate-due',
+    { company_id, workspace_id: localStorage.getItem('gnanova_workspace_id') },
+  );
+
+export const getARRecurringGenerated = (templateId: string) =>
+  get<{ template_id: string; customer_name: string; count: number; invoices: ARGeneratedInvoice[] }>(
+    `/recurring-invoices/${templateId}/generated`,
+  );
+
+export const pauseARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/pause`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const resumeARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/resume`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
+
+export const cancelARRecurringTemplate = (templateId: string) =>
+  patch<ARRecurringTemplate>(`/recurring-invoices/${templateId}/cancel`, {
+    workspace_id: localStorage.getItem('gnanova_workspace_id'),
+  });
 
 export interface DSOMetrics {
   dso_current: number;
@@ -191,7 +578,7 @@ export const predictPayments = (body: { company_id: string; invoice_id?: string;
   });
 
 export async function downloadARPdf(invoiceId: string, filename: string): Promise<void> {
-  const res = await fetch(`${BASE}/invoices/${invoiceId}/pdf`, { headers: hdrs() });
+  const res = await fetch(`${BASE}/invoices/${invoiceId}/pdf`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

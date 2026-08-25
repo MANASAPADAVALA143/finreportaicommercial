@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AlertTriangle } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).replace(/\/$/, '')) || '';
 
@@ -8,7 +9,8 @@ type AgentKey =
   | 'ifrs-checker'
   | 'controls-tester'
   | 'sox-checker'
-  | 'aml-monitor';
+  | 'aml-monitor'
+  | 'going_concern';
 
 type AuditRunRow = {
   id: number;
@@ -115,6 +117,24 @@ type AuditEvidenceResult = {
   message?: string;
 };
 
+type GoingConcernResult = {
+  indicators?: {
+    net_loss_current_period?: boolean;
+    negative_working_capital?: boolean;
+    ar_overdue_above_30pct?: boolean;
+    ap_payment_delays?: boolean;
+    vat_compliance_stress?: boolean;
+    revenue_decline_over_20pct?: boolean;
+  };
+  triggered_count?: number;
+  going_concern_level?: 'none' | 'low' | 'medium' | 'high' | string;
+  narrative?: string;
+  generated_at?: string;
+  isa_570_reference?: string;
+  message?: string;
+  _error?: string;
+};
+
 const AGENTS: {
   key: AgentKey;
   icon: string;
@@ -157,6 +177,13 @@ const AGENTS: {
     description: 'FATF-style red flags, risk scores, and SAR suggestions from transaction CSV.',
     anchor: 'aml',
   },
+  {
+    key: 'going_concern',
+    icon: '⚠️',
+    title: 'Going Concern Assessor',
+    description: 'ISA 570 / IAS 1 para 25 uncertainty assessment with data-driven flags.',
+    anchor: 'going-concern',
+  },
 ];
 
 function pdfUrl(runId: number) {
@@ -194,6 +221,7 @@ export default function AuditIntelligencePage() {
     'controls-tester': [],
     'sox-checker': [],
     'aml-monitor': [],
+    going_concern: [],
   });
   const [loadingMap, setLoadingMap] = useState<Record<AgentKey, boolean>>({
     'evidence-collector': false,
@@ -201,6 +229,7 @@ export default function AuditIntelligencePage() {
     'controls-tester': false,
     'sox-checker': false,
     'aml-monitor': false,
+    going_concern: false,
   });
   const [resultMap, setResultMap] = useState<Record<AgentKey, { run_id: number; result: unknown } | null>>({
     'evidence-collector': null,
@@ -208,6 +237,7 @@ export default function AuditIntelligencePage() {
     'controls-tester': null,
     'sox-checker': null,
     'aml-monitor': null,
+    going_concern: null,
   });
 
   const refreshHistories = useCallback(async () => {
@@ -602,6 +632,87 @@ export default function AuditIntelligencePage() {
             <AgentResult data={resultMap['aml-monitor']} />
             <HistoryTable rows={histories['aml-monitor']} />
           </section>
+
+          {/* Going Concern */}
+          <section id="agent-going-concern" className="scroll-mt-6 space-y-4">
+            <h2 className="text-lg font-semibold text-[#F5A623] flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Going Concern Assessor
+            </h2>
+            <form
+              className={`space-y-3 ${cardBase}`}
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setBusy('going_concern', true);
+                try {
+                  const fd = new FormData(e.currentTarget);
+                  const boolVal = (name: string) => fd.get(name) === 'on';
+                  const payload = {
+                    workspace_id: String(fd.get('workspace_id') || '').trim(),
+                    company_id: String(fd.get('company_id') || '').trim(),
+                    period: String(fd.get('period') || '').trim(),
+                    financial_data: {
+                      overrides: {
+                        net_loss_current_period: boolVal('ovr_net_loss_current_period'),
+                        negative_working_capital: boolVal('ovr_negative_working_capital'),
+                        ar_overdue_above_30pct: boolVal('ovr_ar_overdue_above_30pct'),
+                        ap_payment_delays: boolVal('ovr_ap_payment_delays'),
+                        vat_compliance_stress: boolVal('ovr_vat_compliance_stress'),
+                        revenue_decline_over_20pct: boolVal('ovr_revenue_decline_over_20pct'),
+                      },
+                    },
+                  };
+                  const r = await fetch(`${API_BASE}/api/audit/going-concern`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                  });
+                  const j = await r.json();
+                  if (!r.ok) throw new Error(j.detail || r.statusText);
+                  setResultMap((m) => ({ ...m, going_concern: { run_id: j.run_id, result: j } }));
+                  await refreshHistories();
+                } catch (err) {
+                  setResultMap((m) => ({
+                    ...m,
+                    going_concern: { run_id: 0, result: { _error: 'request_failed', message: String(err) } },
+                  }));
+                } finally {
+                  setBusy('going_concern', false);
+                }
+              }}
+            >
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <label className={labelCls}>Workspace ID</label>
+                  <input name="workspace_id" className={inputCls} placeholder="workspace id" required />
+                </div>
+                <div>
+                  <label className={labelCls}>Company ID</label>
+                  <input name="company_id" className={inputCls} placeholder="company id" required />
+                </div>
+                <div>
+                  <label className={labelCls}>Period (e.g. 2026-Q2)</label>
+                  <input name="period" className={inputCls} defaultValue={`${new Date().getFullYear()}-Q${Math.floor(new Date().getMonth() / 3) + 1}`} required />
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-xs text-slate-400">Optional manual overrides (for incomplete source data)</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_net_loss_current_period" className="mr-2" />Net loss this period</label>
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_negative_working_capital" className="mr-2" />Negative working capital</label>
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_ar_overdue_above_30pct" className="mr-2" />AR aging stress (&gt;90 days)</label>
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_ap_payment_delays" className="mr-2" />AP payment delays (&gt;60 days)</label>
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_vat_compliance_stress" className="mr-2" />VAT/CT compliance stress</label>
+                  <label className="text-xs text-slate-300"><input type="checkbox" name="ovr_revenue_decline_over_20pct" className="mr-2" />Revenue decline &gt;20%</label>
+                </div>
+              </div>
+              <button type="submit" className={btnPrimary} disabled={loadingMap.going_concern}>
+                {loadingMap.going_concern ? 'Running…' : 'Run Going Concern Assessment'}
+              </button>
+            </form>
+            <GoingConcernResultCard data={resultMap.going_concern} />
+            <HistoryTable rows={histories.going_concern} />
+          </section>
         </div>
       </main>
     </div>
@@ -773,6 +884,63 @@ function AuditEvidenceDashboard({ data }: { data: { run_id: number; result: unkn
           {mgmt.map((m, idx) => <li key={`mgmt-${idx}`}>- {m}</li>)}
         </ul>
       </div>
+    </div>
+  );
+}
+
+function GoingConcernResultCard({ data }: { data: { run_id: number; result: unknown } | null }) {
+  if (!data) return null;
+  const typed = (data.result || {}) as GoingConcernResult;
+  if (typed._error) {
+    return <div className={`${cardBase} text-sm text-red-300`}>{typed.message || typed._error}</div>;
+  }
+  const indicators = typed.indicators || {};
+  const level = String(typed.going_concern_level || "none").toLowerCase();
+  const badgeCls =
+    level === "high"
+      ? "bg-red-500/20 text-red-300 ring-red-400/40"
+      : level === "medium"
+        ? "bg-amber-500/20 text-amber-300 ring-amber-400/40"
+        : level === "low"
+          ? "bg-blue-500/20 text-blue-300 ring-blue-400/40"
+          : "bg-emerald-500/20 text-emerald-300 ring-emerald-400/40";
+  const rows: Array<[string, boolean]> = [
+    ["Net loss this period", Boolean(indicators.net_loss_current_period)],
+    ["Negative working capital (AR/AP stress)", Boolean(indicators.negative_working_capital)],
+    ["AR aging stress (>90 days >30%)", Boolean(indicators.ar_overdue_above_30pct)],
+    ["AP payment delays (>60 days >25%)", Boolean(indicators.ap_payment_delays)],
+    ["VAT/CT compliance stress", Boolean(indicators.vat_compliance_stress)],
+    ["Revenue decline >20%", Boolean(indicators.revenue_decline_over_20pct)],
+  ];
+
+  return (
+    <div className={`${cardBase} space-y-4`}>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Going Concern Result</h3>
+        <span className={`rounded-full px-3 py-1 text-xs ring-1 ${badgeCls}`}>
+          {level.toUpperCase()} {level === "high" ? "— Material Uncertainty" : ""}
+        </span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {rows.map(([label, v]) => (
+          <div key={label} className="rounded-md bg-[#0A0F1E] px-3 py-2 text-xs text-slate-300">
+            <span className="mr-2">{v ? "🔴" : "✅"}</span>
+            {label}
+          </div>
+        ))}
+      </div>
+      <div className="rounded-md bg-[#0A0F1E] px-3 py-3 text-sm text-slate-200 whitespace-pre-wrap">
+        {typed.narrative || "No narrative returned."}
+      </div>
+      <div className="flex items-center justify-between text-[11px] text-slate-500">
+        <span>{typed.isa_570_reference || "ISA 570"}</span>
+        {typed.generated_at ? <span>{new Date(typed.generated_at).toLocaleString()}</span> : null}
+      </div>
+      {data.run_id > 0 ? (
+        <a href={pdfUrl(data.run_id)} className={btnGhost} target="_blank" rel="noreferrer">
+          Download Report PDF
+        </a>
+      ) : null}
     </div>
   );
 }

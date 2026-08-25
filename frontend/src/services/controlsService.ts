@@ -1,16 +1,12 @@
 /** UAE accounting controls — /api/uae/controls */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/uae/controls`;
 
-function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+function hdrs(extra: Record<string, string> = {}): Record<string, string> {
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 function companyQs(): string {
@@ -38,7 +34,7 @@ export interface PendingJournal {
 }
 
 export async function getControls(): Promise<AccountingControls> {
-  const res = await fetch(`${BASE}${companyQs()}`, { headers: hdrs() });
+  const res = await fetch(`${BASE}${companyQs()}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.controls;
@@ -50,6 +46,7 @@ export async function saveControls(body: Partial<AccountingControls>): Promise<A
     method: 'PATCH',
     headers: hdrs(),
     body: JSON.stringify({ ...body, company_id: cid }),
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -57,18 +54,18 @@ export async function saveControls(body: Partial<AccountingControls>): Promise<A
 }
 
 export async function listPendingJournals(): Promise<PendingJournal[]> {
-  const res = await fetch(`${BASE}/pending-journals${companyQs()}`, { headers: hdrs() });
+  const res = await fetch(`${BASE}/pending-journals${companyQs()}`, { headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.entries;
 }
 
 export async function approveJournal(jeId: string): Promise<void> {
-  const res = await fetch(`${BASE}/journals/${jeId}/approve`, { method: 'POST', headers: hdrs() });
+  const res = await fetch(`${BASE}/journals/${jeId}/approve`, { method: 'POST', headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function rejectJournal(jeId: string): Promise<void> {
-  const res = await fetch(`${BASE}/journals/${jeId}/reject`, { method: 'POST', headers: hdrs() });
+  const res = await fetch(`${BASE}/journals/${jeId}/reject`, { method: 'POST', headers: hdrs(), credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
 }

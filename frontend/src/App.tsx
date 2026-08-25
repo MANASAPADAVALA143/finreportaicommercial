@@ -1,37 +1,57 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Toaster as ShadcnToaster } from './components/ui/toaster';
 import { ErrorBoundary } from './ErrorBoundary';
 import { AgentActivityProvider } from './context/AgentActivityContext';
 import { ClientProvider } from './context/ClientContext';
 import { WorkspaceProvider } from './context/WorkspaceContext';
+import { IndustryConfigProvider } from './context/IndustryConfigContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { SuiteProvider } from './context/SuiteContext';
+import { MarketProvider } from './contexts/MarketContext';
+import { MarketToggle } from './components/MarketToggle';
 import { WorkspaceSelector } from './components/WorkspaceSelector';
 import { CompanySelector } from './components/CompanySelector';
 import PrivateRoute from './components/PrivateRoute';
 import WorkspaceGuard from './components/WorkspaceGuard';
 import RoleRoute from './components/RoleRoute';
 import { useAuth } from './context/AuthContext';
-import { canAccessPath, homePathForRole } from './config/productRole';
+import { canAccessPath } from './config/productRole';
 import Sidebar from './components/layout/Sidebar';
 import { SuiteSidebar } from './components/SuiteSidebar';
 import { useAutoSuiteSwitcher } from './hooks/useAutoSuiteSwitcher';
+import GulfTaxLayout from './pages/gulftax/GulfTaxLayout';
 
 const PUBLIC_PATHS = new Set(['/', '/login', '/register', '/forgot-password', '/reset-password', '/get-demo']);
 
 /** Cross-app navigation banner — links filtered by product role */
 function GnanovaBanner() {
   const { pathname } = useLocation();
-  const { productRole, user, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const { productRole, user, isAuthenticated, logout } = useAuth();
+
+  // Public real-estate marketing page owns its own nav — the cross-app workspace
+  // banner must not bleed through onto it.
+  if (pathname === '/real-estate') return null;
+
   const showWorkspaceControls = !PUBLIC_PATHS.has(pathname);
 
   const showAp = !isAuthenticated || canAccessPath(productRole, '/ap-invoices', user?.role);
   const showGulfTax = !isAuthenticated || canAccessPath(productRole, '/gulftax', user?.role);
+  const showSettings = isAuthenticated && canAccessPath(productRole, '/ap-invoices', user?.role);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } finally {
+      navigate('/', { replace: true });
+    }
+  };
 
   return (
     <div
+      data-gnanova-banner
       style={{
         height: 36,
         background: '#0f2d5e',
@@ -51,6 +71,7 @@ function GnanovaBanner() {
       <span style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Gnanova Finance OS</span>
       {showWorkspaceControls && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <MarketToggle compact />
           <CompanySelector />
         </div>
       )}
@@ -89,6 +110,49 @@ function GnanovaBanner() {
       >
         🇦🇪 GulfTax →
       </a>
+      )}
+      {showSettings && (
+      <a
+        href="/ap-invoices/industry"
+        style={{
+          color: '#a5b4fc',
+          textDecoration: 'none',
+          fontWeight: 500,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#c7d2fe'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.color = '#a5b4fc'; }}
+      >
+        ⚙️ Industry →
+      </a>
+      )}
+      {isAuthenticated && (
+        <button
+          type="button"
+          onClick={() => void handleLogout()}
+          style={{
+            background: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 6,
+            padding: '4px 10px',
+            color: '#fca5a5',
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(248,113,113,0.15)';
+            e.currentTarget.style.color = '#fecaca';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
+            e.currentTarget.style.color = '#fca5a5';
+          }}
+        >
+          Log out
+        </button>
       )}
       </div>
     </div>
@@ -172,6 +236,8 @@ function namedLazy<T extends ComponentType<object>>(
 const Dashboard = safeLazy(() =>
   import('./components/dashboard/Dashboard').then((m) => ({ default: m.Dashboard }))
 );
+const LoginPage = safeLazy(() => import('./pages/Login'));
+const RegisterPage = safeLazy(() => import('./pages/Register'));
 const R2RModule = safeLazy(() =>
   import('./components/r2r/R2RModule').then((m) => ({ default: m.R2RModule }))
 );
@@ -191,10 +257,12 @@ const MonthEndClose = safeLazy(() => import('./pages/MonthEndClose'));
 const EarningsReviewer = safeLazy(() => import('./pages/EarningsReviewer'));
 const GLReconciler = safeLazy(() => import('./pages/GLReconciler'));
 const ModelBuilder = safeLazy(() => import('./pages/ModelBuilder'));
-const Login = safeLazy(() => import('./pages/Login'));
-const Register = safeLazy(() => import('./pages/Register'));
-const ForgotPassword = safeLazy(() => import('./pages/ForgotPassword'));
-const ResetPassword = safeLazy(() => import('./pages/ResetPassword'));
+// Login temporarily disabled — keep imports commented for restore later
+// const Login = safeLazy(() => import('./pages/Login'));
+// const Register = safeLazy(() => import('./pages/Register'));
+// const ForgotPassword = safeLazy(() => import('./pages/ForgotPassword'));
+// const ResetPassword = safeLazy(() => import('./pages/ResetPassword'));
+const RealEstateLanding = safeLazy(() => import('./pages/RealEstateLanding'));
 const Unauthorized = safeLazy(() => import('./pages/Unauthorized'));
 const UserManagement = safeLazy(() => import('./pages/UserManagement'));
 const NovaAssistant = safeLazy(() =>
@@ -300,6 +368,7 @@ const GetDemoPage = safeLazy(() => import('./pages/GetDemoPage'));
 const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
 const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
 const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntelligencePage'));
+const AuditCommandCenterPage = safeLazy(() => import('./pages/audit/AuditCommandCenterPage'));
 // CA Firm Tools
 const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
 const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
@@ -314,11 +383,18 @@ const UAETrialBalanceViewer  = safeLazy(() => import('./pages/uae-accounting/Tri
 // UAE Full Accounting Suite (Phase C)
 const UAEAccountingOverview  = safeLazy(() => import('./pages/uae-accounting/UAEAccountingOverview'));
 const CompanySetupWizard       = safeLazy(() => import('./pages/company-setup/CompanySetupWizard'));
+const CostCentersSettingsPage  = safeLazy(() => import('./pages/settings/CostCentersSettingsPage'));
+const CoaMappingSettingsPage = safeLazy(() => import('./pages/ap-invoices/settings/CoaMappingSettingsPage'));
+const IndustrySelectorPage     = safeLazy(() => import('./pages/settings/IndustrySelector'));
 const ConsolidationPage        = safeLazy(() => import('./pages/consolidation/ConsolidationPage'));
 const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/ChartOfAccounts'));
 const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
 const UAESalesInvoices       = safeLazy(() => import('./pages/uae-accounting/SalesInvoices'));
 const ARInvoices             = safeLazy(() => import('./pages/uae-full/ARInvoices'));
+const ARInvoiceExtract       = safeLazy(() => import('./pages/uae-full/ARInvoiceExtract'));
+const ARCustomerRisk         = safeLazy(() => import('./pages/uae-full/ARCustomerRisk'));
+const ARDunning              = safeLazy(() => import('./pages/uae-full/ARDunning'));
+const ARRecurringInvoices    = safeLazy(() => import('./pages/uae-full/ARRecurringInvoices'));
 const CRMLayout              = safeLazy(() => import('./pages/crm/CRMLayout'));
 const CRMDashboard           = safeLazy(() => import('./pages/crm/CRMDashboard'));
 const CRMContacts            = safeLazy(() => import('./pages/crm/CRMContacts'));
@@ -332,6 +408,8 @@ const UAEPeriodEndClose      = safeLazy(() => import('./pages/uae-accounting/Per
 const UAEManagementAccounts  = safeLazy(() => import('./pages/uae-accounting/ManagementAccounts'));
 const AccountClassification    = safeLazy(() => import('./pages/uae-full/AccountClassification'));
 const CITReturn                = safeLazy(() => import('./pages/uae-full/CITReturn'));
+const UAEFinanceSuiteDashboard = safeLazy(() => import('./pages/uae-suite/UAEFinanceSuiteDashboard'));
+const UAESuiteSelector         = safeLazy(() => import('./pages/uae-suite/UAESuiteSelector'));
 
 // â”€â”€ AP InvoiceFlow (embedded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const APInvoicesLayout  = safeLazy(() => import('./pages/ap-invoices/APInvoicesLayout'));
@@ -357,6 +435,9 @@ const APEmailInvoices   = namedLazy(() => import('./pages/ap-invoices/EmailInvoi
 const APMonthEndClose   = namedLazy(() => import('./pages/ap-invoices/MonthEndChecklist'), 'MonthEndChecklist');
 const APAnomalyIntel    = namedLazy(() => import('./pages/ap-invoices/AnomalyIntelligence'), 'AnomalyIntelligence');
 const APPaymentLog      = namedLazy(() => import('./pages/ap-invoices/PaymentLog'), 'PaymentLog');
+const APPaymentRunDashboard = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunDashboard'));
+const APPaymentRunNew = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunNew'));
+const APPaymentRunDetail = safeLazy(() => import('./pages/ap-invoices/payment-run/PaymentRunDetail'));
 const APVendorPortal    = namedLazy(() => import('./pages/ap-invoices/VendorUploadPortal'), 'VendorUploadPortal');
 const APCompanyConfig   = namedLazy(() => import('./pages/ap-invoices/CompanyConfig'), 'CompanyConfig');
 const APTrainingData    = namedLazy(() => import('./pages/ap-invoices/TrainingData'), 'TrainingData');
@@ -386,7 +467,6 @@ const IndiaPeriodClose        = safeLazy(() => import('./pages/india-accounting/
 const IndiaManagementAccounts = safeLazy(() => import('./pages/india-accounting/IndiaManagementAccounts'));
 
 // GulfTax AI (embedded from uaetax)
-const GulfTaxLayout       = safeLazy(() => import('./pages/gulftax/GulfTaxLayout'));
 const GulfTaxDashboard    = safeLazy(() => import('./pages/gulftax/GulfTaxDashboard'));
 const GulfTaxVATClassifier = safeLazy(() => import('./pages/gulftax/VATClassifier'));
 const GulfTaxVATReturn    = safeLazy(() => import('./pages/gulftax/VATReturn'));
@@ -405,6 +485,11 @@ const GulfTaxInvoiceFlowReview = safeLazy(() => import('./pages/gulftax/InvoiceF
 const GulfTaxPartialExemption = safeLazy(() => import('./pages/gulftax/PartialExemption'));
 const GulfTaxDesignatedZones = safeLazy(() => import('./pages/gulftax/DesignatedZones'));
 const GulfTaxBadDebtRelief = safeLazy(() => import('./pages/gulftax/BadDebtRelief'));
+const GulfTaxAuditExports = safeLazy(() => import('./pages/gulftax/AuditExports'));
+const GulfTaxTaxCompliance = safeLazy(() => import('./pages/gulftax/TaxComplianceReport'));
+const GulfTaxAnomalyDetection = safeLazy(() => import('./pages/gulftax/AnomalyDetection'));
+const GulfTaxFinancialStatements = safeLazy(() => import('./pages/gulftax/FinancialStatements'));
+const GulfTaxReconSummary = safeLazy(() => import('./pages/gulftax/ReconciliationSummary'));
 
 // Workspaces
 const WorkspaceList       = safeLazy(() => import('./pages/workspaces/WorkspaceList'));
@@ -468,21 +553,23 @@ function AutoSwitchOnly() {
 }
 
 function RootRedirect() {
-  const { isAuthenticated, accessToken, bootstrapping, productRole, user } = useAuth();
+  const { isAuthenticated, bootstrapping } = useAuth();
 
-  if (bootstrapping) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <p className="text-slate-400 text-sm">Loading session…</p>
-      </div>
-    );
+  if (bootstrapping) return <RouteFallback />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  try {
+    const saved = localStorage.getItem('finreportai_ap_market');
+    if (saved !== 'uae' && saved !== 'india') {
+      localStorage.setItem('finreportai_ap_market', 'india');
+      localStorage.setItem('gnanova_suite', 'india');
+      localStorage.setItem('finreportai_market_user_set', '1');
+      window.dispatchEvent(new CustomEvent('finreportai-market-change', { detail: 'india' }));
+    }
+  } catch {
+    /* ignore */
   }
-
-  if (!isAuthenticated || !accessToken) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return <Navigate to={homePathForRole(productRole, user?.role)} replace />;
+  return <Navigate to="/ap-invoices" replace />;
 }
 
 function App() {
@@ -490,7 +577,9 @@ function App() {
     <AgentActivityProvider>
       <ClientProvider>
         <WorkspaceProvider>
+          <IndustryConfigProvider>
           <CompanyProvider>
+            <MarketProvider>
             <SuiteProvider>
         <BrowserRouter
           basename={routerBasename}
@@ -504,10 +593,11 @@ function App() {
             <Routes>
               <Route path="/" element={<RootRedirect />} />
               <Route path="/get-demo" element={<GetDemoPage />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/real-estate" element={<RealEstateLanding />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route path="/forgot-password" element={<Navigate to="/login" replace />} />
+              <Route path="/reset-password" element={<Navigate to="/login" replace />} />
               <Route element={<PrivateRoute />}>
                 <Route element={<WorkspaceGuard />}>
                 <Route element={<RoleRoute />}>
@@ -516,6 +606,7 @@ function App() {
                 <Route path="/command-center" element={<CommandCenter />} />
                 <Route path="/agent-status" element={<AgentStatus />} />
                 <Route path="/audit" element={<AuditIntelligencePage />} />
+                <Route path="/audit/command-center" element={<AuditCommandCenterPage />} />
                 {/* Non-suite pages (no SuiteSidebar) */}
                 <Route path="/cfo-dashboard" element={<CFODashboard />} />
                 <Route path="/ifrs-generator" element={<IFRSStatementGenerator />} />
@@ -579,6 +670,11 @@ function App() {
                     <Route path="invoice-flow/review" element={<GulfTaxInvoiceFlowReview />} />
                     <Route path="tax-memo" element={<GulfTaxTaxMemo />} />
                     <Route path="fta-reports" element={<GulfTaxFTAReports />} />
+                    <Route path="audit-exports" element={<GulfTaxAuditExports />} />
+                    <Route path="tax-compliance" element={<GulfTaxTaxCompliance />} />
+                    <Route path="anomaly-detection" element={<GulfTaxAnomalyDetection />} />
+                    <Route path="financial-statements" element={<GulfTaxFinancialStatements />} />
+                    <Route path="recon-summary" element={<GulfTaxReconSummary />} />
                     <Route path="suppliers" element={<GulfTaxSuppliers />} />
                     <Route path="settings" element={<GulfTaxSettings />} />
                   </Route>
@@ -601,12 +697,18 @@ function App() {
                   <Route path="gl-accounts"  element={<APGLAccounts />} />
                   <Route path="integrations"   element={<APIntegrations />} />
                   <Route path="settings"       element={<APSettings />} />
+                  <Route path="settings/cost-centers" element={<CostCentersSettingsPage />} />
+                  <Route path="settings/coa-mapping" element={<CoaMappingSettingsPage />} />
+                  <Route path="industry"       element={<IndustrySelectorPage />} />
                   <Route path="cfo"            element={<APCFODashboard />} />
                   <Route path="audit-log"      element={<APAuditLog />} />
                   <Route path="email-invoices" element={<APEmailInvoices />} />
                   <Route path="month-end"      element={<APMonthEndClose />} />
                   <Route path="anomaly"        element={<APAnomalyIntel />} />
                   <Route path="payment-log"    element={<APPaymentLog />} />
+                  <Route path="payment-run" element={<ErrorBoundary><APPaymentRunDashboard /></ErrorBoundary>} />
+                  <Route path="payment-run/new" element={<ErrorBoundary><APPaymentRunNew /></ErrorBoundary>} />
+                  <Route path="payment-run/:id" element={<ErrorBoundary><APPaymentRunDetail /></ErrorBoundary>} />
                   <Route path="vendor-portal"  element={<APVendorPortal />} />
                   <Route path="company-config" element={<APCompanyConfig />} />
                   <Route path="training"       element={<APTrainingData />} />
@@ -636,12 +738,20 @@ function App() {
                 <Route path="/uae-accounting/trial-balances/:id"           element={<UAETrialBalanceViewer />} />
                 {/* UAE Full Accounting Suite */}
                 <Route path="/company-setup" element={<CompanySetupWizard />} />
+                <Route path="/settings/industry" element={<IndustrySelectorPage />} />
+                <Route path="/settings/cost-centers" element={<CostCentersSettingsPage />} />
+                <Route path="/uae-select" element={<UAESuiteSelector />} />
+                <Route path="/uae-suite" element={<UAEFinanceSuiteDashboard />} />
                 <Route path="/consolidation" element={<ConsolidationPage />} />
                 <Route path="/uae-full"                                    element={<UAEAccountingOverview />} />
                 <Route path="/uae-full/coa"                                element={<UAEChartOfAccounts />} />
                 <Route path="/uae-full/journals"                           element={<UAEJournalEntries />} />
                 <Route path="/uae-full/invoices"                           element={<UAESalesInvoices />} />
                 <Route path="/uae-full/ar"                                 element={<ARInvoices />} />
+                <Route path="/uae-full/ar/extract-pdf"                   element={<ARInvoiceExtract />} />
+                <Route path="/uae-full/ar/customer-risk"                 element={<ARCustomerRisk />} />
+                <Route path="/uae-full/ar/dunning"                       element={<ARDunning />} />
+                <Route path="/uae-full/ar/recurring"                     element={<ARRecurringInvoices />} />
                 <Route path="/o2c"                                         element={<O2CDashboard />} />
                 <Route path="/crm" element={<CRMLayout />}>
                   <Route index element={<CRMDashboard />} />
@@ -700,6 +810,7 @@ function App() {
                 {/* Other shared pages */}
                 <Route path="/tb-variance"             element={<TBVariancePage />} />
                 <Route path="/audit"                   element={<AuditIntelligencePage />} />
+                <Route path="/audit/command-center"    element={<AuditCommandCenterPage />} />
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />
                 <Route path="/ifrs/agentic"            element={<AgenticGenerator />} />
@@ -740,7 +851,9 @@ function App() {
           </Suspense>
         </BrowserRouter>
             </SuiteProvider>
+            </MarketProvider>
           </CompanyProvider>
+          </IndustryConfigProvider>
         </WorkspaceProvider>
         <Toaster position="top-right" />
         <ShadcnToaster />

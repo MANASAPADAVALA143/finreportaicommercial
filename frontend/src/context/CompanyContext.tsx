@@ -38,11 +38,16 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
       const valid = res.companies.find(c => c.id === stored);
       if (valid) {
         setActiveCompanyId(valid.id);
+        if (valid.company_name) localStorage.setItem('active_company_name', valid.company_name);
       } else if (res.companies.length === 1) {
         setActiveCompanyId(res.companies[0].id);
         localStorage.setItem(STORAGE_KEY, res.companies[0].id);
+        if (res.companies[0].company_name) {
+          localStorage.setItem('active_company_name', res.companies[0].company_name);
+        }
       } else if (stored && !valid) {
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem('active_company_name');
         setActiveCompanyId(null);
       }
     } catch {
@@ -60,7 +65,23 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     setActiveCompanyId(id);
     localStorage.setItem(STORAGE_KEY, id);
     localStorage.setItem('gulftax_company_id', id);
-  }, []);
+    const named = companiesList.find(c => c.id === id);
+    if (named?.company_name) {
+      localStorage.setItem('active_company_name', named.company_name);
+    } else {
+      localStorage.removeItem('active_company_name');
+    }
+    // Align Supabase JWT so get_effective_company_id() matches PO/GRN inserts
+    void (async () => {
+      try {
+        const { supabase } = await import('../lib/ap-invoice/supabase');
+        await supabase.auth.updateUser({ data: { active_company_id: id } });
+        await supabase.auth.refreshSession();
+      } catch (e) {
+        console.warn('[CompanyContext] could not sync active_company_id to JWT:', e);
+      }
+    })();
+  }, [companiesList]);
 
   const activeCompany = useMemo(
     () => companiesList.find(c => c.id === activeCompanyId) ?? null,

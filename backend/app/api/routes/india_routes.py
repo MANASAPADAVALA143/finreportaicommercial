@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -63,6 +63,40 @@ from fastapi import Header
 
 def tenant_header(x_tenant_id: str = Header(default="demo")) -> str:
     return x_tenant_id
+
+
+class TdsCalcIn(BaseModel):
+    section: str
+    taxable_amount: float
+    deductee_type: str = "company"
+
+
+@router.post("/tds/calc", summary="Stateless TDS calculation for a section + amount (no DB write)")
+def calc_tds_for_invoice(body: TdsCalcIn) -> dict[str, Any]:
+    """Used by the AP InvoiceFlow TDS Section dropdown — pure calculation,
+    not tied to a tenant/DB row, so any authenticated caller can use it to
+    preview the TDS a given section/amount would produce before saving."""
+    sec = TDS_SECTIONS.get(body.section)
+    if not sec:
+        return {"ok": False, "error": f"Unknown TDS section: {body.section}"}
+    threshold_met = body.taxable_amount >= sec["threshold"]
+    result = calc_tds(body.taxable_amount, body.section, body.deductee_type)
+    return {
+        "ok": True,
+        "section": body.section,
+        "description": sec["desc"],
+        "threshold": sec["threshold"],
+        "threshold_met": threshold_met,
+        **result,
+        # If below threshold, TDS isn't actually deductible yet — surface the
+        # calculated rate/amount for reference but flag it as not applicable.
+        "applicable_tds": result["net_tds"] if threshold_met else 0.0,
+    }
+
+
+@router.get("/tds/sections", summary="List TDS sections for the dropdown")
+def list_tds_sections() -> dict[str, Any]:
+    return {"sections": [{"code": k, **v} for k, v in TDS_SECTIONS.items()]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -629,6 +663,79 @@ def list_purchase_invoices(
     }
 
 
+def _export_row_dicts(db: Session, tenant: str, status: Optional[str] = None) -> list[dict[str, Any]]:
+    q = db.query(IndiaPurchaseInvoice).filter_by(tenant_id=tenant)
+    if status:
+        q = q.filter(IndiaPurchaseInvoice.status == status)
+    invoices = q.order_by(IndiaPurchaseInvoice.invoice_date.desc()).all()
+
+    rows = []
+    for inv in invoices:
+        vendor = db.get(IndiaVendor, inv.vendor_id)
+        first_line = (
+            db.query(IndiaPurchaseInvoiceLine)
+            .filter_by(invoice_id=inv.id)
+            .order_by(IndiaPurchaseInvoiceLine.id)
+            .first()
+        )
+        rows.append({
+            "invoice_number": inv.invoice_number,
+            "vendor_name": vendor.name if vendor else "",
+            "vendor_gstin": vendor.gstin if vendor else "",
+            "invoice_date": str(inv.invoice_date),
+            "due_date": str(inv.due_date),
+            "subtotal": float(inv.subtotal or 0),
+            "cgst_amount": float(inv.cgst_amount or 0),
+            "sgst_amount": float(inv.sgst_amount or 0),
+            "igst_amount": float(inv.igst_amount or 0),
+            "total_amount": float(inv.total_amount or 0),
+            "hsn_sac": first_line.hsn_sac if first_line else "",
+            "payment_terms": f"Net {vendor.payment_terms_days}" if vendor and vendor.payment_terms_days else "-",
+            "status": inv.status,
+        })
+    return rows
+
+
+@router.get("/purchase-invoices/export/excel")
+def export_purchase_invoices_excel(
+    status: Optional[str] = None,
+    tenant: str = Depends(tenant_header),
+    db: Session = Depends(get_db),
+):
+    from fastapi.responses import Response
+
+    from app.services.india_purchase_invoice_export import build_excel
+
+    rows = _export_row_dicts(db, tenant, status)
+    content = build_excel(rows)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="india_ap_invoices.xlsx"'},
+    )
+
+
+@router.get("/purchase-invoices/export/pdf")
+def export_purchase_invoices_pdf(
+    status: Optional[str] = None,
+    company_name: str = Query("Company"),
+    period: str = Query(""),
+    tenant: str = Depends(tenant_header),
+    db: Session = Depends(get_db),
+):
+    from fastapi.responses import Response
+
+    from app.services.india_purchase_invoice_export import build_pdf
+
+    rows = _export_row_dicts(db, tenant, status)
+    content = build_pdf(invoices=rows, company_name=company_name, period=period or date.today().strftime("%B %Y"))
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="india_ap_invoices.pdf"'},
+    )
+
+
 @router.post("/purchase-invoices")
 def create_purchase_invoice(
     body: PurchaseInvoiceIn,
@@ -694,6 +801,126 @@ def create_purchase_invoice(
 
     db.commit()
     return {"id": inv.id, "invoice_number": inv.invoice_number, "total_amount": total, "tds_deducted": tds_deducted}
+
+
+class PurchaseInvoiceOcrIn(BaseModel):
+    vendor_name: str
+    vendor_gstin: Optional[str] = None
+    buyer_gstin: Optional[str] = None
+    invoice_number: str
+    invoice_date: str
+    due_date: Optional[str] = None
+    taxable_amount: float
+    cgst_amount: Optional[float] = None
+    sgst_amount: Optional[float] = None
+    igst_amount: Optional[float] = None
+    tax_amount: Optional[float] = None
+    total_amount: Optional[float] = None
+    hsn_sac: Optional[str] = None
+    payment_terms: Optional[str] = None
+
+
+def _detect_supply_type(vendor_gstin: Optional[str], buyer_gstin: Optional[str]) -> str:
+    """Intra-state (CGST+SGST) if the first 2 digits (state code) of both GSTINs match,
+    inter-state (IGST) otherwise. Defaults to inter-state when either GSTIN is missing."""
+    if vendor_gstin and buyer_gstin and len(vendor_gstin) >= 2 and len(buyer_gstin) >= 2:
+        return "intra" if vendor_gstin[:2] == buyer_gstin[:2] else "inter"
+    return "inter"
+
+
+def _find_or_create_vendor(db: Session, tenant: str, name: str, gstin: Optional[str]) -> IndiaVendor:
+    q = db.query(IndiaVendor).filter_by(tenant_id=tenant)
+    if gstin:
+        existing = q.filter_by(gstin=gstin).first()
+        if existing:
+            return existing
+    existing = q.filter_by(name=name).first()
+    if existing:
+        return existing
+    vendor = IndiaVendor(
+        id=_uuid(), tenant_id=tenant, name=name, gstin=gstin,
+        state_code=gstin[:2] if gstin else None,
+    )
+    db.add(vendor)
+    db.flush()
+    return vendor
+
+
+@router.post("/purchase-invoices/from-ocr")
+def create_purchase_invoice_from_ocr(
+    body: PurchaseInvoiceOcrIn,
+    tenant: str = Depends(tenant_header),
+    db: Session = Depends(get_db),
+):
+    """Create a purchase invoice from OCR-extracted fields with a proper CGST/SGST/IGST split.
+
+    Trusts OCR-extracted CGST/SGST/IGST amounts when present (the invoice's own printed
+    breakup). Falls back to splitting a single combined `tax_amount` using vendor-vs-buyer
+    GSTIN state-code comparison only when the OCR could not read a clean per-tax breakup.
+    """
+    supply_type = _detect_supply_type(body.vendor_gstin, body.buyer_gstin)
+
+    cgst = body.cgst_amount or 0.0
+    sgst = body.sgst_amount or 0.0
+    igst = body.igst_amount or 0.0
+    if cgst <= 0 and sgst <= 0 and igst <= 0 and body.tax_amount:
+        if supply_type == "intra":
+            cgst = round(body.tax_amount / 2, 2)
+            sgst = round(body.tax_amount / 2, 2)
+        else:
+            igst = round(body.tax_amount, 2)
+
+    taxable = round(body.taxable_amount, 2)
+    total = round(body.total_amount, 2) if body.total_amount else round(taxable + cgst + sgst + igst, 2)
+    gst_rate = round((cgst + sgst + igst) / taxable * 100, 2) if taxable > 0 else 0.0
+
+    try:
+        invoice_date = date.fromisoformat(body.invoice_date[:10])
+    except ValueError:
+        invoice_date = date.today()
+    if body.due_date:
+        try:
+            due_date = date.fromisoformat(body.due_date[:10])
+        except ValueError:
+            due_date = invoice_date
+    else:
+        due_date = invoice_date + timedelta(days=30)
+
+    vendor = _find_or_create_vendor(db, tenant, body.vendor_name.strip() or "Unknown Vendor", body.vendor_gstin)
+
+    inv = IndiaPurchaseInvoice(
+        id=_uuid(), tenant_id=tenant,
+        invoice_number=body.invoice_number,
+        vendor_id=vendor.id,
+        invoice_date=invoice_date,
+        due_date=due_date,
+        supply_type=supply_type,
+        subtotal=taxable,
+        cgst_amount=cgst,
+        sgst_amount=sgst,
+        igst_amount=igst,
+        total_amount=total,
+        outstanding=total,
+        status="draft",
+    )
+    db.add(inv)
+    db.flush()
+
+    db.add(IndiaPurchaseInvoiceLine(
+        id=_uuid(), invoice_id=inv.id,
+        description=f"OCR extracted{' — ' + body.payment_terms if body.payment_terms else ''}",
+        hsn_sac=body.hsn_sac,
+        quantity=1, unit_price=taxable, gst_rate=gst_rate,
+        line_subtotal=taxable, line_cgst=cgst, line_sgst=sgst, line_igst=igst,
+        line_total=total, itc_eligible=True,
+    ))
+
+    db.commit()
+    return {
+        "id": inv.id, "invoice_number": inv.invoice_number, "vendor_id": vendor.id,
+        "supply_type": supply_type, "subtotal": taxable,
+        "cgst_amount": cgst, "sgst_amount": sgst, "igst_amount": igst, "total_amount": total,
+    }
 
 
 @router.post("/purchase-invoices/{inv_id}/post")
@@ -886,6 +1113,8 @@ def list_gst_returns(
     return {
         "returns": [
             {"id": r.id, "return_type": r.return_type, "period": r.period,
+             "b2b_taxable": float(r.b2b_taxable or 0),
+             "b2c_taxable": float(r.b2c_taxable or 0),
              "total_taxable": float(r.total_taxable or 0),
              "total_cgst": float(r.total_cgst or 0),
              "total_sgst": float(r.total_sgst or 0),
@@ -933,6 +1162,8 @@ def compile_gst_return(
 
     return {
         "id": rec.id, "return_type": rec.return_type, "period": rec.period,
+        "b2b_taxable": float(rec.b2b_taxable or 0),
+        "b2c_taxable": float(rec.b2c_taxable or 0),
         "total_taxable": float(rec.total_taxable or 0),
         "total_cgst": float(rec.total_cgst or 0),
         "total_sgst": float(rec.total_sgst or 0),

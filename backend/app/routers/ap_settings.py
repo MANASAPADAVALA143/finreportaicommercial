@@ -1,6 +1,7 @@
 """AP settings + one-time Supabase bootstrap for missing core tables."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -10,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.ap_settings_service import get_app_settings, get_company_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ap", tags=["ap-settings"])
 
@@ -27,6 +30,42 @@ def read_app_settings() -> dict[str, str]:
 @router.get("/company-settings")
 def read_company_settings(company_id: str | None = Query(default=None)) -> dict[str, Any]:
     return get_company_settings(company_id)
+
+
+@router.get("/properties")
+def list_demo_properties() -> dict[str, Any]:
+    """Return demo_properties rows for AP Property / Project dropdown."""
+    try:
+        from app.core.supabase import get_supabase
+
+        sb = get_supabase()
+        res = (
+            sb.table("demo_properties")
+            .select("id, property_name, location, property_type")
+            .order("property_name")
+            .execute()
+        )
+        rows: list[dict[str, Any]] = []
+        for raw in res.data or []:
+            name = (raw.get("property_name") or "").strip()
+            if not name:
+                continue
+            rows.append(
+                {
+                    "id": raw.get("id"),
+                    "property_name": name,
+                    "location": (raw.get("location") or "").strip() or None,
+                    "property_type": (raw.get("property_type") or "").strip() or None,
+                }
+            )
+        return {"properties": rows}
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "schema cache" in msg or "does not exist" in msg or "404" in msg:
+            logger.warning("demo_properties table missing: %s", exc)
+            return {"properties": []}
+        logger.exception("demo_properties fetch failed")
+        raise HTTPException(status_code=502, detail=f"Failed to load properties: {exc}") from exc
 
 
 @router.post("/bootstrap-supabase-tables")
