@@ -3,6 +3,9 @@ export type NavLeaf = {
   path: string;
   icon?: string;
   badge?: string;
+  /** Shared routes (e.g. /ap-invoices) render different data per market — pin it
+   *  explicitly on click instead of relying on whatever the toggle last set. */
+  pinMarket?: 'uae' | 'india';
 };
 
 export type NavSection = {
@@ -30,7 +33,8 @@ export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
   {
     section: '🇦🇪 UAE Finance Suite',
     items: [
-      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP' },
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP', pinMarket: 'uae' },
+      { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
       { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
       { label: 'E-Invoicing', path: '/gulftax/e-invoicing', icon: 'receipt', badge: 'Peppol' },
       { label: 'IFRS 16 Leases', path: '/ifrs/16', icon: 'building-2', badge: 'IFRS' },
@@ -44,7 +48,7 @@ export const UAE_SUITE_NAV: NavEntry[] = [
     section: '🇦🇪 UAE Finance Suite',
     items: [
       { label: 'UAE Taxation', path: '/uae-suite', icon: 'layout-dashboard', badge: 'AP+Tax' },
-      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP' },
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP', pinMarket: 'uae' },
       { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
       { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
       { label: 'E-Invoicing', path: '/gulftax/e-invoicing', icon: 'receipt', badge: 'Peppol' },
@@ -68,7 +72,7 @@ export const INDIA_NAV: NavEntry[] = [
   { label: 'Chart of Accounts',  path: '/india-full/coa',       icon: 'book' },
   { label: 'Journal Entries',    path: '/india-full/journals',  icon: 'file-text' },
   { label: 'Sales Invoices',     path: '/india-full/sales',     icon: 'receipt' },
-  { label: 'AP InvoiceFlow',     path: '/ap-invoices',          icon: 'shopping-cart', badge: 'AP' },
+  { label: 'AP InvoiceFlow',     path: '/ap-invoices',          icon: 'shopping-cart', badge: 'AP', pinMarket: 'india' },
   { label: 'Purchase + ITC',     path: '/india-full/purchases', icon: 'shopping-cart' },
   { label: 'GST Returns',        path: '/india-full/gst',       icon: 'percent' },
   { label: 'TDS Management',     path: '/india-full/tds',       icon: 'calculator' },
@@ -118,7 +122,7 @@ export const UAE_NAV: NavEntry[] = [
       { label: 'Activities', path: '/crm/activities',  icon: 'calendar' },
     ],
   },
-  { label: 'AP InvoiceFlow',     path: '/ap-invoices',           icon: 'shopping-cart',  badge: 'AP' },
+  { label: 'AP InvoiceFlow',     path: '/ap-invoices',           icon: 'shopping-cart',  badge: 'AP', pinMarket: 'uae' },
   { label: 'Bank Recon',         path: '/uae-full/bank-recon',   icon: 'landmark' },
   { label: 'Accruals',           path: '/uae-full/accruals',     icon: 'clock' },
   { label: 'Fixed Assets',       path: '/uae-full/fixed-assets', icon: 'building-2' },
