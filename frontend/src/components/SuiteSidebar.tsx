@@ -12,7 +12,7 @@ import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
-import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, TWO_MARKET_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
 import { withIndustryNavLabels } from '../config/industryNav';
 import { useIndustryConfig } from '../context/IndustryConfigContext';
 import { isUaeFinanceSuiteOnly, isUaeSuite, filterNavByRole } from '../config/productRole';
@@ -345,20 +345,27 @@ export function SuiteSidebar() {
         ]
       : UAE_NAV;
 
+  // Unrestricted (full_access / admin) accounts see UAE and India as two
+  // permanent sidebar sections instead of a single suite chosen by the
+  // market toggle — no hidden context switch, both markets always visible.
+  const showBothMarkets = productRole === 'full_access';
+
   const baseNav = filterNavByRole(
-    uaeOnly || uaeSuite
-      ? uaeNav
-      : activeSuite === 'india'
-        ? INDIA_NAV
-        : activeSuite === 'uae'
-          ? uaeNav
-          : FPA_NAV,
+    showBothMarkets
+      ? TWO_MARKET_NAV
+      : uaeOnly || uaeSuite
+        ? uaeNav
+        : activeSuite === 'india'
+          ? INDIA_NAV
+          : activeSuite === 'uae'
+            ? uaeNav
+            : FPA_NAV,
     productRole,
     user?.role,
   );
 
   const navItems =
-    activeSuite === 'uae' || uaeOnly || uaeSuite
+    !showBothMarkets && (activeSuite === 'uae' || uaeOnly || uaeSuite)
       ? withIndustryNavLabels(baseNav, industryCfg)
       : baseNav;
 

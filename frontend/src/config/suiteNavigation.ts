@@ -66,6 +66,27 @@ export const UAE_SUITE_NAV: NavEntry[] = [
   },
 ];
 
+// ── Both markets side by side (full_access / admin accounts) ──────────────────
+// Shown as two permanent sections on the dashboard so switching markets is a
+// scroll, not a toggle click that silently swaps context behind the scenes.
+export const TWO_MARKET_NAV: NavEntry[] = [
+  {
+    section: '🇦🇪 UAE Finance Suite',
+    items: [
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP', pinMarket: 'uae' },
+      { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
+      { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
+    ],
+  },
+  {
+    section: '🇮🇳 India',
+    items: [
+      { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP', pinMarket: 'india' },
+      { label: 'GST Returns', path: '/india-full/gst', icon: 'percent' },
+    ],
+  },
+];
+
 // ── India Suite ───────────────────────────────────────────────────────────────
 export const INDIA_NAV: NavEntry[] = [
   { label: 'Dashboard',          path: '/india-full',           icon: 'layout-dashboard' },
