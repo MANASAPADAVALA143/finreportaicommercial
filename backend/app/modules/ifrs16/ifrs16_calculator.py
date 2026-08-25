@@ -99,7 +99,7 @@ class IFRS16Calculator:
             return Decimal('0')
 
         is_advance = (lease.payment_type or "Arrears").strip().lower() == "advance"
-        if self._use_schedule_based_pv(lease) and not is_advance:
+        if self._use_schedule_based_pv(lease):
             return self._pv_lease_payments_schedule_based(lease)
         
         monthly_rate = lease.annual_discount_rate / Decimal('12')
@@ -219,10 +219,20 @@ class IFRS16Calculator:
         return payment
 
     def _pv_lease_payments_schedule_based(self, lease: LeaseInput) -> Decimal:
-        """PV of lease payments when CPI and/or escalation change amounts period-by-period (arrears path)."""
+        """PV of lease payments when CPI and/or escalation change amounts period-by-period.
+
+        Regression fix: this used to hardcode the Arrears exponent (`period`) regardless
+        of payment_type, so any Advance lease with CPI/escalation was silently discounted
+        as if it were Arrears — understating the liability. exponent(t) now depends on
+        payment_type exactly like the non-schedule-based (flat-payment) branch above:
+          Arrears: exponent = period      (payment for period p discounted by p months)
+          Advance: exponent = period - 1  (payment for period p discounted by p-1 months —
+                                            period 1's payment happens at commencement, t=0)
+        """
         monthly_rate = lease.annual_discount_rate / Decimal('12')
         rent_free = getattr(lease, 'rent_free_months', 0) or 0
         payment = self.get_lease_component_payment(lease)
+        is_advance = (lease.payment_type or "Arrears").strip().lower() == "advance"
         pv = Decimal('0')
         for period in range(1, lease.lease_term_months + 1):
             if rent_free > 0 and period <= rent_free:
@@ -234,7 +244,8 @@ class IFRS16Calculator:
             if monthly_rate == 0:
                 pv += pay_amt
             else:
-                pv += pay_amt / ((Decimal('1') + monthly_rate) ** period)
+                exponent = (period - 1) if is_advance else period
+                pv += pay_amt / ((Decimal('1') + monthly_rate) ** exponent)
         return pv.quantize(self.precision, ROUND_HALF_UP)
 
     def _use_schedule_based_pv(self, lease: LeaseInput) -> bool:
