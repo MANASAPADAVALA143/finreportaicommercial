@@ -128,10 +128,18 @@ export default function Login() {
           {loading ? 'Signing in...' : 'Sign In'}
         </button>
 
-        <div className="flex justify-between text-sm">
-          <Link className="text-slate-400 hover:text-slate-200" to="/forgot-password">Forgot password?</Link>
-          <button className="text-blue-400 hover:text-blue-300" type="button" onClick={() => nav('/register')}>
-            Create account
+        <div className="text-center">
+          <Link className="text-slate-400 hover:text-slate-200 text-sm" to="/forgot-password">Forgot password?</Link>
+        </div>
+
+        <div className="border-t border-slate-700 pt-4 text-center">
+          <p className="text-slate-400 text-sm mb-2">New client? Set up their workspace here.</p>
+          <button
+            type="button"
+            onClick={() => nav('/register')}
+            className="w-full rounded border border-blue-500 py-2 text-sm font-medium text-blue-400 hover:bg-blue-500 hover:text-white transition-colors"
+          >
+            Create a free account
           </button>
         </div>
       </form>
