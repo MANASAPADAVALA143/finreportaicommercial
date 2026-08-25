@@ -34,6 +34,7 @@ export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
     section: '🇦🇪 UAE Finance Suite',
     items: [
       { label: 'AP InvoiceFlow', path: '/ap-invoices', icon: 'shopping-cart', badge: 'AP', pinMarket: 'uae' },
+      { label: 'AR', path: '/uae-full/ar', icon: 'receipt', badge: 'AR' },
       { label: 'UAE Tax (GulfTax)', path: '/gulftax', icon: 'shield' },
       { label: 'E-Invoicing', path: '/gulftax/e-invoicing', icon: 'receipt', badge: 'Peppol' },
       { label: 'IFRS 16 Leases', path: '/ifrs/16', icon: 'building-2', badge: 'IFRS' },
