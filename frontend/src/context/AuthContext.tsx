@@ -178,9 +178,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // holds a real Supabase session — so mirror the same credentials into Supabase
     // auth. Non-fatal: some accounts may only exist on the RBAC backend.
     if (isSupabaseConfigured) {
-      supabase.auth.signInWithPassword({ email, password }).catch((e) => {
-        console.warn('[Auth] Supabase session mirror failed (RLS-protected writes may fail):', e);
-      });
+      // Awaited, not fire-and-forget: navigation used to happen before this
+      // resolved, so the very first RLS-protected write after login (e.g. the
+      // first invoice in a bulk upload) could fire while the Supabase client
+      // was still anonymous, failing with 401 even though the app looked
+      // logged in. Also sign out any stale/mismatched session first — a
+      // leftover session from a different account can make signInWithPassword
+      // silently no-op instead of establishing this user's session.
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        /* ignore */
+      }
+      try {
+        const { error: supaErr } = await supabase.auth.signInWithPassword({ email, password });
+        if (supaErr) {
+          console.warn('[Auth] Supabase session mirror failed (RLS-protected writes will 401 until this account exists in Supabase Auth too):', supaErr.message);
+        }
+      } catch (e) {
+        console.warn('[Auth] Supabase session mirror threw:', e);
+      }
     }
 
     return loggedIn;
