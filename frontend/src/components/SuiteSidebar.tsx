@@ -10,8 +10,9 @@ import {
 import { useSuite } from '../context/SuiteContext';
 import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
+import { useMarket } from '../contexts/MarketContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
-import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, TWO_MARKET_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
 import { withIndustryNavLabels } from '../config/industryNav';
 import { useIndustryConfig } from '../context/IndustryConfigContext';
 import { isUaeFinanceSuiteOnly, isUaeSuite, filterNavByRole } from '../config/productRole';
@@ -227,6 +228,7 @@ function NavItem({
   collapsed?: boolean;
 }) {
   const location = useLocation();
+  const { setMarket } = useMarket();
   const isActive =
     location.pathname === item.path ||
     (item.path !== '/' && item.path.length > 1 && location.pathname.startsWith(item.path));
@@ -234,9 +236,15 @@ function NavItem({
   const Icon = item.icon ? ICONS[item.icon] : null;
   const tooltipLabel = item.badge ? `${item.label} (${item.badge})` : item.label;
 
+  // Shared routes (e.g. /ap-invoices) render different data per market — pin it
+  // explicitly here so clicking "AP InvoiceFlow" under the UAE section always
+  // shows UAE data, never whatever the last toggle click happened to leave set.
+  const handleClick = item.pinMarket ? () => void setMarket(item.pinMarket!) : undefined;
+
   const link = (
     <Link
       to={item.path}
+      onClick={handleClick}
       className={`
         flex items-center rounded-lg text-sm transition-all
         ${collapsed ? 'justify-center px-2 py-2.5' : 'gap-2.5 px-3 py-2'}
@@ -337,20 +345,27 @@ export function SuiteSidebar() {
         ]
       : UAE_NAV;
 
+  // Unrestricted (full_access / admin) accounts see UAE and India as two
+  // permanent sidebar sections instead of a single suite chosen by the
+  // market toggle — no hidden context switch, both markets always visible.
+  const showBothMarkets = productRole === 'full_access';
+
   const baseNav = filterNavByRole(
-    uaeOnly || uaeSuite
-      ? uaeNav
-      : activeSuite === 'india'
-        ? INDIA_NAV
-        : activeSuite === 'uae'
-          ? uaeNav
-          : FPA_NAV,
+    showBothMarkets
+      ? TWO_MARKET_NAV
+      : uaeOnly || uaeSuite
+        ? uaeNav
+        : activeSuite === 'india'
+          ? INDIA_NAV
+          : activeSuite === 'uae'
+            ? uaeNav
+            : FPA_NAV,
     productRole,
     user?.role,
   );
 
   const navItems =
-    activeSuite === 'uae' || uaeOnly || uaeSuite
+    !showBothMarkets && (activeSuite === 'uae' || uaeOnly || uaeSuite)
       ? withIndustryNavLabels(baseNav, industryCfg)
       : baseNav;
 
