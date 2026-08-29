@@ -128,6 +128,8 @@ export function InvoiceUpload() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadMethod, setUploadMethod] = useState<'scan' | 'single' | 'bulk' | 'multi-pdf'>('scan');
+  // Period for this upload batch — defaults to current month; used as fallback invoice_date for all methods
+  const [uploadPeriod, setUploadPeriod] = useState<string>(new Date().toISOString().slice(0, 7));
   const [extracting, setExtracting] = useState(false);
   const [apiEndpoint, setApiEndpoint] = useState<string | null>(null);
   const [apiEndpointClassifyJson, setApiEndpointClassifyJson] = useState<string | null>(null);
@@ -799,7 +801,7 @@ export function InvoiceUpload() {
           invoice_id: inserted.id,
           invoice_number: String(values.invoice_number),
           vendor_name: String(values.vendor_name || 'Unknown'),
-          invoice_date: values.invoice_date ?? undefined,
+          invoice_date: values.invoice_date ?? (uploadPeriod ? `${uploadPeriod}-01` : undefined),
           total_amount: Number(values.total_amount || 0),
           vat_amount: values.vat_amount != null ? Number(values.vat_amount) : undefined,
           vat_rate: values.vat_rate != null ? Number(values.vat_rate) : undefined,
@@ -1785,10 +1787,13 @@ export function InvoiceUpload() {
             }
           }
 
+          // Use uploadPeriod as fallback date if invoice has no date
+          const periodFallbackDate = uploadPeriod ? `${uploadPeriod}-01` : undefined;
+
           const upsertPayload: Record<string, unknown> = {
             company_id: companyId,
             invoice_number: invoiceData.invoice_number,
-            invoice_date: invoiceData.invoice_date,
+            invoice_date: invoiceData.invoice_date || periodFallbackDate,
             due_date: invoiceData.due_date,
             vendor_name: invoiceData.vendor_name,
             vendor_email: invoiceData.vendor_email || null,
@@ -1950,7 +1955,7 @@ export function InvoiceUpload() {
             invoice_id: invoice.id,
             invoice_number: String(invoice.invoice_number),
             vendor_name: String(invoice.vendor_name),
-            invoice_date: invoice.invoice_date ?? undefined,
+            invoice_date: invoice.invoice_date ?? (uploadPeriod ? `${uploadPeriod}-01` : undefined),
             total_amount: Number(invoice.total_amount),
             vat_amount: (invoice as { vat_amount?: number }).vat_amount ?? undefined,
             vat_rate: (invoice as { vat_rate?: number }).vat_rate ?? undefined,
@@ -3034,11 +3039,32 @@ export function InvoiceUpload() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900">Upload Invoice</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Upload invoice files or enter invoice details manually
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Upload Invoice</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Upload invoice files or enter invoice details manually
+          </p>
+        </div>
+        {/* Period selector — stamps all invoices in this batch with the correct accounting period */}
+        <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-white shadow-sm">
+          <div>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-0.5">Accounting Period</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="month"
+                value={uploadPeriod}
+                onChange={(e) => setUploadPeriod(e.target.value)}
+                className="border-none outline-none bg-transparent text-sm font-medium text-gray-800 cursor-pointer"
+              />
+              <span className="text-[11px] text-gray-400">
+                {uploadPeriod
+                  ? new Date(uploadPeriod + '-01').toLocaleDateString('en-AE', { month: 'long', year: 'numeric' })
+                  : 'No period set'}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {noCompany && (
