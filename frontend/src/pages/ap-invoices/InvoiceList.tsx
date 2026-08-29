@@ -1252,18 +1252,21 @@ export function InvoiceList() {
     // matching the client's raw-data requirement, not just the app's own
     // workflow-tracking fields.
     const headers = [
-      'Invoice #', 'Vendor', 'Vendor Email', 'Vendor Phone', 'Vendor Address',
+      'Invoice #', 'Vendor', 'Vendor TRN', 'Vendor Email', 'Vendor Phone', 'Vendor Address',
       'Vendor GSTIN', 'Buyer GSTIN', 'HSN/SAC', 'Place of Supply', 'Supply Type', 'Reverse Charge',
-      'Date', 'Due Date', 'Taxable Amount', 'CGST', 'SGST', 'IGST',
-      'Amount', 'Currency', 'Status',
+      'Date', 'Due Date', 'Subtotal (Net)', 'Taxable Amount', 'CGST', 'SGST', 'IGST',
+      'VAT Amount', 'VAT Rate (%)', 'VAT Treatment',
+      'Total Amount', 'Currency', 'Status',
       'GL Code', 'GL Name', 'IFRS Category', 'Tax Type', 'Tax Amount',
       'TDS Section', 'TDS Amount',
-      'Department', 'Property', 'Project Code', 'Match Status', 'Risk Score',
+      'PO Number', 'Cost Center', 'Department', 'Property', 'Project Code',
+      'Match Status', 'Risk Score',
       'Approval Level', 'Approved By', 'Payment Status', 'Description', 'Source',
     ];
     const rows = invList.map((inv) => [
       inv.invoice_number,
       inv.vendor_name,
+      inv.vendor_trn || '',
       inv.vendor_email || '',
       inv.vendor_phone || '',
       inv.vendor_address || '',
@@ -1275,10 +1278,14 @@ export function InvoiceList() {
       inv.reverse_charge ? 'Yes' : '',
       displayDate(inv.invoice_date, dateFormat),
       displayDate(inv.due_date, dateFormat),
+      inv.subtotal_amount ?? '',
       (inv as unknown as { taxable_amount?: number }).taxable_amount ?? inv.subtotal_amount ?? '',
       inv.cgst ?? (inv as unknown as { cgst_amount?: number }).cgst_amount ?? '',
       inv.sgst ?? (inv as unknown as { sgst_amount?: number }).sgst_amount ?? '',
       inv.igst ?? (inv as unknown as { igst_amount?: number }).igst_amount ?? '',
+      inv.vat_amount ?? '',
+      inv.vat_rate ?? '',
+      inv.vat_treatment || '',
       inv.total_amount,
       inv.currency,
       inv.status,
@@ -1289,8 +1296,10 @@ export function InvoiceList() {
       inv.tax_amount || 0,
       inv.tds_section || '',
       inv.tds_amount ?? '',
+      inv.po_number || '',
+      inv.cost_center || '',
       inv.department || '',
-      effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) || inv.cost_center || '',
+      effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) || '',
       inv.project_code || '',
       inv.match_status || '',
       inv.risk_score || '',
@@ -1500,13 +1509,12 @@ export function InvoiceList() {
                 <div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} aria-hidden />
                 <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
                   {[
-                    { icon: '🧾', label: 'Invoice PDF (Raw)', fn: () => { filteredInvoices.slice(0, 1).forEach(inv => generateInvoicePdf(inv)); } },
+                    { icon: '📥', label: 'Raw Invoice Data (Excel)', fn: () => void exportExcel(filteredInvoices) },
                     { icon: '📊', label: 'Tally XML', fn: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
                     { icon: '🟢', label: 'QuickBooks IIF', fn: () => downloadQBIIF(filteredInvoices) },
                     { icon: '⚫', label: 'Xero CSV', fn: () => downloadXeroCSV(filteredInvoices) },
                     { icon: '📘', label: 'Zoho Books CSV', fn: () => exportZohoCSV(filteredInvoices) },
                     { icon: '🔷', label: 'SAP CSV', fn: () => exportSAPCSV(filteredInvoices) },
-                    { icon: '📥', label: 'Excel (Generic)', fn: () => void exportExcel(filteredInvoices) },
                   ].map((item) => (
                     <button
                       key={item.label}
