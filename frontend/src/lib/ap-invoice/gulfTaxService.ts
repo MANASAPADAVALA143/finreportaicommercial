@@ -134,3 +134,41 @@ export async function classifyAPInvoiceEmbedded(params: {
   }
   return res.json();
 }
+
+export interface ApInvoiceSyncItem {
+  invoice_id: string;
+  invoice_number: string;
+  vendor_name: string;
+  invoice_date?: string;
+  total_amount: number;
+  vat_amount?: number;
+  vat_rate?: number;
+  vat_treatment?: string;
+  vendor_trn?: string;
+  currency?: string;
+  description?: string;
+  source?: string;
+  gulftax_confidence?: number;
+  gulftax_decision?: string;
+  blocked_input_vat?: boolean;
+  blocked_reason?: string;
+  box_number?: number;
+}
+
+/** Fire-and-forget: push AP invoices into GulfTax VAT classifier after bulk import */
+export function syncApInvoicesToVatClassifier(invoices: ApInvoiceSyncItem[]): void {
+  if (!invoices.length) return;
+  void (async () => {
+    try {
+      const res = await fetch(joinApiUrl('/api/vat/sync-from-ap-invoices'), {
+        method: 'POST',
+        headers: authHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ invoices }),
+      });
+      if (!res.ok) console.warn('[GulfTax sync] non-OK response', res.status);
+    } catch (err) {
+      console.warn('[GulfTax sync] failed (non-critical):', err);
+    }
+  })();
+}

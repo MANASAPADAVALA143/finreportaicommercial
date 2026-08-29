@@ -61,7 +61,7 @@ import {
   getEffectiveExtractionScore,
 } from '../../utils/extractionConfidence';
 import { safeStr, safeNum, apiErrorMessage } from '../../utils/safeRender';
-import { classifyAPInvoiceEmbedded } from '../../lib/ap-invoice/gulfTaxService';
+import { classifyAPInvoiceEmbedded, syncApInvoicesToVatClassifier } from '../../lib/ap-invoice/gulfTaxService';
 import { notifyApInvoiceUploaded } from '../../services/notificationService';
 import {
   findBulkExcelHeaderRowIndex,
@@ -791,6 +791,24 @@ export function InvoiceUpload() {
         }));
         const { error: liErr } = await supabase.from('invoice_line_items').insert(lineRows);
         if (liErr) console.warn('Line items insert warning:', liErr.message);
+      }
+
+      // Sync single PDF invoice to GulfTax VAT classifier (UAE only, fire-and-forget)
+      if (isUAE && inserted?.id) {
+        syncApInvoicesToVatClassifier([{
+          invoice_id: inserted.id,
+          invoice_number: String(values.invoice_number),
+          vendor_name: String(values.vendor_name || 'Unknown'),
+          invoice_date: values.invoice_date ?? undefined,
+          total_amount: Number(values.total_amount || 0),
+          vat_amount: values.vat_amount != null ? Number(values.vat_amount) : undefined,
+          vat_rate: values.vat_rate != null ? Number(values.vat_rate) : undefined,
+          vat_treatment: vatTreatment || values.vat_treatment || undefined,
+          vendor_trn: values.vendor_trn ?? undefined,
+          currency: values.currency || 'AED',
+          description: values.description ?? undefined,
+          source: 'invoice_flow_auto',
+        }]);
       }
 
       toast({
@@ -1923,6 +1941,28 @@ export function InvoiceUpload() {
           });
           console.error('ROW FAILED (catch):', invoiceData.invoice_number, error);
         }
+      }
+
+      // Push to GulfTax VAT Classifier (fire-and-forget, UAE only)
+      if (isUAE && enrichQueue.length > 0) {
+        syncApInvoicesToVatClassifier(
+          enrichQueue.map(({ invoice, invoiceData }) => ({
+            invoice_id: invoice.id,
+            invoice_number: String(invoice.invoice_number),
+            vendor_name: String(invoice.vendor_name),
+            invoice_date: invoice.invoice_date ?? undefined,
+            total_amount: Number(invoice.total_amount),
+            vat_amount: (invoice as { vat_amount?: number }).vat_amount ?? undefined,
+            vat_rate: (invoice as { vat_rate?: number }).vat_rate ?? undefined,
+            vat_treatment: (invoice as { vat_treatment?: string }).vat_treatment ?? undefined,
+            vendor_trn: (invoice as { vendor_trn?: string }).vendor_trn ?? undefined,
+            currency: invoice.currency ?? 'AED',
+            description: invoiceData.description ?? undefined,
+            source: 'invoice_flow_auto',
+            gulftax_confidence: (invoice as { gulftax_confidence?: number }).gulftax_confidence ?? undefined,
+            gulftax_decision: (invoice as { gulftax_decision?: string }).gulftax_decision ?? undefined,
+          }))
+        );
       }
 
       // Fire anomaly scan, auto-match, and GL post in background — never block the import success UI

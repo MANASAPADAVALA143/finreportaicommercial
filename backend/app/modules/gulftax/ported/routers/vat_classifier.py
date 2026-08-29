@@ -1053,6 +1053,133 @@ async def download_classify_bulk_excel(job_id: str):
     )
 
 
+class ApInvoiceSyncItem(BaseModel):
+    invoice_id: str
+    invoice_number: str
+    vendor_name: str
+    invoice_date: Optional[str] = None
+    total_amount: float = 0
+    vat_amount: Optional[float] = None
+    vat_rate: Optional[float] = None
+    vat_treatment: Optional[str] = None
+    vendor_trn: Optional[str] = None
+    currency: Optional[str] = "AED"
+    description: Optional[str] = None
+    source: str = "invoice_flow_auto"
+    gulftax_confidence: Optional[float] = None
+    gulftax_decision: Optional[str] = None
+    blocked_input_vat: bool = False
+    blocked_reason: Optional[str] = None
+    box_number: Optional[int] = None
+
+
+class SyncApInvoicesRequest(BaseModel):
+    invoices: List[ApInvoiceSyncItem] = Field(..., min_length=1)
+
+
+@router.post("/sync-from-ap-invoices")
+async def sync_ap_invoices_to_vat_classifier(
+    body: SyncApInvoicesRequest,
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Sync AP invoices (from InvoiceFlow bulk import) into the VAT classifier transactions table."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    saved: List[Dict[str, Any]] = []
+    skipped = 0
+
+    for inv in body.invoices:
+        amount = float(inv.total_amount or 0)
+        if amount <= 0:
+            skipped += 1
+            continue
+
+        # Dedup by invoice_number
+        if inv.invoice_number:
+            existing = (
+                db.query(Transaction)
+                .filter(
+                    Transaction.company_id == company_id,
+                    Transaction.invoice_number == inv.invoice_number,
+                )
+                .first()
+            )
+            if existing:
+                skipped += 1
+                continue
+
+        # Use GulfTax classification if available, otherwise run decision tree
+        vat_treatment = inv.vat_treatment or "standard_rated"
+        confidence = float(inv.gulftax_confidence or 0.85)
+        box_num = inv.box_number or (9 if "purchase" in (inv.source or "") or True else 1)
+        vat_amt = float(inv.vat_amount or (amount * 0.05 if vat_treatment == "standard_rated" else 0))
+
+        if not inv.gulftax_decision:
+            # Re-classify via decision tree if no GulfTax result
+            raw = classify_with_decision_tree(
+                description=inv.description or f"Invoice {inv.invoice_number}",
+                amount_aed=amount,
+                vendor_or_customer=inv.vendor_name,
+                transaction_type="purchase",
+                vendor_trn=inv.vendor_trn,
+            )
+            vat_treatment = raw.get("vat_treatment", vat_treatment)
+            confidence = float(raw.get("confidence_score_0_100", confidence * 100) or confidence)
+            box_num = raw.get("box_number", box_num)
+            vat_amt = float(raw.get("vat_amount_aed", vat_amt))
+
+        trans_date = date.today()
+        if inv.invoice_date:
+            try:
+                trans_date = date.fromisoformat(inv.invoice_date[:10])
+            except ValueError:
+                pass
+
+        is_blocked = inv.blocked_input_vat or vat_treatment in ("entertainment_restricted",)
+        review_tier = "blocked" if is_blocked else ("auto_approve" if confidence >= 85 else "review_required")
+
+        txn = Transaction(
+            company_id=company_id,
+            date=trans_date,
+            description=inv.description or f"Invoice {inv.invoice_number} from {inv.vendor_name}",
+            amount_aed=amount,
+            vendor_or_customer=inv.vendor_name,
+            vendor_trn=inv.vendor_trn,
+            invoice_number=inv.invoice_number,
+            vat_treatment=vat_treatment,
+            transaction_type="purchase",
+            vat_amount_aed=vat_amt,
+            confidence_score=confidence if confidence <= 1 else confidence / 100,
+            box_number=box_num,
+            is_verified=review_tier == "auto_approve",
+            blocked_input_vat=is_blocked,
+            blocked_vat_amount=vat_amt if is_blocked else 0,
+            blocked_reason=inv.blocked_reason if is_blocked else None,
+            review_tier=review_tier,
+            source=inv.source or "invoice_flow_auto",
+            source_invoice_id=None,
+            source_metadata={"invoice_id": inv.invoice_id, "currency": inv.currency},
+        )
+        db.add(txn)
+        db.flush()
+        saved.append({"id": txn.id, "invoice_number": inv.invoice_number})
+
+    if saved:
+        db.add(
+            AuditLog(
+                company_id=company_id,
+                actor="system",
+                action="sync_ap_invoices",
+                entity=f"{len(saved)} invoices synced from AP InvoiceFlow",
+            )
+        )
+    db.commit()
+    return {"saved_count": len(saved), "skipped_count": skipped}
+
+
 @router.get("/transactions", response_model=List[TransactionResponse])
 async def get_transactions(
     period_start: Optional[date] = Query(None, description="Filter by period start date"),
