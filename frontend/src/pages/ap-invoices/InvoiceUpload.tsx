@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+﻿import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/ap-invoice/supabase';
 import { useMarket } from '../../contexts/MarketContext';
@@ -2325,19 +2325,20 @@ export function InvoiceUpload() {
             updated_at: new Date().toISOString(),
           };
 
-          const { data: invoice, error: invoiceError } = await supabase
-            .from('invoices')
-            .upsert(queueUpsertPayload, { onConflict: 'invoice_number' })
-            .select()
-            .single();
-
-          if (invoiceError) {
-            console.error('Queue bulk upsert error:', invoiceError.message, invoiceError.details, invoiceError);
+          // Use backend service role to bypass browser-side RLS (anon key has no Supabase session)
+          const apiUpsertResult = await bulkUpsertInvoicesViaApi(companyIdQ, [queueUpsertPayload]);
+          const firstResult = apiUpsertResult.results?.[0];
+          if (!apiUpsertResult.ok || !firstResult?.ok) {
+            const errMsg = firstResult?.error || apiUpsertResult.error || 'Upsert failed';
+            console.error('Queue bulk upsert error:', errMsg);
             results.failed++;
-            results.errors.push({
-              fileName: item.file.name,
-              error: [invoiceError.message, invoiceError.details].filter(Boolean).join(' â€” '),
-            });
+            results.errors.push({ fileName: item.file.name, error: errMsg });
+            continue;
+          }
+          const invoice = (firstResult.invoice ?? firstResult) as { id: string; created_at?: string | null };
+          if (!invoice?.id) {
+            results.errors.push({ fileName: item.file.name, error: 'No invoice ID returned from upsert' });
+            results.failed++;
             continue;
           }
 
