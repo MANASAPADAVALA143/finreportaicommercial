@@ -148,15 +148,30 @@ export default function VATClassifier() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
+  // Period filter — default to current month
+  const currentMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const [selectedPeriod, setSelectedPeriod] = useState<string>(currentMonth);
+
+  // Build period_start / period_end from selected YYYY-MM
+  const periodStart = selectedPeriod ? `${selectedPeriod}-01` : undefined;
+  const periodEnd = selectedPeriod
+    ? new Date(new Date(periodStart!).getFullYear(), new Date(periodStart!).getMonth() + 1, 0)
+        .toISOString().slice(0, 10)
+    : undefined;
+
   const fetchSaved = useCallback(async () => {
     setLoadingSaved(true);
     try {
-      const { data } = await apiClient.get("/api/vat/transactions/enriched?limit=200");
+      const ps = periodStart ? `&period_start=${periodStart}` : '';
+      const pe = periodEnd ? `&period_end=${periodEnd}` : '';
+      const { data } = await apiClient.get(`/api/vat/transactions/enriched?limit=500${ps}${pe}`);
       setSavedTxns(Array.isArray(data.transactions) ? data.transactions : []);
       setTierCounts(data.tier_counts || { auto_approve: 0, review_required: 0, blocked: 0 });
     } catch {
       try {
-        const { data } = await apiClient.get("/api/vat/transactions?limit=200");
+        const ps = periodStart ? `&period_start=${periodStart}` : '';
+        const pe = periodEnd ? `&period_end=${periodEnd}` : '';
+        const { data } = await apiClient.get(`/api/vat/transactions?limit=500${ps}${pe}`);
         setSavedTxns(Array.isArray(data) ? data : []);
       } catch {
         setSavedTxns([]);
@@ -164,7 +179,7 @@ export default function VATClassifier() {
     } finally {
       setLoadingSaved(false);
     }
-  }, []);
+  }, [periodStart, periodEnd]);
 
   useEffect(() => { fetchSaved(); }, [fetchSaved]);
 
@@ -584,7 +599,27 @@ export default function VATClassifier() {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-3">
+          {/* Period picker */}
+          <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-1.5 bg-card">
+            <span className="text-[11px] text-muted2 uppercase tracking-wide">Period</span>
+            <input
+              type="month"
+              value={selectedPeriod}
+              onChange={(e) => setSelectedPeriod(e.target.value)}
+              className="bg-transparent text-[12px] font-mono text-white border-none outline-none cursor-pointer"
+            />
+            {selectedPeriod && (
+              <button
+                type="button"
+                onClick={() => setSelectedPeriod("")}
+                title="Show all periods"
+                className="text-[10px] text-muted2 hover:text-white ml-1"
+              >
+                ✕
+              </button>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setActiveView("saved")}
@@ -604,6 +639,13 @@ export default function VATClassifier() {
 
       {/* Summary stats */}
       {savedTxns.length > 0 && (
+        <>
+        {selectedPeriod && (
+          <div className="mb-3 text-[12px] text-muted2">
+            Showing <span className="text-white font-medium">{savedTxns.length} transaction{savedTxns.length !== 1 ? 's' : ''}</span> for{' '}
+            <span className="text-gold font-medium">{new Date(periodStart + 'T00:00:00').toLocaleDateString('en-AE', { month: 'long', year: 'numeric' })}</span>
+          </div>
+        )}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
             { label: "Total Sales (Output)", value: `AED ${totalSales.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-green", sub: `Output VAT: AED ${outputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}` },
@@ -618,6 +660,7 @@ export default function VATClassifier() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* Reclassify result banner */}

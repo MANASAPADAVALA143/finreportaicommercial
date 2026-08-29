@@ -1222,23 +1222,24 @@ async def get_transactions(
 
 @router.get("/transactions/enriched")
 async def get_transactions_enriched(
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(500, ge=1, le=2000),
+    period_start: Optional[date] = Query(None),
+    period_end: Optional[date] = Query(None),
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
-    """Transactions with entertainment, reverse charge, and review tier flags."""
-    rows = (
-        db.query(Transaction)
-        .filter(Transaction.company_id == company_id)
-        .order_by(Transaction.date.desc())
-        .limit(limit)
-        .all()
-    )
+    """Transactions with entertainment, reverse charge, and review tier flags, filtered by period."""
+    query = db.query(Transaction).filter(Transaction.company_id == company_id)
+    if period_start:
+        query = query.filter(Transaction.date >= period_start)
+    if period_end:
+        query = query.filter(Transaction.date <= period_end)
+    rows = query.order_by(Transaction.date.desc()).limit(limit).all()
     enriched = [enrich_transaction_row(t) for t in rows]
     tiers = {"auto_approve": 0, "review_required": 0, "blocked": 0}
     for e in enriched:
         tiers[e["review_tier"]] = tiers.get(e["review_tier"], 0) + 1
-    return {"transactions": enriched, "tier_counts": tiers}
+    return {"transactions": enriched, "tier_counts": tiers, "period_start": str(period_start) if period_start else None, "period_end": str(period_end) if period_end else None}
 
 
 def _transaction_flagged(t: Transaction) -> bool:
