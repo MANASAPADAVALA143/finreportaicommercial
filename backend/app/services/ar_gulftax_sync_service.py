@@ -155,24 +155,16 @@ def _insert_rds_row(db: Session, row: dict[str, Any]) -> GulftaxTransaction:
 
 
 def _mirror_to_vat_classifier(gt_row: Any) -> dict[str, Any]:
-    """Best-effort write into VAT Classifier `transactions` (Saved list)."""
-    try:
-        from app.services.vat_classifier_sync_service import sync_ar_invoice_to_vat_classifier
+    """Best-effort write into VAT Classifier `transactions` (Saved list).
 
-        result = sync_ar_invoice_to_vat_classifier(
-            finreport_company_id=str(gt_row.company_id or ""),
-            workspace_id=str(getattr(gt_row, "tenant_id", None) or "") or None,
-            invoice_number=gt_row.invoice_number,
-            customer_name=gt_row.vendor_name,
-            transaction_date=gt_row.transaction_date,
-            gross_amount=float(gt_row.gross_amount or 0),
-            vat_amount=float(gt_row.vat_amount or 0),
-            vat_category=gt_row.vat_category,
-            vendor_trn=gt_row.vendor_trn,
-            fta_box=gt_row.fta_box,
-            sales_invoice_id=gt_row.ap_invoice_id,
-            source=gt_row.source or "ar_approve_and_post",
-        )
+    Uses sync_gulftax_orm_row_to_classifier which respects gt_row.direction
+    (input=purchase / output=sale). The old sync_ar_invoice_to_vat_classifier
+    hardcoded direction=output, creating phantom sale rows for every AP purchase.
+    """
+    try:
+        from app.services.vat_classifier_sync_service import sync_gulftax_orm_row_to_classifier
+
+        result = sync_gulftax_orm_row_to_classifier(gt_row)
         if not result.get("ok"):
             logger.warning(
                 "VAT Classifier mirror failed for %s: %s",

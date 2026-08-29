@@ -121,6 +121,7 @@ export default function VATClassifier() {
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
+  const [fixingPhantoms, setFixingPhantoms] = useState(false);
   const [reclassifyMsg, setReclassifyMsg] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [reviewTab, setReviewTab] = useState<ReviewTab>("auto_approve");
@@ -485,6 +486,20 @@ export default function VATClassifier() {
     return null;
   };
 
+  const handleFixPhantomSales = async () => {
+    setFixingPhantoms(true);
+    try {
+      const res = await apiClient.delete("/api/vat/transactions/phantom-ar-sales");
+      const count = (res.data as { deleted_count?: number }).deleted_count ?? 0;
+      await fetchSaved();
+      setUploadMsg(`✅ Removed ${count} phantom AR sale rows. Purchases-only now shown.`);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "Failed to remove phantom sales.");
+    } finally {
+      setFixingPhantoms(false);
+    }
+  };
+
   const handleClearAll = async () => {
     if (!window.confirm(`Delete ALL ${savedTxns.length} transactions? This cannot be undone.`)) return;
     setClearing(true);
@@ -720,6 +735,17 @@ export default function VATClassifier() {
                   title="Re-run AI on exempt purchases — corrects professional services wrongly marked as exempt"
                 >
                   {reclassifying ? "Re-classifying…" : "⚡ Fix Exempt"}
+                </button>
+              )}
+              {savedTxns.some(t => t.transaction_type === 'sale' && (t.description || '').startsWith('AR sale ')) && (
+                <button
+                  type="button"
+                  onClick={handleFixPhantomSales}
+                  disabled={fixingPhantoms}
+                  className="px-3 py-1 rounded-[6px] text-[11px] font-medium border border-red/30 text-red hover:bg-[rgba(255,107,107,0.1)] disabled:opacity-50 transition-all"
+                  title="Remove phantom sale rows that were auto-generated from AP purchases — keeps only real purchase records"
+                >
+                  {fixingPhantoms ? "Fixing…" : "🧹 Fix Phantom Sales"}
                 </button>
               )}
               {savedTxns.length > 0 && (

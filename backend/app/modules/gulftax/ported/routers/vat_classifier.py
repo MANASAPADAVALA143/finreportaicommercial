@@ -1704,3 +1704,33 @@ async def reclassify_exempt_purchases(
         "message": f"{reclassified} of {len(exempt_purchases)} exempt purchases reclassified to standard-rated.",
         "details": results,
     }
+
+
+@router.delete("/transactions/phantom-ar-sales")
+async def delete_phantom_ar_sale_transactions(
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Remove phantom 'AR sale' rows that were incorrectly created for every AP purchase.
+
+    These rows have description starting with 'AR sale ' and transaction_type='sale',
+    but they were generated from AP purchases — not real sales invoices.
+    """
+    phantom_rows = (
+        db.query(Transaction)
+        .filter(
+            Transaction.company_id == company_id,
+            Transaction.transaction_type == "sale",
+            Transaction.description.like("AR sale %"),
+        )
+        .all()
+    )
+    deleted_ids = [r.id for r in phantom_rows]
+    for r in phantom_rows:
+        db.delete(r)
+    db.commit()
+    return {
+        "deleted_count": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+        "message": f"Removed {len(deleted_ids)} phantom AR sale rows from AP purchases.",
+    }
