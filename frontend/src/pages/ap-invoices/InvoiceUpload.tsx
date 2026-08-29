@@ -1863,6 +1863,9 @@ export function InvoiceUpload() {
         canWriteAuditLogs = false;
       }
 
+      // Collect results and invoices that need background enrichment — do NOT await per-row enrichment
+      const enrichQueue: Array<{ invoice: import('../../lib/ap-invoice/supabase').Invoice; invoiceData: (typeof bulkData)[number]; initialStatus: string }> = [];
+
       for (let i = 0; i < prepared.length; i++) {
         const { rowNum, invoiceData, upsertPayload, initialStatus } = prepared[i];
         try {
@@ -1909,8 +1912,24 @@ export function InvoiceUpload() {
             currency: invoice.currency ?? invoiceData.currency ?? null,
           });
 
+          enrichQueue.push({ invoice, invoiceData, initialStatus });
+          results.success++;
+        } catch (error: unknown) {
+          results.failed++;
+          results.errors.push({
+            row: rowNum,
+            invoice_number: invoiceData.invoice_number,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+          console.error('ROW FAILED (catch):', invoiceData.invoice_number, error);
+        }
+      }
+
+      // Fire anomaly scan, auto-match, and GL post in background — never block the import success UI
+      void (async () => {
+        for (const { invoice, invoiceData, initialStatus } of enrichQueue) {
           try {
-            await scanInvoiceAnomalies(
+            void scanInvoiceAnomalies(
               {
                 id: invoice.id,
                 company_id: companyId,
@@ -1928,48 +1947,22 @@ export function InvoiceUpload() {
                 created_at: invoice.created_at ?? null,
               },
               'bulk-import',
-            );
-          } catch (anomalyError) {
-            console.error(`Anomaly detection failed for invoice ${invoiceData.invoice_number}:`, anomalyError);
-          }
+            ).catch(() => null);
 
-          if (invoiceData.po_number?.trim() || invoiceData.vendor_name?.trim()) {
-            try {
-              await runAutoMatch(invoice.id);
-            } catch (matchError) {
-              console.warn(`Auto match failed for invoice ${invoiceData.invoice_number}:`, matchError);
+            if (invoiceData.po_number?.trim() || invoiceData.vendor_name?.trim()) {
+              void runAutoMatch(invoice.id).catch(() => null);
             }
-          }
 
-          if (initialStatus === 'Approved') {
-            await awaitGlPostAfterApproval(invoice, companyId, (opts) =>
-              toast({ title: opts.title, description: opts.description, variant: opts.variant }),
-            );
-          }
-
-          try {
-            if (canWriteAuditLogs) {
-              await supabase.from('audit_logs').insert({
-                invoice_id: invoice.id,
-                action: 'Created',
-                user_name: 'System User',
-              });
+            if (initialStatus === 'Approved') {
+              void awaitGlPostAfterApproval(invoice, companyId, (opts) =>
+                toast({ title: opts.title, description: opts.description, variant: opts.variant }),
+              ).catch(() => null);
             }
           } catch {
-            /* audit may also hit RLS — non-fatal after successful insert */
+            // background enrichment — never surface errors
           }
-
-          results.success++;
-        } catch (error: unknown) {
-          results.failed++;
-          results.errors.push({
-            row: rowNum,
-            invoice_number: invoiceData.invoice_number,
-            error: error instanceof Error ? error.message : 'Unknown error',
-          });
-          console.error('ROW FAILED (catch):', invoiceData.invoice_number, error);
         }
-      }
+      })();
 
       console.log('Succeeded:', results.success, 'Failed:', results.failed);
       results.errors.forEach((e, i) => console.error('Fail', i, e.invoice_number, e.error));
