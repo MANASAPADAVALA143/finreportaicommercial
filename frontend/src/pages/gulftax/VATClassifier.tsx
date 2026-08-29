@@ -537,7 +537,16 @@ export default function VATClassifier() {
 
   const totalSales = savedTxns.filter(t => t.transaction_type === "sale").reduce((s, t) => s + t.amount_aed, 0);
   const totalPurchases = savedTxns.filter(t => t.transaction_type === "purchase").reduce((s, t) => s + t.amount_aed, 0);
-  const totalVAT = savedTxns.reduce((s, t) => s + (t.vat_amount_aed || 0), 0);
+  // Input VAT = VAT on purchases only (recoverable, non-blocked). Sales-side VAT is output VAT shown separately.
+  const inputVAT = savedTxns
+    .filter(t => t.transaction_type === "purchase" && !t.blocked_input_vat)
+    .reduce((s, t) => s + (t.vat_amount_aed || 0), 0);
+  const outputVAT = savedTxns
+    .filter(t => t.transaction_type === "sale")
+    .reduce((s, t) => s + (t.vat_amount_aed || 0), 0);
+  const blockedVAT = savedTxns
+    .filter(t => t.blocked_input_vat)
+    .reduce((s, t) => s + (t.blocked_vat_amount || t.vat_amount_aed || 0), 0);
 
   // Source-filtered view
   const sourceFiltered = sourceFilter === "all"
@@ -595,15 +604,17 @@ export default function VATClassifier() {
 
       {/* Summary stats */}
       {savedTxns.length > 0 && (
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           {[
-            { label: "Total Sales", value: `AED ${totalSales.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-green" },
-            { label: "Total Purchases", value: `AED ${totalPurchases.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-amber" },
-            { label: "Total VAT", value: `AED ${totalVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}`, color: "text-white" },
+            { label: "Total Sales (Output)", value: `AED ${totalSales.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-green", sub: `Output VAT: AED ${outputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}` },
+            { label: "Total Purchases (Input)", value: `AED ${totalPurchases.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-amber", sub: `Input VAT: AED ${inputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}` },
+            { label: "Recoverable Input VAT", value: `AED ${inputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}`, color: "text-blue-300", sub: "Box 9 — deductible" },
+            { label: "Blocked / Non-Recoverable", value: `AED ${blockedVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}`, color: blockedVAT > 0 ? "text-red-400" : "text-muted2", sub: blockedVAT > 0 ? "Entertainment / Article 54" : "None" },
           ].map(card => (
             <div key={card.label} className="bg-gradient-to-br from-card to-[#071228] border border-border rounded-2xl p-5">
               <p className="text-[11px] text-muted2 uppercase tracking-wide mb-1">{card.label}</p>
-              <p className={`text-[20px] font-bold font-mono ${card.color}`}>{card.value}</p>
+              <p className={`text-[18px] font-bold font-mono ${card.color}`}>{card.value}</p>
+              <p className="text-[10px] text-muted2 mt-1">{card.sub}</p>
             </div>
           ))}
         </div>
