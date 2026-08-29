@@ -114,6 +114,7 @@ import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { effectivePropertyRef } from '@/lib/ap-invoice/propertyFromGl';
 import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { deleteAllInvoicesViaApi } from '@/lib/ap-invoice/bulkUpsertService';
+import { generateInvoicePdf } from '@/lib/ap-invoice/generateInvoicePdf';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -1499,6 +1500,7 @@ export function InvoiceList() {
                 <div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} aria-hidden />
                 <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
                   {[
+                    { icon: '🧾', label: 'Invoice PDF (Raw)', fn: () => { filteredInvoices.slice(0, 1).forEach(inv => generateInvoicePdf(inv)); } },
                     { icon: '📊', label: 'Tally XML', fn: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
                     { icon: '🟢', label: 'QuickBooks IIF', fn: () => downloadQBIIF(filteredInvoices) },
                     { icon: '⚫', label: 'Xero CSV', fn: () => downloadXeroCSV(filteredInvoices) },
@@ -2346,6 +2348,18 @@ export function InvoiceList() {
                           📋 Validate PINT AE
                         </Button>
                       )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        title="Download Invoice PDF"
+                        className="mr-1 h-7 px-2 text-[11px]"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          generateInvoicePdf(invoice);
+                        }}
+                      >
+                        🧾 PDF
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
