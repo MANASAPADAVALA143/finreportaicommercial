@@ -1129,8 +1129,28 @@ export function InvoiceList() {
       }
       if (!companyId) throw new Error('Could not determine company — please refresh and try again.');
 
-      const result = await deleteAllInvoicesViaApi(companyId);
-      if (!result.ok) throw new Error(result.error || 'Delete failed');
+      // Try backend service-role endpoint first (bypasses RLS)
+      let deleted = 0;
+      let apiOk = false;
+      try {
+        const result = await deleteAllInvoicesViaApi(companyId);
+        if (result.ok) {
+          deleted = result.deleted;
+          apiOk = true;
+        }
+      } catch {
+        apiOk = false;
+      }
+
+      // Fallback: direct Supabase delete (works when user has a valid Supabase session)
+      if (!apiOk) {
+        const { error } = await supabase
+          .from('invoices')
+          .delete()
+          .eq('company_id', companyId);
+        if (error) throw new Error(error.message);
+        deleted = invoices.length;
+      }
 
       setInvoices([]);
       setFilteredInvoices([]);
@@ -1139,7 +1159,7 @@ export function InvoiceList() {
       setDeleteAllDialogOpen(false);
       toast({
         title: 'Invoices removed',
-        description: `Deleted ${result.deleted} invoice${result.deleted === 1 ? '' : 's'}.`,
+        description: `Deleted ${deleted} invoice${deleted === 1 ? '' : 's'}.`,
       });
     } catch (err) {
       console.error('Delete all invoices failed:', err);
