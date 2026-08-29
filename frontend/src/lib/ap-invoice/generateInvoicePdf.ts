@@ -2,7 +2,7 @@
  * Generate a clean tax invoice PDF from raw invoice data.
  * Opens a print-ready HTML page and triggers browser print dialog.
  */
-import type { Invoice } from './supabase';
+import type { Invoice, InvoiceLineItem } from './supabase';
 
 function fmt(amount: number | null | undefined, currency = 'AED'): string {
   if (amount == null) return '—';
@@ -18,13 +18,32 @@ function fmtDate(d: string | null | undefined): string {
   }
 }
 
-export function generateInvoicePdf(invoice: Invoice, companyName = ''): void {
+export function generateInvoicePdf(invoice: Invoice, companyName = '', lineItems: InvoiceLineItem[] = []): void {
   const cur = invoice.currency || 'AED';
   const subtotal = invoice.subtotal_amount ?? invoice.total_amount;
   const vatAmt = invoice.vat_amount ?? invoice.tax_amount ?? 0;
   const vatRate = invoice.vat_rate ?? invoice.tax_rate ?? 0;
   const total = invoice.total_amount;
   const isUAE = cur === 'AED' || !!invoice.vendor_trn;
+
+  const itemRows = lineItems.length > 0
+    ? lineItems.map((li, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${li.description || '—'}</td>
+        <td style="text-align:right">${li.quantity ?? 1}</td>
+        <td style="text-align:right">${fmt(li.unit_price, cur)}</td>
+        <td style="text-align:right">${vatRate ? `${vatRate}%` : '—'}</td>
+        <td style="text-align:right">${fmt(li.total, cur)}</td>
+      </tr>`).join('')
+    : `<tr>
+        <td>1</td>
+        <td>${invoice.vendor_name} — Invoice ${invoice.invoice_number}</td>
+        <td style="text-align:right">1</td>
+        <td style="text-align:right">${fmt(subtotal, cur)}</td>
+        <td style="text-align:right">${vatRate ? `${vatRate}%` : '—'}</td>
+        <td style="text-align:right">${fmt(subtotal, cur)}</td>
+      </tr>`;
 
   const vatRow = vatAmt
     ? `<tr><td colspan="3" style="text-align:right;padding:6px 12px;font-size:13px;color:#555">VAT (${vatRate}%):</td><td style="text-align:right;padding:6px 12px;font-size:13px;font-weight:600">${fmt(vatAmt, cur)}</td></tr>`
@@ -135,19 +154,16 @@ ${vatTreatmentBadge}
 <table class="items">
   <thead>
     <tr>
-      <th style="width:50%">Description</th>
-      <th>Date</th>
-      <th>Tax Type</th>
-      <th>Amount (${cur})</th>
+      <th style="width:5%">#</th>
+      <th style="width:45%">Description</th>
+      <th style="text-align:right">Qty</th>
+      <th style="text-align:right">Unit Price (${cur})</th>
+      <th style="text-align:right">VAT%</th>
+      <th style="text-align:right">Amount (${cur})</th>
     </tr>
   </thead>
   <tbody>
-    <tr>
-      <td>${invoice.vendor_name} — Invoice ${invoice.invoice_number}</td>
-      <td>${fmtDate(invoice.invoice_date)}</td>
-      <td>${invoice.vat_treatment ? invoice.vat_treatment.replace(/_/g, ' ') : (invoice.tax_type || 'Standard')}</td>
-      <td>${fmt(subtotal, cur)}</td>
-    </tr>
+    ${itemRows}
   </tbody>
 </table>
 

@@ -115,6 +115,7 @@ import { effectivePropertyRef } from '@/lib/ap-invoice/propertyFromGl';
 import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { deleteAllInvoicesViaApi } from '@/lib/ap-invoice/bulkUpsertService';
 import { generateInvoicePdf } from '@/lib/ap-invoice/generateInvoicePdf';
+import type { InvoiceLineItem } from '@/lib/ap-invoice/supabase';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -2361,9 +2362,18 @@ export function InvoiceList() {
                         size="sm"
                         title="Download Invoice PDF"
                         className="mr-1 h-7 px-2 text-[11px]"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          generateInvoicePdf(invoice);
+                          let lineItems: InvoiceLineItem[] = [];
+                          try {
+                            const { data } = await supabase
+                              .from('invoice_line_items')
+                              .select('*')
+                              .eq('invoice_id', invoice.id)
+                              .order('created_at');
+                            lineItems = (data ?? []) as InvoiceLineItem[];
+                          } catch { /* ignore — fallback to single row */ }
+                          generateInvoicePdf(invoice, '', lineItems);
                         }}
                       >
                         🧾 PDF
