@@ -1733,6 +1733,35 @@ export function InvoiceList() {
                   <SelectItem value="low">Low</SelectItem>
                 </SelectContent>
               </Select>
+              {/* Period month picker */}
+              <div className="flex items-center gap-1 border border-gray-200 rounded-md px-2 h-8 bg-white text-sm">
+                <span className="text-gray-400 text-xs whitespace-nowrap">Period</span>
+                <input
+                  type="month"
+                  className="border-none outline-none bg-transparent text-xs text-gray-700 cursor-pointer w-[110px]"
+                  value={startDate ? startDate.slice(0, 7) : ''}
+                  onChange={(e) => {
+                    const m = e.target.value; // "YYYY-MM"
+                    if (m) {
+                      setStartDate(`${m}-01`);
+                      const lastDay = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate();
+                      setEndDate(`${m}-${String(lastDay).padStart(2, '0')}`);
+                    } else {
+                      setStartDate('');
+                      setEndDate('');
+                    }
+                  }}
+                  title="Filter by invoice month"
+                />
+                {startDate && (
+                  <button
+                    type="button"
+                    className="text-gray-400 hover:text-gray-700 text-xs ml-0.5"
+                    onClick={() => { setStartDate(''); setEndDate(''); }}
+                    title="Clear period filter"
+                  >✕</button>
+                )}
+              </div>
               <Button
                 type="button"
                 size="sm"
