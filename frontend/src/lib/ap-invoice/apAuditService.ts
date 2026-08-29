@@ -21,10 +21,12 @@ function getUserAgent(): string | null {
   return navigator.userAgent?.slice(0, 500) ?? null;
 }
 
-/** Fire-and-forget append to ap_audit_log. */
+/** Fire-and-forget append to ap_audit_log. Skips silently when no Supabase session (avoids 401 spam). */
 export function logApAudit(input: ApAuditInput): void {
   void (async () => {
     try {
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess?.session?.access_token) return;
       const co = await getMyCompany();
       if (!co?.id) return;
       await supabase.from('ap_audit_log').insert({

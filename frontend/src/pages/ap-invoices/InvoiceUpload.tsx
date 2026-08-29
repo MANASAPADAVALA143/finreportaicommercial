@@ -1714,9 +1714,15 @@ export function InvoiceUpload() {
 
       const authToken = getStoredAccessToken();
       let gulfTaxWarned = false;
+      // Skip per-row GulfTax for large batches (>10 rows) to avoid sequential API bottleneck.
+      // The backend bulk-upsert path handles VAT classification server-side.
+      const skipGulfTaxForBulk = bulkData.length > 10;
       if (isUAE && !authToken) {
         console.warn('[AP] GulfTax classify skipped for bulk import — no bearer token (log out and log in)');
         gulfTaxWarned = true;
+      }
+      if (isUAE && skipGulfTaxForBulk) {
+        console.info(`[AP] GulfTax per-row classify skipped for ${bulkData.length}-row batch (> 10 rows) — backend handles VAT enrichment`);
       }
 
       for (let i = 0; i < bulkData.length; i++) {
@@ -1728,9 +1734,9 @@ export function InvoiceUpload() {
           const approvalLevel = getRequiredApprovalLevel(invoiceData.total_amount);
           const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
 
-          // UAE: classify each invoice with embedded GulfTax before insert
+          // UAE: classify each invoice with embedded GulfTax before insert (skipped for large batches)
           let gulfTaxFields: Record<string, unknown> = {};
-          if (isUAE && authToken) {
+          if (isUAE && authToken && !skipGulfTaxForBulk) {
             try {
               const gt = await classifyAPInvoiceEmbedded({
                 invoice_number: invoiceData.invoice_number,
