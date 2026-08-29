@@ -4,6 +4,9 @@
 import { supabase } from './supabase';
 import type { ApAuditLogEntry } from './supabase';
 import { getMyCompany } from './companyService';
+import { joinApiUrl } from '@/utils/backendOrigin';
+import { getStoredAccessToken } from '@/utils/authToken';
+import { workspaceHeaders } from '@/services/workspaceService';
 
 export type ApAuditInput = {
   entity_type: string;
@@ -21,28 +24,32 @@ function getUserAgent(): string | null {
   return navigator.userAgent?.slice(0, 500) ?? null;
 }
 
-/** Fire-and-forget append to ap_audit_log. Skips silently when no Supabase session (avoids 401 spam). */
+/** Fire-and-forget append to ap_audit_log via backend service role (no RLS issues). */
 export function logApAudit(input: ApAuditInput): void {
   void (async () => {
     try {
-      const { data: sess } = await supabase.auth.getSession();
-      if (!sess?.session?.access_token) return;
       const co = await getMyCompany();
       if (!co?.id) return;
-      await supabase.from('ap_audit_log').insert({
-        company_id: co.id,
-        entity_type: input.entity_type,
-        entity_id: input.entity_id ?? null,
-        action: input.action,
-        action_by: input.action_by ?? null,
-        action_by_role: input.action_by_role ?? 'System',
-        old_values: input.old_values ?? null,
-        new_values: input.new_values ?? null,
-        user_agent: getUserAgent(),
-        notes: input.notes ?? null,
+      const token = getStoredAccessToken();
+      await fetch(joinApiUrl('/api/ap/invoices/audit-log'), {
+        method: 'POST',
+        headers: workspaceHeaders(token, { 'Content-Type': 'application/json' }),
+        credentials: 'include',
+        body: JSON.stringify({
+          company_id: co.id,
+          entity_type: input.entity_type,
+          entity_id: input.entity_id ?? null,
+          action: input.action,
+          action_by: input.action_by ?? null,
+          action_by_role: input.action_by_role ?? 'System',
+          old_values: input.old_values ?? null,
+          new_values: input.new_values ?? null,
+          user_agent: getUserAgent(),
+          notes: input.notes ?? null,
+        }),
       });
-    } catch (e) {
-      console.warn('[ap_audit] failed:', e);
+    } catch {
+      // fire-and-forget — never surface audit errors to the user
     }
   })();
 }

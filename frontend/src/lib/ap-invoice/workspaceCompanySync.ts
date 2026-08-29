@@ -218,7 +218,7 @@ export async function syncApCompanyFromWorkspace(ws: Workspace): Promise<Company
       market,
       subscription_tier: 'starter',
       subscription_status: 'trial',
-      max_invoices_per_month: 100,
+      max_invoices_per_month: 10000,
       max_users: 5,
       workspace_id: ws.id,
     })

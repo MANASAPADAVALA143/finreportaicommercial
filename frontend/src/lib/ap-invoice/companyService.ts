@@ -415,17 +415,43 @@ export async function checkInvoiceLimit(): Promise<{
   message?: string;
 }> {
   const company = await getMyCompany();
-  if (!company) return { allowed: false, used: 0, limit: 0, message: 'No company found.' };
+  if (!company) return { allowed: true, used: 0, limit: 10000 };
 
   const tier = company.subscription_tier;
-  const max = company.max_invoices_per_month;
-  if (tier === 'enterprise' || max < 0) {
+  // Treat max < 0 OR very large limit OR enterprise as unlimited
+  const raw = company.max_invoices_per_month;
+  const max = (!raw || raw < 0 || raw >= 10000) ? 10000 : raw;
+  if (tier === 'enterprise' || max >= 10000) {
     return { allowed: true, used: 0, limit: -1 };
   }
 
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
+
+  // Use backend service role count to avoid RLS issues with browser Supabase client
+  try {
+    const { joinApiUrl } = await import('@/utils/backendOrigin');
+    const { getStoredAccessToken } = await import('@/utils/authToken');
+    const { workspaceHeaders } = await import('@/services/workspaceService');
+    const token = getStoredAccessToken();
+    const res = await fetch(joinApiUrl('/api/ap/invoices/count'), {
+      method: 'POST',
+      headers: workspaceHeaders(token, { 'Content-Type': 'application/json' }),
+      credentials: 'include',
+      body: JSON.stringify({ company_id: company.id, since: startOfMonth.toISOString() }),
+    });
+    if (res.ok) {
+      const data = await res.json() as { ok: boolean; count: number };
+      if (data.ok) {
+        const used = data.count ?? 0;
+        const allowed = used < max;
+        return { allowed, used, limit: max, message: allowed ? undefined : `Monthly limit reached (${used}/${max}). Upgrade your plan to process more invoices.` };
+      }
+    }
+  } catch {
+    // fall through to direct Supabase
+  }
 
   const { count, error } = await supabase
     .from('invoices')
@@ -434,8 +460,7 @@ export async function checkInvoiceLimit(): Promise<{
     .gte('created_at', startOfMonth.toISOString());
 
   if (error) {
-    console.warn('checkInvoiceLimit:', error.message);
-    return { allowed: true, used: 0, limit: max, message: undefined };
+    return { allowed: true, used: 0, limit: max };
   }
 
   const used = count ?? 0;

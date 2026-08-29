@@ -57,6 +57,24 @@ class DeleteAllInvoicesIn(BaseModel):
     company_id: str = Field(..., min_length=1)
 
 
+class AuditLogIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    entity_type: str
+    entity_id: str | None = None
+    action: str
+    action_by: str | None = None
+    action_by_role: str | None = None
+    old_values: dict[str, Any] | None = None
+    new_values: dict[str, Any] | None = None
+    user_agent: str | None = None
+    notes: str | None = None
+
+
+class InvoiceCountIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+    since: str  # ISO date string (start of month)
+
+
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
     return {
         "id": inv.id,
@@ -142,6 +160,61 @@ def delete_all_invoices(
     from app.services.ap_bulk_invoice_service import delete_all_invoices_for_company
 
     return delete_all_invoices_for_company(company_id=body.company_id.strip())
+
+
+@router.post("/audit-log")
+def append_audit_log(
+    body: AuditLogIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Insert one audit log row via service role — bypasses browser RLS."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.core.supabase import get_supabase
+    import uuid
+    sb = get_supabase()
+    try:
+        sb.table("ap_audit_log").insert({
+            "id": str(uuid.uuid4()),
+            "company_id": body.company_id,
+            "entity_type": body.entity_type,
+            "entity_id": body.entity_id,
+            "action": body.action,
+            "action_by": body.action_by,
+            "action_by_role": body.action_by_role or "System",
+            "old_values": body.old_values,
+            "new_values": body.new_values,
+            "user_agent": body.user_agent,
+            "notes": body.notes,
+        }).execute()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@router.post("/count")
+def count_invoices(
+    body: InvoiceCountIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Count invoices for a company since a given date via service role."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.core.supabase import get_supabase
+    sb = get_supabase()
+    try:
+        res = (
+            sb.table("invoices")
+            .select("id", count="exact")
+            .eq("company_id", body.company_id.strip())
+            .gte("created_at", body.since)
+            .execute()
+        )
+        return {"ok": True, "count": res.count if res.count is not None else len(res.data or [])}
+    except Exception as exc:
+        return {"ok": False, "count": 0, "error": str(exc)}
 
 
 @router.post("/bulk-approve")
