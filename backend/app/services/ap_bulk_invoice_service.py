@@ -320,6 +320,24 @@ def list_invoices_for_company(
         return {"ok": False, "invoices": [], "count": 0, "error": str(exc)}
 
 
+def delete_all_invoices_for_company(*, company_id: str) -> dict[str, Any]:
+    """Delete all invoices for a company via service role (bypasses browser RLS)."""
+    from app.core.supabase import get_supabase
+
+    cid = (company_id or "").strip()
+    if not cid:
+        return {"ok": False, "deleted": 0, "error": "company_id required"}
+    sb = get_supabase()
+    try:
+        res = sb.table("invoices").delete().eq("company_id", cid).execute()
+        deleted = len(res.data) if isinstance(res.data, list) else 0
+        logger.info("delete_all_invoices: deleted %d rows for company %s", deleted, cid)
+        return {"ok": True, "deleted": deleted}
+    except Exception as exc:
+        logger.exception("delete_all_invoices failed for company %s", cid)
+        return {"ok": False, "deleted": 0, "error": str(exc)}
+
+
 def get_invoice_for_match(
     *,
     company_id: str,

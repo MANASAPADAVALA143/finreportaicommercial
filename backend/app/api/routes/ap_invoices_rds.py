@@ -53,6 +53,10 @@ class ListInvoicesIn(BaseModel):
     limit: int = Field(default=500, ge=1, le=2000)
 
 
+class DeleteAllInvoicesIn(BaseModel):
+    company_id: str = Field(..., min_length=1)
+
+
 def _invoice_dict(inv: ApInvoice, lines: list[ApInvoiceLineItem] | None = None) -> dict[str, Any]:
     return {
         "id": inv.id,
@@ -124,6 +128,20 @@ def list_invoices_supabase(
     from app.services.ap_bulk_invoice_service import list_invoices_for_company
 
     return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
+
+
+@router.post("/delete-all")
+def delete_all_invoices(
+    body: DeleteAllInvoicesIn,
+    db: Session = Depends(get_db),
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+) -> dict[str, Any]:
+    """Delete all invoices for a company via service role — bypasses browser RLS."""
+    _ = db, x_tenant_id, x_workspace_id
+    from app.services.ap_bulk_invoice_service import delete_all_invoices_for_company
+
+    return delete_all_invoices_for_company(company_id=body.company_id.strip())
 
 
 @router.post("/bulk-approve")

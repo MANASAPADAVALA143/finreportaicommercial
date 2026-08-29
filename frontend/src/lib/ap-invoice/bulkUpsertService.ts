@@ -66,3 +66,19 @@ export async function bulkUpsertInvoicesViaApi(
   }
   return (await res.json()) as BulkUpsertResult;
 }
+
+export async function deleteAllInvoicesViaApi(companyId: string): Promise<{ ok: boolean; deleted: number; error?: string }> {
+  const token = getStoredAccessToken();
+  const headers = workspaceHeaders(token, { 'Content-Type': 'application/json' });
+  const res = await fetch(joinApiUrl('/api/ap/invoices/delete-all'), {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify({ company_id: companyId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Delete failed (${res.status})`);
+  }
+  return (await res.json()) as { ok: boolean; deleted: number; error?: string };
+}

@@ -113,6 +113,7 @@ import { useToast } from '@/hooks/use-toast';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { effectivePropertyRef } from '@/lib/ap-invoice/propertyFromGl';
 import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
+import { deleteAllInvoicesViaApi } from '@/lib/ap-invoice/bulkUpsertService';
 import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
@@ -1120,16 +1121,16 @@ export function InvoiceList() {
     if (invoices.length === 0) return;
     setDeletingAll(true);
     try {
-      const delCompany = await getMyCompany();
-      let dq = supabase.from('invoices').delete();
-      if (delCompany?.id) {
-        dq = dq.eq('company_id', delCompany.id);
-      } else {
-        dq = dq.gte('created_at', '1970-01-01T00:00:00.000Z');
+      let companyId: string | null = null;
+      try {
+        companyId = await resolveApSupabaseCompanyId(accessToken);
+      } catch {
+        companyId = (await getMyCompany())?.id ?? null;
       }
-      const { error } = await dq;
+      if (!companyId) throw new Error('Could not determine company — please refresh and try again.');
 
-      if (error) throw error;
+      const result = await deleteAllInvoicesViaApi(companyId);
+      if (!result.ok) throw new Error(result.error || 'Delete failed');
 
       setInvoices([]);
       setFilteredInvoices([]);
@@ -1138,7 +1139,7 @@ export function InvoiceList() {
       setDeleteAllDialogOpen(false);
       toast({
         title: 'Invoices removed',
-        description: `Deleted ${invoices.length} invoice${invoices.length === 1 ? '' : 's'}.`,
+        description: `Deleted ${result.deleted} invoice${result.deleted === 1 ? '' : 's'}.`,
       });
     } catch (err) {
       console.error('Delete all invoices failed:', err);
