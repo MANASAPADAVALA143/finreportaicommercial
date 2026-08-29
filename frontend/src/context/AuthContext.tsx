@@ -193,7 +193,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const { error: supaErr } = await supabase.auth.signInWithPassword({ email, password });
         if (supaErr) {
-          console.warn('[Auth] Supabase session mirror failed (RLS-protected writes will 401 until this account exists in Supabase Auth too):', supaErr.message);
+          // User doesn't exist in Supabase Auth yet (created via RBAC backend only).
+          // Auto-create them so future logins work. Backend also does this on login/register
+          // but may lag on first login for existing accounts.
+          if (supaErr.message?.toLowerCase().includes('invalid login') || supaErr.message?.toLowerCase().includes('invalid credentials')) {
+            try {
+              const { error: signUpErr } = await supabase.auth.signUp({ email, password });
+              if (!signUpErr) {
+                // Sign up succeeded — now sign in to get a real session
+                await supabase.auth.signInWithPassword({ email, password });
+              } else {
+                console.warn('[Auth] Supabase auto-signUp failed:', signUpErr.message);
+              }
+            } catch (signUpEx) {
+              console.warn('[Auth] Supabase auto-signUp threw:', signUpEx);
+            }
+          } else {
+            console.warn('[Auth] Supabase session mirror failed:', supaErr.message);
+          }
         }
       } catch (e) {
         console.warn('[Auth] Supabase session mirror threw:', e);

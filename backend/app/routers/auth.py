@@ -28,6 +28,37 @@ from app.services.auth_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["rbac-auth"])
+
+
+def _sync_supabase_auth_user(email: str, password: str, display_name: str = "") -> None:
+    """Create or update the user in Supabase Auth so the browser client can call
+    supabase.auth.signInWithPassword() and get a real session (needed for RLS)."""
+    try:
+        from app.core.supabase import get_supabase
+        sb = get_supabase()
+        # Try to create — if already exists the AdminAPI returns an error we can ignore
+        sb.auth.admin.create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_metadata": {"display_name": display_name},
+        })
+    except Exception as e:
+        err_str = str(e)
+        if "already been registered" in err_str or "already exists" in err_str or "422" in err_str:
+            # User already in Supabase Auth — update password to keep it in sync
+            try:
+                from app.core.supabase import get_supabase
+                sb = get_supabase()
+                users = sb.auth.admin.list_users()
+                for u in (users or []):
+                    if getattr(u, "email", None) == email:
+                        sb.auth.admin.update_user_by_id(u.id, {"password": password})
+                        break
+            except Exception:
+                pass
+        else:
+            logger.warning("[Supabase Auth] could not sync user %s: %s", email, e)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3006")
 
 
@@ -129,6 +160,9 @@ def register(body: RegisterBody, request: Request, response: Response, db: Sessi
     except Exception:
         pass
 
+    # Mirror into Supabase Auth so the browser client can get an RLS session
+    _sync_supabase_auth_user(body.email.lower().strip(), body.password, body.name.strip())
+
     access = create_access_token(user.id, UserRole.super_admin.value, company.id, "full_access")
     refresh = create_refresh_token(user.id, UserRole.super_admin.value, company.id)
     response.set_cookie("refresh_token", refresh, httponly=True, samesite="lax")
@@ -147,6 +181,14 @@ def login(body: LoginBody, request: Request, response: Response, db: Session = D
     company = db.get(Company, user.company_id)
     _audit(db, user.id, "login", "auth", {}, request.client.host if request.client else None)
     db.commit()
+
+    # Keep Supabase Auth in sync so the browser gets an RLS session (fire-and-forget)
+    import threading
+    threading.Thread(
+        target=_sync_supabase_auth_user,
+        args=(user.email, body.password, user.name or ""),
+        daemon=True,
+    ).start()
 
     role = user.role.value if hasattr(user.role, "value") else str(user.role)
     product_role = getattr(user, "product_role", None) or "full_access"
