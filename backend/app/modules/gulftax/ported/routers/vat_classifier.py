@@ -1111,10 +1111,18 @@ async def sync_ap_invoices_to_vat_classifier(
                 skipped += 1
                 continue
 
+        # Validate TRN: UAE TRN must be exactly 15 numeric digits
+        raw_trn = (inv.vendor_trn or "").strip().replace("-", "").replace(" ", "")
+        trn_valid = bool(raw_trn) and raw_trn.isdigit() and len(raw_trn) == 15
+        trn_flag = [] if trn_valid else [{"code": "TRN_INVALID", "icon": "🔴", "label": "TRN Invalid",
+                                          "tooltip": f"TRN '{inv.vendor_trn}' is not a valid 15-digit UAE TRN"}]
+
         # Use GulfTax classification if available, otherwise run decision tree
         vat_treatment = inv.vat_treatment or "standard_rated"
-        confidence = float(inv.gulftax_confidence or 0.85)
-        box_num = inv.box_number or (9 if "purchase" in (inv.source or "") or True else 1)
+        # Convert 0-1 range to 0-100; default 85 when not provided
+        raw_conf = float(inv.gulftax_confidence or 0)
+        confidence = (raw_conf * 100 if raw_conf <= 1.0 else raw_conf) if raw_conf else 85.0
+        box_num = inv.box_number or 9
         vat_amt = float(inv.vat_amount or (amount * 0.05 if vat_treatment == "standard_rated" else 0))
 
         if not inv.gulftax_decision:
@@ -1127,9 +1135,15 @@ async def sync_ap_invoices_to_vat_classifier(
                 vendor_trn=inv.vendor_trn,
             )
             vat_treatment = raw.get("vat_treatment", vat_treatment)
-            confidence = float(raw.get("confidence_score_0_100", confidence * 100) or confidence)
+            dt_conf = raw.get("confidence_score")  # decision tree returns 0-100
+            if dt_conf is not None:
+                confidence = float(dt_conf)
             box_num = raw.get("box_number", box_num)
             vat_amt = float(raw.get("vat_amount_aed", vat_amt))
+
+        # Penalise confidence for invalid TRN: -15pp, floor at 60
+        if not trn_valid and inv.vendor_trn:
+            confidence = max(60.0, confidence - 15.0)
 
         trans_date = date.today()
         if inv.invoice_date:
@@ -1140,6 +1154,9 @@ async def sync_ap_invoices_to_vat_classifier(
 
         is_blocked = inv.blocked_input_vat or vat_treatment in ("entertainment_restricted",)
         review_tier = "blocked" if is_blocked else ("auto_approve" if confidence >= 85 else "review_required")
+        # Invalid TRN always goes to review regardless of confidence
+        if not trn_valid and inv.vendor_trn and review_tier == "auto_approve":
+            review_tier = "review_required"
 
         txn = Transaction(
             company_id=company_id,
@@ -1152,16 +1169,15 @@ async def sync_ap_invoices_to_vat_classifier(
             vat_treatment=vat_treatment,
             transaction_type="purchase",
             vat_amount_aed=vat_amt,
-            confidence_score=confidence if confidence <= 1 else confidence / 100,
+            confidence_score=confidence / 100.0,  # always store as 0-1
             box_number=box_num,
             is_verified=review_tier == "auto_approve",
-            blocked_input_vat=is_blocked,
-            blocked_vat_amount=vat_amt if is_blocked else 0,
-            blocked_reason=inv.blocked_reason if is_blocked else None,
-            review_tier=review_tier,
             source=inv.source or "invoice_flow_auto",
             source_invoice_id=None,
-            source_metadata={"invoice_id": inv.invoice_id, "currency": inv.currency},
+            source_metadata={"invoice_id": inv.invoice_id, "currency": inv.currency,
+                             "blocked": is_blocked, "blocked_reason": inv.blocked_reason if is_blocked else None,
+                             "review_tier": review_tier},
+            classification_flags=trn_flag or None,
         )
         db.add(txn)
         db.flush()
