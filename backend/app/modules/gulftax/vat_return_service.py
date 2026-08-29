@@ -1,7 +1,10 @@
 """FTA VAT return — aggregate all 12 boxes from sales + purchase sources."""
 from __future__ import annotations
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
@@ -569,13 +572,29 @@ def fetch_all_vat_return_boxes(
     period_start, period_end = parse_period(period)
     tenant_id = workspace_id
 
-    sales = _sales_boxes(
-        db,
-        tenant_id=tenant_id,
-        company_id=company_id,
-        period_start=period_start,
-        period_end=period_end,
-    )
+    try:
+        sales = _sales_boxes(
+            db,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+    except Exception:
+        logger.exception("_sales_boxes failed — using zero sales")
+        sales = {
+            "box1_standard_rated_sales_net": 0.0,
+            "box1_standard_rated_sales_vat": 0.0,
+            "box2_tourist_refunds": 0.0,
+            "box3_reverse_charge_supplies_net": 0.0,
+            "box3_reverse_charge_supplies_vat": 0.0,
+            "box4_zero_rated_supplies": 0.0,
+            "box5_exempt_supplies": 0.0,
+            "box6_imports_vat": 0.0,
+            "box7_output_adjustments": 0.0,
+            "box8_total_output_vat": 0.0,
+            "sales_invoice_count": 0,
+        }
     purchases = fetch_vat_return_boxes(workspace_id, period)
     advances = fetch_advance_payment_invoices(workspace_id, period, company_id)
 
@@ -652,6 +671,73 @@ def fetch_all_vat_return_boxes(
                     gt_entries = list_transactions(company_id, period, workspace_id=workspace_id)
             except Exception:
                 pass
+
+        # Fallback: read ported Transaction model (AP invoice flow syncs here)
+        if not gt_entries and purchases.get("entry_count", 0) == 0:
+            try:
+                from models import Transaction as PortedTransaction
+
+                port_rows = (
+                    db.query(PortedTransaction)
+                    .filter(
+                        PortedTransaction.company_id == company_id,
+                        PortedTransaction.date >= period_start,
+                        PortedTransaction.date <= period_end,
+                    )
+                    .all()
+                )
+                if port_rows:
+                    box9_p = sum(
+                        float(t.amount_aed or 0)
+                        for t in port_rows
+                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
+                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
+                    )
+                    box11_p = sum(
+                        float(t.vat_amount_aed or 0)
+                        for t in port_rows
+                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
+                    )
+                    box1_p_net = sum(
+                        float(t.amount_aed or 0)
+                        for t in port_rows
+                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "sale"
+                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
+                    )
+                    box1_p_vat = sum(
+                        float(t.vat_amount_aed or 0)
+                        for t in port_rows
+                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "sale"
+                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
+                    )
+                    purchases = {
+                        **purchases,
+                        "entry_count": len(port_rows),
+                        "box9_standard_rated_expenses": round(box9_p, 2),
+                        "box11_recoverable_input_vat": round(box11_p, 2),
+                    }
+                    if int(sales.get("sales_invoice_count") or 0) == 0 and box1_p_net:
+                        sales["box1_standard_rated_sales_net"] = round(
+                            sales["box1_standard_rated_sales_net"] + box1_p_net, 2
+                        )
+                        sales["box1_standard_rated_sales_vat"] = round(
+                            sales["box1_standard_rated_sales_vat"] + box1_p_vat, 2
+                        )
+                    gt_entries = [
+                        {
+                            "id": t.id,
+                            "transaction_id": getattr(t, "invoice_number", None) or str(t.id),
+                            "invoice_number": getattr(t, "invoice_number", None),
+                            "vendor_name": getattr(t, "vendor_or_customer", None),
+                            "gross_amount": float(t.amount_aed or 0),
+                            "vat_amount": float(t.vat_amount_aed or 0),
+                            "direction": "input" if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase" else "output",
+                            "source": getattr(t, "source", "invoice_flow_auto"),
+                        }
+                        for t in port_rows
+                    ]
+            except Exception:
+                logger.exception("Ported Transaction fallback failed")
 
     entries = (gt_entries if gt_entries else purchases.get("entries")) or []
     box9_net = float(purchases.get("box9_standard_rated_expenses") or 0)

@@ -218,10 +218,21 @@ export default function VATReturn() {
       }
       await loadReconStatus();
     } catch {
-      setData(null);
+      // On error show zeros rather than "—" so the page is usable
+      const zeros: AllBoxes = {
+        box1_standard_rated_sales_net: 0, box1_standard_rated_sales_vat: 0,
+        box2_tourist_refunds: 0, box3_reverse_charge_supplies_net: 0,
+        box3_reverse_charge_supplies_vat: 0, box4_zero_rated_supplies: 0,
+        box5_exempt_supplies: 0, box6_imports_vat: 0, box7_output_adjustments: 0,
+        box8_total_output_vat: 0, box9_standard_rated_expenses: 0,
+        box10_reverse_charge_expenses: 0, box11_total_input_vat: 0,
+        box12_net_vat_payable_or_refundable: 0, payable: false,
+        sales_invoice_count: 0, purchase_entry_count: 0, entries: [],
+      };
+      setData(zeros);
       setApSyncCount(0);
       setApSummary(null);
-      setFilingOverrides(null);
+      setFilingOverrides(overridesFromAllBoxes(zeros));
       setShowFilingOverrides(false);
       setReconStatus(null);
     } finally {
