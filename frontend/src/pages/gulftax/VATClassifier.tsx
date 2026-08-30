@@ -4,6 +4,9 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { apiClient } from '../../services/gulfTaxClient';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { resolveClassifierEntityType } from '../../lib/gulftax/vatAdvanced';
+import { listInvoicesViaApi } from '../../lib/ap-invoice/listInvoicesService';
+import { syncApInvoicesToVatClassifier } from '../../lib/ap-invoice/gulfTaxService';
+import { useCompany } from '../../context/CompanyContext';
 
 interface ClassificationResult {
   description: string;
@@ -122,6 +125,7 @@ export default function VATClassifier() {
   const [clearing, setClearing] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
   const [fixingPhantoms, setFixingPhantoms] = useState(false);
+  const [syncingFromAp, setSyncingFromAp] = useState(false);
   const [reclassifyMsg, setReclassifyMsg] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [reviewTab, setReviewTab] = useState<ReviewTab>("auto_approve");
@@ -500,6 +504,66 @@ export default function VATClassifier() {
     }
   };
 
+  const handleSyncFromApInvoices = async () => {
+    setSyncingFromAp(true);
+    setError(null);
+    setUploadMsg(null);
+    try {
+      const companyId =
+        activeWorkspace?.id ||
+        localStorage.getItem('active_company_id') ||
+        localStorage.getItem('gnanova_company_id') ||
+        '';
+      if (!companyId) {
+        setError('No company ID found — please select a company first.');
+        return;
+      }
+      const invoices = await listInvoicesViaApi(companyId, 1000);
+      if (!invoices.length) {
+        setUploadMsg('No AP invoices found for this company.');
+        return;
+      }
+      const payload = invoices.map((inv: any) => ({
+        invoice_id: inv.id,
+        invoice_number: String(inv.invoice_number || ''),
+        vendor_name: String(inv.vendor_name || inv.supplier_name || 'Unknown'),
+        invoice_date: inv.invoice_date || inv.posting_date || undefined,
+        total_amount: Number(inv.total_amount || inv.amount || 0),
+        vat_amount: Number(inv.vat_amount || 0) || undefined,
+        vat_treatment: inv.vat_treatment || undefined,
+        vendor_trn: inv.vendor_trn || inv.trn_number || undefined,
+        currency: inv.currency || 'AED',
+        description: inv.description || undefined,
+        gulftax_confidence: inv.gulftax_confidence || undefined,
+        gulftax_decision: inv.gulftax_decision || undefined,
+        blocked_input_vat: inv.blocked_input_vat || false,
+        blocked_reason: inv.blocked_reason || undefined,
+        box_number: inv.box_number || undefined,
+        source: 'invoice_flow_resync',
+      }));
+      // Call sync endpoint directly (await so we know when done)
+      const { joinApiUrl } = await import('../../utils/backendOrigin');
+      const { getStoredAccessToken } = await import('../../utils/authToken');
+      const { workspaceHeaders } = await import('../../services/workspaceService');
+      const token = getStoredAccessToken();
+      const headers = workspaceHeaders(token, { 'Content-Type': 'application/json' });
+      const res = await fetch(joinApiUrl('/api/vat/sync-from-ap-invoices'), {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ invoices: payload }),
+      });
+      if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
+      const data = await res.json();
+      await fetchSaved();
+      setUploadMsg(`✅ Synced ${data.saved_count} invoices from AP (${data.skipped_count} already existed).`);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to sync from AP Invoices.');
+    } finally {
+      setSyncingFromAp(false);
+    }
+  };
+
   const handleClearAll = async () => {
     if (!window.confirm(`Delete ALL ${savedTxns.length} transactions? This cannot be undone.`)) return;
     setClearing(true);
@@ -737,6 +801,15 @@ export default function VATClassifier() {
                   {reclassifying ? "Re-classifying…" : "⚡ Fix Exempt"}
                 </button>
               )}
+              <button
+                type="button"
+                onClick={handleSyncFromApInvoices}
+                disabled={syncingFromAp}
+                className="px-3 py-1 rounded-[6px] text-[11px] font-medium border border-blue/30 text-blue-400 hover:bg-[rgba(59,130,246,0.1)] disabled:opacity-50 transition-all"
+                title="Pull all approved AP invoices into VAT Classifier (purchase records only)"
+              >
+                {syncingFromAp ? "Syncing…" : "🔄 Sync from AP Invoices"}
+              </button>
               {savedTxns.some(t => t.transaction_type === 'sale' && (t.description || '').startsWith('AR sale ')) && (
                 <button
                   type="button"
