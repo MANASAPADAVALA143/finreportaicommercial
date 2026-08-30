@@ -565,6 +565,7 @@ export function InvoiceUpload() {
         ifrsData?.ifrs_confidence != null ? Number(ifrsData.ifrs_confidence) :
         ifrsData?.confidence != null ? Number(ifrsData.confidence) :
         raw?.ifrs_confidence != null ? Number(raw.ifrs_confidence) :
+        rawData?.confidence != null ? Number(rawData.confidence) :
         0;
       const ifrs_explanation =
         ifrsData?.ifrs_explanation ?? ifrsData?.explanation ?? raw?.ifrs_explanation ?? null;
