@@ -1767,6 +1767,9 @@ export function InvoiceUpload() {
                 trn_number: invoiceData.vendor_trn || '',
                 company_id: companyId,
               });
+              const rawConf = Number(gt.confidence_score || 0);
+              // confidence_score from backend is 0-1; normalize to 0-100 for ifrs_confidence display
+              const confPct = rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf);
               gulfTaxFields = {
                 vat_treatment: String(gt.vat_treatment || 'standard_rated'),
                 vat_rate: Number(gt.vat_rate || 0),
@@ -1776,7 +1779,8 @@ export function InvoiceUpload() {
                 tax_rate: Number(gt.vat_rate || 0),
                 gulftax_decision: gt.decision,
                 gulftax_risk_score: gt.risk_score,
-                gulftax_confidence: gt.confidence_score,
+                gulftax_confidence: rawConf,
+                ifrs_confidence: confPct,
               };
               setBulkGulfTaxCount((c) => c + 1);
             } catch (gtErr) {
