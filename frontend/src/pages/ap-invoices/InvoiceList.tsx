@@ -2126,7 +2126,9 @@ export function InvoiceList() {
                           (invoice.ifrs_category || '').trim() ||
                           (invoice.vat_treatment || '').trim();
                         if (category) {
-                          const conf = Number(invoice.ifrs_confidence ?? 0);
+                          const rawConf = Number(invoice.ifrs_confidence ?? 0);
+                        // Normalize: backend sometimes stores 0-1 (e.g. 0.95) instead of 0-100
+                        const conf = rawConf > 0 && rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf);
                           const showConf = Boolean((invoice.ifrs_category || '').trim()) && conf > 0;
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>

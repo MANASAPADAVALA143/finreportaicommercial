@@ -55,12 +55,17 @@ export function computeFieldCompletenessScore(
   return pts;
 }
 
+function normalizeConfidence(raw: number): number {
+  // Backend sometimes stores 0-1 (e.g. 0.95) instead of 0-100
+  return raw > 0 && raw <= 1 ? Math.round(raw * 100) : Math.min(100, Math.max(0, Math.round(raw)));
+}
+
 export function getEffectiveExtractionScore(inv: Invoice): number {
   if (inv.ocr_confidence != null && !Number.isNaN(Number(inv.ocr_confidence))) {
-    return Math.min(100, Math.max(0, Number(inv.ocr_confidence)));
+    return normalizeConfidence(Number(inv.ocr_confidence));
   }
   if (inv.ifrs_confidence != null && Number(inv.ifrs_confidence) > 0) {
-    return Math.min(100, Math.max(0, Number(inv.ifrs_confidence)));
+    return normalizeConfidence(Number(inv.ifrs_confidence));
   }
   return computeFieldCompletenessScore(inv);
 }
