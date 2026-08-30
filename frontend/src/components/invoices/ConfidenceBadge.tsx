@@ -33,6 +33,7 @@ export function ConfidenceBadge({ score, size = 'sm', className }: Props) {
 
   return (
     <span
+      title="AI confidence in the extracted invoice data and classification"
       className={cn(
         'inline-flex items-center rounded-full border font-medium',
         tier,
@@ -40,7 +41,7 @@ export function ConfidenceBadge({ score, size = 'sm', className }: Props) {
         className
       )}
     >
-      {showLabel ? `${Math.round(n)}% confidence` : `${Math.round(n)}%`}
+      {showLabel ? `${Math.round(n)}% AI confidence` : `${Math.round(n)}%`}
     </span>
   );
 }

@@ -144,7 +144,27 @@ const statusColors: Record<string, string> = {
   Paid: 'bg-blue-100 text-blue-800 border-blue-200',
   'On Hold': 'bg-orange-100 text-orange-800 border-orange-200',
   Queried: 'bg-purple-100 text-purple-800 border-purple-200',
+  review_required: 'bg-amber-100 text-amber-800 border-amber-200',
+  auto_approve: 'bg-green-100 text-green-800 border-green-200',
+  blocked: 'bg-red-100 text-red-800 border-red-200',
 };
+
+/** Human-readable label for a status value. Handles known values plus any
+ * raw snake_case value (e.g. "review_required") that leaks in from a sync path. */
+function formatStatusLabel(status: string | null | undefined): string {
+  const s = String(status ?? '').trim();
+  if (!s) return 'Unknown';
+  if (s === 'review_required') return 'Needs Review';
+  if (s === 'auto_approve') return 'Approved';
+  if (s === 'blocked') return 'Blocked';
+  if (s === 'Processing') return 'AI Processing';
+  if (/[A-Z\s]/.test(s) && !s.includes('_')) return s; // already human-formatted (e.g. "Approved", "On Hold")
+  return s
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
 
 function invoicePaymentPill(inv: Invoice): { label: string; title?: string; variant: 'paid' | 'overdue' | 'pending' } {
   const paid = inv.status === 'Paid' || inv.payment_status === 'paid';
@@ -2061,8 +2081,8 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant="outline" className={statusColors[invoice.status]}>
-                          {invoice.status}
+                        <Badge variant="outline" className={statusColors[invoice.status] || statusColors.review_required}>
+                          {formatStatusLabel(invoice.status)}
                         </Badge>
                         {invoice.duplicate_flag === true && (
                           <Badge

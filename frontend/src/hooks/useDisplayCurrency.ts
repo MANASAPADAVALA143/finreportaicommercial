@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
 import { useCompanySettings } from '@/hooks/useCompanySettings';
-import { formatCurrency, getCurrencySymbol } from '@/utils/currency';
+import { formatCurrency, formatCompactCurrency, getCurrencySymbol } from '@/utils/currency';
 
 /** Market-aware currency for AP / CFO dashboards (UAE → AED, India → INR). */
 export function useDisplayCurrency() {
@@ -20,7 +20,7 @@ export function useDisplayCurrency() {
   }, [isUAE, isIndia, settingsCurrency, config.currency]);
 
   const symbol = useMemo(() => {
-    if (isUAE) return 'د.إ';
+    if (isUAE) return 'AED';
     if (currency === 'INR') return '₹';
     return getCurrencySymbol(currency);
   }, [isUAE, currency]);
@@ -30,13 +30,9 @@ export function useDisplayCurrency() {
     [currency],
   );
 
+  // Compact form for chart axes / dense KPI tiles: "AED 500K", "AED 1.5M", "₹34.0L".
   const fmtCompact = useMemo(
-    () => (amount: number) => {
-      if (currency === 'INR' && amount >= 100_000) {
-        return `₹${(amount / 100_000).toFixed(1)}L`;
-      }
-      return formatCurrency(amount, currency);
-    },
+    () => (amount: number) => formatCompactCurrency(amount, currency),
     [currency],
   );
 

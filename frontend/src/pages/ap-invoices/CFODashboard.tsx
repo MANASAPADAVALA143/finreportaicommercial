@@ -665,7 +665,7 @@ export default function CFODashboard() {
                   <BarChart data={kpis.agingTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid {...GRID_LIGHT} />
                     <XAxis dataKey="month" tick={AXIS_TICK} />
-                    <YAxis tick={AXIS_TICK} tickFormatter={(v) => `${(Number(v) / 100000).toFixed(1)}L`} />
+                    <YAxis tick={AXIS_TICK} tickFormatter={(v) => fmtCompact(Number(v))} />
                     <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Bar dataKey="current" stackId="a" fill="#1D9E75" name="Current" />
@@ -717,7 +717,7 @@ export default function CFODashboard() {
                   margin={{ top: 8, right: 16, left: 12, bottom: 0 }}
                 >
                   <CartesianGrid {...GRID_LIGHT} />
-                  <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
+                  <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => fmtCompact(Number(v))} />
                   <YAxis type="category" dataKey="department" width={110} tick={AXIS_TICK} />
                   <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
@@ -760,7 +760,7 @@ export default function CFODashboard() {
                 <ComposedChart data={kpis.waterfall} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
                   <CartesianGrid {...GRID_LIGHT} />
                   <XAxis dataKey="name" tick={AXIS_TICK} />
-                  <YAxis tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
+                  <YAxis tick={AXIS_TICK} tickFormatter={(v) => fmtCompact(Number(v))} />
                   <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
                   <Bar dataKey="inflow" fill={COL.teal} name="Inflow" />
@@ -1003,7 +1003,7 @@ export default function CFODashboard() {
                     margin={{ top: 8, right: 16, left: 8, bottom: 0 }}
                   >
                     <CartesianGrid {...GRID_LIGHT} />
-                    <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
+                    <XAxis type="number" tick={AXIS_TICK} tickFormatter={(v) => fmtCompact(Number(v))} />
                     <YAxis type="category" dataKey="vendor" width={120} tick={AXIS_TICK} />
                     <Tooltip {...chartTooltipProps()} formatter={(v: number) => fmtL(v)} />
                     <Bar dataKey="amount" radius={[0, 4, 4, 0]} name="Spend">

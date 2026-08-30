@@ -12,7 +12,7 @@ export const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: '$',
   EUR: '€',
   GBP: '£',
-  AED: 'د.إ ',
+  AED: 'AED ',
   SGD: 'S$',
   JPY: '¥',
   AUD: 'A$',
@@ -36,6 +36,24 @@ export const CURRENCY_SYMBOLS: Record<string, string> = {
 export function getCurrencySymbol(currency: string): string {
   const code = currency?.toUpperCase?.() ?? '';
   return CURRENCY_SYMBOLS[code] || currency || '';
+}
+
+/**
+ * Compact form for chart axes / KPI tiles: "AED 0", "AED 500K", "AED 1.5M".
+ * INR keeps the Lakh convention (₹34.0L) since that's the standard there.
+ */
+export function formatCompactCurrency(amount: number, currency: string = 'INR'): string {
+  const code = currency.toUpperCase();
+  const symbol = CURRENCY_SYMBOLS[code] || `${currency} `;
+  const n = Number(amount) || 0;
+  if (code === 'INR') {
+    if (Math.abs(n) >= 100_000) return `${symbol}${(n / 100_000).toFixed(1)}L`;
+    return `${symbol}${Math.round(n).toLocaleString('en-IN')}`;
+  }
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `${symbol}${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${symbol}${(n / 1_000).toFixed(0)}K`;
+  return `${symbol}${Math.round(n).toLocaleString('en-US')}`;
 }
 
 /**
