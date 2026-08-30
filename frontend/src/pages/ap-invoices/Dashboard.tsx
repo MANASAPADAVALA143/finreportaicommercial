@@ -69,7 +69,7 @@ function getAgentBadgeStyle(action: string): { bg: string; label: string } {
 export function Dashboard() {
   const navigate = useNavigate();
   const { dateFormat } = useCompanySettings();
-  const { currency: baseCurrencyDisplay, fmt } = useDisplayCurrency();
+  const { currency: baseCurrencyDisplay, fmt, fmtCompact } = useDisplayCurrency();
   const { activeCompanyId } = useCompany();
   const { costCenterLabel } = useIndustryConfig();
   const workspaceId =
@@ -296,20 +296,25 @@ export function Dashboard() {
     let d1 = 0;
     let d2 = 0;
     let d60 = 0;
+    let currentCount = 0;
+    let d1Count = 0;
+    let d2Count = 0;
+    let d60Count = 0;
     for (const inv of invoices) {
       if (inv.status === 'Paid' || inv.payment_status === 'paid') continue;
       const amt = Number(inv.total_amount);
       if (!inv.due_date) {
         current += amt;
+        currentCount++;
         continue;
       }
       const days = Math.floor(
         (new Date(today).getTime() - new Date(inv.due_date).getTime()) / 86400000
       );
-      if (days <= 0) current += amt;
-      else if (days <= 30) d1 += amt;
-      else if (days <= 60) d2 += amt;
-      else d60 += amt;
+      if (days <= 0) { current += amt; currentCount++; }
+      else if (days <= 30) { d1 += amt; d1Count++; }
+      else if (days <= 60) { d2 += amt; d2Count++; }
+      else { d60 += amt; d60Count++; }
     }
     const totalOutstanding = current + d1 + d2 + d60;
     const overdueTotal = d1 + d2 + d60;
@@ -318,6 +323,10 @@ export function Dashboard() {
       d1,
       d2,
       d60,
+      currentCount,
+      d1Count,
+      d2Count,
+      d60Count,
       totalOutstanding,
       overdueTotal,
       maxBar: Math.max(current, d1, d2, d60, 1),
@@ -387,13 +396,15 @@ export function Dashboard() {
             <div className="text-3xl font-bold text-gray-900">
               {fmt(monthTotalInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Base currency: {baseCurrencyDisplay}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {monthTotalInBase > 0 ? `Base currency: ${baseCurrencyDisplay}` : 'No invoices in selected period'}
+            </p>
             {otherCurrencyTotals.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
                 Also this month:{' '}
                 {otherCurrencyTotals
                   .map(([c, v]) => `${formatCurrency(v.total, c)}`)
-                  .join(' Â· ')}
+                  .join(' · ')}
               </p>
             )}
           </CardContent>
@@ -410,7 +421,9 @@ export function Dashboard() {
             <div className="text-3xl font-bold text-gray-900">
               {fmt(monthTaxInBase)}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Tax in {baseCurrencyDisplay} (same-currency invoices)</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {monthTaxInBase > 0 ? `Tax in ${baseCurrencyDisplay} (same-currency invoices)` : 'No invoices in selected period'}
+            </p>
           </CardContent>
         </Card>
 
@@ -423,9 +436,11 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-gray-900">
-              {stats.avgProcessingTime}s
+              {stats.avgProcessingTime > 0 ? `${stats.avgProcessingTime}s` : '—'}
             </div>
-            <p className="text-xs text-gray-500 mt-1">Per invoice</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {stats.avgProcessingTime > 0 ? 'Per invoice' : 'Not enough processing history'}
+            </p>
           </CardContent>
         </Card>
 
@@ -567,7 +582,7 @@ export function Dashboard() {
         <Card className="bg-white border shadow-sm border-l-4 border-l-yellow-500">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-gray-900">
-              Awaiting Approval
+              Approval Bottleneck
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -577,14 +592,15 @@ export function Dashboard() {
               const managerCount = pending.filter((inv) => inv.approval_level === 'manager').length;
               return (
                 <>
-                  <div className="text-2xl font-bold text-gray-900">{pending.length}</div>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
-                      CFO: {cfoCount}
-                    </span>
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
-                      Manager: {managerCount}
-                    </span>
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <p className="text-2xl font-bold text-gray-900">{cfoCount}</p>
+                      <p className="text-xs text-muted-foreground">CFO approvals</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold text-gray-900">{managerCount}</p>
+                      <p className="text-xs text-muted-foreground">Manager approvals</p>
+                    </div>
                   </div>
                   <Button
                     variant="outline"
@@ -592,7 +608,7 @@ export function Dashboard() {
                     className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
                     onClick={() => navigate('/invoices')}
                   >
-                    Approve Queue
+                    Open approval queue →
                   </Button>
                 </>
               );
@@ -675,9 +691,15 @@ export function Dashboard() {
                       </span>
                     ))}
                   </div>
-                  <p className="text-[11px] text-gray-500 mb-2">
-                    {totalFlagged} of {invoices.length} invoices carry a risk flag
-                  </p>
+                  {invoiceSeverityCounts.critical > 0 ? (
+                    <p className="text-[12px] font-semibold text-rose-700 mb-2">
+                      {invoiceSeverityCounts.critical} require immediate attention
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-gray-500 mb-2">
+                      {totalFlagged} of {invoices.length} invoices carry a risk flag
+                    </p>
+                  )}
                   <div className="space-y-1">
                     {topFlags.map(([msg, { count, severity }]) => {
                       const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.low;
@@ -831,7 +853,7 @@ export function Dashboard() {
 
         <Card className="xl:col-span-1">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Cash flow â€” next 30 days</CardTitle>
+            <CardTitle className="text-base">Cash flow — next 30 days</CardTitle>
             <p className="text-xs text-muted-foreground font-normal">
               By due date, unpaid / overdue vs scheduled ({baseCurrencyDisplay})
             </p>
@@ -891,10 +913,10 @@ export function Dashboard() {
           <CardContent className="space-y-3">
             <div className="grid grid-cols-4 gap-2 text-center">
               {[
-                { label: 'Current', amt: apAgingWidget.current, color: 'bg-emerald-500' },
-                { label: '1â€“30', amt: apAgingWidget.d1, color: 'bg-amber-500' },
-                { label: '31â€“60', amt: apAgingWidget.d2, color: 'bg-orange-600' },
-                { label: '60+', amt: apAgingWidget.d60, color: 'bg-red-500' },
+                { label: 'Current', amt: apAgingWidget.current, count: apAgingWidget.currentCount, color: 'bg-emerald-500' },
+                { label: '1–30', amt: apAgingWidget.d1, count: apAgingWidget.d1Count, color: 'bg-amber-500' },
+                { label: '31–60', amt: apAgingWidget.d2, count: apAgingWidget.d2Count, color: 'bg-orange-600' },
+                { label: '60+', amt: apAgingWidget.d60, count: apAgingWidget.d60Count, color: 'bg-red-500' },
               ].map((b) => (
                 <div key={b.label} className="space-y-1">
                   <div className="h-16 flex items-end justify-center rounded bg-muted/50 overflow-hidden">
@@ -906,7 +928,10 @@ export function Dashboard() {
                       }}
                     />
                   </div>
-                  <p className="text-[10px] text-muted-foreground">{b.label}</p>
+                  <p className="text-[11px] font-semibold text-gray-900">{fmtCompact(b.amt)}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {b.label} · {b.count}
+                  </p>
                 </div>
               ))}
             </div>
@@ -914,6 +939,10 @@ export function Dashboard() {
               <span className="text-muted-foreground">Total outstanding: </span>
               <span className="font-semibold">
                 {fmt(apAgingWidget.totalOutstanding)}
+              </span>
+              <span className="text-muted-foreground">
+                {' '}
+                ({apAgingWidget.currentCount + apAgingWidget.d1Count + apAgingWidget.d2Count + apAgingWidget.d60Count} invoices)
               </span>
             </div>
             {apAgingWidget.d1 + apAgingWidget.d2 + apAgingWidget.d60 > 0 && (
@@ -930,7 +959,7 @@ export function Dashboard() {
                   }).length;
                   return (
                     <>
-                      {overdueCount} invoices overdue â€”{' '}
+                      {overdueCount} invoices overdue —{' '}
                       {fmt(apAgingWidget.overdueTotal)} at risk
                     </>
                   );
@@ -957,20 +986,48 @@ export function Dashboard() {
           acc[key] = (acc[key] || 0) + 1;
           return acc;
         }, {} as Record<string, number>);
-        const ifrsChartData = Object.entries(byCategory).map(([name, count]) => ({
-          name,
-          value: total > 0 ? Math.round((count / total) * 100) : 0,
-          count,
-        }));
+        const notClassified = byCategory['Not Classified'] ?? 0;
+        const classified = total - notClassified;
+
+        // Category breakdown chart tells the classification story — it should show
+        // what the AI DID classify, not be dominated by the "Not Classified" bucket.
+        const classifiedChartData = Object.entries(byCategory)
+          .filter(([name]) => name !== 'Not Classified')
+          .map(([name, count]) => ({
+            name,
+            value: classified > 0 ? Math.round((count / classified) * 100) : 0,
+            count,
+          }))
+          .sort((a, b) => b.count - a.count);
+
         return (
           <Card className="bg-white border shadow-sm">
             <CardHeader>
-              <CardTitle>IFRS Category Breakdown</CardTitle>
+              <CardTitle>IFRS Classification</CardTitle>
             </CardHeader>
-            <CardContent>
-              {ifrsChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={ifrsChartData} layout="vertical" margin={{ left: 12, right: 24 }}>
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-6 pb-3 border-b border-gray-100">
+                <div>
+                  <p className="text-2xl font-bold text-emerald-700">{classified}</p>
+                  <p className="text-xs text-muted-foreground">Classified</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-amber-700">{notClassified}</p>
+                  <p className="text-xs text-muted-foreground">Needs Review</p>
+                </div>
+                {total > 0 && (
+                  <div className="ml-auto text-right">
+                    <p className="text-lg font-semibold text-gray-900">
+                      {Math.round((classified / total) * 100)}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">classification rate</p>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground -mt-1">Category breakdown (classified invoices)</p>
+              {classifiedChartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={Math.max(180, classifiedChartData.length * 36)}>
+                  <BarChart data={classifiedChartData} layout="vertical" margin={{ left: 12, right: 24 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis type="number" domain={[0, 100]} unit="%" />
                     <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 12 }} />
@@ -981,18 +1038,13 @@ export function Dashboard() {
                         return [p ? `${value}% (${p.count} invoices)` : `${value}%`, p?.name ?? ''];
                       }}
                     />
-                    <Bar dataKey="value" name="%" radius={[0, 4, 4, 0]}>
-                      {ifrsChartData.map((entry, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={entry.name === 'Not Classified' ? '#EF4444' : '#1a56db'}
-                        />
-                      ))}
-                    </Bar>
+                    <Bar dataKey="value" name="%" fill="#1a56db" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <p className="text-sm text-gray-500 text-center py-8">No IFRS category data yet</p>
+                <p className="text-sm text-gray-500 text-center py-8">
+                  No invoices classified yet — {notClassified} awaiting review.
+                </p>
               )}
             </CardContent>
           </Card>

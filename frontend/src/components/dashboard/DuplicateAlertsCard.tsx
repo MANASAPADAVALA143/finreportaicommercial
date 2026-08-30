@@ -40,7 +40,7 @@ export function DuplicateAlertsCard({ invoices }: Props) {
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <Files className="h-4 w-4 text-amber-600" />
-          Duplicate alerts
+          Duplicate Detection
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -51,14 +51,16 @@ export function DuplicateAlertsCard({ invoices }: Props) {
           </>
         ) : (
           <>
-            <div className="text-2xl font-bold text-gray-900">{count}</div>
+            <div className="text-2xl font-bold text-gray-900">
+              {count} potential duplicate{count === 1 ? '' : 's'}
+            </div>
             <p className="text-xs text-gray-600 mt-1">
-              Flagged amount (partial view):{' '}
               <span className="font-semibold text-gray-900">
                 {formatCurrency(primaryTotal, primaryCur)}
-              </span>
+              </span>{' '}
+              potentially duplicated
               {Object.keys(sumSameCurrency).length > 1 && (
-                <span className="block text-amber-800 mt-1">Multiple currencies â€” totals shown per base where available.</span>
+                <span className="block text-amber-800 mt-1">Multiple currencies — totals shown per base where available.</span>
               )}
             </p>
           </>
@@ -69,7 +71,7 @@ export function DuplicateAlertsCard({ invoices }: Props) {
           className={`mt-3 w-full ${isClear ? 'border-green-600 text-green-800' : 'border-amber-600 text-amber-900'}`}
           onClick={() => navigate('/invoices?filter=duplicates')}
         >
-          Review duplicates â†’
+          Review duplicates →
         </Button>
       </CardContent>
     </Card>

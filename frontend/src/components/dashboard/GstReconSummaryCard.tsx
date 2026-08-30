@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getGstReconSummary } from '@/lib/ap-invoice/gstService';
+import { useMarket } from '@/contexts/MarketContext';
 import { Receipt } from 'lucide-react';
 
 function currentPeriod(): string {
@@ -12,6 +13,9 @@ function currentPeriod(): string {
 
 export function GstReconSummaryCard() {
   const navigate = useNavigate();
+  const { isUAE } = useMarket();
+  const reconLabel = isUAE ? 'VAT Reconciliation' : 'GST recon';
+  const reconRoute = '/gst-recon';
   const [summary, setSummary] = useState<{
     matched: number;
     mismatch: number;
@@ -44,22 +48,22 @@ export function GstReconSummaryCard() {
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <Receipt className="h-4 w-4 text-[#0A4B8F]" />
-          GST recon ({period})
+          {reconLabel} ({period})
         </CardTitle>
       </CardHeader>
       <CardContent>
         {err || s === null ? (
           <>
-            <p className="text-sm text-gray-600">Run GST migration to enable summaries.</p>
-            <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-              Open GST recon â†’
+            <p className="text-sm text-gray-600">Run {isUAE ? 'VAT' : 'GST'} migration to enable summaries.</p>
+            <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate(reconRoute)}>
+              Open {reconLabel} →
             </Button>
           </>
         ) : s.total === 0 ? (
           <>
-            <p className="text-sm text-gray-600">No GST lines this month yet.</p>
-            <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-              Run reconciliation â†’
+            <p className="text-sm text-gray-600">No {isUAE ? 'VAT' : 'GST'} lines this month yet.</p>
+            <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate(reconRoute)}>
+              Run {reconLabel.toLowerCase()} →
             </Button>
           </>
         ) : (
@@ -73,18 +77,18 @@ export function GstReconSummaryCard() {
                 variant="outline"
                 size="sm"
                 className="mt-3 w-full border-amber-600 text-amber-900"
-                onClick={() => navigate('/gst-recon')}
+                onClick={() => navigate(reconRoute)}
               >
-                Review â†’
+                Review →
               </Button>
             )}
             {allUnmatched && (
-              <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate('/gst-recon')}>
-                Run reconciliation â†’
+              <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => navigate(reconRoute)}>
+                Run {reconLabel.toLowerCase()} →
               </Button>
             )}
             {allMatched && (
-              <p className="text-xs text-green-700 mt-2">All GST lines matched for this period.</p>
+              <p className="text-xs text-green-700 mt-2">All {isUAE ? 'VAT' : 'GST'} lines matched for this period.</p>
             )}
           </>
         )}
