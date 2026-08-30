@@ -608,54 +608,107 @@ export function Dashboard() {
           </CardHeader>
           <CardContent>
             {(() => {
-              const allFlags = invoices.flatMap((inv) => {
+              type ParsedFlag = { message?: string; severity?: 'low' | 'medium' | 'high' | 'critical' };
+              const SEVERITY_RANK: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 };
+              const SEVERITY_STYLE: Record<string, { fg: string; bg: string; label: string }> = {
+                critical: { fg: '#9f1239', bg: '#fecdd3', label: 'Critical' },
+                high: { fg: '#e02424', bg: '#fee2e2', label: 'High' },
+                medium: { fg: '#b45309', bg: '#fef3c7', label: 'Medium' },
+                low: { fg: '#4b5563', bg: '#f3f4f6', label: 'Low' },
+              };
+
+              const perInvoiceFlags: ParsedFlag[][] = invoices.map((inv) => {
                 try {
                   const f = (inv as { risk_flags?: unknown }).risk_flags;
                   if (!f || f === '[]') return [];
-                  return Array.isArray(f) ? f : JSON.parse(typeof f === 'string' ? f : '[]');
+                  const parsed = Array.isArray(f) ? f : JSON.parse(typeof f === 'string' ? f : '[]');
+                  return Array.isArray(parsed) ? (parsed as ParsedFlag[]) : [];
                 } catch {
                   return [];
                 }
               });
-              const flagCounts = allFlags.reduce((acc: Record<string, number>, flag: unknown) => {
-                const f = flag as { message?: string };
-                const msg = f?.message ?? 'Unknown';
-                acc[msg] = (acc[msg] || 0) + 1;
+              const allFlags = perInvoiceFlags.flat();
+
+              // Overall severity per invoice = the worst flag it carries (falls back to
+              // the invoice's own risk_level when it has no itemised flags).
+              const invoiceSeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
+              invoices.forEach((inv, i) => {
+                const flags = perInvoiceFlags[i];
+                let worst: string | null = null;
+                for (const f of flags) {
+                  const sev = f?.severity;
+                  if (sev && (!worst || SEVERITY_RANK[sev] > SEVERITY_RANK[worst])) worst = sev;
+                }
+                if (!worst) {
+                  const lvl = (inv as { risk_level?: string | null }).risk_level;
+                  worst = lvl && lvl in SEVERITY_RANK ? lvl : null;
+                }
+                if (worst && worst in invoiceSeverityCounts) {
+                  invoiceSeverityCounts[worst as keyof typeof invoiceSeverityCounts]++;
+                }
+              });
+              const totalFlagged = Object.values(invoiceSeverityCounts).reduce((a, b) => a + b, 0);
+
+              const flagCounts = allFlags.reduce((acc: Record<string, { count: number; severity: string }>, flag) => {
+                const msg = flag?.message ?? 'Unknown';
+                const sev = flag?.severity ?? 'low';
+                if (!acc[msg]) acc[msg] = { count: 0, severity: sev };
+                acc[msg].count += 1;
+                if (SEVERITY_RANK[sev] > SEVERITY_RANK[acc[msg].severity]) acc[msg].severity = sev;
                 return acc;
               }, {});
               const topFlags = Object.entries(flagCounts)
-                .sort((a, b) => b[1] - a[1])
+                .sort((a, b) => SEVERITY_RANK[b[1].severity] - SEVERITY_RANK[a[1].severity] || b[1].count - a[1].count)
                 .slice(0, 4);
+
               return topFlags.length > 0 ? (
                 <>
-                  <div className="space-y-1">
-                    {topFlags.map(([msg, count]) => (
-                      <div
-                        key={msg}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '6px 0',
-                          borderBottom: '1px solid #f3f4f6',
-                          fontSize: '12.5px',
-                        }}
-                      >
-                        <span style={{ color: '#374151' }}>{msg}</span>
+                  <div className="flex items-center gap-3 pb-2 mb-2 border-b border-gray-100 text-[11px]">
+                    {(['critical', 'high', 'medium', 'low'] as const).map((sev) => (
+                      <span key={sev} className="flex items-center gap-1">
                         <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ background: SEVERITY_STYLE[sev].fg }}
+                        />
+                        <span className="text-gray-500">{SEVERITY_STYLE[sev].label}</span>
+                        <span className="font-semibold text-gray-900">{invoiceSeverityCounts[sev]}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-500 mb-2">
+                    {totalFlagged} of {invoices.length} invoices carry a risk flag
+                  </p>
+                  <div className="space-y-1">
+                    {topFlags.map(([msg, { count, severity }]) => {
+                      const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.low;
+                      return (
+                        <div
+                          key={msg}
                           style={{
-                            fontWeight: 700,
-                            color: '#e02424',
-                            background: '#fee2e2',
-                            padding: '1px 8px',
-                            borderRadius: '20px',
-                            fontSize: '11px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '6px 0',
+                            borderBottom: '1px solid #f3f4f6',
+                            fontSize: '12.5px',
                           }}
                         >
-                          {Number(count)}
-                        </span>
-                      </div>
-                    ))}
+                          <span style={{ color: '#374151' }}>{msg}</span>
+                          <span
+                            style={{
+                              fontWeight: 700,
+                              color: style.fg,
+                              background: style.bg,
+                              padding: '1px 8px',
+                              borderRadius: '20px',
+                              fontSize: '11px',
+                            }}
+                          >
+                            {Number(count)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                   <Button
                     variant="outline"

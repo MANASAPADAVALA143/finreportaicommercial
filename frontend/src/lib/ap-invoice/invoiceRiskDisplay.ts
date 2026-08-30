@@ -47,6 +47,31 @@ export function deriveInvoiceRiskDisplayScore(inv: Invoice): number | null {
   return 15;
 }
 
+function parsedRiskFlags(inv: Invoice): Array<{ message?: string }> {
+  if (Array.isArray(inv.risk_flags)) return inv.risk_flags as Array<{ message?: string }>;
+  if (typeof inv.risk_flags === 'string' && inv.risk_flags.trim()) {
+    try {
+      const p = JSON.parse(inv.risk_flags) as unknown;
+      return Array.isArray(p) ? (p as Array<{ message?: string }>) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/** Short "why" string for the risk badge — e.g. "No PO + Overdue + Duplicate similarity" —
+ * so risk reads as a reason, not just a bare score. Falls back to null when there's
+ * nothing itemised to show (score-only risk). */
+export function deriveInvoiceRiskReason(inv: Invoice, maxFlags = 3): string | null {
+  const flags = parsedRiskFlags(inv);
+  const messages = flags.map((f) => f?.message).filter((m): m is string => !!m && m.trim().length > 0);
+  if (messages.length === 0) return null;
+  const shown = messages.slice(0, maxFlags);
+  const extra = messages.length - shown.length;
+  return shown.join(' + ') + (extra > 0 ? ` + ${extra} more` : '');
+}
+
 export function invoiceHasRiskSignal(inv: Invoice): boolean {
   return (
     !!(inv.risk_level && String(inv.risk_level).trim()) ||

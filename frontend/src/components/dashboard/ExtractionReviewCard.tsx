@@ -21,13 +21,13 @@ export function ExtractionReviewCard({ invoices }: Props) {
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <ScanLine className="h-4 w-4 text-muted-foreground" />
-          Needs review
+          Extraction Quality
         </CardTitle>
       </CardHeader>
       <CardContent>
         {isClear ? (
           <>
-            <div className="text-2xl font-bold text-gray-900">All good</div>
+            <div className="text-2xl font-bold text-gray-900">All clear</div>
             <p className="text-xs text-gray-500 mt-1">All invoices extracted with high confidence.</p>
             <Button
               variant="outline"

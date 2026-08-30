@@ -96,6 +96,7 @@ import { IFRS_STANDARD_GL } from '@/utils/ifrsStandardGL';
 import { glAccountDisplayName } from '@/utils/glAccountLabels';
 import {
   deriveInvoiceRiskDisplayScore,
+  deriveInvoiceRiskReason,
   invoiceHasRiskSignal,
   invoiceMatchesAnomalyTab,
   invoiceRiskTierForFilter,
@@ -2381,14 +2382,28 @@ export function InvoiceList() {
                         {((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 0 ||
                         (typeof invoice.risk_score === 'number' && invoice.risk_score > 0) ||
                         deriveInvoiceRiskDisplayScore(invoice) != null ? (
-                          <span style={{ fontSize: '12px', color: '#374151', fontWeight: 600 }}>
-                            {(invoice as { risk_flag_count?: number }).risk_flag_count
-                              ? `${(invoice as { risk_flag_count?: number }).risk_flag_count} flag${((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 1 ? 's' : ''} · `
-                              : ''}
+                          <span
+                            style={{
+                              fontSize: '12px',
+                              color: '#374151',
+                              fontWeight: 600,
+                              maxWidth: '220px',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                            }}
+                            title={deriveInvoiceRiskReason(invoice) ?? undefined}
+                          >
                             Score:{' '}
                             {typeof invoice.risk_score === 'number' && invoice.risk_score > 0
                               ? invoice.risk_score
                               : (deriveInvoiceRiskDisplayScore(invoice) ?? '—')}
+                            {deriveInvoiceRiskReason(invoice) ? (
+                              <span style={{ color: '#6b7280', fontWeight: 500 }}>
+                                {' '}
+                                — {deriveInvoiceRiskReason(invoice)}
+                              </span>
+                            ) : null}
                           </span>
                         ) : null}
                       </div>
