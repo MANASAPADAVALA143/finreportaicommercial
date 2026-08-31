@@ -4084,12 +4084,16 @@ export function InvoiceUpload() {
                   </div>
 
                   <div className="space-y-3">
-                    {pdfQueue.map((item) => (
+                    {pdfQueue.map((item) => {
+                      const isDemoFallback = item.status === 'ready' && !!item.extractedData?._demo_mode;
+                      return (
                       <Card
                         key={item.id}
                         className={`${
-                          item.status === 'ready' 
-                            ? 'border-green-300 bg-green-50' 
+                          isDemoFallback
+                            ? 'border-amber-300 bg-amber-50'
+                            : item.status === 'ready'
+                            ? 'border-green-300 bg-green-50'
                             : item.status === 'failed'
                             ? 'border-red-300 bg-red-50'
                             : item.status === 'extracting'
@@ -4111,19 +4115,38 @@ export function InvoiceUpload() {
                                 </div>
                                 <Badge
                                   variant={
-                                    item.status === 'ready' 
-                                      ? 'default' 
+                                    isDemoFallback
+                                      ? 'outline'
+                                      : item.status === 'ready'
+                                      ? 'default'
                                       : item.status === 'failed'
                                       ? 'destructive'
                                       : item.status === 'extracting'
                                       ? 'secondary'
                                       : 'outline'
                                   }
-                                  className="capitalize"
+                                  className={isDemoFallback ? 'capitalize border-amber-400 text-amber-700 bg-amber-100' : 'capitalize'}
                                 >
-                                  {item.status}
+                                  {isDemoFallback ? 'Not extracted — check fields' : item.status}
                                 </Badge>
                               </div>
+
+                              {isDemoFallback && (
+                                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-100 p-2 text-sm text-amber-800">
+                                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                                  <div>
+                                    <p className="font-medium">
+                                      AI extraction didn't run for this file — the fields below are placeholder values, not read from your PDF.
+                                    </p>
+                                    <p className="text-xs mt-1 text-amber-700">
+                                      {item.extractedData?._fallback_reason
+                                        ? `Reason: ${item.extractedData._fallback_reason}`
+                                        : item.extractedData?._note || 'The extraction service is not configured.'}{' '}
+                                      Please fill in the invoice details manually before submitting.
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Status Messages */}
                               {item.status === 'extracting' && (
@@ -4214,7 +4237,8 @@ export function InvoiceUpload() {
                           </div>
                         </CardContent>
                       </Card>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Submit All Button */}
