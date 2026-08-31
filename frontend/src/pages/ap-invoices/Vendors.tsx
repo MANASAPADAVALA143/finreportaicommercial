@@ -22,7 +22,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Building2, Search, Eye, Pencil, Plus } from 'lucide-react';
+import { Building2, Search, Eye, Pencil, Plus, MoreHorizontal } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { format } from 'date-fns';
 import { formatCurrency } from '@/utils/currency';
 import {
@@ -331,7 +337,11 @@ export function Vendors() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-xs max-w-[140px] truncate" title={vendor.gstin ?? ''}>
-                        {vendor.gstin || '—'}
+                        {vendor.gstin || (
+                          <span className="text-amber-700 font-sans italic">
+                            {config.taxIdLabel}: Not on file
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs capitalize">
@@ -365,17 +375,30 @@ export function Vendors() {
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                         <Button variant="ghost" size="sm" onClick={() => void openVendorDetail(vendor)}>
-                          <Building2 className="h-4 w-4 mr-1" />
-                          Detail
+                          View →
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => openEdit(vendor)}>
-                          <Pencil className="h-4 w-4 mr-1" />
-                          {config.taxIdLabel}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleViewVendorInvoices(vendor.name)}>
-                          <Eye className="mr-2 h-4 w-4" />
-                          Invoices
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="px-2">
+                              <MoreHorizontal className="h-4 w-4" />
+                              <span className="sr-only">More actions</span>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => void openVendorDetail(vendor)}>
+                              <Building2 className="h-4 w-4 mr-2" />
+                              View Vendor
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleViewVendorInvoices(vendor.name)}>
+                              <Eye className="h-4 w-4 mr-2" />
+                              View Invoices
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openEdit(vendor)}>
+                              <Pencil className="h-4 w-4 mr-2" />
+                              Edit {config.taxIdLabel}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </TableCell>
                     </TableRow>
                   ))

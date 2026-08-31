@@ -710,7 +710,26 @@ export async function getCFOKPIs(): Promise<CFOKPIs> {
   const missedDiscount = unpaid.reduce((s, i) => s + Number(i.total_amount ?? 0) * 0.02, 0);
 
   const withGst = vendors.filter((v) => v.gstin && String(v.gstin).trim()).length;
-  const gstinCompliance = vendors.length > 0 ? Math.round((withGst / vendors.length) * 100) : 100;
+  // When the vendors master table is empty (common — vendor rows are often
+  // derived from invoices, not maintained separately), fall back to the same
+  // invoice-level TRN/GSTIN presence the Vendors list page uses, instead of
+  // silently reporting 100% compliance with no vendors on file at all.
+  let gstinCompliance: number;
+  if (vendors.length > 0) {
+    gstinCompliance = Math.round((withGst / vendors.length) * 100);
+  } else {
+    const byVendorTrn = new Map<string, boolean>();
+    for (const inv of invData) {
+      const key = (inv.vendor_name || '').trim();
+      if (!key) continue;
+      const hasTrn = !!(inv.vendor_trn && String(inv.vendor_trn).trim());
+      byVendorTrn.set(key, (byVendorTrn.get(key) ?? false) || hasTrn);
+    }
+    gstinCompliance =
+      byVendorTrn.size > 0
+        ? Math.round((Array.from(byVendorTrn.values()).filter(Boolean).length / byVendorTrn.size) * 100)
+        : 100;
+  }
 
   const matchOk = invData.filter((i) =>
     ['three_way_matched', 'matched', 'partial'].includes(String(i.match_status || ''))

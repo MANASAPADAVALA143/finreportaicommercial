@@ -132,7 +132,9 @@ export function VendorDetailDialog({ vendor, open, onOpenChange, onSaved }: Prop
             </div>
             <div>
               <p className="text-gray-500">{config.taxIdLabel}</p>
-              <p className="font-mono text-xs">{vendor.gstin || '—'}</p>
+              <p className={vendor.gstin ? 'font-mono text-xs' : 'text-xs italic text-amber-700'}>
+                {vendor.gstin || `${config.taxIdLabel}: Not on file`}
+              </p>
             </div>
             <div>
               <p className="text-gray-500">Last invoice</p>

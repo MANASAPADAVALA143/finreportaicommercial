@@ -84,12 +84,14 @@ function KpiCard({
   sub,
   trend,
   variant = 'default',
+  tooltip,
 }: {
   label: string;
   value: string;
   sub: string;
   trend?: { pct: number; up: boolean; inverse?: boolean };
   variant?: KpiVariant;
+  tooltip?: string;
 }) {
   const wrap =
     variant === 'danger'
@@ -115,8 +117,13 @@ function KpiCard({
   return (
     <Card className={`shadow-sm ${wrap}`}>
       <CardHeader className="pb-1 pt-3">
-        <CardTitle className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <CardTitle className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground flex items-center gap-1">
           {label}
+          {tooltip && (
+            <span title={tooltip} className="cursor-help normal-case tracking-normal text-[11px] text-muted-foreground/70">
+              ⓘ
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-1 pb-3">
@@ -577,16 +584,18 @@ export default function CFODashboard() {
               variant={kpis.gstinCompliance < 80 ? 'danger' : 'success'}
             />
             <KpiCard
-              label="Cash position (projected)"
+              label="Projected cash position"
               value={fmtL(kpis.cashPosition)}
-              sub="6-week projection basis"
+              sub="6-week forecast"
               variant="info"
+              tooltip="A 6-week forward projection, not a live bank balance. Based on open AP due dates and recent payment activity."
             />
             <KpiCard
               label="Missed early-pay discount (est.)"
               value={fmtL(kpis.missedDiscount)}
               sub="2% on unpaid open AP"
               variant="purple"
+              tooltip="Estimated opportunity based on eligible unpaid invoices and a 2% early-payment discount assumption."
             />
           </div>
 
@@ -681,8 +690,17 @@ export default function CFODashboard() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium">DPO vs industry</CardTitle>
               </CardHeader>
-              <CardContent className="h-[260px]">
-                <ResponsiveContainer width="100%" height="100%" minHeight={200}>
+              <CardContent className="h-[260px] flex flex-col">
+                <div className="flex items-baseline gap-2 mb-2">
+                  <span className="text-2xl font-bold text-gray-900">{kpis.dpo} days</span>
+                  {kpis.dpo !== kpis.industryDpo && (
+                    <span className={`text-xs font-medium ${kpis.dpo > kpis.industryDpo ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {kpis.dpo > kpis.industryDpo ? '+' : ''}
+                      {kpis.dpo - kpis.industryDpo} days {kpis.dpo > kpis.industryDpo ? 'above' : 'below'} industry benchmark
+                    </span>
+                  )}
+                </div>
+                <ResponsiveContainer width="100%" height="100%" minHeight={160}>
                   <LineChart data={kpis.dpoTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid {...GRID_LIGHT} />
                     <XAxis dataKey="month" tick={AXIS_TICK} />
@@ -755,7 +773,31 @@ export default function CFODashboard() {
                 Inflows from payment log (30d) vs paid-out AP (30d) on a 6-week projection basis.
               </p>
             </CardHeader>
-            <CardContent className="h-[300px]">
+            <CardContent className="h-[340px] flex flex-col">
+              {kpis.waterfall.length > 0 && (() => {
+                const balances = kpis.waterfall.map((w) => w.balance);
+                const starting = balances[0];
+                const ending = balances[balances.length - 1];
+                const minimum = Math.min(...balances);
+                return (
+                  <div className="flex items-center gap-4 mb-3 text-xs">
+                    <div>
+                      <p className="text-muted-foreground">Starting cash</p>
+                      <p className="font-semibold text-gray-900">{fmtCompact(starting)}</p>
+                    </div>
+                    <span className="text-muted-foreground">→</span>
+                    <div>
+                      <p className="text-muted-foreground">Minimum cash</p>
+                      <p className="font-semibold text-amber-700">{fmtCompact(minimum)}</p>
+                    </div>
+                    <span className="text-muted-foreground">→</span>
+                    <div>
+                      <p className="text-muted-foreground">Projected ending cash</p>
+                      <p className="font-semibold text-emerald-700">{fmtCompact(ending)}</p>
+                    </div>
+                  </div>
+                );
+              })()}
               <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                 <ComposedChart data={kpis.waterfall} margin={{ top: 12, right: 12, left: 0, bottom: 8 }}>
                   <CartesianGrid {...GRID_LIGHT} />
