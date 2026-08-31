@@ -190,16 +190,16 @@ function buildFinStatements(rows: TBRow[]): FinStatements {
   const assetTurnover = totalAssets ? revenue / totalAssets : 0;
 
   const ratios: RatioCard[] = [
-    { name: 'Current Ratio', value: currentRatio.toFixed(2), status: currentRatio >= 1.5 ? 'green' : currentRatio >= 1 ? 'yellow' : 'red', benchmark: 'â‰¥ 1.5' },
-    { name: 'Quick Ratio', value: quickRatio.toFixed(2), status: quickRatio >= 1 ? 'green' : quickRatio >= 0.7 ? 'yellow' : 'red', benchmark: 'â‰¥ 1.0' },
-    { name: 'Debt / Equity', value: debtToEq.toFixed(2), status: debtToEq <= 1 ? 'green' : debtToEq <= 2 ? 'yellow' : 'red', benchmark: 'â‰¤ 1.0' },
-    { name: 'Gross Margin %', value: `${gpPct}%`, status: parseFloat(gpPct) >= 35 ? 'green' : parseFloat(gpPct) >= 20 ? 'yellow' : 'red', benchmark: 'â‰¥ 35%' },
-    { name: 'EBITDA Margin %', value: `${ebitdaPct}%`, status: parseFloat(ebitdaPct) >= 15 ? 'green' : parseFloat(ebitdaPct) >= 8 ? 'yellow' : 'red', benchmark: 'â‰¥ 15%' },
-    { name: 'Net Margin %', value: `${netPct}%`, status: parseFloat(netPct) >= 10 ? 'green' : parseFloat(netPct) >= 5 ? 'yellow' : 'red', benchmark: 'â‰¥ 10%' },
-    { name: 'ROE', value: `${roe.toFixed(1)}%`, status: roe >= 15 ? 'green' : roe >= 8 ? 'yellow' : 'red', benchmark: 'â‰¥ 15%' },
-    { name: 'ROA', value: `${roa.toFixed(1)}%`, status: roa >= 8 ? 'green' : roa >= 4 ? 'yellow' : 'red', benchmark: 'â‰¥ 8%' },
-    { name: 'Asset Turnover', value: assetTurnover.toFixed(2), status: assetTurnover >= 1 ? 'green' : assetTurnover >= 0.5 ? 'yellow' : 'red', benchmark: 'â‰¥ 1.0' },
-    { name: 'Interest Cover', value: interestCover > 50 ? 'N/A' : interestCover.toFixed(1), status: interestCover >= 3 ? 'green' : interestCover >= 1.5 ? 'yellow' : 'red', benchmark: 'â‰¥ 3Ã—' },
+    { name: 'Current Ratio', value: currentRatio.toFixed(2), status: currentRatio >= 1.5 ? 'green' : currentRatio >= 1 ? 'yellow' : 'red', benchmark: '≥ 1.5' },
+    { name: 'Quick Ratio', value: quickRatio.toFixed(2), status: quickRatio >= 1 ? 'green' : quickRatio >= 0.7 ? 'yellow' : 'red', benchmark: '≥ 1.0' },
+    { name: 'Debt / Equity', value: debtToEq.toFixed(2), status: debtToEq <= 1 ? 'green' : debtToEq <= 2 ? 'yellow' : 'red', benchmark: '≤ 1.0' },
+    { name: 'Gross Margin %', value: `${gpPct}%`, status: parseFloat(gpPct) >= 35 ? 'green' : parseFloat(gpPct) >= 20 ? 'yellow' : 'red', benchmark: '≥ 35%' },
+    { name: 'EBITDA Margin %', value: `${ebitdaPct}%`, status: parseFloat(ebitdaPct) >= 15 ? 'green' : parseFloat(ebitdaPct) >= 8 ? 'yellow' : 'red', benchmark: '≥ 15%' },
+    { name: 'Net Margin %', value: `${netPct}%`, status: parseFloat(netPct) >= 10 ? 'green' : parseFloat(netPct) >= 5 ? 'yellow' : 'red', benchmark: '≥ 10%' },
+    { name: 'ROE', value: `${roe.toFixed(1)}%`, status: roe >= 15 ? 'green' : roe >= 8 ? 'yellow' : 'red', benchmark: '≥ 15%' },
+    { name: 'ROA', value: `${roa.toFixed(1)}%`, status: roa >= 8 ? 'green' : roa >= 4 ? 'yellow' : 'red', benchmark: '≥ 8%' },
+    { name: 'Asset Turnover', value: assetTurnover.toFixed(2), status: assetTurnover >= 1 ? 'green' : assetTurnover >= 0.5 ? 'yellow' : 'red', benchmark: '≥ 1.0' },
+    { name: 'Interest Cover', value: interestCover > 50 ? 'N/A' : interestCover.toFixed(1), status: interestCover >= 3 ? 'green' : interestCover >= 1.5 ? 'yellow' : 'red', benchmark: '≥ 3×' },
   ];
 
   return { balanceSheet: { assets, liabilities }, pandl, ratios, commentary: '' };
@@ -215,7 +215,7 @@ function FSTable({ lines }: { lines: FSLine[] }) {
               {l.label}
             </td>
             <td className={cn('py-1.5 text-right font-mono whitespace-nowrap', l.bold ? 'font-bold' : '', l.amount < 0 ? 'text-red-700' : '')}>
-              {l.amount !== 0 ? `â‚¹${Math.abs(l.amount).toLocaleString('en-IN')}` : ''}
+              {l.amount !== 0 ? `₹${Math.abs(l.amount).toLocaleString('en-IN')}` : ''}
               {l.amount < 0 && l.amount !== 0 ? ' (DR)' : ''}
             </td>
           </tr>
@@ -248,7 +248,7 @@ export function TBFinancials() {
     setFs(result);
     setCommentary('');
     setActiveTab('bs');
-    toast({ title: 'Trial balance loaded', description: `${DEMO_TB.length} accounts â€” ${clientName || 'Demo Company'}` });
+    toast({ title: 'Trial balance loaded', description: `${DEMO_TB.length} accounts — ${clientName || 'Demo Company'}` });
   };
 
   const generateCommentary = async () => {
@@ -256,13 +256,13 @@ export function TBFinancials() {
     setCommentaryLoading(true);
     try {
       const ratioText = (fs.ratios || []).map((r) => `${r.name}: ${r.value} (${r.status})`).join(', ');
-      const plLines = fs.pandl.filter((l) => l.bold).map((l) => `${l.label}: â‚¹${Math.abs(l.amount).toLocaleString('en-IN')}`).join('; ');
+      const plLines = fs.pandl.filter((l) => l.bold).map((l) => `${l.label}: ₹${Math.abs(l.amount).toLocaleString('en-IN')}`).join('; ');
       const res = await fetch(anthropicMessagesUrl(), {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
           model: 'claude-sonnet-4-5', max_tokens: 700,
           messages: [{
-            role: 'user', content: `You are a CA firm preparing a management commentary for client ${clientName || 'the company'}, period ${period}.\n\nKey financials: ${plLines}\nRatios: ${ratioText}\n\nWrite exactly 3 paragraphs:\n1. Financial position summary (2-3 sentences with actual numbers)\n2. Three key strengths observed in the numbers\n3. Three risk areas with specific recommendations\n\nProfessional, concise, Indian CA style. Use â‚¹ symbol.`
+            role: 'user', content: `You are a CA firm preparing a management commentary for client ${clientName || 'the company'}, period ${period}.\n\nKey financials: ${plLines}\nRatios: ${ratioText}\n\nWrite exactly 3 paragraphs:\n1. Financial position summary (2-3 sentences with actual numbers)\n2. Three key strengths observed in the numbers\n3. Three risk areas with specific recommendations\n\nProfessional, concise, Indian CA style. Use ₹ symbol.`
           }],
         }),
       });
@@ -275,9 +275,9 @@ export function TBFinancials() {
   const downloadExcel = () => {
     if (!fs) return;
     let csv = `Trial Balance to Financial Statements\nClient: ${clientName || 'Demo Co'}\nPeriod: ${period}\n\n`;
-    csv += 'PROFIT & LOSS\n' + fs.pandl.map((l) => `"${l.label}","${l.amount !== 0 ? 'â‚¹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
-    csv += '\n\nBALANCE SHEET - ASSETS\n' + fs.balanceSheet.assets.map((l) => `"${l.label}","${l.amount !== 0 ? 'â‚¹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
-    csv += '\n\nBALANCE SHEET - LIABILITIES\n' + fs.balanceSheet.liabilities.map((l) => `"${l.label}","${l.amount !== 0 ? 'â‚¹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
+    csv += 'PROFIT & LOSS\n' + fs.pandl.map((l) => `"${l.label}","${l.amount !== 0 ? '₹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
+    csv += '\n\nBALANCE SHEET - ASSETS\n' + fs.balanceSheet.assets.map((l) => `"${l.label}","${l.amount !== 0 ? '₹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
+    csv += '\n\nBALANCE SHEET - LIABILITIES\n' + fs.balanceSheet.liabilities.map((l) => `"${l.label}","${l.amount !== 0 ? '₹' + Math.abs(l.amount).toLocaleString('en-IN') : ''}"`).join('\n');
     csv += '\n\nKEY RATIOS\n' + fs.ratios.map((r) => `"${r.name}","${r.value}","${statusEmoji(r.status)}","Benchmark: ${r.benchmark}"`).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${clientName || 'financials'}_${period}.csv`; a.click();
@@ -294,8 +294,8 @@ export function TBFinancials() {
     <div className="p-6 max-w-6xl mx-auto space-y-6">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">CA Firm Tools</p>
-        <h1 className="text-2xl font-bold text-slate-900">TB â†’ Financial Statements</h1>
-        <p className="text-sm text-slate-500 mt-1">Upload trial balance â†’ instant P&L, Balance Sheet, ratios, and AI commentary.</p>
+        <h1 className="text-2xl font-bold text-slate-900">TB → Financial Statements</h1>
+        <p className="text-sm text-slate-500 mt-1">Upload trial balance → instant P&L, Balance Sheet, ratios, and AI commentary.</p>
       </div>
 
       <Card className="border border-slate-200">
@@ -331,7 +331,7 @@ export function TBFinancials() {
           {/* Balance check */}
           <div className={cn('flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-semibold', balanced ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800')}>
             {balanced ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />}
-            {balanced ? 'Balance Sheet is Balanced âœ“ â€” Assets = Liabilities + Equity' : 'âš  Balance Sheet out of balance â€” check TB mappings'}
+            {balanced ? 'Balance Sheet is Balanced ✓ — Assets = Liabilities + Equity' : '⚠ Balance Sheet out of balance — check TB mappings'}
           </div>
 
           {/* Tabs */}
@@ -363,7 +363,7 @@ export function TBFinancials() {
 
           {activeTab === 'pl' && (
             <Card className="border border-slate-200 max-w-xl">
-              <CardHeader className="px-5 py-3 bg-slate-50 border-b"><CardTitle className="text-sm">Statement of Profit & Loss â€” {clientName || 'Company'} Â· {period}</CardTitle></CardHeader>
+              <CardHeader className="px-5 py-3 bg-slate-50 border-b"><CardTitle className="text-sm">Statement of Profit & Loss — {clientName || 'Company'} · {period}</CardTitle></CardHeader>
               <CardContent className="p-5"><FSTable lines={fs.pandl} /></CardContent>
             </Card>
           )}
@@ -389,10 +389,10 @@ export function TBFinancials() {
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="w-5 h-5 text-blue-600" />
                   <span className="font-semibold text-blue-800">AI Management Commentary</span>
-                  <span className="text-xs text-slate-500">Â· {clientName || 'Company'} Â· {period}</span>
+                  <span className="text-xs text-slate-500">· {clientName || 'Company'} · {period}</span>
                 </div>
                 {commentaryLoading ? (
-                  <div className="flex items-center gap-2 text-slate-500 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Generating commentaryâ€¦</div>
+                  <div className="flex items-center gap-2 text-slate-500 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Generating commentary…</div>
                 ) : commentary ? (
                   <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{commentary}</div>
                 ) : (

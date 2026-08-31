@@ -1,5 +1,5 @@
 ﻿/**
- * Login page â€” email + password via Supabase Auth.
+ * Login page — email + password via Supabase Auth.
  * After login redirects to /dashboard (or the page they tried to reach).
  */
 import { useState } from 'react';
@@ -78,7 +78,7 @@ export function LoginPage() {
           {resetMessage ? (
             <div className="space-y-4">
               <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-3">
-                âœ… {resetMessage}
+                ✅ {resetMessage}
               </div>
               <button
                 type="button"
@@ -114,7 +114,7 @@ export function LoginPage() {
                 disabled={resetLoading}
                 className="w-full bg-[#1a56db] text-white font-semibold rounded-lg py-2.5 text-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
               >
-                {resetLoading ? 'Sendingâ€¦' : 'Send reset link'}
+                {resetLoading ? 'Sending…' : 'Send reset link'}
               </button>
 
               <button
@@ -181,7 +181,7 @@ export function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+              placeholder="••••••••"
             />
           </div>
 
@@ -196,7 +196,7 @@ export function LoginPage() {
             disabled={loading}
             className="w-full bg-[#1a56db] text-white font-semibold rounded-lg py-2.5 text-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? 'Signing inâ€¦' : 'Sign in'}
+            {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 

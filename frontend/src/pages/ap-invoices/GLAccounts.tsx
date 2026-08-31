@@ -384,7 +384,7 @@ export function GLAccounts() {
           <div className="flex items-center gap-2">
             <AlertCircle className="h-5 w-5 shrink-0" />
             <span>
-              {unconfirmedAiCount} invoice{unconfirmedAiCount === 1 ? '' : 's'} have unconfirmed GL codes â€” AI suggested codes need your review
+              {unconfirmedAiCount} invoice{unconfirmedAiCount === 1 ? '' : 's'} have unconfirmed GL codes — AI suggested codes need your review
             </span>
           </div>
           <Button asChild variant="outline" size="sm" className="border-amber-600 text-amber-950">
@@ -545,7 +545,7 @@ export function GLAccounts() {
               Load standard template
             </Button>
             <p className="text-xs text-gray-500">
-              Adds missing codes from the selected standard only â€” does not remove or overwrite existing GL accounts.
+              Adds missing codes from the selected standard only — does not remove or overwrite existing GL accounts.
             </p>
           </div>
         </CardContent>
@@ -681,8 +681,8 @@ export function GLAccounts() {
                             {account.account_type}
                           </Badge>
                         </TableCell>
-                        <TableCell>{account.department || 'â€”'}</TableCell>
-                        <TableCell>{account.cost_center || 'â€”'}</TableCell>
+                        <TableCell>{account.department || '—'}</TableCell>
+                        <TableCell>{account.cost_center || '—'}</TableCell>
                         <TableCell>
                           <Badge
                             variant="outline"

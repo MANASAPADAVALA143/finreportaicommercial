@@ -56,7 +56,7 @@ export function ClientReports() {
           max_tokens: 800,
           messages: [{
             role: 'user',
-            content: `You are a CA firm preparing a client financial report for ${data.clientName}, ${data.period}.\n\nKey numbers:\n- Revenue: â‚¹${data.revenue}\n- Gross Profit: â‚¹${data.grossProfit} (${data.gpPct})\n- Net Profit: â‚¹${data.netProfit} (${data.netPct})\n- Cash Balance: â‚¹${data.cashBalance}\n- Current Ratio: ${data.currentRatio}\n- DSO: ${data.dso}\n\nWrite exactly 3 sections (each 2-3 sentences):\n1. EXECUTIVE SUMMARY: Overall financial health\n2. KEY STRENGTHS: 3 specific positives from the numbers\n3. RECOMMENDED ACTIONS: 3 specific action items with timelines\n\nProfessional Indian CA style. Use â‚¹ symbol. Specific numbers.`,
+            content: `You are a CA firm preparing a client financial report for ${data.clientName}, ${data.period}.\n\nKey numbers:\n- Revenue: ₹${data.revenue}\n- Gross Profit: ₹${data.grossProfit} (${data.gpPct})\n- Net Profit: ₹${data.netProfit} (${data.netPct})\n- Cash Balance: ₹${data.cashBalance}\n- Current Ratio: ${data.currentRatio}\n- DSO: ${data.dso}\n\nWrite exactly 3 sections (each 2-3 sentences):\n1. EXECUTIVE SUMMARY: Overall financial health\n2. KEY STRENGTHS: 3 specific positives from the numbers\n3. RECOMMENDED ACTIONS: 3 specific action items with timelines\n\nProfessional Indian CA style. Use ₹ symbol. Specific numbers.`,
           }],
         }),
       });
@@ -74,7 +74,7 @@ export function ClientReports() {
     setData(DEMO_DATA);
     setReportReady(false);
     setRecommendations('');
-    toast({ title: 'Demo data loaded', description: 'Sharma & Sons Pvt Ltd â€” FY 2025-26' });
+    toast({ title: 'Demo data loaded', description: 'Sharma & Sons Pvt Ltd — FY 2025-26' });
   };
 
   const downloadHTML = () => {
@@ -83,7 +83,7 @@ export function ClientReports() {
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<title>Financial Report â€” ${data.clientName}</title>
+<title>Financial Report — ${data.clientName}</title>
 <style>
   body { font-family: Georgia, serif; color: #1e293b; margin: 0; padding: 0; }
   .cover { background: #1e3a5f; color: white; padding: 80px 60px; min-height: 200px; }
@@ -118,10 +118,10 @@ export function ClientReports() {
 <div class="section">
   <h3>Executive Summary</h3>
   <div class="kpi-grid">
-    <div class="kpi"><div class="val">â‚¹${data.revenue}</div><div class="lbl">Revenue</div></div>
-    <div class="kpi"><div class="val">â‚¹${data.grossProfit}</div><div class="lbl">Gross Profit (${data.gpPct})</div></div>
-    <div class="kpi"><div class="val">â‚¹${data.netProfit}</div><div class="lbl">Net Profit (${data.netPct})</div></div>
-    <div class="kpi"><div class="val">â‚¹${data.cashBalance}</div><div class="lbl">Cash Balance</div></div>
+    <div class="kpi"><div class="val">₹${data.revenue}</div><div class="lbl">Revenue</div></div>
+    <div class="kpi"><div class="val">₹${data.grossProfit}</div><div class="lbl">Gross Profit (${data.gpPct})</div></div>
+    <div class="kpi"><div class="val">₹${data.netProfit}</div><div class="lbl">Net Profit (${data.netPct})</div></div>
+    <div class="kpi"><div class="val">₹${data.cashBalance}</div><div class="lbl">Cash Balance</div></div>
   </div>
 </div>
 
@@ -142,7 +142,7 @@ ${recommendations ? `<div class="section">
 
 <div class="footer">
   <span>${data.firmName}</span>
-  <span>Powered by Gnanova Pro Â· DEMO</span>
+  <span>Powered by Gnanova Pro · DEMO</span>
   <span>${today}</span>
 </div>
 </body>
@@ -154,7 +154,7 @@ ${recommendations ? `<div class="section">
   };
 
   const openWhatsApp = () => {
-    const msg = encodeURIComponent(`Hi, please find the financial report for ${data.clientName} (${data.period}) attached.\n\nRevenue: â‚¹${data.revenue} | Net Profit: â‚¹${data.netProfit} | GP: ${data.gpPct}\n\nPrepared by ${data.firmName} â€” Powered by Gnanova Pro`);
+    const msg = encodeURIComponent(`Hi, please find the financial report for ${data.clientName} (${data.period}) attached.\n\nRevenue: ₹${data.revenue} | Net Profit: ₹${data.netProfit} | GP: ${data.gpPct}\n\nPrepared by ${data.firmName} — Powered by Gnanova Pro`);
     window.open(`https://wa.me/?text=${msg}`, '_blank');
   };
 
@@ -163,7 +163,7 @@ ${recommendations ? `<div class="section">
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">CA Firm Tools</p>
         <h1 className="text-2xl font-bold text-slate-900">Client Report Generator</h1>
-        <p className="text-sm text-slate-500 mt-1">Generate a branded, professional financial report with AI commentary â€” ready to share.</p>
+        <p className="text-sm text-slate-500 mt-1">Generate a branded, professional financial report with AI commentary — ready to share.</p>
       </div>
 
       {/* Inputs */}
@@ -176,8 +176,8 @@ ${recommendations ? `<div class="section">
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
-              ['Revenue (â‚¹)', 'revenue'], ['Gross Profit (â‚¹)', 'grossProfit'],
-              ['Net Profit (â‚¹)', 'netProfit'], ['Cash Balance (â‚¹)', 'cashBalance'],
+              ['Revenue (₹)', 'revenue'], ['Gross Profit (₹)', 'grossProfit'],
+              ['Net Profit (₹)', 'netProfit'], ['Cash Balance (₹)', 'cashBalance'],
               ['GP %', 'gpPct'], ['Net %', 'netPct'], ['Current Ratio', 'currentRatio'], ['DSO', 'dso'],
             ].map(([label, key]) => (
               <div key={key}>
@@ -193,7 +193,7 @@ ${recommendations ? `<div class="section">
         <Button variant="outline" size="sm" onClick={loadDemo}>Load Demo Data</Button>
         <Button onClick={generateReport} disabled={loading} className="gap-2 bg-amber-600 hover:bg-amber-700">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-          {loading ? 'Generating AI commentaryâ€¦' : 'Generate Report'}
+          {loading ? 'Generating AI commentary…' : 'Generate Report'}
         </Button>
       </div>
 
@@ -216,10 +216,10 @@ ${recommendations ? `<div class="section">
               <h3 className="text-sm font-bold uppercase tracking-wider text-[#1e3a5f] mb-4">Executive Summary</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 {[
-                  { label: 'Revenue', value: `â‚¹${data.revenue}` },
-                  { label: `Gross Profit (${data.gpPct})`, value: `â‚¹${data.grossProfit}` },
-                  { label: `Net Profit (${data.netPct})`, value: `â‚¹${data.netProfit}` },
-                  { label: 'Cash Balance', value: `â‚¹${data.cashBalance}` },
+                  { label: 'Revenue', value: `₹${data.revenue}` },
+                  { label: `Gross Profit (${data.gpPct})`, value: `₹${data.grossProfit}` },
+                  { label: `Net Profit (${data.netPct})`, value: `₹${data.netProfit}` },
+                  { label: 'Cash Balance', value: `₹${data.cashBalance}` },
                 ].map((k) => (
                   <div key={k.label} className="bg-slate-50 rounded-xl p-4 text-center border border-slate-100">
                     <p className="text-xl font-bold text-[#1e3a5f]">{k.value}</p>
@@ -262,16 +262,16 @@ ${recommendations ? `<div class="section">
             {/* Footer actions */}
             <div className="flex flex-wrap gap-3 pt-4 border-t border-slate-100">
               <Button onClick={downloadHTML} className="gap-2 bg-[#1e3a5f] hover:bg-[#1e3a5f]/90">
-                <Download className="w-4 h-4" /> Download Report (HTMLâ†’PDF)
+                <Download className="w-4 h-4" /> Download Report (HTML→PDF)
               </Button>
               <Button variant="outline" className="gap-2" onClick={openWhatsApp}>
                 <Share2 className="w-4 h-4" /> Share via WhatsApp
               </Button>
-              <Button variant="outline" className="gap-2" onClick={() => toast({ title: 'Email', description: 'Connect email integration in Settings â†’ Integrations' })}>
+              <Button variant="outline" className="gap-2" onClick={() => toast({ title: 'Email', description: 'Connect email integration in Settings → Integrations' })}>
                 <Mail className="w-4 h-4" /> Email to Client
               </Button>
             </div>
-            <p className="text-xs text-slate-400 text-center">Powered by Gnanova Pro Â· {data.firmName}</p>
+            <p className="text-xs text-slate-400 text-center">Powered by Gnanova Pro · {data.firmName}</p>
           </CardContent>
         </Card>
       )}

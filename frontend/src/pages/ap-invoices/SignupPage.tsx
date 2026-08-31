@@ -1,5 +1,5 @@
 ﻿/**
- * Signup page â€” new user registration via Supabase Auth.
+ * Signup page — new user registration via Supabase Auth.
  * On success redirects to /onboarding to set up the company.
  */
 import { useState } from 'react';
@@ -31,7 +31,7 @@ export function SignupPage() {
     try {
       const { session } = await signUpWithEmail(email.trim(), password);
       if (session) {
-        // Auto-confirmed (email confirm disabled in Supabase) â†’ go to onboarding
+        // Auto-confirmed (email confirm disabled in Supabase) → go to onboarding
         navigate('/onboarding', { replace: true });
       } else {
         // Email confirmation required
@@ -78,7 +78,7 @@ export function SignupPage() {
         </div>
 
         <h1 className="text-xl font-bold text-gray-900 mb-1">Create account</h1>
-        <p className="text-sm text-gray-500 mb-6">Start your InvoiceFlow workspace â€” free forever.</p>
+        <p className="text-sm text-gray-500 mb-6">Start your InvoiceFlow workspace — free forever.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -114,7 +114,7 @@ export function SignupPage() {
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+              placeholder="••••••••"
             />
           </div>
 
@@ -129,7 +129,7 @@ export function SignupPage() {
             disabled={loading}
             className="w-full bg-[#1a56db] text-white font-semibold rounded-lg py-2.5 text-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? 'Creating accountâ€¦' : 'Create account'}
+            {loading ? 'Creating account…' : 'Create account'}
           </button>
         </form>
 

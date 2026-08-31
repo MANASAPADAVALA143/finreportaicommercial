@@ -34,13 +34,13 @@ export function CurrencyCombobox({ value, onChange, id, className }: Props) {
           aria-expanded={open}
           className={cn('w-full justify-between font-normal', className)}
         >
-          {selected ? `${selected.symbol} ${selected.code} â€” ${selected.name}` : 'Select currencyâ€¦'}
+          {selected ? `${selected.symbol} ${selected.code} — ${selected.name}` : 'Select currency…'}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Search currencyâ€¦" />
+          <CommandInput placeholder="Search currency…" />
           <CommandList>
             <CommandEmpty>No currency found.</CommandEmpty>
             <CommandGroup>
@@ -54,7 +54,7 @@ export function CurrencyCombobox({ value, onChange, id, className }: Props) {
                   }}
                 >
                   <Check className={cn('mr-2 h-4 w-4', value === c.code ? 'opacity-100' : 'opacity-0')} />
-                  {c.symbol} {c.code} â€” {c.name}
+                  {c.symbol} {c.code} — {c.name}
                 </CommandItem>
               ))}
             </CommandGroup>

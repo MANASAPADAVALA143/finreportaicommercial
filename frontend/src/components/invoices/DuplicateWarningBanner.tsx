@@ -56,9 +56,9 @@ export function DuplicateWarningBanner({
   }
 
   const origLabel = original
-    ? `${original.invoice_number} â€” ${original.vendor_name}, ${formatCurrency(Number(original.total_amount), original.currency || 'INR')}, ${displayDate(original.invoice_date, dateFormat)}`
+    ? `${original.invoice_number} — ${original.vendor_name}, ${formatCurrency(Number(original.total_amount), original.currency || 'INR')}, ${displayDate(original.invoice_date, dateFormat)}`
     : loadingOriginal
-      ? 'Loading originalâ€¦'
+      ? 'Loading original…'
       : invoice.duplicate_of_id
         ? '(Original invoice not found or was removed)'
         : 'Unknown original';

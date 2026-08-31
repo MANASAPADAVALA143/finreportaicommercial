@@ -1,5 +1,5 @@
 ﻿/**
- * Public vendor self-upload portal â€” no login required.
+ * Public vendor self-upload portal — no login required.
  * URL: /vendor-upload (or /vendor-upload?company=<company_id>)
  *
  * Vendor fills in their name/email, picks a PDF/image, and submits.
@@ -108,7 +108,7 @@ export function VendorUploadPortal() {
 
         {state === 'success' ? (
           <div className="text-center py-6">
-            <div className="text-5xl mb-4">âœ…</div>
+            <div className="text-5xl mb-4">✅</div>
             <p className="text-green-800 font-medium">{message}</p>
             <button
               onClick={() => setState('idle')}
@@ -181,7 +181,7 @@ export function VendorUploadPortal() {
               disabled={state === 'uploading' || !file || !vendorName.trim()}
               className="w-full bg-[#1a56db] text-white font-medium rounded-lg py-2.5 text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {state === 'uploading' ? 'Submittingâ€¦' : 'Submit Invoice'}
+              {state === 'uploading' ? 'Submitting…' : 'Submit Invoice'}
             </button>
           </form>
         )}

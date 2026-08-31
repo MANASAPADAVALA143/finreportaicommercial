@@ -24,11 +24,11 @@ const TRUST_STATS_FALLBACK =
 
 function formatManagedInr(total: number): string {
   const cr = total / 1e7;
-  if (cr >= 0.01) return `â‚¹${cr.toFixed(2)} Cr`;
+  if (cr >= 0.01) return `₹${cr.toFixed(2)} Cr`;
   const L = total / 1e5;
-  if (L >= 1) return `â‚¹${L.toFixed(2)} L`;
-  if (total >= 1000) return `â‚¹${(total / 1e3).toFixed(2)} K`;
-  return `â‚¹${Math.round(total).toLocaleString('en-IN')}`;
+  if (L >= 1) return `₹${L.toFixed(2)} L`;
+  if (total >= 1000) return `₹${(total / 1e3).toFixed(2)} K`;
+  return `₹${Math.round(total).toLocaleString('en-IN')}`;
 }
 
 export function LandingPage() {
@@ -57,7 +57,7 @@ export function LandingPage() {
         ).size;
         if (!cancelled) {
           setTrustBar(
-            `${count.toLocaleString()} Invoices Processed Â· ${formatManagedInr(sum)} Managed Â· ${vendors.toLocaleString()} Vendors`
+            `${count.toLocaleString()} Invoices Processed · ${formatManagedInr(sum)} Managed · ${vendors.toLocaleString()} Vendors`
           );
         }
       } catch {
@@ -120,10 +120,10 @@ export function LandingPage() {
                 Automate Your Invoice Processing with AI
               </h1>
               <p className="mt-4 text-sm font-semibold tracking-wide text-gray-800 sm:text-base">
-                IFRS Â· Ind AS Â· US GAAP Â· IGAAP Â· Cash Basis
+                IFRS · Ind AS · US GAAP · IGAAP · Cash Basis
               </p>
               <p className="mt-2 text-sm text-gray-600 sm:text-base">
-                Built for India Â· UAE Â· UK Â· Singapore Â· Australia Â· USA
+                Built for India · UAE · UK · Singapore · Australia · USA
               </p>
               <p className="mt-6 text-xl text-gray-600 whitespace-pre-line">{`Process invoices 10x faster with
 AI-powered extraction and automatic
@@ -201,7 +201,7 @@ standards.`}</p>
                       </div>
                     </div>
 
-                    {/* Step 3: IFRS Category â†’ Operating Expense, Confidence 95%, Ready for Review */}
+                    {/* Step 3: IFRS Category → Operating Expense, Confidence 95%, Ready for Review */}
                     <div className="animate-fade-in rounded-xl border border-green-300 bg-green-50 p-4 shadow-lg transition-all duration-300" style={{ animationDelay: '0.6s', animationFillMode: 'both' }}>
                       <div className="flex items-start gap-3">
                         <div className="rounded-lg bg-[#10B981] p-2.5 shadow-md">
@@ -343,7 +343,7 @@ standards.`}</p>
         </div>
       </section>
 
-      {/* Trust & compliance â€” after features, before How It Works */}
+      {/* Trust & compliance — after features, before How It Works */}
       <section id="trust" className="relative py-20 overflow-hidden scroll-mt-20">
         <div className="absolute inset-0 bg-gradient-to-b from-white via-slate-50/80 to-white" />
         <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -353,7 +353,7 @@ standards.`}</p>
               Built on Trust, Backed by Compliance
             </h2>
             <p className="mt-4 text-lg text-gray-600">
-              Security and accountability are built inâ€”not bolted on.
+              Security and accountability are built in—not bolted on.
             </p>
           </div>
 
@@ -383,7 +383,7 @@ standards.`}</p>
                 <CardTitle className="text-lg">SOC 2 compliant hosting</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-gray-600">
-                Hosted on Supabaseâ€”independently SOC 2 Type II certified infrastructure.
+                Hosted on Supabase—independently SOC 2 Type II certified infrastructure.
               </CardContent>
             </Card>
             <Card className="border-gray-200 shadow-sm">
@@ -711,7 +711,7 @@ standards.`}</p>
             </div>
           </div>
           <div className="mt-8 border-t border-gray-200 pt-8 text-center text-sm text-gray-600">
-            <p>Â© 2024 InvoiceFlow. All rights reserved.</p>
+            <p>© 2024 InvoiceFlow. All rights reserved.</p>
           </div>
         </div>
       </footer>

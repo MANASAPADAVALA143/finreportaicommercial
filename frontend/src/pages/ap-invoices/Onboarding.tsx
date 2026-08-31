@@ -97,7 +97,7 @@ export function Onboarding() {
       });
       if (mErr) throw mErr;
 
-      // Now membership exists â€” safe to read the company
+      // Now membership exists — safe to read the company
       await supabase.from('companies').select('id').eq('id', companyId).single();
 
       const approvers = approverEmails

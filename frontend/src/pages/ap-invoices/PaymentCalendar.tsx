@@ -426,7 +426,7 @@ export function PaymentCalendar() {
     const ids = [...selectedIds];
     if (!ids.length) return;
     try {
-      await markAsPaid(ids, payReference.trim() || 'â€”');
+      await markAsPaid(ids, payReference.trim() || '—');
       toast({ title: 'Marked as paid' });
       setPaidOpen(false);
       setPayReference('');
@@ -631,7 +631,7 @@ export function PaymentCalendar() {
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="h-3 w-3 rounded-full bg-amber-500" />
-                      <span>Unpaid (due â‰¤7 days)</span>
+                      <span>Unpaid (due ≤7 days)</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="h-3 w-3 rounded-full bg-red-500" />
@@ -725,7 +725,7 @@ export function PaymentCalendar() {
                                       <p className="text-xs text-muted-foreground">
                                         Due {displayDate(inv.due_date)}
                                         {inv.scheduled_payment_date
-                                          ? ` Â· Sched ${displayDate(inv.scheduled_payment_date)}`
+                                          ? ` · Sched ${displayDate(inv.scheduled_payment_date)}`
                                           : ''}
                                       </p>
                                     </div>
@@ -870,7 +870,7 @@ export function PaymentCalendar() {
             </CardHeader>
             <CardContent>
               {batchesLoading ? (
-                <p className="text-sm text-muted-foreground">Loadingâ€¦</p>
+                <p className="text-sm text-muted-foreground">Loading…</p>
               ) : batches.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No batches yet.</p>
               ) : (
@@ -907,9 +907,9 @@ export function PaymentCalendar() {
                           </Badge>
                         </TableCell>
                         <TableCell className="max-w-[180px] truncate text-muted-foreground">
-                          {b.notes ?? 'â€”'}
+                          {b.notes ?? '—'}
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{b.created_by ?? 'â€”'}</TableCell>
+                        <TableCell className="text-muted-foreground">{b.created_by ?? '—'}</TableCell>
                         <TableCell className="text-right">
                           <Button size="sm" variant="outline" onClick={() => void onExportBatchRow(b)}>
                             Export CSV

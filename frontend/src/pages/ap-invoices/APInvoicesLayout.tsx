@@ -1,6 +1,6 @@
 /**
  * APInvoicesLayout.tsx
- * AP InvoiceFlow embedded inside FinReportAI â€” dark design, live data from InvoiceFlow Supabase.
+ * AP InvoiceFlow embedded inside FinReportAI — dark design, live data from InvoiceFlow Supabase.
  * Full sidebar matching standalone InvoiceFlow app.
  */
 import type React from 'react';

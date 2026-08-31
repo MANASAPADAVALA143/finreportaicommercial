@@ -73,7 +73,7 @@ export function PaymentLog() {
           setRows([]);
           setInvoiceMeta({});
           setLoadError(
-            `${error.message}${error.hint ? ` â€” ${error.hint}` : ''} If the payment_log table is missing, run migration 20260412120000_payment_utr_payment_log.sql in Supabase.`
+            `${error.message}${error.hint ? ` — ${error.hint}` : ''} If the payment_log table is missing, run migration 20260412120000_payment_utr_payment_log.sql in Supabase.`
           );
           toast({
             title: 'Could not load payment log',
@@ -243,16 +243,16 @@ export function PaymentLog() {
                         <TableCell className="whitespace-nowrap text-xs font-mono">
                           {displayDate(String(r.payment_date ?? r.created_at ?? '').slice(0, 10), dateFormat)}
                         </TableCell>
-                        <TableCell className="font-mono text-xs">{r.invoice_number ?? 'â€”'}</TableCell>
-                        <TableCell className="max-w-[160px] truncate">{r.vendor_name ?? 'â€”'}</TableCell>
+                        <TableCell className="font-mono text-xs">{r.invoice_number ?? '—'}</TableCell>
+                        <TableCell className="max-w-[160px] truncate">{r.vendor_name ?? '—'}</TableCell>
                         <TableCell className="text-right font-mono text-sm">
-                          {r.amount != null ? formatCurrency(Number(r.amount), cur) : 'â€”'}
+                          {r.amount != null ? formatCurrency(Number(r.amount), cur) : '—'}
                         </TableCell>
-                        <TableCell>{r.payment_method ?? 'â€”'}</TableCell>
+                        <TableCell>{r.payment_method ?? '—'}</TableCell>
                         <TableCell className="max-w-[200px] truncate font-mono text-xs" title={r.utr_number ?? ''}>
-                          {r.utr_number?.trim() ? r.utr_number : 'â€”'}
+                          {r.utr_number?.trim() ? r.utr_number : '—'}
                         </TableCell>
-                        <TableCell className="max-w-[140px] truncate text-xs">{r.paid_by ?? 'â€”'}</TableCell>
+                        <TableCell className="max-w-[140px] truncate text-xs">{r.paid_by ?? '—'}</TableCell>
                         <TableCell>
                           {rec ? (
                             <Badge className="bg-emerald-100 text-emerald-900 text-[10px]">Yes</Badge>

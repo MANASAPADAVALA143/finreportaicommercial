@@ -43,7 +43,7 @@ function actionBadgeClass(action: string): string {
 function shortEntityId(id: string | null): string {
   if (!id) return '';
   const s = id.replace(/-/g, '');
-  return s.length >= 8 ? `${s.slice(0, 8)}â€¦` : id;
+  return s.length >= 8 ? `${s.slice(0, 8)}…` : id;
 }
 
 export function AuditLog() {
@@ -182,7 +182,7 @@ export function AuditLog() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="secondary" onClick={() => void handleExport()} disabled={exporting}>
-              {exporting ? 'Exportingâ€¦' : 'Export CSV'}
+              {exporting ? 'Exporting…' : 'Export CSV'}
             </Button>
           </div>
           <button
@@ -198,7 +198,7 @@ export function AuditLog() {
       <Card>
         <CardContent className="pt-6">
           {loading ? (
-            <p className="text-sm text-gray-500">Loadingâ€¦</p>
+            <p className="text-sm text-gray-500">Loading…</p>
           ) : entries.length === 0 ? (
             <p className="text-center text-sm text-gray-500 py-12">
               No audit entries yet. Actions you take in InvoiceFlow will appear here.
@@ -236,7 +236,7 @@ export function AuditLog() {
                           ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">
-                          {e.performed_by ?? 'â€”'}
+                          {e.performed_by ?? '—'}
                         </TableCell>
                         <TableCell className="max-w-[280px]">
                           <button
@@ -263,7 +263,7 @@ export function AuditLog() {
               </div>
               <div className="mt-4 flex items-center justify-between gap-4">
                 <p className="text-sm text-muted-foreground">
-                  {total} total Â· page {page + 1} of {Math.max(1, maxPage + 1)}
+                  {total} total · page {page + 1} of {Math.max(1, maxPage + 1)}
                 </p>
                 <div className="flex gap-2">
                   <Button

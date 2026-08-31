@@ -1,5 +1,5 @@
 ﻿/**
- * Public one-tap approval page â€” no login required.
+ * Public one-tap approval page — no login required.
  * URL: /approve?id=<approvalRowId>&email=<approverEmail>&action=approved|rejected
  *
  * Reads query params, calls processApprovalAction once, shows a result card.
@@ -54,11 +54,11 @@ export function ApprovalCallback() {
       <div className="bg-white rounded-2xl shadow-lg p-8 max-w-sm w-full text-center">
         <div className="mb-4 text-5xl">
           {state === 'loading' && 'â³'}
-          {state === 'success' && (isApproved ? 'âœ…' : 'ðŸš«')}
+          {state === 'success' && (isApproved ? '✅' : 'ðŸš«')}
           {state === 'error' && 'âŒ'}
         </div>
         <h1 className="text-xl font-bold text-gray-900 mb-2">
-          {state === 'loading' && 'Processingâ€¦'}
+          {state === 'loading' && 'Processing…'}
           {state === 'success' && (isApproved ? 'Invoice Approved' : 'Invoice Rejected')}
           {state === 'error' && 'Action Failed'}
         </h1>

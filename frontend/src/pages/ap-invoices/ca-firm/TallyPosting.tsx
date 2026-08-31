@@ -33,10 +33,10 @@ const DEMO_ENTRIES: VEntry[] = [
   { date: '2025-05-02', narration: 'Salary May 2025', dr_ledger: 'Salary A/c', cr_ledger: 'Bank Account', amount: 180000, voucher_type: 'Payment', valid: true },
   { date: '2025-05-03', narration: 'Receipt - Atlas Corp INV-2214', dr_ledger: 'Bank Account', cr_ledger: 'Debtors A/c', amount: 95000, voucher_type: 'Receipt', valid: true },
   { date: '2025-05-04', narration: 'GST Payment May 2025', dr_ledger: 'GST Payable', cr_ledger: 'Bank Account', amount: 42000, voucher_type: 'Payment', valid: true },
-  { date: '2025-05-10', narration: 'HDFC Bank Charges', dr_ledger: 'Bank Charges', cr_ledger: 'Bank Account', amount: 500, voucher_type: 'Payment', valid: false, warning: 'Ledger "Bank Charges" not in master â€” use "Bank Charges"' },
+  { date: '2025-05-10', narration: 'HDFC Bank Charges', dr_ledger: 'Bank Charges', cr_ledger: 'Bank Account', amount: 500, voucher_type: 'Payment', valid: false, warning: 'Ledger "Bank Charges" not in master — use "Bank Charges"' },
   { date: '2025-05-13', narration: 'SBI Loan EMI May 2025', dr_ledger: 'Loan A/c', cr_ledger: 'Bank Account', amount: 35000, voucher_type: 'Payment', valid: true },
   { date: '2025-05-17', narration: 'EPF Contribution May 2025', dr_ledger: 'PF Expense', cr_ledger: 'Bank Account', amount: 22000, voucher_type: 'Payment', valid: true },
-  { date: '2025-05-19', narration: 'XYZ Unknown Corp - Suspense', dr_ledger: 'Suspense A/c', cr_ledger: 'Bank Account', amount: 15000, voucher_type: 'Journal', valid: true, warning: 'Suspense entry â€” requires manual review before posting' },
+  { date: '2025-05-19', narration: 'XYZ Unknown Corp - Suspense', dr_ledger: 'Suspense A/c', cr_ledger: 'Bank Account', amount: 15000, voucher_type: 'Journal', valid: true, warning: 'Suspense entry — requires manual review before posting' },
   { date: '2025-05-21', narration: 'Cash Withdrawal ATM', dr_ledger: 'Cash Account', cr_ledger: 'Bank Account', amount: 20000, voucher_type: 'Contra', valid: true },
   { date: '2025-05-23', narration: 'Advance Tax Q1 FY26', dr_ledger: 'Advance Tax', cr_ledger: 'Bank Account', amount: 30000, voucher_type: 'Payment', valid: true },
 ];
@@ -87,7 +87,7 @@ function validateEntries(entries: VEntry[]): VEntry[] {
     let valid = e.valid;
     if (!drOk) { warning = `Dr ledger "${e.dr_ledger}" not in master map`; valid = false; }
     else if (!crOk) { warning = `Cr ledger "${e.cr_ledger}" not in master map`; valid = false; }
-    else if (suspense) { warning = 'Suspense entry â€” requires manual review'; }
+    else if (suspense) { warning = 'Suspense entry — requires manual review'; }
     return { ...e, valid, warning };
   });
 }
@@ -109,7 +109,7 @@ export function TallyPosting() {
     const blob = new Blob([xml], { type: 'text/xml' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
     a.download = 'tally_import.xml'; a.click();
-    toast({ title: 'Tally XML downloaded', description: 'Import into Tally: Gateway â†’ Import Data â†’ Vouchers' });
+    toast({ title: 'Tally XML downloaded', description: 'Import into Tally: Gateway → Import Data → Vouchers' });
   };
 
   const downloadErrorReport = () => {
@@ -147,7 +147,7 @@ export function TallyPosting() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: 'Total Vouchers', value: entries.length, cls: 'bg-slate-100 text-slate-700' },
-              { label: 'âœ… Valid', value: valid.length, cls: 'bg-emerald-100 text-emerald-700' },
+              { label: '✅ Valid', value: valid.length, cls: 'bg-emerald-100 text-emerald-700' },
               { label: 'âš ï¸ Warnings', value: warnings.length, cls: 'bg-amber-100 text-amber-700' },
               { label: 'âŒ Invalid', value: invalid.length, cls: 'bg-red-100 text-red-700' },
             ].map((s) => (
@@ -163,8 +163,8 @@ export function TallyPosting() {
             <CardContent className="p-4 flex items-center gap-3">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
               <div className="text-sm">
-                <span className="font-semibold text-emerald-800">Debit = Credit âœ“</span>
-                <span className="text-emerald-700 ml-2">Total: â‚¹{totalDebit.toLocaleString('en-IN')}</span>
+                <span className="font-semibold text-emerald-800">Debit = Credit ✓</span>
+                <span className="text-emerald-700 ml-2">Total: ₹{totalDebit.toLocaleString('en-IN')}</span>
               </div>
             </CardContent>
           </Card>
@@ -202,7 +202,7 @@ export function TallyPosting() {
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">{e.dr_ledger}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{e.cr_ledger}</td>
-                      <td className="px-3 py-2 font-mono font-semibold whitespace-nowrap">â‚¹{e.amount.toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 font-mono font-semibold whitespace-nowrap">₹{e.amount.toLocaleString('en-IN')}</td>
                       <td className="px-3 py-2"><Badge variant="outline" className="text-xs">{e.voucher_type}</Badge></td>
                     </tr>
                   ))}
@@ -220,10 +220,10 @@ export function TallyPosting() {
               </div>
               <ol className="text-sm text-slate-700 space-y-1 list-decimal list-inside">
                 <li>Open <strong>TallyPrime</strong> or Tally ERP 9</li>
-                <li>Go to <strong>Gateway of Tally â†’ Import Data</strong></li>
+                <li>Go to <strong>Gateway of Tally → Import Data</strong></li>
                 <li>Select <strong>Vouchers</strong></li>
                 <li>Browse to the downloaded <code className="bg-white px-1 rounded text-blue-700">tally_import.xml</code> file</li>
-                <li>Press <strong>Enter</strong> to import â€” vouchers will appear in Day Book</li>
+                <li>Press <strong>Enter</strong> to import — vouchers will appear in Day Book</li>
               </ol>
             </CardContent>
           </Card>

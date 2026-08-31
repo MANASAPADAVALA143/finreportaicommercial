@@ -13,11 +13,11 @@ const STAT_CARDS = [
 const MODULES = [
   {
     title: 'Bank Statement Processor',
-    desc: 'Upload any Indian bank statement â€” auto-generates journal entries with Tally-ready export.',
+    desc: 'Upload any Indian bank statement — auto-generates journal entries with Tally-ready export.',
     href: '/ca-firm/bank-processor',
     icon: Landmark,
     color: 'bg-blue-600',
-    badge: 'HDFC Â· ICICI Â· SBI Â· Axis',
+    badge: 'HDFC · ICICI · SBI · Axis',
   },
   {
     title: 'Tally Auto-Posting',
@@ -25,15 +25,15 @@ const MODULES = [
     href: '/ca-firm/tally-posting',
     icon: Zap,
     color: 'bg-violet-600',
-    badge: 'TallyPrime Â· ERP 9',
+    badge: 'TallyPrime · ERP 9',
   },
   {
-    title: 'TB â†’ Financial Statements',
+    title: 'TB → Financial Statements',
     desc: 'Upload a trial balance and instantly get P&L, Balance Sheet, ratios, and AI commentary.',
     href: '/ca-firm/tb-financials',
     icon: FileSpreadsheet,
     color: 'bg-emerald-600',
-    badge: 'IFRS Â· Ind AS',
+    badge: 'IFRS · Ind AS',
   },
   {
     title: 'Client Report Generator',
@@ -41,7 +41,7 @@ const MODULES = [
     href: '/ca-firm/client-reports',
     icon: Receipt,
     color: 'bg-amber-600',
-    badge: 'PDF Â· WhatsApp Â· Email',
+    badge: 'PDF · WhatsApp · Email',
   },
 ];
 
@@ -59,7 +59,7 @@ export function CAFirmDashboard() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900">CA Firm Automation Hub</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Bank statements â†’ Journal entries â†’ Tally â†’ Financial statements. Fully automated.
+            Bank statements → Journal entries → Tally → Financial statements. Fully automated.
           </p>
         </div>
         <Button
@@ -109,7 +109,7 @@ export function CAFirmDashboard() {
                 </div>
                 <p className="text-sm text-slate-500">{m.desc}</p>
               </div>
-              <span className="text-slate-400 group-hover:text-slate-600 text-lg">â†’</span>
+              <span className="text-slate-400 group-hover:text-slate-600 text-lg">→</span>
             </CardContent>
           </Card>
         ))}
@@ -120,8 +120,8 @@ export function CAFirmDashboard() {
         <CardContent className="p-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">Recommended Workflow</p>
           <div className="flex flex-wrap gap-2 items-center text-sm text-slate-700">
-            {['1. Upload bank statement', 'â†’', '2. Auto journal entries', 'â†’', '3. Export Tally XML', 'â†’', '4. TB â†’ Statements', 'â†’', '5. Generate client PDF'].map((s) => (
-              <span key={s} className={s === 'â†’' ? 'text-slate-400' : 'px-3 py-1 bg-white rounded-full border border-slate-200 font-medium text-xs'}>
+            {['1. Upload bank statement', '→', '2. Auto journal entries', '→', '3. Export Tally XML', '→', '4. TB → Statements', '→', '5. Generate client PDF'].map((s) => (
+              <span key={s} className={s === '→' ? 'text-slate-400' : 'px-3 py-1 bg-white rounded-full border border-slate-200 font-medium text-xs'}>
                 {s}
               </span>
             ))}

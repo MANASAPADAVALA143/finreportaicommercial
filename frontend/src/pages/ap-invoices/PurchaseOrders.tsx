@@ -739,7 +739,7 @@ export function PurchaseOrders() {
         } catch { /* skip errors per PO */ }
       }
       toast({
-        title: 'âœ… Match complete',
+        title: '✅ Match complete',
         description: `${matched} invoice(s) matched. Go to Invoice List to see results.`,
       });
     } catch (e) {
@@ -1202,10 +1202,10 @@ export function PurchaseOrders() {
                         {formatCurrency(Number(po.po_amount), po.currency || baseCurrency)}
                       </TableCell>
                       <TableCell>
-                        {po.po_date ? format(new Date(po.po_date), 'MMM dd, yyyy') : 'â€”'}
+                        {po.po_date ? format(new Date(po.po_date), 'MMM dd, yyyy') : '—'}
                       </TableCell>
                       <TableCell className="text-sm text-gray-600">
-                        {po.delivery_date ? format(new Date(po.delivery_date), 'MMM dd, yyyy') : 'â€”'}
+                        {po.delivery_date ? format(new Date(po.delivery_date), 'MMM dd, yyyy') : '—'}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={statusColors[po.status]}>
@@ -1230,7 +1230,7 @@ export function PurchaseOrders() {
                                 : 'bg-gray-50 text-gray-600 border-gray-200'
                           }
                         >
-                          {poMeta[po.id]?.invLabel ?? 'â€”'}
+                          {poMeta[po.id]?.invLabel ?? '—'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-gray-500">
@@ -1271,7 +1271,7 @@ export function PurchaseOrders() {
               disabled={deletingAll}
               onClick={() => void handleDeleteAllPurchaseOrders()}
             >
-              {deletingAll ? 'Deletingâ€¦' : 'Yes, delete all'}
+              {deletingAll ? 'Deleting…' : 'Yes, delete all'}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -459,7 +459,7 @@ export function InvoiceUpload() {
   }
 
   const extractInvoiceFromFile = async (file: File) => {
-    // Use Anthropic proxy directly (same as Multiple PDFs tab) â€” no n8n needed
+    // Use Anthropic proxy directly (same as Multiple PDFs tab) — no n8n needed
     console.log('ðŸ”„ Starting extraction for file:', file.name);
     setExtracting(true);
 
@@ -491,7 +491,7 @@ export function InvoiceUpload() {
         ? (rawData[0]?.invoice ?? rawData[0])
         : (rawData?.invoice ?? rawData);
 
-      console.log('âœ… Anthropic proxy extraction successful:', data?.invoice_number, data?.vendor_name, data?.total_amount);
+      console.log('✅ Anthropic proxy extraction successful:', data?.invoice_number, data?.vendor_name, data?.total_amount);
       
       // Handle different response formats from n8n
       let invoices: any[] = [];
@@ -499,22 +499,22 @@ export function InvoiceUpload() {
       // Case 1: Direct array
       if (Array.isArray(data)) {
         invoices = data;
-        console.log('âœ… Response is direct array:', invoices.length, 'invoices');
+        console.log('✅ Response is direct array:', invoices.length, 'invoices');
       }
       // Case 2: Nested in 'invoices' key
       else if (data && typeof data === 'object' && Array.isArray(data.invoices)) {
         invoices = data.invoices;
-        console.log('âœ… Response has nested invoices array:', invoices.length, 'invoices');
+        console.log('✅ Response has nested invoices array:', invoices.length, 'invoices');
       }
       // Case 3: Nested in 'data' key
       else if (data && typeof data === 'object' && Array.isArray(data.data)) {
         invoices = data.data;
-        console.log('âœ… Response has nested data array:', invoices.length, 'invoices');
+        console.log('✅ Response has nested data array:', invoices.length, 'invoices');
       }
       // Case 4: Nested in 'results' key
       else if (data && typeof data === 'object' && Array.isArray(data.results)) {
         invoices = data.results;
-        console.log('âœ… Response has nested results array:', invoices.length, 'invoices');
+        console.log('✅ Response has nested results array:', invoices.length, 'invoices');
       }
       // Case 5: Single invoice object
       else if (data && typeof data === 'object' && data.invoice_number) {
@@ -650,7 +650,7 @@ export function InvoiceUpload() {
         );
       }
 
-      console.log('âœ… IFRS & risk from n8n:', {
+      console.log('✅ IFRS & risk from n8n:', {
         ifrs_category: invoiceData.ifrs_category,
         risk_level: invoiceData.risk_level,
       });
@@ -815,7 +815,7 @@ export function InvoiceUpload() {
       }
 
       toast({
-        title: 'âœ… Invoice saved',
+        title: '✅ Invoice saved',
         description: `${values.invoice_number} saved with ${scanPreviewLineItems.length} line item(s)`,
       });
       setScanPreviewOpen(false);
@@ -975,14 +975,14 @@ export function InvoiceUpload() {
   };
 
   // Parse amount from n8n/bulk upload
-  // Handles: "46,846.00", "â‚¹46,846", "$1,234.56", "AED 1,234.56", "AED1234",
-  //          "1,23,456.00" (Indian lakhs), "â‚¬1.234,56" (EU format), plain numbers
+  // Handles: "46,846.00", "₹46,846", "$1,234.56", "AED 1,234.56", "AED1234",
+  //          "1,23,456.00" (Indian lakhs), "€1.234,56" (EU format), plain numbers
   const parseAmount = (val: any): number => {
     if (val === null || val === undefined || val === '') return 0;
     if (typeof val === 'number') return isFinite(val) ? val : 0;
     // Remove currency symbols, codes (AED, INR, USD, EUR, GBP, SAR, QAR etc.), commas, spaces
     const cleaned = String(val)
-      .replace(/[â‚¹$â‚¬Â£Â¥â‚©]/g, '')                   // currency symbols
+      .replace(/[₹$â‚¬Â£Â¥₩]/g, '')                   // currency symbols
       .replace(/\b[A-Z]{3}\b/g, '')                // 3-letter currency codes like AED, INR, USD
       .replace(/,/g, '')                            // thousands separators
       .replace(/\s+/g, '')                          // spaces
@@ -1234,7 +1234,7 @@ export function InvoiceUpload() {
             ? `Average confidence ${avg}% (strong).`
             : avg >= 70
               ? `Average confidence ${avg}%.`
-              : `Average confidence ${avg}% â€” review recommended.`;
+              : `Average confidence ${avg}% — review recommended.`;
         toast({
           title: 'Batch Upload Successful!',
           description: `Successfully processed ${successCount} invoice${successCount > 1 ? 's' : ''}${errorCount > 0 ? `. ${errorCount} failed.` : '.'} ${confPhrase}${needsN > 0 ? ` ${needsN} need${needsN === 1 ? 's' : ''} review.` : ''}`,
@@ -1378,7 +1378,7 @@ export function InvoiceUpload() {
               null;
 
             const risk = n8nData?.risk_level ?? n8nData?.riskLevel ?? 'Low';
-            console.log('Parsed:', invoice.invoice_number, 'â†’', cat, '| confidence:', n8nData?.ifrs_confidence, '| risk:', risk);
+            console.log('Parsed:', invoice.invoice_number, '→', cat, '| confidence:', n8nData?.ifrs_confidence, '| risk:', risk);
 
             if (!cat) {
               console.warn('No ifrs_category in response:', JSON.stringify(n8nData).substring(0, 300));
@@ -1430,7 +1430,7 @@ export function InvoiceUpload() {
             if (error) {
               console.error('Supabase update error:', invoice.invoice_number, error.message);
             } else {
-              console.log('âœ… Classified:', invoice.invoice_number, 'â†’', cat);
+              console.log('✅ Classified:', invoice.invoice_number, '→', cat);
             }
           } catch (err) {
             console.error('Exception for', invoice.invoice_number, (err as Error)?.message);
@@ -1565,7 +1565,7 @@ export function InvoiceUpload() {
         if (/^\d{4}-\d{2}-\d{2}$/.test(nInv)) parsedInvoiceDate = nInv;
         if (/^\d{4}-\d{2}-\d{2}$/.test(nDue)) parsedDueDate = nDue;
 
-        // Amount validation (parseAmount handles Indian format 3,24,500.00 and â‚¹46,846)
+        // Amount validation (parseAmount handles Indian format 3,24,500.00 and ₹46,846)
         const totalAmount = parseAmount(rowNorm.total_amount);
         if (isNaN(totalAmount) || totalAmount <= 0) {
           rowErrors.push('Total amount must be a positive number');
@@ -2173,7 +2173,7 @@ export function InvoiceUpload() {
   };
 
   const extractInvoiceFromFileForQueue = async (file: File): Promise<any[]> => {
-    // Use the Anthropic proxy â€” it reads ALL pages and returns every invoice found as an array
+    // Use the Anthropic proxy — it reads ALL pages and returns every invoice found as an array
     const url = invoiceFlowAgentUrl('/api/agent/extract-image');
     const payload = new FormData();
     payload.append('file', file, file.name);
@@ -2318,7 +2318,7 @@ export function InvoiceUpload() {
           const approvalLevel = getRequiredApprovalLevel(totalAmount);
           const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
 
-          // Convert dates â€” fallback to today so NOT NULL constraint is always satisfied
+          // Convert dates — fallback to today so NOT NULL constraint is always satisfied
           const _todayQ = new Date().toISOString().split('T')[0];
           const invoiceDate = convertDateFormat(invoiceData.invoice_date || '') || _todayQ;
           const dueDate = convertDateFormat(invoiceData.due_date || '') || null;
@@ -2950,8 +2950,8 @@ export function InvoiceUpload() {
         effAfterSave >= 90
           ? `Extraction confidence ${Math.round(effAfterSave)}% (strong).`
           : effAfterSave >= 70
-            ? `Extraction confidence ${Math.round(effAfterSave)}% â€” quick review recommended.`
-            : `Extraction confidence ${Math.round(effAfterSave)}% â€” needs review.`;
+            ? `Extraction confidence ${Math.round(effAfterSave)}% — quick review recommended.`
+            : `Extraction confidence ${Math.round(effAfterSave)}% — needs review.`;
       toast({
         title: 'Success',
         description: `Invoice uploaded successfully. ${confMsg}.${matchHint}`.trim(),
@@ -3114,7 +3114,7 @@ export function InvoiceUpload() {
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600">
-                Take a photo, upload an image, or select a PDF â€” Claude AI will extract all invoice fields automatically.
+                Take a photo, upload an image, or select a PDF — Claude AI will extract all invoice fields automatically.
               </p>
               <div className="flex flex-col items-center gap-4 py-6">
                 <Button
@@ -3125,10 +3125,10 @@ export function InvoiceUpload() {
                   onClick={() => setCameraOpen(true)}
                 >
                   <Camera className="mr-2 h-6 w-6" />
-                  {extracting ? 'Extracting invoiceâ€¦' : 'Open Camera / Upload Image'}
+                  {extracting ? 'Extracting invoice…' : 'Open Camera / Upload Image'}
                 </Button>
                 <p className="text-xs text-gray-400 text-center max-w-sm">
-                  Supports JPG, PNG, PDF â€” works from phone camera, desktop file picker, or webcam
+                  Supports JPG, PNG, PDF — works from phone camera, desktop file picker, or webcam
                 </p>
               </div>
               <CameraCapture
@@ -3140,7 +3140,7 @@ export function InvoiceUpload() {
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
                   <div className="flex items-center gap-3">
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-                    <p className="text-sm font-medium text-blue-900">Reading invoiceâ€¦ Claude AI is extracting all fields</p>
+                    <p className="text-sm font-medium text-blue-900">Reading invoice… Claude AI is extracting all fields</p>
                   </div>
                 </div>
               )}
@@ -3740,7 +3740,7 @@ export function InvoiceUpload() {
               <div>
                 <div style={{ fontSize: '11px', color: '#6b7280' }}>GL Account</div>
                 <div style={{ fontSize: '14px', fontWeight: '700', color: '#374151', fontFamily: 'monospace' }}>
-                  {extractedData?.gl_account ?? 'â€”'} â€” {extractedData?.gl_account_name ?? 'â€”'}
+                  {extractedData?.gl_account ?? '—'} — {extractedData?.gl_account_name ?? '—'}
                 </div>
               </div>
               <div>

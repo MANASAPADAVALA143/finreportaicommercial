@@ -78,8 +78,8 @@ async function categoriseTxn(txn: TxnRow): Promise<Omit<JournalEntry, keyof TxnR
   "gst_applicable": boolean,
   "gst_rate": number|null
 }
-Standard rules: Salary â†’ Dr Salary A/c Cr Bank; Vendor pmt â†’ Dr Creditors Cr Bank; Customer receipt â†’ Dr Bank Cr Debtors; GST pmt â†’ Dr GST Payable Cr Bank; Rent â†’ Dr Rent A/c Cr Bank; Electricity/Utilities â†’ Dr respective expense Cr Bank; Bank charges â†’ Dr Bank Charges Cr Bank; Loan EMI â†’ Dr Loan A/c Cr Bank; Interest â†’ Dr Interest A/c Cr Bank; TDS/TCS/Advance tax â†’ Dr Tax Payable Cr Bank; EPF/PF â†’ Dr PF Expense Cr Bank; Cash withdrawal â†’ Dr Cash A/c Cr Bank (Contra); Unknown â†’ Dr Suspense A/c Cr Bank confidence 30.`,
-      messages: [{ role: 'user', content: `Transaction: date=${txn.date}, description="${txn.description}", amount=â‚¹${txn.amount}, type=${txn.type}` }],
+Standard rules: Salary → Dr Salary A/c Cr Bank; Vendor pmt → Dr Creditors Cr Bank; Customer receipt → Dr Bank Cr Debtors; GST pmt → Dr GST Payable Cr Bank; Rent → Dr Rent A/c Cr Bank; Electricity/Utilities → Dr respective expense Cr Bank; Bank charges → Dr Bank Charges Cr Bank; Loan EMI → Dr Loan A/c Cr Bank; Interest → Dr Interest A/c Cr Bank; TDS/TCS/Advance tax → Dr Tax Payable Cr Bank; EPF/PF → Dr PF Expense Cr Bank; Cash withdrawal → Dr Cash A/c Cr Bank (Contra); Unknown → Dr Suspense A/c Cr Bank confidence 30.`,
+      messages: [{ role: 'user', content: `Transaction: date=${txn.date}, description="${txn.description}", amount=₹${txn.amount}, type=${txn.type}` }],
     }),
   });
   const data = await res.json() as { content?: Array<{ text?: string }> };
@@ -189,7 +189,7 @@ export function BankProcessor() {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({
           model: 'claude-sonnet-4-5', max_tokens: 400,
-          messages: [{ role: 'user', content: `Bank statement processed for ${clientName || 'Demo Client'}, period ${period}. ${total} transactions, ${auto} auto-categorized, ${flagged} flagged. Top 3 expenses: ${top3.map((t) => `${t.description} â‚¹${t.amount.toLocaleString('en-IN')}`).join('; ')}. Write 3 bullet points: total summary, top expenses insight, any unusual patterns. Concise, professional, Indian CA style.` }],
+          messages: [{ role: 'user', content: `Bank statement processed for ${clientName || 'Demo Client'}, period ${period}. ${total} transactions, ${auto} auto-categorized, ${flagged} flagged. Top 3 expenses: ${top3.map((t) => `${t.description} ₹${t.amount.toLocaleString('en-IN')}`).join('; ')}. Write 3 bullet points: total summary, top expenses insight, any unusual patterns. Concise, professional, Indian CA style.` }],
         }),
       });
       const d = await res.json() as { content?: Array<{ text?: string }> };
@@ -208,7 +208,7 @@ export function BankProcessor() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">CA Firm Tools</p>
         <h1 className="text-2xl font-bold text-slate-900">Bank Statement Processor</h1>
-        <p className="text-sm text-slate-500 mt-1">Upload any Indian bank statement â€” AI categorises every transaction into journal entries.</p>
+        <p className="text-sm text-slate-500 mt-1">Upload any Indian bank statement — AI categorises every transaction into journal entries.</p>
       </div>
 
       {/* Config */}
@@ -244,7 +244,7 @@ export function BankProcessor() {
           <Upload className="w-10 h-10 text-slate-400" />
           <div>
             <p className="font-semibold text-slate-700">{file ? file.name : 'Drag & drop bank statement'}</p>
-            <p className="text-xs text-slate-500 mt-1">PDF Â· Excel Â· CSV â€” HDFC, ICICI, SBI, Axis, Kotak, QuickBooks, Xero, Tally exports</p>
+            <p className="text-xs text-slate-500 mt-1">PDF · Excel · CSV — HDFC, ICICI, SBI, Axis, Kotak, QuickBooks, Xero, Tally exports</p>
           </div>
           <input ref={fileRef} type="file" accept=".pdf,.xlsx,.xls,.csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </CardContent>
@@ -253,7 +253,7 @@ export function BankProcessor() {
       <div className="flex gap-3 flex-wrap">
         <Button onClick={processDemo} disabled={loading} className="gap-2 bg-blue-600 hover:bg-blue-700">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-          {loading ? `Processingâ€¦ ${progress}%` : 'Load Demo Data & Process'}
+          {loading ? `Processing… ${progress}%` : 'Load Demo Data & Process'}
         </Button>
         {file && !loading && (
           <Button onClick={processDemo} variant="outline" className="gap-2">
@@ -274,7 +274,7 @@ export function BankProcessor() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: 'Total', value: entries.length, cls: 'text-slate-700 bg-slate-100' },
-              { label: 'âœ… Auto-posted', value: auto, cls: 'text-emerald-700 bg-emerald-100' },
+              { label: '✅ Auto-posted', value: auto, cls: 'text-emerald-700 bg-emerald-100' },
               { label: 'âš ï¸ Review', value: review, cls: 'text-amber-700 bg-amber-100' },
               { label: 'ðŸ”´ Flagged', value: flagged, cls: 'text-red-700 bg-red-100' },
             ].map((s) => (
@@ -316,12 +316,12 @@ export function BankProcessor() {
                       <td className="px-3 py-2 whitespace-nowrap">{e.date}</td>
                       <td className="px-3 py-2 max-w-[200px] truncate" title={e.description}>{e.description}</td>
                       <td className={cn('px-3 py-2 font-mono font-semibold whitespace-nowrap', e.type === 'debit' ? 'text-red-700' : 'text-emerald-700')}>
-                        {e.type === 'debit' ? 'âˆ’' : '+'}â‚¹{e.amount.toLocaleString('en-IN')}
+                        {e.type === 'debit' ? '−' : '+'}₹{e.amount.toLocaleString('en-IN')}
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">{e.debit_account}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{e.credit_account}</td>
                       <td className="px-3 py-2"><Badge variant="outline" className="text-xs">{e.voucher_type}</Badge></td>
-                      <td className="px-3 py-2">{e.gst_applicable ? `${e.gst_rate ?? 18}%` : 'â€”'}</td>
+                      <td className="px-3 py-2">{e.gst_applicable ? `${e.gst_rate ?? 18}%` : '—'}</td>
                       <td className="px-3 py-2">
                         <span className={cn('px-2 py-0.5 rounded-full text-xs font-semibold', confidenceColor(e.confidence))}>{e.confidence}%</span>
                       </td>
@@ -338,7 +338,7 @@ export function BankProcessor() {
               <CardContent className="p-5">
                 <div className="flex items-center gap-2 mb-3">
                   <Sparkles className="w-4 h-4 text-blue-600" />
-                  <span className="text-sm font-semibold text-blue-800">AI Analysis â€” {clientName || 'Demo Client'} Â· {period}</span>
+                  <span className="text-sm font-semibold text-blue-800">AI Analysis — {clientName || 'Demo Client'} · {period}</span>
                 </div>
                 <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{aiNarrative}</div>
               </CardContent>

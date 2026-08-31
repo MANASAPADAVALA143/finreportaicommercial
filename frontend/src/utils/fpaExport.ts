@@ -22,7 +22,7 @@ export function downloadBase64Pdf(base64: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-/** Opens print dialog on a minimal HTML document (browser â€œSave as PDFâ€). */
+/** Opens print dialog on a minimal HTML document (browser “Save as PDFâ€). */
 export function exportHtmlPrintPdf(title: string, innerHtml: string) {
   const w = window.open('', '_blank');
   if (!w) return;

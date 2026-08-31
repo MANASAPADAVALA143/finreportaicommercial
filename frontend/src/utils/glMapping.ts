@@ -10,8 +10,8 @@ export type GLSuggest = {
 
 export const IFRS_TO_GL: Record<string, GLSuggest> = {
   'Professional Services': { code: '6100', name: 'Professional Fees', type: 'Expense' },
-  'IT Infrastructure': { code: '1500', name: 'Fixed Assets â€” IT', type: 'Asset' },
-  'IT Equipment': { code: '1500', name: 'Fixed Assets â€” IT', type: 'Asset' },
+  'IT Infrastructure': { code: '1500', name: 'Fixed Assets — IT', type: 'Asset' },
+  'IT Equipment': { code: '1500', name: 'Fixed Assets — IT', type: 'Asset' },
   'Office Supplies': { code: '6050', name: 'Office & Admin Expenses', type: 'Expense' },
   'Utilities': { code: '6300', name: 'Utilities Expense', type: 'Expense' },
   'Marketing': { code: '6400', name: 'Marketing & Advertising', type: 'Expense' },

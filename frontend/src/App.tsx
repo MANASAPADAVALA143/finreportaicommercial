@@ -232,7 +232,7 @@ function namedLazy<T extends ComponentType<object>>(
   );
 }
 
-// Home is eager so a failed lazy chunk canâ€™t leave `/` blank (lazy rejections bypass Error Boundaries).
+// Home is eager so a failed lazy chunk can’t leave `/` blank (lazy rejections bypass Error Boundaries).
 const Dashboard = safeLazy(() =>
   import('./components/dashboard/Dashboard').then((m) => ({ default: m.Dashboard }))
 );
@@ -411,7 +411,7 @@ const CITReturn                = safeLazy(() => import('./pages/uae-full/CITRetu
 const UAEFinanceSuiteDashboard = safeLazy(() => import('./pages/uae-suite/UAEFinanceSuiteDashboard'));
 const UAESuiteSelector         = safeLazy(() => import('./pages/uae-suite/UAESuiteSelector'));
 
-// â”€â”€ AP InvoiceFlow (embedded) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AP InvoiceFlow (embedded) ──────────────────────────────────────────────
 const APInvoicesLayout  = safeLazy(() => import('./pages/ap-invoices/APInvoicesLayout'));
 const APDashboard       = namedLazy(() => import('./pages/ap-invoices/Dashboard'), 'Dashboard');
 const APInvoiceList     = namedLazy(() => import('./pages/ap-invoices/InvoiceList'), 'InvoiceList');
@@ -449,11 +449,11 @@ const APAdminClients    = namedLazy(() => import('./pages/ap-invoices/AdminClien
 const APApprovalCallback = namedLazy(() => import('./pages/ap-invoices/ApprovalCallback'), 'ApprovalCallback');
 const APOnboarding      = namedLazy(() => import('./pages/ap-invoices/Onboarding'), 'Onboarding');
 
-// â”€â”€ Accounting Pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Accounting Pipeline ────────────────────────────────────────────────────
 const CloseStatusPage = safeLazy(() => import('./pages/accounting/CloseStatus'));
 const IndiaCloseStatus = safeLazy(() => import('./pages/accounting/IndiaCloseStatus'));
 
-// â”€â”€ India Accounting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── India Accounting ───────────────────────────────────────────────────────
 const IndiaAccountingOverview = safeLazy(() => import('./pages/india-accounting/IndiaAccountingOverview'));
 const IndiaChartOfAccounts    = safeLazy(() => import('./pages/india-accounting/IndiaChartOfAccounts'));
 const IndiaJournalEntries     = safeLazy(() => import('./pages/india-accounting/IndiaJournalEntries'));
@@ -516,12 +516,12 @@ function RouteFallback() {
         fontSize: 14,
       }}
     >
-      Loadingâ€¦
+      Loading…
     </div>
   );
 }
 
-/** Legacy R2R shell â€” keeps Sidebar for R2R-specific routes (unchanged) */
+/** Legacy R2R shell — keeps Sidebar for R2R-specific routes (unchanged) */
 function R2rShell() {
   return (
     <div className="flex min-h-screen w-full">
@@ -533,7 +533,7 @@ function R2rShell() {
   );
 }
 
-/** Suite shell â€” SuiteSidebar for UAE / India / FP&A routes */
+/** Suite shell — SuiteSidebar for UAE / India / FP&A routes */
 function SuiteShell() {
   useAutoSuiteSwitcher();
   return (
@@ -546,7 +546,7 @@ function SuiteShell() {
   );
 }
 
-/** Auto-switcher only â€” no extra layout, used inside nested layouts that have their own sidebar */
+/** Auto-switcher only — no extra layout, used inside nested layouts that have their own sidebar */
 function AutoSwitchOnly() {
   useAutoSuiteSwitcher();
   return <Outlet />;
@@ -614,7 +614,7 @@ function App() {
                 <Route path="/connections" element={<ConnectionsPage />} />
                 <Route path="/connections/zoho/callback" element={<ZohoCallback />} />
                 <Route path="/cfo-decision" element={<CFODecisionIntelligence />} />
-                {/* R2R shell â€” legacy sidebar for R2R tools */}
+                {/* R2R shell — legacy sidebar for R2R tools */}
                 <Route element={<R2rShell />}>
                   <Route path="/r2r" element={<R2RModule />} />
                   <Route path="/r2r-pattern" element={<JournalPageWithHistoricalTabs />} />
@@ -722,7 +722,7 @@ function App() {
               <Route path="/ap-invoices/approve" element={<ErrorBoundary><APApprovalCallback /></ErrorBoundary>} />
               </Route>
 
-              {/* â”€â”€ Suite Shell â€” UAE / India / FP&A / CFO / CA Firm â”€â”€ */}
+              {/* ── Suite Shell — UAE / India / FP&A / CFO / CA Firm ── */}
               <Route element={<SuiteShell />}>
                 {/* CA Firm Tools */}
                 <Route path="/ca-firm" element={<Navigate to="/ca-firm/bank-processor" replace />} />

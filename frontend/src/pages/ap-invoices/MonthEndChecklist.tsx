@@ -22,7 +22,7 @@ interface CheckItem {
 const INDIA_ITEMS: CheckItem[] = [
   { id: 'pending_approvals', label: 'No Pending Approvals', description: 'All submitted invoices have been approved or rejected.', status: 'loading', detail: '' },
   { id: 'all_paid', label: 'All Approved Invoices Paid', description: 'Every approved invoice has payment_status = paid.', status: 'loading', detail: '' },
-  { id: 'tally_sync', label: 'Tally Sync Complete', description: 'All approved invoices are synced to TallyPrime.', status: 'loading', detail: '', action: { label: 'Go to Settings â†’ Tally', href: '/settings' } },
+  { id: 'tally_sync', label: 'Tally Sync Complete', description: 'All approved invoices are synced to TallyPrime.', status: 'loading', detail: '', action: { label: 'Go to Settings → Tally', href: '/settings' } },
   { id: 'bank_recon', label: 'Bank Reconciliation Done', description: 'All paid invoices are matched to bank lines.', status: 'loading', detail: '', action: { label: 'Go to Bank Recon', href: '/bank-recon' } },
   { id: 'gst_recon', label: 'GST Reconciliation Done', description: 'All eligible invoices are reconciled with GSTR-2B.', status: 'loading', detail: '', action: { label: 'Go to GST Recon', href: '/gst-recon' } },
   { id: 'no_overdue', label: 'No Overdue Invoices', description: 'No approved unpaid invoices past their due date.', status: 'loading', detail: '' },
@@ -41,7 +41,7 @@ const UAE_ITEMS: CheckItem[] = [
 
 function StatusIcon({ status }: { status: CheckItem['status'] }) {
   if (status === 'loading') return <span className="text-gray-400 text-lg">â³</span>;
-  if (status === 'ok') return <span className="text-green-600 text-lg">âœ…</span>;
+  if (status === 'ok') return <span className="text-green-600 text-lg">✅</span>;
   if (status === 'warning') return <span className="text-amber-500 text-lg">âš ï¸</span>;
   return <span className="text-red-500 text-lg">âŒ</span>;
 }
@@ -174,7 +174,7 @@ export function MonthEndChecklist() {
             className="border rounded-lg px-3 py-1.5 text-sm"
           />
           <Button size="sm" variant="outline" onClick={() => void runChecks()} disabled={loading}>
-            {loading ? 'Checkingâ€¦' : 'Refresh'}
+            {loading ? 'Checking…' : 'Refresh'}
           </Button>
         </div>
       </div>

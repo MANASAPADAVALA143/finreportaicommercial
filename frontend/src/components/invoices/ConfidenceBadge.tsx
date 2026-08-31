@@ -18,7 +18,7 @@ export function ConfidenceBadge({ score, size = 'sm', className }: Props) {
           className
         )}
       >
-        {showLabel ? 'Not scored' : 'â€”'}
+        {showLabel ? 'Not scored' : '—'}
       </span>
     );
   }

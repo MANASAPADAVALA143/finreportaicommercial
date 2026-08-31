@@ -12,7 +12,7 @@ export function ResetPassword() {
   const [sessionReady, setSessionReady] = useState(false);
 
   useEffect(() => {
-    // Supabase puts the tokens in the URL hash â€” listen for the session event
+    // Supabase puts the tokens in the URL hash — listen for the session event
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') {
         setSessionReady(true);
@@ -66,7 +66,7 @@ export function ResetPassword() {
         {success ? (
           <div className="space-y-4">
             <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-3">
-              âœ… Password updated! Redirecting to sign inâ€¦
+              ✅ Password updated! Redirecting to sign in…
             </div>
           </div>
         ) : (
@@ -104,7 +104,7 @@ export function ResetPassword() {
 
             {!sessionReady && (
               <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                Verifying reset linkâ€¦ if this persists, request a new one.
+                Verifying reset link… if this persists, request a new one.
               </div>
             )}
 
@@ -113,7 +113,7 @@ export function ResetPassword() {
               disabled={loading || !sessionReady}
               className="w-full bg-[#1a56db] text-white font-semibold rounded-lg py-2.5 text-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              {loading ? 'Updatingâ€¦' : 'Update password'}
+              {loading ? 'Updating…' : 'Update password'}
             </button>
           </form>
         )}

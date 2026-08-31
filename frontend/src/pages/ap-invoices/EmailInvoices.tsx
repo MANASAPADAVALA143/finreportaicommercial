@@ -860,7 +860,7 @@ export function EmailInvoices() {
         </CardContent>
       </Card>
 
-      {/* Email inbox monitoring â€” stats */}
+      {/* Email inbox monitoring — stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
@@ -897,7 +897,7 @@ export function EmailInvoices() {
             <div className="text-sm font-semibold">
               {intakeStats.lastReceived
                 ? new Date(intakeStats.lastReceived).toLocaleString()
-                : 'â€”'}
+                : '—'}
             </div>
           </CardContent>
         </Card>
@@ -1165,7 +1165,7 @@ export function EmailInvoices() {
                             View invoices
                           </Link>
                         ) : (
-                          <span className="text-xs text-muted-foreground">â€”</span>
+                          <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </TableCell>
                     </TableRow>

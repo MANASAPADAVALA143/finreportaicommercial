@@ -60,9 +60,9 @@ const FX_RATES: Record<string, number> = {
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
   USD: '$',
-  EUR: 'â‚¬',
-  GBP: 'Â£',
-  INR: 'â‚¹',
+  EUR: '€',
+  GBP: '£',
+  INR: '₹',
   AED: 'AED ',
   SGD: 'S$',
   AUD: 'A$',
@@ -161,7 +161,7 @@ function normaliseAmountString(raw: string | number): number {
   if (typeof raw === 'number') return Math.abs(raw);
   const t = String(raw)
     .replace(/,/g, '')
-    .replace(/[â‚¹$Â£â‚¬\s\u00A0]/g, '')
+    .replace(/[₹$£€\s\u00A0]/g, '')
     .trim();
   if (!t) return 0;
   const n = parseFloat(t);
@@ -320,7 +320,7 @@ function parseBankStatementFromText(csvText: string, defaultCurrency: string): {
       date: parsedDate.display,
       dateIso: parsedDate.iso,
       desc: desc || ref || 'Bank transaction',
-      ref: ref || 'â€”',
+      ref: ref || '—',
       amount,
       cur,
       type,
@@ -393,7 +393,7 @@ export function BankRecon() {
                 return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
               })(),
         desc: inv.vendor_name?.trim() || 'Vendor',
-        ref: inv.invoice_number || 'â€”',
+        ref: inv.invoice_number || '—',
         amount: Number(inv.total_amount) || 0,
         cur: (inv.currency || 'USD').toUpperCase().slice(0, 3),
         status: 'unmatched' as const,
@@ -412,7 +412,7 @@ export function BankRecon() {
     const a = sorted[0]!.dateIso;
     const b = sorted[sorted.length - 1]!.dateIso;
     if (a === b) return sorted[0]!.date;
-    return `${sorted[0]!.date} â€“ ${sorted[sorted.length - 1]!.date}`;
+    return `${sorted[0]!.date} – ${sorted[sorted.length - 1]!.date}`;
   }, [bankTxns]);
 
   function onBankStatementFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -691,7 +691,7 @@ export function BankRecon() {
       setBankTxns(nextBank);
       setInvTxns(nextInv);
       setAiLastSummary(
-        `Auto Match: ${appliedPairs.length} pair(s) â€” ${utrMatches} by UTR/reference, ${amtMatches} by amount + vendor.`
+        `Auto Match: ${appliedPairs.length} pair(s) — ${utrMatches} by UTR/reference, ${amtMatches} by amount + vendor.`
       );
 
       if (appliedPairs.length) {
@@ -701,7 +701,7 @@ export function BankRecon() {
       setActiveTab('report');
       toast({
         title: 'Auto Match complete',
-        description: `${appliedPairs.length} bankâ†”invoice pair(s) applied.`,
+        description: `${appliedPairs.length} bank↔invoice pair(s) applied.`,
       });
     } finally {
       setAiLoading(false);
@@ -724,7 +724,7 @@ export function BankRecon() {
         date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         dateIso,
         desc: manualForm.desc,
-        ref: manualForm.ref || 'â€”',
+        ref: manualForm.ref || '—',
         amount,
         cur: manualForm.currency,
         type: manualForm.type,
@@ -835,8 +835,8 @@ export function BankRecon() {
             </Badge>
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            Upload your bank statement CSV â†’ match payments to invoices using UTR/reference numbers first, then amounts
-            and vendor names â†’ export a reconciliation report. Manual match remains for overrides.
+            Upload your bank statement CSV → match payments to invoices using UTR/reference numbers first, then amounts
+            and vendor names → export a reconciliation report. Manual match remains for overrides.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -927,7 +927,7 @@ export function BankRecon() {
                 <div>
                   <CardTitle className="text-base">Bank Statement</CardTitle>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">
-                    {filteredBank.length} shown Â· {bankTxns.length} loaded
+                    {filteredBank.length} shown · {bankTxns.length} loaded
                   </p>
                 </div>
                 <Button
@@ -989,7 +989,7 @@ export function BankRecon() {
                         </div>
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">{t.desc}</div>
-                          <div className="text-xs text-gray-500 font-mono">{t.date} Â· {t.ref}</div>
+                          <div className="text-xs text-gray-500 font-mono">{t.date} · {t.ref}</div>
                         </div>
                         <div className="flex flex-col gap-0.5 items-end">
                           {t.status === 'matched' && <Badge className="text-[10px] bg-green-100 text-green-800">matched</Badge>}
@@ -1003,7 +1003,7 @@ export function BankRecon() {
                           <Badge variant="outline" className="text-[10px]">{t.cur}</Badge>
                         </div>
                         <div className={cn('text-sm font-mono font-medium', t.type === 'debit' ? 'text-red-600' : 'text-green-600')}>
-                          {t.type === 'debit' ? 'âˆ’' : '+'}{fmt(t.amount, t.cur)}
+                          {t.type === 'debit' ? '−' : '+'}{fmt(t.amount, t.cur)}
                         </div>
                       </div>
                     ))
@@ -1024,7 +1024,7 @@ export function BankRecon() {
                 <div>
                   <CardTitle className="text-base">Invoice Payments</CardTitle>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">
-                    {filteredInv.length} shown Â· {invTxns.length} Approved/Paid from database
+                    {filteredInv.length} shown · {invTxns.length} Approved/Paid from database
                   </p>
                 </div>
                 <Button
@@ -1090,7 +1090,7 @@ export function BankRecon() {
                         </div>
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">{t.desc}</div>
-                          <div className="text-xs text-gray-500 font-mono">{t.date} Â· {t.ref}</div>
+                          <div className="text-xs text-gray-500 font-mono">{t.date} · {t.ref}</div>
                         </div>
                         <div>
                           {t.status === 'matched' && <Badge className="text-[10px] bg-green-100 text-green-800">matched</Badge>}
@@ -1099,7 +1099,7 @@ export function BankRecon() {
                           )}
                           <Badge variant="outline" className="text-[10px] ml-1">{t.cur}</Badge>
                         </div>
-                        <div className="text-sm font-mono font-medium text-red-600">âˆ’{fmt(t.amount, t.cur)}</div>
+                        <div className="text-sm font-mono font-medium text-red-600">−{fmt(t.amount, t.cur)}</div>
                       </div>
                     ))
                   )}
@@ -1129,14 +1129,14 @@ export function BankRecon() {
               )}
               {!aiLastSummary && !aiLoading && (
                 <p className="text-sm text-gray-500">
-                  Click <span className="font-semibold text-purple-600">Auto match</span> above â€” UTR/reference pairs
-                  first, then amount + vendor fallback â€” then open the <strong>Report</strong> tab.
+                  Click <span className="font-semibold text-purple-600">Auto match</span> above — UTR/reference pairs
+                  first, then amount + vendor fallback — then open the <strong>Report</strong> tab.
                 </p>
               )}
               {aiLoading && (
                 <div className="flex items-center gap-2 text-sm text-gray-500">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Matching all lines (amounts, vendors, dates, refs)â€¦
+                  Matching all lines (amounts, vendors, dates, refs)…
                 </div>
               )}
             </CardContent>
@@ -1181,12 +1181,12 @@ export function BankRecon() {
               <FolderOpen className="h-12 w-12 text-amber-500 mb-3" />
               <span className="font-medium text-gray-700">Choose bank statement CSV</span>
               <span className="text-sm text-gray-500 mt-1 text-center px-4">
-                Excel (.xlsx), OFX, and QIF are not parsed in the browser yetâ€”export from your bank as CSV.
+                Excel (.xlsx), OFX, and QIF are not parsed in the browser yet—export from your bank as CSV.
               </span>
             </button>
             <div className="rounded-lg border border-blue-100 bg-blue-50/80 px-4 py-3 text-sm text-blue-950">
               <span className="font-medium">Tip:</span> When paying an invoice, enter the UTR or NEFT reference on the
-              invoice payment screen. That gives the most reliable match to your bank statementâ€”often a single exact hit
+              invoice payment screen. That gives the most reliable match to your bank statement—often a single exact hit
               instead of amount guessing.
             </div>
           </CardContent>
@@ -1221,7 +1221,7 @@ export function BankRecon() {
             <div>
               <CardTitle>Reconciliation Report</CardTitle>
               <p className="text-xs text-gray-500 font-mono mt-1">
-                {statementRangeLabel} Â· Generated {new Date().toLocaleDateString('en-US')}
+                {statementRangeLabel} · Generated {new Date().toLocaleDateString('en-US')}
               </p>
             </div>
             <Button className="bg-[#0A4B8F]" onClick={exportReport}>
@@ -1267,15 +1267,15 @@ export function BankRecon() {
                       ['Unmatched / flagged bank lines', String(unmatchedBankLinesCount)],
                       [
                         'Debits (USD equiv., indicative)',
-                        reportDebitUsd ? `âˆ’$${reportDebitUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'â€”',
+                        reportDebitUsd ? `−$${reportDebitUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—',
                       ],
                       [
                         'Credits (USD equiv., indicative)',
-                        reportCreditUsd ? `+$${reportCreditUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'â€”',
+                        reportCreditUsd ? `+$${reportCreditUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—',
                       ],
                       [
                         'Flagged amount (USD equiv., indicative)',
-                        flaggedDiff > 0 ? `$${flaggedDiff.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'â€”',
+                        flaggedDiff > 0 ? `$${flaggedDiff.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—',
                       ],
                     ].map(([label, val], i) => (
                       <tr
@@ -1289,7 +1289,7 @@ export function BankRecon() {
                         <td
                           className={cn(
                             'py-2.5 px-4 text-right font-mono',
-                            String(val).startsWith('âˆ’') ? 'text-red-600' : String(val).startsWith('+') ? 'text-green-600' : 'text-gray-600'
+                            String(val).startsWith('−') ? 'text-red-600' : String(val).startsWith('+') ? 'text-green-600' : 'text-gray-600'
                           )}
                         >
                           {val}
@@ -1302,7 +1302,7 @@ export function BankRecon() {
             </div>
 
             <div>
-              <h3 className="font-semibold text-gray-900 mb-2">âœ“ Matched Transactions ({bankTxns.filter((t) => t.status === 'matched').length})</h3>
+              <h3 className="font-semibold text-gray-900 mb-2">✓ Matched Transactions ({bankTxns.filter((t) => t.status === 'matched').length})</h3>
               <div className="overflow-hidden rounded-lg border border-gray-200">
                 <table className="w-full text-sm">
                   <thead>
@@ -1330,7 +1330,7 @@ export function BankRecon() {
                             <td><Badge variant="outline" className="text-xs">{t.cur}</Badge></td>
                             <td className="py-2 px-4 text-right font-mono">{fmt(t.amount, t.cur)}</td>
                             <td className="py-2 px-4 text-right font-mono text-xs text-gray-600">
-                              {t.matchConfidence != null ? `${t.matchConfidence}%` : 'â€”'}
+                              {t.matchConfidence != null ? `${t.matchConfidence}%` : '—'}
                             </td>
                             <td className="py-2 px-4">
                               {t.matchType === 'UTR/Reference' ? (
@@ -1342,10 +1342,10 @@ export function BankRecon() {
                                   Amount match
                                 </Badge>
                               ) : (
-                                <span className="text-xs text-gray-500">â€”</span>
+                                <span className="text-xs text-gray-500">—</span>
                               )}
                             </td>
-                            <td><Badge className="bg-green-100 text-green-800 text-xs">âœ“ matched</Badge></td>
+                            <td><Badge className="bg-green-100 text-green-800 text-xs">✓ matched</Badge></td>
                           </tr>
                         );
                       })}
@@ -1355,7 +1355,7 @@ export function BankRecon() {
             </div>
 
             <div>
-              <h3 className="font-semibold text-gray-900 mb-2">âš‘ Unmatched / Flagged ({bankTxns.filter((t) => t.status !== 'matched').length})</h3>
+              <h3 className="font-semibold text-gray-900 mb-2">⚑ Unmatched / Flagged ({bankTxns.filter((t) => t.status !== 'matched').length})</h3>
               <div className="overflow-hidden rounded-lg border border-gray-200">
                 <table className="w-full text-sm">
                   <thead>
@@ -1376,7 +1376,7 @@ export function BankRecon() {
                           <td className="py-2 px-4">{t.desc}</td>
                           <td><Badge variant="outline" className="text-xs">{t.cur}</Badge></td>
                           <td className={cn('py-2 px-4 text-right font-mono', t.type === 'debit' ? 'text-red-600' : 'text-green-600')}>
-                            {t.type === 'debit' ? 'âˆ’' : '+'}{fmt(t.amount, t.cur)}
+                            {t.type === 'debit' ? '−' : '+'}{fmt(t.amount, t.cur)}
                           </td>
                           <td className="text-xs text-gray-600 max-w-[220px]">
                             {t.status === 'flagged' ? (
@@ -1421,8 +1421,8 @@ export function BankRecon() {
                               {t.cur}
                             </Badge>
                           </td>
-                          <td className="py-2 px-4 text-right font-mono text-red-600">âˆ’{fmt(t.amount, t.cur)}</td>
-                          <td className="text-xs text-gray-600">{t.reconHint ?? 'â€”'}</td>
+                          <td className="py-2 px-4 text-right font-mono text-red-600">−{fmt(t.amount, t.cur)}</td>
+                          <td className="text-xs text-gray-600">{t.reconHint ?? '—'}</td>
                         </tr>
                       ))}
                   </tbody>

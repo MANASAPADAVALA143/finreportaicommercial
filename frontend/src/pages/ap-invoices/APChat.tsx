@@ -128,7 +128,7 @@ export function APChat() {
 
 Output rules (always follow):
 - Use GitHub-Flavored Markdown: short paragraphs, bullet lists where helpful, and a **markdown table** when listing 2+ invoices (e.g. columns: Invoice # | Vendor | Amount | Currency | Due date | Workflow status | Payment status).
-- After any table, add 1â€“3 sentences of plain English: totals, who is most overdue, and what to do next.
+- After any table, add 1–3 sentences of plain English: totals, who is most overdue, and what to do next.
 - Do not emit one long run-on paragraph for lists.
 - Overdue logic: compare each row's due_date to today's date (${todayIso}) in UTC date form. Treat as paid only if status is "Paid" OR payment_status is paid (case-insensitive). Ignore misleading placeholder fields like overdue_days if they disagree with due_date vs today.
 - Use invoice_number, vendor_name, total_amount, currency, due_date, status, payment_status from the JSON.`;
@@ -192,7 +192,7 @@ Output rules (always follow):
             </div>
             <div>
               <CardTitle className="text-lg font-semibold text-gray-900">AP Finance Assistant</CardTitle>
-              <p className="text-xs text-gray-500">Powered by Claude Â· Connected to Supabase</p>
+              <p className="text-xs text-gray-500">Powered by Claude · Connected to Supabase</p>
             </div>
           </div>
         </CardHeader>
@@ -289,7 +289,7 @@ Output rules (always follow):
                 />
                 <span className="text-gray-700">{name}</span>
                 <span className="ml-auto text-xs text-gray-500">
-                  {agentLastRun ? formatDistanceToNow(new Date(agentLastRun), { addSuffix: true }) : 'â€”'}
+                  {agentLastRun ? formatDistanceToNow(new Date(agentLastRun), { addSuffix: true }) : '—'}
                 </span>
               </div>
             ))}

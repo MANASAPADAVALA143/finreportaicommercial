@@ -532,7 +532,7 @@ export function GoodsReceipts() {
     setImportPhase('running');
     setImportLog([]);
     setImportResult(null);
-    setImportProgress({ current: 0, total: importPreview.master.length, detail: 'Startingâ€¦' });
+    setImportProgress({ current: 0, total: importPreview.master.length, detail: 'Starting…' });
     setImportBusy(true);
     try {
       const res = await bulkImportGRNs(importPreview.master, importPreview.lineItems, (cur, tot, detail) => {
@@ -597,7 +597,7 @@ export function GoodsReceipts() {
   if (loading) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-gray-500">
-        Loading goods receiptsâ€¦
+        Loading goods receipts…
       </div>
     );
   }
@@ -618,13 +618,13 @@ export function GoodsReceipts() {
           <Button type="button" variant="outline" disabled={scanningGrn} onClick={() => grnScanRef.current?.click()}
             className="border-purple-300 text-purple-700 hover:bg-purple-50">
             <ScanLine className="mr-2 h-4 w-4" />
-            {scanningGrn && !bulkGrnProgress ? 'Extractingâ€¦' : 'Scan GRN PDF'}
+            {scanningGrn && !bulkGrnProgress ? 'Extracting…' : 'Scan GRN PDF'}
           </Button>
 
           <Button type="button" variant="outline" disabled={scanningGrn} onClick={() => grnBulkScanRef.current?.click()}
             className="border-indigo-300 text-indigo-700 hover:bg-indigo-50">
             <ScanLine className="mr-2 h-4 w-4" />
-            {bulkGrnProgress ? `Scanning ${bulkGrnProgress.done}/${bulkGrnProgress.total}â€¦` : 'Bulk Scan GRNs'}
+            {bulkGrnProgress ? `Scanning ${bulkGrnProgress.done}/${bulkGrnProgress.total}…` : 'Bulk Scan GRNs'}
           </Button>
 
           <Button
@@ -698,9 +698,9 @@ export function GoodsReceipts() {
                           <TableRow key={g.id}>
                             <TableCell className="font-medium">{g.grn_number}</TableCell>
                             <TableCell>
-                              {g.received_date ? format(new Date(g.received_date), 'dd MMM yyyy') : 'â€”'}
+                              {g.received_date ? format(new Date(g.received_date), 'dd MMM yyyy') : '—'}
                             </TableCell>
-                            <TableCell>{po?.po_number ?? (g.po_id ? 'â€”' : 'â€”')}</TableCell>
+                            <TableCell>{po?.po_number ?? (g.po_id ? '—' : '—')}</TableCell>
                             <TableCell>{g.vendor_name}</TableCell>
                             <TableCell>{total.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
                             <TableCell>{g.grn_line_items?.length ?? 0}</TableCell>
@@ -744,7 +744,7 @@ export function GoodsReceipts() {
                         <SelectContent>
                           {purchaseOrders.map((p) => (
                             <SelectItem key={p.id} value={p.id}>
-                              {p.po_number} â€” {p.vendor_name}
+                              {p.po_number} — {p.vendor_name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -833,7 +833,7 @@ export function GoodsReceipts() {
                   </div>
 
                   <Button type="submit" className="bg-[#0A4B8F]" disabled={saving}>
-                    {saving ? 'Savingâ€¦' : 'Confirm GRN'}
+                    {saving ? 'Saving…' : 'Confirm GRN'}
                   </Button>
                 </form>
               )}
@@ -853,7 +853,7 @@ export function GoodsReceipts() {
           <DialogHeader>
             <DialogTitle>
               {importPhase === 'running'
-                ? 'Importing GRNsâ€¦'
+                ? 'Importing GRNs…'
                 : importPhase === 'done'
                   ? 'Import complete'
                   : 'Bulk import GRNs'}
@@ -984,7 +984,7 @@ export function GoodsReceipts() {
           {importPhase === 'preview' && importPreview && (
             <div className="space-y-3">
               <p className="text-sm font-medium text-foreground">
-                {importPreview.master.length} GRN(s) Â· {importPreview.lineItems.length} line item row(s)
+                {importPreview.master.length} GRN(s) · {importPreview.lineItems.length} line item row(s)
               </p>
               <ScrollArea className="h-[220px] rounded-md border">
                 <Table>
@@ -1002,9 +1002,9 @@ export function GoodsReceipts() {
                       <TableRow key={m.grn_number}>
                         <TableCell className="font-mono text-xs">{m.grn_number}</TableCell>
                         <TableCell className="max-w-[140px] truncate text-xs">{m.vendor_name}</TableCell>
-                        <TableCell className="font-mono text-xs">{m.po_number || 'â€”'}</TableCell>
-                        <TableCell className="font-mono text-xs">{m.invoice_number || 'â€”'}</TableCell>
-                        <TableCell className="text-xs">{m.grn_date || 'â€”'}</TableCell>
+                        <TableCell className="font-mono text-xs">{m.po_number || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{m.invoice_number || '—'}</TableCell>
+                        <TableCell className="text-xs">{m.grn_date || '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1143,7 +1143,7 @@ export function GoodsReceipts() {
             )}
             {importPhase === 'running' && (
               <Button type="button" variant="secondary" disabled>
-                Workingâ€¦
+                Working…
               </Button>
             )}
             {importPhase === 'done' && (
@@ -1167,7 +1167,7 @@ export function GoodsReceipts() {
             <AlertDialogDescription className="space-y-2 text-left">
               <span className="block">
                 This permanently removes <strong>all {grns.length} GRN record{grns.length === 1 ? '' : 's'}</strong> for your
-                current company. This is <strong>not</strong> your chart of accounts or GL accountsâ€”only goods receipt notes
+                current company. This is <strong>not</strong> your chart of accounts or GL accounts—only goods receipt notes
                 in this list.
               </span>
               <span className="block text-red-700 font-medium">This cannot be undone.</span>
@@ -1181,7 +1181,7 @@ export function GoodsReceipts() {
               disabled={deletingAllGrns}
               onClick={() => void handleDeleteAllGrns()}
             >
-              {deletingAllGrns ? 'Deletingâ€¦' : 'Yes, delete all GRNs'}
+              {deletingAllGrns ? 'Deleting…' : 'Yes, delete all GRNs'}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

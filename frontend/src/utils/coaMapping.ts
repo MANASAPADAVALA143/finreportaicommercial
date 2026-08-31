@@ -1,6 +1,6 @@
 ﻿/**
- * Chart of Accounts (COA) mapping â€” Enterprise tier
- * Resolves GL: chart_of_accounts (IFRS mapping) â†’ company gl_accounts + accounting standard engine
+ * Chart of Accounts (COA) mapping — Enterprise tier
+ * Resolves GL: chart_of_accounts (IFRS mapping) → company gl_accounts + accounting standard engine
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';

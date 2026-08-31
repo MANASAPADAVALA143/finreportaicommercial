@@ -1,11 +1,11 @@
-﻿// ==================== FP&A VARIANCE ANALYSIS â€” UTILITY FUNCTIONS ====================
+﻿// ==================== FP&A VARIANCE ANALYSIS — UTILITY FUNCTIONS ====================
 
 import type { VarianceRow, KPISummary, VarianceAlert, CurrencyFormatLocale } from '../types/fpa';
 
 // ==================== CURRENCY FORMATTING ====================
 
 export const LS_CURRENCY_FORMAT_KEY = 'fpa_currency_format';
-/** Same key as FP&A variance page â€” keep in sync for Settings â†’ Currency */
+/** Same key as FP&A variance page — keep in sync for Settings → Currency */
 export const LS_FPA_CURRENCY_KEY = 'fpa_currency';
 export const LS_APP_CURRENCY_FALLBACK_KEY = 'app_currency';
 
@@ -16,10 +16,10 @@ export function getCurrencyFormatLocale(): CurrencyFormatLocale {
 }
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  INR: 'â‚¹',
+  INR: '₹',
   USD: '$',
-  EUR: 'â‚¬',
-  GBP: 'Â£',
+  EUR: '€',
+  GBP: '£',
   AED: 'AED ',
 };
 
@@ -34,7 +34,7 @@ export function getCurrencyDisplaySymbol(currency: string): string {
 
 /**
  * Compact currency for KPIs, tables, charts, AI data lines.
- * GLOBAL: >= 1M â†’ $58.29M; >= 100K â†’ $582.9K; below â†’ full number (en-US grouping).
+ * GLOBAL: >= 1M → $58.29M; >= 100K → $582.9K; below → full number (en-US grouping).
  * IN + INR: Cr / L / en-IN full below 1L.
  * IN + other: full amount with Indian digit grouping (en-IN).
  */
@@ -66,7 +66,7 @@ export const formatCurrency = (
     return `${prefix}${sym}${formatted}`;
   }
 
-  // GLOBAL â€” M / K (100K+) / full
+  // GLOBAL — M / K (100K+) / full
   if (absAmount >= 1_000_000) {
     const m = absAmount / 1_000_000;
     const decimals = m >= 100 ? 1 : 2;
@@ -157,16 +157,16 @@ export const getCardGradient = (favorable: boolean, threshold: string): string =
 // ==================== ICONS ====================
 
 export const getVarianceIcon = (favorable: boolean, threshold: string): string => {
-  if (favorable && threshold !== "ok") return "âœ…";
+  if (favorable && threshold !== "ok") return "✅";
   if (threshold === "critical") return "ðŸ”´";
   if (threshold === "warning") return "âš ï¸";
-  return "âœ…";
+  return "✅";
 };
 
 export const getVarianceArrow = (variance: number): string => {
-  if (variance > 0) return "â–²";
-  if (variance < 0) return "â–¼";
-  return "âˆ’";
+  if (variance > 0) return "▲";
+  if (variance < 0) return "▼";
+  return "−";
 };
 
 // When variance is 0 or near 0, show "Neutral" not "Unfavorable"
@@ -375,7 +375,7 @@ export const extractVarianceAlerts = (data: VarianceRow[]): VarianceAlert[] => {
     } else if (!favorable && threshold === 'warning') {
       message = `${row.category}: âš ï¸ ${formatPercentage(variancePct)} ${isRevenueType(row) ? 'below' : 'over'} budget`;
     } else if (favorable) {
-      message = `${row.category}: âœ… ${formatPercentage(Math.abs(variancePct))} ${isRevenueType(row) ? 'above' : 'under'} budget`;
+      message = `${row.category}: ✅ ${formatPercentage(Math.abs(variancePct))} ${isRevenueType(row) ? 'above' : 'under'} budget`;
     } else {
       message = `${row.category}: ${formatPercentage(variancePct)} variance`;
     }

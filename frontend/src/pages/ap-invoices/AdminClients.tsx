@@ -91,7 +91,7 @@ export function AdminClients() {
   }
 
   if (loading || allowed === null) {
-    return <div className="py-12 text-center text-gray-500">Loadingâ€¦</div>;
+    return <div className="py-12 text-center text-gray-500">Loading…</div>;
   }
 
   return (
@@ -121,7 +121,7 @@ export function AdminClients() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">MRR estimate (â‚¹)</CardTitle>
+            <CardTitle className="text-sm font-medium text-gray-500">MRR estimate (₹)</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-bold">{stats.mrr.toLocaleString('en-IN')}</CardContent>
         </Card>
@@ -130,8 +130,8 @@ export function AdminClients() {
             <CardTitle className="text-sm font-medium text-gray-500">Tiers</CardTitle>
           </CardHeader>
           <CardContent className="text-xs text-gray-600">
-            Starter â‚¹{TIER_PRESETS.starter.price_inr_monthly.toLocaleString('en-IN')} Â· Growth â‚¹
-            {TIER_PRESETS.growth.price_inr_monthly.toLocaleString('en-IN')} Â· Enterprise â‚¹
+            Starter ₹{TIER_PRESETS.starter.price_inr_monthly.toLocaleString('en-IN')} · Growth ₹
+            {TIER_PRESETS.growth.price_inr_monthly.toLocaleString('en-IN')} · Enterprise ₹
             {TIER_PRESETS.enterprise.price_inr_monthly.toLocaleString('en-IN')}
           </CardContent>
         </Card>
@@ -165,7 +165,7 @@ export function AdminClients() {
                   <TableCell>
                     {c.subscription_tier === 'enterprise' || c.max_invoices_per_month < 0
                       ? 'Unlimited'
-                      : `â‰¤ ${c.max_invoices_per_month}`}
+                      : `≤ ${c.max_invoices_per_month}`}
                   </TableCell>
                   <TableCell>
                     {c.max_users < 0 ? 'Unlimited' : c.max_users}
@@ -286,7 +286,7 @@ export function AdminClients() {
                 })();
               }}
             >
-              {submitting ? 'Creatingâ€¦' : 'Create'}
+              {submitting ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
         </DialogContent>
