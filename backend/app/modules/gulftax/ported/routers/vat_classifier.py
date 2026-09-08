@@ -1169,7 +1169,7 @@ async def sync_ap_invoices_to_vat_classifier(
             vat_treatment=vat_treatment,
             transaction_type="purchase",
             vat_amount_aed=vat_amt,
-            confidence_score=confidence / 100.0,  # always store as 0-1
+            confidence_score=confidence,  # store as 0-100 (column convention)
             box_number=box_num,
             is_verified=review_tier == "auto_approve",
             source=inv.source or "invoice_flow_auto",
@@ -1342,15 +1342,26 @@ async def bulk_approve_high_confidence(
     box_fixes = _fix_akk_and_purchase_boxes(db, company_id)
 
     threshold_pct = body.min_confidence * 100
+    threshold_01 = body.min_confidence  # some legacy rows stored 0-1 instead of 0-100
+    from sqlalchemy import or_
     rows = (
         db.query(Transaction)
         .filter(
             Transaction.company_id == company_id,
             Transaction.is_verified == False,  # noqa: E712
-            Transaction.confidence_score >= threshold_pct,
+            or_(
+                Transaction.confidence_score >= threshold_pct,  # normal 0-100
+                # legacy rows stored 0-1 (e.g. 0.97): scores < 2 can't be meaningful
+                # percentages, so treat them as fractional and include if >= threshold_01
+                Transaction.confidence_score.between(threshold_01, 1.999),
+            ),
         )
         .all()
     )
+    # Normalise any legacy 0-1 scores to 0-100 so enrichment thresholds work correctly
+    for t in rows:
+        if t.confidence_score is not None and t.confidence_score < 2.0:
+            t.confidence_score = round(t.confidence_score * 100, 2)
     approved = 0
     skipped_blocked = 0
     approved_txns: List[Transaction] = []
