@@ -302,9 +302,9 @@ SPECIFIC VENDOR RULES (ALWAYS STANDARD RATED):
 - DIFC Investments, Emaar Facilities, any facilities management company
 
 ENTERTAINMENT / CATERING (Art.53 — Input VAT BLOCKED):
-- When description contains: catering, dinner, entertainment, hospitality, gala, buffet, restaurant
-- AND transaction_type = purchase:
-  - vat_treatment = standard_rated (the supply is taxable)
+- When description contains: catering, dinner, entertainment, hospitality, gala, buffet, restaurant, hotel dining, venue hire, client dinner, team lunch, employee gift
+- OR vendor is a hotel, restaurant, entertainment venue (e.g. Jumeirah, Marriott, Hilton, Atlantis, any venue with "hotel", "resort", "restaurant", "grill" in the name) AND transaction_type = purchase:
+  - vat_treatment = entertainment_restricted  ← use this exact string (NOT standard_rated)
   - Set blocked_input_vat = true
   - Set blocked_reason = "Art.53(1)(b) — input VAT on entertainment/meals not recoverable"
   - blocked_vat_amount = amount * 0.05"""
@@ -326,7 +326,7 @@ Entity type: {entity_type}
 
 Return JSON only:
 {{
-  "vat_treatment": "standard_rated|zero_rated|exempt|out_of_scope|reverse_charge",
+  "vat_treatment": "standard_rated|zero_rated|exempt|out_of_scope|reverse_charge|entertainment_restricted",
   "vat_rate": 5 or 0,
   "vat_amount_aed": <calculated float>,
   "confidence_score": <0.0-1.0>,

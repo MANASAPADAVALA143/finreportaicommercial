@@ -48,8 +48,9 @@ def fta_summary(
     exempt_sales = by_treatment(sales, "exempt")
     std_purch    = by_treatment(purchases, "standard_rated")
     rc_purch     = by_treatment(purchases, "reverse_charge")
-    # Article 54(1)(b): entertainment expenses — VAT is blocked (non-recoverable)
-    blocked_treatments = {"entertainment", "blocked_input_vat", "entertainment_blocked"}
+    # Article 53(1)(b): entertainment expenses — VAT is blocked (non-recoverable).
+    # Classifier stores these as vat_treatment="entertainment_restricted" (not standard_rated).
+    blocked_treatments = {"entertainment_restricted", "entertainment", "blocked_input_vat", "entertainment_blocked"}
     blocked_purch = [t for t in purchases if (t.vat_treatment or "").lower() in blocked_treatments]
     blocked_vat_aed = round(sum(t.vat_amount_aed or 0 for t in blocked_purch), 2)
 
@@ -59,8 +60,9 @@ def fta_summary(
     box4 = amt(exempt_sales)
     box5 = round(box1 + box3 + box4, 2)
     box6 = amt(std_purch) + amt(rc_purch)
-    # Blocked input VAT (entertainment/Article 54) is excluded from recoverable input
-    box7 = round(vat(std_purch) + vat(rc_purch) - blocked_vat_aed, 2)
+    # entertainment_restricted rows are excluded from std_purch, so box7 is already correct.
+    # blocked_vat_aed is tracked for display only — do NOT subtract again.
+    box7 = round(vat(std_purch) + vat(rc_purch), 2)
     box8 = round(box2 - box7, 2)
 
     company = db.query(Company).filter(Company.id == company_id).first()
