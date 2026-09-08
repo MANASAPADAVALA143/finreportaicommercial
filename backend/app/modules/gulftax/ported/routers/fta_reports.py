@@ -48,6 +48,10 @@ def fta_summary(
     exempt_sales = by_treatment(sales, "exempt")
     std_purch    = by_treatment(purchases, "standard_rated")
     rc_purch     = by_treatment(purchases, "reverse_charge")
+    # Article 54(1)(b): entertainment expenses — VAT is blocked (non-recoverable)
+    blocked_treatments = {"entertainment", "blocked_input_vat", "entertainment_blocked"}
+    blocked_purch = [t for t in purchases if (t.vat_treatment or "").lower() in blocked_treatments]
+    blocked_vat_aed = round(sum(t.vat_amount_aed or 0 for t in blocked_purch), 2)
 
     box1 = amt(std_sales)
     box2 = vat(std_sales)
@@ -55,7 +59,8 @@ def fta_summary(
     box4 = amt(exempt_sales)
     box5 = round(box1 + box3 + box4, 2)
     box6 = amt(std_purch) + amt(rc_purch)
-    box7 = vat(std_purch) + vat(rc_purch)
+    # Blocked input VAT (entertainment/Article 54) is excluded from recoverable input
+    box7 = round(vat(std_purch) + vat(rc_purch) - blocked_vat_aed, 2)
     box8 = round(box2 - box7, 2)
 
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -76,6 +81,7 @@ def fta_summary(
             "box6_taxable_expenses": round(box6, 2),
             "box7_input_vat_recoverable": round(box7, 2),
             "box8_net_vat_payable": box8,
+            "blocked_input_vat_aed": blocked_vat_aed,
         },
         "counts": {
             "standard_rated_sales": len(std_sales),
@@ -83,6 +89,7 @@ def fta_summary(
             "exempt_sales": len(exempt_sales),
             "standard_rated_purchases": len(std_purch),
             "reverse_charge_purchases": len(rc_purch),
+            "blocked_input_vat_purchases": len(blocked_purch),
         },
     }
 
