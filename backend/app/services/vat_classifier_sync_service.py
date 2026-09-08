@@ -432,9 +432,7 @@ def _upsert_vat_classifier_transactions_row(row: dict[str, Any]) -> dict[str, An
     try:
         from sqlalchemy import text
 
-        from app.core.database import SessionLocal
-
-        rds = SessionLocal()
+        rds = _ported_session()
         try:
             if company_id and source and inv_ref:
                 found = rds.execute(
@@ -533,9 +531,7 @@ def sync_classifier_transaction_to_gulftax(
 
     owns_session = False
     if db is None:
-        from app.core.database import SessionLocal
-
-        db = SessionLocal()
+        db = _ported_session()
         owns_session = True
 
     try:
@@ -1029,9 +1025,7 @@ def sync_approved_classifier_transactions_to_gulftax(
     workspace_id: str | None = None,
 ) -> dict[str, Any]:
     """Batch sync approved classifier transactions into gulftax_transactions."""
-    from app.core.database import SessionLocal
-
-    db = SessionLocal()
+    db = _ported_session()
     synced = skipped = errors = 0
     try:
         for txn in classifier_txns:
