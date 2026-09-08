@@ -55,12 +55,12 @@ export default function ReconciliationSummaryPage() {
       setTxCount(items.length);
       setInputVat(
         items
-          .filter((t) => t.direction === 'input')
+          .filter((t) => t.transaction_type === 'purchase')
           .reduce((s, t) => s + Number(t.vat_amount || 0), 0),
       );
       setOutputVat(
         items
-          .filter((t) => t.direction === 'output')
+          .filter((t) => t.transaction_type === 'sale')
           .reduce((s, t) => s + Number(t.vat_amount || 0), 0),
       );
       if (boxes) {

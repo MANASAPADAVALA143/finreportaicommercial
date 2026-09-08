@@ -12,7 +12,7 @@ async function authHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const h = workspaceHeaders(data.session?.access_token ?? getStoredAccessToken());
   const cid = getActiveCompanyId() || localStorage.getItem('gulftax_company_id') || '';
-  if (cid) h['X-Company-ID'] = cid;
+  if (cid) h['X-Company-Id'] = cid;
   return h;
 }
 
