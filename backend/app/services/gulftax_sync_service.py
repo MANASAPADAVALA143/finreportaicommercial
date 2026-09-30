@@ -628,11 +628,37 @@ def sync_period(
         elif sup_skipped and (db is None or rds_skipped):
             skipped += 1
 
+    # Also promote any Invoice Flow PDF rows that are still 'pending' for this
+    # period into 'posted' so Recon Bot and VAT Return can read them.
+    pdf_promoted = 0
+    if db is not None:
+        try:
+            from app.models.client_data import GulftaxTransaction
+
+            pending_pdf_rows = (
+                db.query(GulftaxTransaction)
+                .filter(
+                    GulftaxTransaction.company_id == company_id,
+                    GulftaxTransaction.tax_period == tax_period,
+                    GulftaxTransaction.status == "pending",
+                    GulftaxTransaction.source == "invoice_flow_pdf",
+                )
+                .all()
+            )
+            for row in pending_pdf_rows:
+                row.status = "posted"
+                pdf_promoted += 1
+            if pdf_promoted:
+                db.commit()
+        except Exception as exc:
+            logger.warning("sync_period: failed to promote Invoice Flow PDF rows: %s", exc)
+
     return {
         "ok": True,
         "synced": synced,
         "skipped": skipped,
         "total_invoices": len(invoices),
+        "pdf_promoted": pdf_promoted,
         "errors": errors[:20],
     }
 
