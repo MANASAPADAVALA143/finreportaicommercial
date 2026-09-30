@@ -813,11 +813,12 @@ def sync_invoice_record_to_gulftax_pending(
     *,
     ported_company: Any | None = None,
     workspace_id: str | None = None,
+    initial_status: str = "pending",
 ) -> dict[str, Any]:
-    """Write gulftax pending row from Invoice Flow `invoices` row (no classifier txn needed).
+    """Write gulftax row from Invoice Flow `invoices` row (no classifier txn needed).
 
-    Called after every classify-and-risk — including review/escalated — so
-    source=invoice_flow_pdf appears immediately after PDF extraction.
+    Called after every classify-and-risk. Pass initial_status='posted' for
+    auto-approved invoices so Recon Bot and VAT Return can read them immediately.
     """
     from app.services.gulftax_sync_service import _norm_treatment, tax_period_for_date
 
@@ -867,6 +868,7 @@ def sync_invoice_record_to_gulftax_pending(
         pseudo,
         ported_company=ported_company,
         workspace_id=workspace_id,
+        initial_status=initial_status,
     )
 
 
@@ -876,10 +878,13 @@ def sync_pdf_txn_to_gulftax_pending(
     *,
     ported_company: Any | None = None,
     workspace_id: str | None = None,
+    initial_status: str = "pending",
 ) -> dict[str, Any]:
-    """Invoice Flow PDF → gulftax_transactions immediately (status=pending).
+    """Invoice Flow PDF → gulftax_transactions immediately.
 
     source='invoice_flow_pdf', purchase → fta_box='9', direction='input'.
+    Pass initial_status='posted' for auto-approved invoices so Recon Bot and
+    VAT Return can read them immediately (they filter on status='posted').
     """
     from app.models.client_data import GulftaxTransaction
     from app.services.gulftax_sync_service import (
@@ -963,7 +968,7 @@ def sync_pdf_txn_to_gulftax_pending(
             vat_category=vat_category,
             fta_box=fta_box,
             direction=direction,
-            status="pending",
+            status=initial_status,
             designated_zone=False,
             transaction_kind="goods",
             created_at=datetime.utcnow(),
@@ -986,7 +991,7 @@ def sync_pdf_txn_to_gulftax_pending(
                 "vat_category": vat_category,
                 "fta_box": fta_box,
                 "direction": direction,
-                "status": "pending",
+                "status": initial_status,
             }
         )
         _upsert_vat_classifier_transactions_row(
@@ -1010,7 +1015,7 @@ def sync_pdf_txn_to_gulftax_pending(
             "transaction_id": gt.id,
             "tax_period": tax_period,
             "fta_box": fta_box,
-            "status": "pending",
+            "status": initial_status,
         }
     except Exception as exc:
         db.rollback()

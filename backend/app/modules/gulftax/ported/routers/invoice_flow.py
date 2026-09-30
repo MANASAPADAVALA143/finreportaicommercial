@@ -1172,8 +1172,9 @@ Return JSON only:
         company = db.query(Company).filter(Company.id == company_id).first()
         main_db = MainSessionLocal()
         try:
+            _gt_status = "posted" if auto_approved else "pending"
             pending_res = sync_invoice_record_to_gulftax_pending(
-                main_db, inv, ported_company=company
+                main_db, inv, ported_company=company, initial_status=_gt_status
             )
             if pending_res.get("ok") and not pending_res.get("skipped"):
                 gulftax_pending = 1
