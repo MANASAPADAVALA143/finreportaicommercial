@@ -38,6 +38,9 @@ interface ProcessedInvoice {
   risk_score?: number;
   recommendation?: string;
   auto_approved?: boolean;
+  blocked_input_vat?: boolean;
+  blocked_vat_amount?: number;
+  review_tier?: "auto_approve" | "review_required" | "blocked";
   transactions_created?: number;
 }
 
@@ -205,7 +208,8 @@ export default function InvoiceFlowPage() {
             invoice_id,
             extracted,
           });
-          const { vat_result, risk_flags, overall_risk, auto_approved, transactions_created } = riskRes.data;
+          const { vat_result, risk_flags, overall_risk, auto_approved, transactions_created,
+                  blocked_input_vat, blocked_vat_amount, review_tier } = riskRes.data;
 
           processed.push({
             invoice_id,
@@ -223,6 +227,9 @@ export default function InvoiceFlowPage() {
             risk_score: riskRes.data.risk_score,
             recommendation: riskRes.data.recommendation,
             auto_approved: auto_approved || false,
+            blocked_input_vat: blocked_input_vat || false,
+            blocked_vat_amount: blocked_vat_amount || 0,
+            review_tier: review_tier || (auto_approved ? "auto_approve" : "review_required"),
             transactions_created: transactions_created || 0,
           });
         }
@@ -458,7 +465,20 @@ export default function InvoiceFlowPage() {
               )}
 
               {/* Auto-approval confirmation (score < 30) */}
-              {inv.auto_approved && (
+              {inv.blocked_input_vat && (
+                <div className="rounded-[10px] border border-red/30 bg-[rgba(255,107,107,0.08)] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-red text-base">🚫</span>
+                    <div>
+                      <p className="text-red text-[13px] font-medium">
+                        Blocked Input VAT — AED {(inv.blocked_vat_amount || inv.vat_amount_aed || 0).toLocaleString("en-AE", { minimumFractionDigits: 2 })} non-recoverable
+                      </p>
+                      <p className="text-[11px] text-muted2 mt-0.5">Entertainment / hospitality — Article 54, UAE VAT Law · Do not include in Box 9</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {inv.auto_approved && !inv.blocked_input_vat && (
                 <div className="rounded-[10px] border border-green/30 bg-[rgba(45,212,160,0.08)] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-green text-base">✓</span>

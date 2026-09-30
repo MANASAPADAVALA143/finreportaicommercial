@@ -615,15 +615,29 @@ def run_all_anomaly_checks(
         ])
         has_po = bool(_po_raw) and _po_raw not in _po_null_values and not _po_is_verbal
         if not any_prior and total > 25_000 and not has_po:
-            flags.append(AnomalyFlag(
-                flag_id=15, flag="ghost_supplier", category="fraud",
-                severity="HIGH",
-                title="Ghost Supplier Risk — New Vendor, High Value, No PO",
-                what_is_wrong=f"First invoice from '{vendor}' for AED {total:,.2f} with no Purchase Order reference. Unverified new supplier presenting high-value invoice is a major fraud risk.",
-                action_required="STOP payment. Perform full KYC: verify UAE trade license, confirm bank account independently, check director details. Do not process without signed PO.",
-                uae_law_reference="UAE Anti-Money Laundering Law + internal procurement policy",
-                vat_at_risk_aed=round(vat_shown, 2),
-            ))
+            # If invoice explicitly mentions CFO approval threshold, flag as approval control
+            # rather than ghost supplier — the supplier may be legitimate but needs a PO/approval
+            _approval_threshold = total >= 50_000
+            if _approval_threshold:
+                flags.append(AnomalyFlag(
+                    flag_id=15, flag="approval_threshold_exceeded", category="approval",
+                    severity="HIGH",
+                    title="Approval Control Triggered — High Value Invoice",
+                    what_is_wrong=f"Invoice value AED {total:,.2f} exceeds the AED 50,000 CFO approval threshold. No Purchase Order reference found.",
+                    action_required="Route for CFO approval before payment. Raise a Purchase Order and obtain signed authorisation. Verify supplier against vendor master.",
+                    uae_law_reference="Internal approval policy — CFO sign-off required above AED 50,000",
+                    vat_at_risk_aed=0,
+                ))
+            else:
+                flags.append(AnomalyFlag(
+                    flag_id=15, flag="ghost_supplier", category="fraud",
+                    severity="HIGH",
+                    title="New Vendor — High Value, No PO",
+                    what_is_wrong=f"First invoice from '{vendor}' for AED {total:,.2f} with no Purchase Order reference. New supplier presenting high-value invoice without a PO requires additional verification.",
+                    action_required="Verify UAE trade license, confirm bank account independently. Do not process without a signed PO.",
+                    uae_law_reference="UAE Anti-Money Laundering Law + internal procurement policy",
+                    vat_at_risk_aed=round(vat_shown, 2),
+                ))
 
     # ANOMALY 16 — Price drift (Mann-Kendall)
     if vendor:
@@ -693,7 +707,7 @@ def run_all_anomaly_checks(
             title="Entertainment Expense — Input VAT is BLOCKED",
             what_is_wrong=f"Invoice appears to be for entertainment/meals/hospitality (AED {vat_shown:,.2f} VAT claimed). UAE VAT law explicitly blocks input tax recovery on entertainment expenses.",
             action_required=f"Remove VAT amount AED {vat_shown:,.2f} from VAT return Box 7 (input VAT). Post the full amount including VAT as an expense to P&L — it is not reclaimable.",
-            uae_law_reference="Article 53(1)(b), UAE VAT Law — blocked input tax on entertainment and meals",
+            uae_law_reference="Article 54, UAE VAT Law — blocked input tax on entertainment, leisure and hospitality expenses",
             vat_at_risk_aed=round(vat_shown, 2),
         ))
 
@@ -1400,6 +1414,20 @@ Return JSON only:
             sync_res.get("pending_synced") or 0
         )
 
+    # Determine blocked_input_vat from flags — entertainment/Article 54 flags mean VAT is non-recoverable
+    _entertainment_flag = next(
+        (f for f in risk.flags if f.flag in ("entertainment_blocked_vat", "blocked_input_vat")), None
+    )
+    _is_blocked = _entertainment_flag is not None
+    _blocked_vat_amount = round(_entertainment_flag.vat_at_risk_aed, 2) if _entertainment_flag else 0.0
+    # review_tier: blocked > review > auto_approve
+    if _is_blocked:
+        _review_tier = "blocked"
+    elif auto_approved:
+        _review_tier = "auto_approve"
+    else:
+        _review_tier = "review_required"
+
     return {
         "invoice_id": inv.id,
         "vat_result": vat_result,
@@ -1407,8 +1435,11 @@ Return JSON only:
         "overall_risk": risk.risk_level,
         "risk_score": risk.risk_score,
         "recommendation": risk.recommendation,
-        "auto_approved": auto_approved,
+        "auto_approved": auto_approved and not _is_blocked,
         "transactions_created": transactions_created,
+        "blocked_input_vat": _is_blocked,
+        "blocked_vat_amount": _blocked_vat_amount,
+        "review_tier": _review_tier,
         "gulftax_synced": gulftax_synced,
         "gulftax_pending": gulftax_pending,
         "gulftax_pending_error": gulftax_pending_error,
