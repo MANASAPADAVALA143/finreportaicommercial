@@ -75,10 +75,22 @@ export default function InvoiceFlowPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false); // prevents double-submit race condition
 
+  const EXCEL_TYPES = [
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "text/csv",
+    "application/csv",
+  ];
+  const isExcel = (f: File) =>
+    EXCEL_TYPES.includes(f.type) ||
+    /\.(xlsx|xls|csv)$/i.test(f.name);
+
   const addFiles = (incoming: FileList | null) => {
     if (!incoming) return;
-    const valid = Array.from(incoming).filter((f) =>
-      ["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(f.type)
+    const valid = Array.from(incoming).filter(
+      (f) =>
+        ["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(f.type) ||
+        isExcel(f)
     );
     setFiles((prev) => [...prev, ...valid]);
     setStage("idle");
@@ -154,40 +166,70 @@ export default function InvoiceFlowPage() {
 
     for (const file of files) {
       try {
-        // Step 1: Extract
-        setStage("extracting");
-        const extractRes = await extractInvoiceFile(file);
-        const { invoice_id, extracted } = extractRes.data;
+        if (isExcel(file)) {
+          // Excel/CSV path — one file may produce many invoice rows
+          setStage("extracting");
+          const API = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") || "";
+          const form = new FormData();
+          form.append("file", file, file.name);
+          const headers: Record<string, string> = {};
+          const ws = localStorage.getItem("active_workspace_id") || getStoredWorkspaceId() || "";
+          const cid = getActiveCompanyId() || localStorage.getItem("gulftax_company_id") || "";
+          if (ws) headers["X-Workspace-Id"] = ws;
+          if (cid) headers["X-Company-Id"] = cid;
+          let token = getStoredAccessToken();
+          if (!token) {
+            try { const { data } = await supabase.auth.getSession(); token = data.session?.access_token ?? null; } catch { token = null; }
+          }
+          if (token) headers.Authorization = `Bearer ${token}`;
+          const xlRes = await fetch(`${API}/api/invoice/extract-excel`, { method: "POST", headers, body: form, credentials: "include" });
+          if (!xlRes.ok) {
+            let detail = xlRes.statusText;
+            try { const err = await xlRes.json(); detail = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail ?? err); } catch { /* ignore */ }
+            throw new Error(detail || `Excel extract failed (${xlRes.status})`);
+          }
+          const xlData = await xlRes.json();
+          const rows: ProcessedInvoice[] = (xlData.invoices || []).map((row: ProcessedInvoice) => ({
+            ...row,
+            filename: file.name,
+          }));
+          processed.push(...rows);
+        } else {
+          // PDF / image path
+          setStage("extracting");
+          const extractRes = await extractInvoiceFile(file);
+          const { invoice_id, extracted } = extractRes.data;
 
-        // Step 2: Classify + risk
-        setStage("classifying");
-        const riskRes = await apiClient.post("/api/invoice/classify-and-risk", {
-          invoice_id,
-          extracted,
-        });
-        const { vat_result, risk_flags, overall_risk, auto_approved, transactions_created } = riskRes.data;
+          setStage("classifying");
+          const riskRes = await apiClient.post("/api/invoice/classify-and-risk", {
+            invoice_id,
+            extracted,
+          });
+          const { vat_result, risk_flags, overall_risk, auto_approved, transactions_created } = riskRes.data;
 
-        processed.push({
-          invoice_id,
-          filename: file.name,
-          vendor_name: extracted.vendor_name,
-          vendor_trn: extracted.vendor_trn,
-          invoice_number: extracted.invoice_number,
-          invoice_date: extracted.invoice_date,
-          total_aed: extracted.total_aed,
-          vat_amount_aed: extracted.vat_amount_aed,
-          vat_treatment: vat_result.vat_treatment,
-          confidence: vat_result.confidence,
-          risk_flags: risk_flags || [],
-          overall_risk,
-          risk_score: riskRes.data.risk_score,
-          recommendation: riskRes.data.recommendation,
-          auto_approved: auto_approved || false,
-          transactions_created: transactions_created || 0,
-        });
+          processed.push({
+            invoice_id,
+            filename: file.name,
+            vendor_name: extracted.vendor_name,
+            vendor_trn: extracted.vendor_trn,
+            invoice_number: extracted.invoice_number,
+            invoice_date: extracted.invoice_date,
+            total_aed: extracted.total_aed,
+            vat_amount_aed: extracted.vat_amount_aed,
+            vat_treatment: vat_result.vat_treatment,
+            confidence: vat_result.confidence,
+            risk_flags: risk_flags || [],
+            overall_risk,
+            risk_score: riskRes.data.risk_score,
+            recommendation: riskRes.data.recommendation,
+            auto_approved: auto_approved || false,
+            transactions_created: transactions_created || 0,
+          });
+        }
       } catch (e: unknown) {
         const msg =
           (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+          (e instanceof Error ? e.message : null) ||
           `Failed to process ${file.name}`;
         processed.push({
           invoice_id: 0,
@@ -243,7 +285,7 @@ export default function InvoiceFlowPage() {
           </div>
           <h2 className="font-playfair text-[26px] font-bold">AI Invoice Processor</h2>
           <p className="text-[13px] text-muted mt-1">
-            Upload PDF or image invoices · Claude extracts, classifies VAT, flags AP risks
+            Upload PDF, image, or Excel/CSV invoices · Claude extracts, classifies VAT, flags AP risks
           </p>
         </div>
         <Link
@@ -268,13 +310,13 @@ export default function InvoiceFlowPage() {
       >
         <div className="text-4xl mb-3">📄</div>
         <p className="text-white font-medium mb-1">Drop invoices here or click to browse</p>
-        <p className="text-[13px] text-muted">PDF, JPG, PNG, WebP · Multiple files supported</p>
+        <p className="text-[13px] text-muted">PDF, JPG, PNG, WebP · Excel (.xlsx, .xls) · CSV · Multiple files supported</p>
         <input
           ref={inputRef}
           type="file"
           className="hidden"
           multiple
-          accept=".pdf,.jpg,.jpeg,.png,.webp"
+          accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.csv"
           onChange={(e) => addFiles(e.target.files)}
         />
       </div>
@@ -288,7 +330,7 @@ export default function InvoiceFlowPage() {
           </div>
           {files.map((f, i) => (
             <div key={i} className="flex items-center gap-3 rounded-[10px] bg-[rgba(4,12,30,0.5)] border border-border px-4 py-2.5">
-              <span className="text-lg">{f.type === "application/pdf" ? "📕" : "🖼️"}</span>
+              <span className="text-lg">{f.type === "application/pdf" ? "📕" : isExcel(f) ? "📊" : "🖼️"}</span>
               <span className="text-[13px] text-white flex-1 truncate">{f.name}</span>
               <span className="text-[11px] text-muted2">{(f.size / 1024).toFixed(0)} KB</span>
               <button onClick={() => removeFile(i)} className="text-muted2 hover:text-red text-sm transition">✕</button>

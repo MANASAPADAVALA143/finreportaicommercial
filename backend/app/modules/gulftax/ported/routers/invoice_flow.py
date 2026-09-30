@@ -823,6 +823,205 @@ def _extract_json(text: str) -> Dict[str, Any]:
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+@router.post("/extract-excel")
+def extract_excel_invoices(
+    file: UploadFile = File(...),
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Extract, classify and risk-assess invoices from an Excel (.xlsx/.xls) or CSV file.
+
+    Each row is treated as one invoice. Expected columns (case-insensitive, flexible):
+    vendor_name, vendor_trn, invoice_number, invoice_date, total_aed, vat_amount_aed,
+    vat_treatment, description. Any missing column is gracefully skipped.
+
+    Returns: { invoices: [...] } — same shape as classify-and-risk response per row.
+    """
+    import io as _io
+
+    content = file.file.read()
+    filename = (file.filename or "").lower()
+
+    # --- Parse rows ---
+    rows: list[dict] = []
+    try:
+        if filename.endswith(".csv") or (file.content_type or "").startswith("text/"):
+            import csv as _csv
+            text = content.decode("utf-8-sig", errors="replace")
+            reader = _csv.DictReader(_io.StringIO(text))
+            rows = [dict(r) for r in reader]
+        else:
+            try:
+                import openpyxl as _xl
+                wb = _xl.load_workbook(_io.BytesIO(content), data_only=True)
+                ws_xl = wb.active
+                headers = [str(c.value or "").strip().lower().replace(" ", "_") for c in next(ws_xl.iter_rows(min_row=1, max_row=1))]
+                for row in ws_xl.iter_rows(min_row=2, values_only=True):
+                    rows.append({headers[i]: (v if v is not None else "") for i, v in enumerate(row) if i < len(headers)})
+            except ImportError:
+                import pandas as _pd
+                df = _pd.read_excel(_io.BytesIO(content))
+                df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+                rows = df.fillna("").astype(str).to_dict("records")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {exc}") from exc
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No data rows found in the file.")
+
+    # Column name aliases — map common variations to canonical names
+    _ALIASES = {
+        "vendor": "vendor_name", "supplier": "vendor_name", "supplier_name": "vendor_name",
+        "trn": "vendor_trn", "tax_registration_number": "vendor_trn",
+        "invoice_no": "invoice_number", "inv_no": "invoice_number", "invoice_ref": "invoice_number",
+        "date": "invoice_date", "inv_date": "invoice_date",
+        "total": "total_aed", "amount": "total_aed", "gross": "total_aed", "gross_amount": "total_aed",
+        "vat": "vat_amount_aed", "tax_amount": "vat_amount_aed", "vat_amount": "vat_amount_aed",
+        "treatment": "vat_treatment", "tax_treatment": "vat_treatment",
+        "desc": "description", "narration": "description",
+    }
+
+    def _norm_row(raw: dict) -> dict:
+        out: dict = {}
+        for k, v in raw.items():
+            canon = _ALIASES.get(k.strip().lower().replace(" ", "_"), k.strip().lower().replace(" ", "_"))
+            out[canon] = str(v).strip() if v is not None else ""
+        return out
+
+    def _float(v: str) -> float:
+        try:
+            return float(str(v).replace(",", "").replace("AED", "").strip() or 0)
+        except (ValueError, TypeError):
+            return 0.0
+
+    invoices_out: list[dict] = []
+    for raw_row in rows:
+        r = _norm_row(raw_row)
+        vendor_name = r.get("vendor_name") or r.get("description") or "Unknown Vendor"
+        # Skip blank rows
+        if not any(str(v).strip() for v in r.values()):
+            continue
+
+        total_aed = _float(r.get("total_aed", "0"))
+        vat_amount_aed = _float(r.get("vat_amount_aed", "0"))
+        if vat_amount_aed == 0 and total_aed > 0:
+            raw_treatment = (r.get("vat_treatment") or "").lower()
+            if "zero" in raw_treatment or "export" in raw_treatment:
+                vat_amount_aed = 0.0
+            elif "exempt" in raw_treatment:
+                vat_amount_aed = 0.0
+            else:
+                vat_amount_aed = round(total_aed * 5 / 105, 2)
+
+        vat_treatment = r.get("vat_treatment") or ("zero_rated" if vat_amount_aed == 0 else "standard_rated")
+
+        # Persist a minimal Invoice record so classify-and-risk can reference it
+        inv_date_raw = r.get("invoice_date") or ""
+        try:
+            inv_date_obj = date.fromisoformat(str(inv_date_raw)[:10]) if inv_date_raw else date.today()
+        except (ValueError, TypeError):
+            inv_date_obj = date.today()
+
+        from app.core.database import SessionLocal as MainSessionLocal
+        from app.services.vat_classifier_sync_service import sync_invoice_record_to_gulftax_pending
+
+        inv = Invoice(
+            company_id=company_id,
+            vendor_name=vendor_name,
+            vendor_trn=r.get("vendor_trn") or None,
+            invoice_number=r.get("invoice_number") or None,
+            invoice_date=inv_date_obj,
+            total_aed=total_aed or None,
+            vat_amount_aed=vat_amount_aed or None,
+            vat_treatment=vat_treatment,
+            description=r.get("description") or f"Excel row: {vendor_name}",
+            source="excel_upload",
+            status="pending",
+        )
+        db.add(inv)
+        db.flush()
+
+        # Lightweight risk scoring (no Claude call — use rule-based flags for Excel rows)
+        risk_flags: list[dict] = []
+        risk_score = 0
+
+        if total_aed > 50_000:
+            risk_flags.append({
+                "flag_id": 1, "flag": "high_value", "category": "approval",
+                "severity": "HIGH", "title": "High Value Invoice",
+                "what_is_wrong": f"Invoice total AED {total_aed:,.2f} exceeds AED 50,000 approval threshold.",
+                "action_required": "Route for CFO approval before payment.",
+                "uae_law_reference": "Internal approval policy", "vat_at_risk_aed": 0,
+            })
+            risk_score += 40
+
+        if not r.get("vendor_trn") and total_aed > 10_000:
+            risk_flags.append({
+                "flag_id": 2, "flag": "missing_trn", "category": "compliance",
+                "severity": "MEDIUM", "title": "Vendor TRN Missing",
+                "what_is_wrong": "No TRN provided for a high-value purchase — input VAT may not be recoverable.",
+                "action_required": "Obtain vendor TRN before filing.",
+                "uae_law_reference": "UAE VAT Law Article 55", "vat_at_risk_aed": vat_amount_aed,
+            })
+            risk_score += 25
+
+        if not r.get("invoice_number"):
+            risk_flags.append({
+                "flag_id": 3, "flag": "missing_invoice_number", "category": "documentation",
+                "severity": "LOW", "title": "Invoice Number Missing",
+                "what_is_wrong": "Row has no invoice number — FTA requires a unique invoice reference.",
+                "action_required": "Obtain invoice number from vendor.",
+                "uae_law_reference": "UAE VAT Law Article 67", "vat_at_risk_aed": 0,
+            })
+            risk_score += 10
+
+        high_flags = [f for f in risk_flags if f["severity"] == "HIGH"]
+        auto_approved = risk_score < 30 and len(high_flags) == 0
+        overall_risk = "clear" if auto_approved else ("escalate" if risk_score >= 60 else "review")
+
+        if auto_approved:
+            inv.status = "auto_approved"
+        elif risk_score >= 60:
+            inv.status = "escalated"
+        else:
+            inv.status = "review"
+        db.commit()
+
+        # Sync to gulftax_transactions
+        _gt_status = "posted" if auto_approved else "pending"
+        try:
+            main_db = MainSessionLocal()
+            try:
+                sync_invoice_record_to_gulftax_pending(
+                    main_db, inv, initial_status=_gt_status
+                )
+            finally:
+                main_db.close()
+        except Exception as _sync_exc:
+            logger.warning("Excel row gulftax sync failed: %s", _sync_exc)
+
+        invoices_out.append({
+            "invoice_id": inv.id,
+            "filename": file.filename,
+            "vendor_name": vendor_name,
+            "vendor_trn": r.get("vendor_trn") or None,
+            "invoice_number": r.get("invoice_number") or None,
+            "invoice_date": inv_date_obj.isoformat(),
+            "total_aed": total_aed,
+            "vat_amount_aed": vat_amount_aed,
+            "vat_treatment": vat_treatment,
+            "confidence": 0.85,
+            "risk_flags": risk_flags,
+            "overall_risk": overall_risk,
+            "risk_score": risk_score,
+            "recommendation": "Auto-approved from Excel upload." if auto_approved else "Review required.",
+            "auto_approved": auto_approved,
+            "transactions_created": 1 if auto_approved else 0,
+        })
+
+    return {"invoices": invoices_out, "total_rows": len(rows), "processed": len(invoices_out)}
+
+
 @router.post("/extract")
 def extract_invoice(
     file: UploadFile = File(...),
