@@ -585,17 +585,27 @@ def run_all_anomaly_checks(
         ))
 
     # ANOMALY 14 — Weekend date (UAE: Fri/Sat)
+    # Only flag if ALSO missing a delivery/service date — a weekend invoice date alone
+    # is not evidence of backdating (many suppliers issue invoices on weekends).
     if inv_date and inv_date.weekday() in (4, 5):  # Friday=4, Saturday=5
         day_name = "Friday" if inv_date.weekday() == 4 else "Saturday"
-        flags.append(AnomalyFlag(
-            flag_id=14, flag="weekend_date", category="fraud",
-            severity="LOW",
-            title=f"Invoice Dated on UAE Weekend ({day_name})",
-            what_is_wrong=f"Invoice date {inv_date_s} falls on {day_name} (UAE weekend). Businesses are typically closed. May indicate backdating.",
-            action_required="Verify actual service delivery date with supplier. Request delivery receipt or email confirmation.",
-            uae_law_reference="FTA Audit indicators — backdated invoices",
-            vat_at_risk_aed=0,
-        ))
+        _has_service_date = bool(
+            getattr(extracted, "service_date", None) or
+            getattr(extracted, "delivery_date", None)
+        )
+        # Only raise flag when there is also another anomaly suggesting backdating
+        # (e.g. duplicate invoice number or high risk score from other checks).
+        # A weekend date alone is NOT flagged — it is a documentation note, not a fraud signal.
+        if not _has_service_date and len(flags) > 0:
+            flags.append(AnomalyFlag(
+                flag_id=14, flag="weekend_date", category="documentation",
+                severity="LOW",
+                title=f"Invoice Date Falls on {day_name} — Confirm Service Date",
+                what_is_wrong=f"Invoice date {inv_date_s} is a {day_name}. No separate service/delivery date provided.",
+                action_required="Request confirmation of the actual service/delivery date from supplier.",
+                uae_law_reference="FTA Audit Guide — invoice date vs supply date",
+                vat_at_risk_aed=0,
+            ))
 
     # ANOMALY 15 — Ghost supplier (new + high value + no PO)
     if vendor:
@@ -717,11 +727,11 @@ def run_all_anomaly_checks(
         flags.append(AnomalyFlag(
             flag_id=19, flag="free_zone_supplier", category="uae_specific",
             severity="MEDIUM",
-            title="Free Zone Supplier — Check VAT Treatment",
-            what_is_wrong=f"Supplier address indicates a UAE Free Zone. Sales from Free Zone to Mainland UAE may be treated as imports requiring reverse charge VAT, not standard-rated purchases.",
-            action_required="Verify supplier's VAT registration status. If QFZP qualified, different rules apply. Consult VAT specialist.",
-            uae_law_reference="Cabinet Decision 55/2017 — Free Zone VAT treatment; Article 51, UAE VAT Law",
-            vat_at_risk_aed=round(subtotal * 0.05, 2),
+            title="Free Zone Supplier — Verify VAT Treatment",
+            what_is_wrong=f"Supplier address indicates a UAE Free Zone entity. The invoice alone does not establish the applicable VAT treatment — this depends on whether the supplier is a Qualifying Free Zone Person (QFZP) and the nature of the supply.",
+            action_required="Verify supplier VAT registration certificate. Confirm whether QFZP status applies before posting as standard-rated input VAT.",
+            uae_law_reference="Cabinet Decision 55/2017 — Qualifying Free Zone Persons; Article 51, UAE VAT Law",
+            vat_at_risk_aed=0,
         ))
 
     # ANOMALY 20a — Free email address on high-value invoice (gmail/yahoo/hotmail)
@@ -759,8 +769,8 @@ def run_all_anomaly_checks(
             flag_id=21, flag="free_zone_supplier_name", category="uae_specific",
             severity="MEDIUM",
             title="Free Zone Entity Detected — Verify VAT Treatment",
-            what_is_wrong=f"Supplier name/address indicates a UAE Free Zone entity. Supplies from a Qualifying Free Zone Person (QFZP) to mainland UAE may require reverse charge or may be treated as imports — standard 5% input VAT may not apply.",
-            action_required="Confirm if supplier is a QFZP under Cabinet Decision 55/2017. If yes, reverse charge applies. Request supplier's VAT registration certificate and confirm treatment in writing.",
+            what_is_wrong=f"Supplier name/address suggests a UAE Free Zone entity. The invoice alone does not establish the VAT treatment — this depends on the supplier's QFZP status and the nature of the supply.",
+            action_required="Request supplier's VAT registration certificate. Confirm applicable treatment before posting as standard-rated input VAT.",
             uae_law_reference="Cabinet Decision 55/2017 — Qualifying Free Zone Persons; Article 51, UAE VAT Law — Designated Zones",
             vat_at_risk_aed=round(subtotal * 0.05, 2),
         ))
