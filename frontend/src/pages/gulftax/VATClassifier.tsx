@@ -153,9 +153,8 @@ export default function VATClassifier() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
-  // Period filter — default to current month
-  const currentMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
-  const [selectedPeriod, setSelectedPeriod] = useState<string>(currentMonth);
+  // Period filter — default to empty (show all) so Invoice Flow uploads are visible regardless of date
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('');
 
   // Build period_start / period_end from selected YYYY-MM
   const periodStart = selectedPeriod ? `${selectedPeriod}-01` : undefined;
