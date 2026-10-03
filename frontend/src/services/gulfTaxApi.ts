@@ -435,7 +435,16 @@ export async function fetchVatTransactions(limit = 200) {
 }
 
 export async function verifyVatTransaction(id: number) {
-  return gulfTaxPost(`/api/vat/transactions/${id}/verify`);
+  const res = await fetch(`${API}/api/vat/transactions/${id}/verify`, {
+    method: 'PATCH',
+    headers: headers(),
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `API error ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function reclassifyExempt() {
@@ -462,8 +471,8 @@ export async function fetchInvoiceVendors() {
 }
 
 // ── Reconciliation ───────────────────────────────────────────────────────────
-export async function runReconciliation(params: Record<string, unknown>) {
-  return gulfTaxPost('/api/vat/reconcile', params);
+export async function runReconciliation(vatReturnId: number, params?: Record<string, unknown>) {
+  return gulfTaxPost(`/api/vat/reconcile/${vatReturnId}`, params ?? {});
 }
 
 // ── Corporate Tax (ported narrative) ─────────────────────────────────────────

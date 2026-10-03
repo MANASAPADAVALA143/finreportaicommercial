@@ -73,7 +73,20 @@ async function parseError(res: Response): Promise<string> {
   return res.statusText || `API error ${res.status}`;
 }
 
-type RequestConfig = { headers?: Record<string, string>; timeout?: number };
+type RequestConfig = {
+  headers?: Record<string, string>;
+  timeout?: number;
+  params?: Record<string, string | number | boolean>;
+};
+
+function appendParams(path: string, params?: Record<string, string | number | boolean>): string {
+  if (!params || Object.keys(params).length === 0) return path;
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) qs.set(k, String(v));
+  }
+  return `${path}${path.includes('?') ? '&' : '?'}${qs.toString()}`;
+}
 
 async function request<T>(
   method: string,
@@ -85,6 +98,9 @@ async function request<T>(
   const controller = new AbortController();
   const timeout = config?.timeout ?? 30_000;
   const timer = setTimeout(() => controller.abort(), timeout);
+  const resolvedPath = (method === 'GET' || method === 'DELETE')
+    ? appendParams(path, config?.params)
+    : path;
 
   try {
     const headers = await buildHeaders(config?.headers, isForm);
@@ -93,7 +109,7 @@ async function request<T>(
       delete headers['Content-Type'];
       delete headers['content-type'];
     }
-    const res = await fetch(`${API}${path}`, {
+    const res = await fetch(`${API}${resolvedPath}`, {
       method,
       headers,
       body: isForm ? body : body ? JSON.stringify(body) : undefined,
