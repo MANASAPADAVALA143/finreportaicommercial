@@ -1219,9 +1219,14 @@ Description: {description}
 Amount AED: {amount:,.2f}
 VAT charged: AED {ex.vat_amount_aed or 0:,.2f}
 
+ENTERTAINMENT / CATERING (Art.53 — Input VAT BLOCKED):
+- When vendor is a hotel, restaurant, or entertainment venue (e.g. Jumeirah, Marriott, Hilton, Atlantis, Nobu, Four Seasons, Hyatt, or any name containing "hotel", "resort", "restaurant", "grill", "café", "catering") AND transaction_type = purchase:
+- OR when description contains: catering, dinner, entertainment, hospitality, gala, buffet, restaurant, hotel dining, venue hire, client dinner, team lunch, employee gift:
+  → vat_treatment = entertainment_restricted  (NOT standard_rated)
+
 Return JSON only:
 {{
-  "vat_treatment": "standard_rated|zero_rated|exempt|out_of_scope|reverse_charge",
+  "vat_treatment": "standard_rated|zero_rated|exempt|out_of_scope|reverse_charge|entertainment_restricted",
   "confidence": 0.0-1.0,
   "article_reference": "Article X, UAE VAT Law",
   "reasoning": "brief explanation"
@@ -1282,12 +1287,13 @@ Return JSON only:
             inv_date = date.today()
 
         vat_treatment = inv.vat_treatment or "standard_rated"
+        _vat_bearing = vat_treatment in ("standard_rated", "entertainment_restricted")
         line_items = inv.line_items or []
 
         def _add_header_total_txn(*, source: str, reasoning: str) -> int:
             if not inv.total_aed:
                 return 0
-            subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
+            subtotal = inv.total_aed / 1.05 if _vat_bearing else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
                     Transaction.company_id == company_id,
@@ -1298,7 +1304,7 @@ Return JSON only:
             ).first()
             if exists:
                 return 0
-            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            vat_amount = round(subtotal * 0.05, 2) if _vat_bearing else 0.0
             db.add(Transaction(
                 company_id=company_id,
                 date=inv_date,
@@ -1339,7 +1345,7 @@ Return JSON only:
                 if exists:
                     continue
                 vat_rate = float(li.get("vat_rate", 5) or 5)
-                vat_amount = round(amount * vat_rate / 100, 2) if vat_treatment == "standard_rated" else 0.0
+                vat_amount = round(amount * vat_rate / 100, 2) if _vat_bearing else 0.0
                 db.add(Transaction(
                     company_id=company_id,
                     date=inv_date,
@@ -1532,12 +1538,13 @@ def review_invoice(
             inv_date = date.today()
 
         vat_treatment = inv.vat_treatment or "standard_rated"
+        _vat_bearing = vat_treatment in ("standard_rated", "entertainment_restricted")
         line_items = inv.line_items or []
 
         def _add_header_total_txn(*, source: str, reasoning: str) -> int:
             if not inv.total_aed:
                 return 0
-            subtotal = inv.total_aed / 1.05 if vat_treatment == "standard_rated" else inv.total_aed
+            subtotal = inv.total_aed / 1.05 if _vat_bearing else inv.total_aed
             exists = db.query(Transaction).filter(
                 and_(
                     Transaction.company_id == company_id,
@@ -1548,7 +1555,7 @@ def review_invoice(
             ).first()
             if exists:
                 return 0
-            vat_amount = round(subtotal * 0.05, 2) if vat_treatment == "standard_rated" else 0.0
+            vat_amount = round(subtotal * 0.05, 2) if _vat_bearing else 0.0
             db.add(Transaction(
                 company_id=company_id,
                 date=inv_date,
@@ -1591,7 +1598,7 @@ def review_invoice(
                     continue
 
                 vat_rate = float(li.get("vat_rate", 5) or 5)
-                vat_amount = round(amount * vat_rate / 100, 2) if vat_treatment == "standard_rated" else 0.0
+                vat_amount = round(amount * vat_rate / 100, 2) if _vat_bearing else 0.0
 
                 db.add(Transaction(
                     company_id=company_id,
