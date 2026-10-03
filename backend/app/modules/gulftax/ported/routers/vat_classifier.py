@@ -1202,6 +1202,7 @@ async def get_transactions(
     period_end: Optional[date] = Query(None, description="Filter by period end date"),
     vat_treatment: Optional[str] = Query(None, description="Filter by VAT treatment"),
     flag_for_review: Optional[bool] = Query(None, description="Filter by flag_for_review status"),
+    limit: Optional[int] = Query(None, ge=1, le=5000, description="Max records to return"),
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
@@ -1231,8 +1232,10 @@ async def get_transactions(
         else:
             query = query.filter(Transaction.confidence_score >= 70)
     
+    if limit:
+        query = query.limit(limit)
     transactions = query.order_by(Transaction.date.desc()).all()
-    
+
     return transactions
 
 
