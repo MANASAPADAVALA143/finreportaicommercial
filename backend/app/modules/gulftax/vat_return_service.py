@@ -677,11 +677,16 @@ def fetch_all_vat_return_boxes(
         # (aggregate_vat_return_summary may report count > 0 with 0 amounts from Supabase)
         _box9_so_far = float(purchases.get("box9_standard_rated_expenses") or 0)
         _box11_so_far = float(purchases.get("box11_recoverable_input_vat") or 0)
+        logger.info(
+            "[VAT-RETURN-DEBUG] company_id=%s period=%s gt_entries=%d box9=%.2f box11=%.2f",
+            company_id, period, len(gt_entries), _box9_so_far, _box11_so_far,
+        )
         if not gt_entries and _box9_so_far == 0 and _box11_so_far == 0:
             try:
-                from models import Transaction as PortedTransaction
-                # Must use the ported DB session — not the main app `db` session
-                from database import SessionLocal as PortedSessionLocal  # noqa: WPS433
+                from app.modules.gulftax.ported.models import Transaction as PortedTransaction
+                from app.modules.gulftax.ported.models import Company as PortedCompany
+                from app.modules.gulftax.ported.database import SessionLocal as PortedSessionLocal
+                from sqlalchemy import or_
 
                 _ported_db = PortedSessionLocal()
                 try:
@@ -694,34 +699,35 @@ def fetch_all_vat_return_boxes(
                         )
                         .all()
                     )
+                    logger.info(
+                        "[VAT-RETURN-DEBUG] ported direct rows=%d company_id=%s %s..%s",
+                        len(port_rows), company_id, period_start, period_end,
+                    )
                     # If no rows, try resolving company_id via the ported Company table
                     # (external_id or workspace_id may equal the FinReportAI company UUID)
                     if not port_rows:
-                        try:
-                            from models import Company as PortedCompany  # noqa: WPS433
-                            from sqlalchemy import or_
-                            ported_co = (
-                                _ported_db.query(PortedCompany)
-                                .filter(
-                                    or_(
-                                        PortedCompany.external_id == company_id,
-                                        PortedCompany.workspace_id == company_id,
-                                    )
+                        ported_co = (
+                            _ported_db.query(PortedCompany)
+                            .filter(
+                                or_(
+                                    PortedCompany.external_id == company_id,
+                                    PortedCompany.workspace_id == company_id,
                                 )
-                                .first()
                             )
-                            if ported_co:
-                                port_rows = (
-                                    _ported_db.query(PortedTransaction)
-                                    .filter(
-                                        PortedTransaction.company_id == str(ported_co.id),
-                                        PortedTransaction.date >= period_start,
-                                        PortedTransaction.date <= period_end,
-                                    )
-                                    .all()
+                            .first()
+                        )
+                        logger.info("[VAT-RETURN-DEBUG] ported Company lookup external_id/workspace_id=%s → %s", company_id, ported_co)
+                        if ported_co:
+                            port_rows = (
+                                _ported_db.query(PortedTransaction)
+                                .filter(
+                                    PortedTransaction.company_id == str(ported_co.id),
+                                    PortedTransaction.date >= period_start,
+                                    PortedTransaction.date <= period_end,
                                 )
-                        except Exception:
-                            logger.debug("ported Company lookup failed, skipping")
+                                .all()
+                            )
+                            logger.info("[VAT-RETURN-DEBUG] ported via-company rows=%d", len(port_rows))
                 finally:
                     _ported_db.close()
                 if port_rows:
