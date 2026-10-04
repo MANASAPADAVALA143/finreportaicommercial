@@ -1077,7 +1077,6 @@ async def get_all_boxes(
             Transaction.company_id == company_id,
             Transaction.date >= period_start,
             Transaction.date <= period_end,
-            Transaction.is_verified == True,
         )
     ).all()
 
