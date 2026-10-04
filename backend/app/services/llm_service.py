@@ -66,6 +66,18 @@ def is_configured() -> bool:
     return bool(_key())
 
 
+def _is_thinking_model(model: str) -> bool:
+    return any(x in model for x in ("sonnet-4", "opus-4", "haiku-4"))
+
+
+def safe_create(client: Anthropic, **kwargs) -> object:
+    """Wrapper around messages.create() that strips temperature for thinking models."""
+    model = kwargs.get("model", DEFAULT_CLAUDE_MODEL)
+    if _is_thinking_model(model):
+        kwargs.pop("temperature", None)
+    return client.messages.create(**kwargs)
+
+
 def provider_label() -> str:
     return "Anthropic Claude"
 
@@ -82,12 +94,16 @@ def invoke(
         raise LLMNotConfiguredError(
             "ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart the API server."
         )
+    _model = model_id or DEFAULT_CLAUDE_MODEL
+    # Extended thinking models (claude-sonnet-4-x, claude-opus-4-x) do not accept temperature
+    _thinking_model = any(x in _model for x in ("sonnet-4", "opus-4", "haiku-4"))
     kwargs = {
-        "model": model_id or DEFAULT_CLAUDE_MODEL,
+        "model": _model,
         "max_tokens": max_tokens,
-        "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
     }
+    if not _thinking_model:
+        kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = system
 

@@ -23,6 +23,13 @@ try:
 except Exception:  # pragma: no cover — ported package may load without app package
     DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
+try:
+    from app.services.llm_service import safe_create
+except Exception:  # pragma: no cover
+    def safe_create(client, **kwargs):
+        kwargs.pop("temperature", None)
+        return client.messages.create(**kwargs)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
@@ -1087,7 +1094,8 @@ def extract_invoice(
         ]
 
     try:
-        msg = claude_client.messages.create(
+        msg = safe_create(
+            claude_client,
             model=DEFAULT_CLAUDE_MODEL,
             max_tokens=1200,
             temperature=0,
@@ -1234,7 +1242,8 @@ Return JSON only:
 
     print(f"[classify-and-risk] calling Claude for VAT classification", flush=True)
     try:
-        msg = claude_client.messages.create(
+        msg = safe_create(
+            claude_client,
             model=DEFAULT_CLAUDE_MODEL,
             max_tokens=300,
             temperature=0.1,

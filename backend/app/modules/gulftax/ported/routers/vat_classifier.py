@@ -26,6 +26,18 @@ import logging
 
 load_dotenv()
 
+try:
+    from app.core.claude_model import DEFAULT_CLAUDE_MODEL
+except Exception:
+    DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+try:
+    from app.services.llm_service import safe_create
+except Exception:  # pragma: no cover
+    def safe_create(client, **kwargs):
+        kwargs.pop("temperature", None)
+        return client.messages.create(**kwargs)
+
 router = APIRouter(prefix="/api/vat", tags=["VAT Classification"])
 logger = logging.getLogger(__name__)
 # Classification: POST /classify-transaction (single JSON) and POST /classify-bulk (multipart file) only.
@@ -340,8 +352,9 @@ Return JSON only:
 
     try:
         # Call Claude API
-        message = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+        message = safe_create(
+            claude_client,
+            model=DEFAULT_CLAUDE_MODEL,
             max_tokens=500,
             temperature=0.1,
             system=system_prompt,
