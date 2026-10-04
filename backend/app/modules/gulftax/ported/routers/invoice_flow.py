@@ -1299,6 +1299,15 @@ Return JSON only:
         _vat_bearing = vat_treatment in ("standard_rated", "entertainment_restricted")
         line_items = inv.line_items or []
 
+        def _box_for_treatment(treatment: str) -> int:
+            """Map vat_treatment to FTA VAT return box number."""
+            return {
+                "zero_rated": 4,
+                "exempt": 5,
+                "out_of_scope": 5,
+                "reverse_charge": 10,
+            }.get(treatment, 9)
+
         def _add_header_total_txn(*, source: str, reasoning: str) -> int:
             if not inv.total_aed:
                 return 0
@@ -1324,7 +1333,7 @@ Return JSON only:
                 vat_treatment=vat_treatment,
                 amount_aed=round(subtotal, 2),
                 vat_amount_aed=vat_amount,
-                box_number=9,
+                box_number=_box_for_treatment(vat_treatment),
                 confidence_score=round((inv.confidence or 0.9) * 100, 1),
                 is_verified=True,
                 source=source,
@@ -1334,6 +1343,17 @@ Return JSON only:
             return 1
 
         if line_items:
+            # Bug fix: if line items exist, delete any stale header-total transaction for this
+            # invoice so we don't double-count (header + line items for the same invoice).
+            db.query(Transaction).filter(
+                and_(
+                    Transaction.company_id == company_id,
+                    Transaction.invoice_number == inv.invoice_number,
+                    Transaction.source_invoice_id == inv.id,
+                    Transaction.description == (inv.vendor_name or f"Invoice #{inv.invoice_number}"),
+                )
+            ).delete(synchronize_session=False)
+
             for li in line_items:
                 desc = (li.get("description") or "").strip() or inv.vendor_name or "Invoice line item"
                 qty = float(li.get("quantity") or li.get("qty") or 1)
@@ -1353,8 +1373,10 @@ Return JSON only:
                 ).first()
                 if exists:
                     continue
+                li_treatment = (li.get("vat_treatment") or vat_treatment)
+                li_vat_bearing = li_treatment in ("standard_rated", "entertainment_restricted")
                 vat_rate = float(li.get("vat_rate", 5) or 5)
-                vat_amount = round(amount * vat_rate / 100, 2) if _vat_bearing else 0.0
+                vat_amount = round(amount * vat_rate / 100, 2) if li_vat_bearing else 0.0
                 db.add(Transaction(
                     company_id=company_id,
                     date=inv_date,
@@ -1362,10 +1384,10 @@ Return JSON only:
                     vendor_or_customer=inv.vendor_name,
                     invoice_number=inv.invoice_number,
                     transaction_type="purchase",
-                    vat_treatment=vat_treatment,
+                    vat_treatment=li_treatment,
                     amount_aed=amount,
                     vat_amount_aed=vat_amount,
-                    box_number=9,
+                    box_number=_box_for_treatment(li_treatment),
                     confidence_score=round((inv.confidence or 0.9) * 100, 1),
                     is_verified=True,
                     source="invoice_flow_auto",
