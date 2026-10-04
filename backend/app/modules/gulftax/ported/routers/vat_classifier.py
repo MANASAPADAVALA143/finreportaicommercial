@@ -1360,6 +1360,14 @@ async def bulk_approve_high_confidence(
     threshold_pct = body.min_confidence * 100
     threshold_01 = body.min_confidence  # some legacy rows stored 0-1 instead of 0-100
     from sqlalchemy import or_
+
+    # Count already-approved so the UI message is accurate
+    already_approved_count = (
+        db.query(Transaction)
+        .filter(Transaction.company_id == company_id, Transaction.is_verified == True)  # noqa: E712
+        .count()
+    )
+
     rows = (
         db.query(Transaction)
         .filter(
@@ -1474,6 +1482,7 @@ async def bulk_approve_high_confidence(
 
     return {
         "approved_count": approved,
+        "already_approved_count": already_approved_count,
         "skipped_blocked": skipped_blocked,
         "min_confidence": body.min_confidence,
         "akk_fixed": box_fixes.get("akk_fixed", 0),

@@ -103,8 +103,7 @@ export async function fetchVatReturnBoxes(period: string) {
 
 export async function fetchVatReturnAllBoxes(period: string, companyIdParam?: string) {
   const cid = companyIdParam || companyId();
-  if (!cid) throw new Error('company_id is required for VAT return');
-  const qs = new URLSearchParams({ period, company_id: cid });
+  const qs = new URLSearchParams({ period, ...(cid ? { company_id: cid } : {}) });
   const res = await fetch(`${API}/api/gulftax/vat-return/all-boxes?${qs}`, { headers: headers() });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json() as Promise<Record<string, unknown>>;

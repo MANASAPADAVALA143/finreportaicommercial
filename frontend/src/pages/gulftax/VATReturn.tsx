@@ -210,6 +210,10 @@ export default function VATReturn() {
   };
 
   const load = async () => {
+    if (!activeCompanyId) {
+      setLoadError('No company selected — please select a company from the top menu.');
+      return;
+    }
     setLoading(true);
     setPayMsg(null);
     setOverrideMsg(null);
