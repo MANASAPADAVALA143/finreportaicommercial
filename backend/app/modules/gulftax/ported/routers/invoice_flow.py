@@ -1875,3 +1875,83 @@ def demo_reset(
         "deleted_invoices": deleted_invoices,
         "deleted_transactions": deleted_txns,
     }
+
+
+@router.post("/repair-transactions")
+def repair_transactions(
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Fix existing transaction data:
+    1. For invoices with both header-total and line-item rows, delete the header-total duplicates.
+    2. Fix box_number for zero_rated (→4), exempt/out_of_scope (→5), reverse_charge (→10).
+    """
+    from sqlalchemy import func as sqlfunc
+
+    BOX_MAP = {
+        "zero_rated": 4,
+        "exempt": 5,
+        "out_of_scope": 5,
+        "reverse_charge": 10,
+    }
+
+    deleted_duplicates = 0
+    fixed_boxes = 0
+
+    # Step 1: find invoices that have >1 transaction row
+    inv_counts = (
+        db.query(Transaction.invoice_number, sqlfunc.count(Transaction.id).label("cnt"))
+        .filter(Transaction.company_id == company_id, Transaction.invoice_number.isnot(None))
+        .group_by(Transaction.invoice_number)
+        .having(sqlfunc.count(Transaction.id) > 1)
+        .all()
+    )
+
+    for inv_num, _ in inv_counts:
+        rows = (
+            db.query(Transaction)
+            .filter(Transaction.company_id == company_id, Transaction.invoice_number == inv_num)
+            .all()
+        )
+        if len(rows) <= 1:
+            continue
+
+        # Find the invoice to get vendor name (used as header-row description)
+        inv_obj = db.query(Invoice).filter(
+            Invoice.company_id == company_id,
+            Invoice.invoice_number == inv_num,
+        ).first()
+        header_desc = inv_obj.vendor_name if inv_obj else None
+
+        # Identify header-total rows: description == vendor name (set in _add_header_total_txn)
+        header_rows = [r for r in rows if header_desc and r.description == header_desc]
+        line_rows = [r for r in rows if r not in header_rows]
+
+        # Only delete header rows when real line-item rows also exist
+        if header_rows and line_rows:
+            for hr in header_rows:
+                db.delete(hr)
+                deleted_duplicates += 1
+
+    db.flush()
+
+    # Step 2: fix box_number for non-standard-rated transactions
+    wrong_box_rows = (
+        db.query(Transaction)
+        .filter(
+            Transaction.company_id == company_id,
+            Transaction.vat_treatment.in_(list(BOX_MAP.keys())),
+        )
+        .all()
+    )
+    for t in wrong_box_rows:
+        correct = BOX_MAP.get(t.vat_treatment or "", 9)
+        if t.box_number != correct:
+            t.box_number = correct
+            fixed_boxes += 1
+
+    db.commit()
+    return {
+        "deleted_duplicate_header_rows": deleted_duplicates,
+        "fixed_box_numbers": fixed_boxes,
+    }
