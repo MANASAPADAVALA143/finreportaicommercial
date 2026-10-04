@@ -297,8 +297,12 @@ export default function VATClassifier() {
           ? ` · GulfTax synced ${data.gulftax_synced}`
           : "";
       const akkBit = data.akk_fixed ? ` · AKK box fixed ${data.akk_fixed}` : "";
+      const alreadyBit =
+        data.approved_count === 0 && data.already_approved_count > 0
+          ? ` · ${data.already_approved_count} already approved`
+          : "";
       setUploadMsg(
-        `✅ Approved ${data.approved_count} transaction(s)${
+        `✅ Approved ${data.approved_count} transaction(s)${alreadyBit}${
           data.skipped_blocked ? ` · ${data.skipped_blocked} blocked skipped` : ""
         }${akkBit}${syncBit}.`
       );

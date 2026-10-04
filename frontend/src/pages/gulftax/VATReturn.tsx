@@ -210,6 +210,10 @@ export default function VATReturn() {
   };
 
   const load = async () => {
+    if (!activeCompanyId) {
+      setLoadError('No company selected — please select a company from the top menu.');
+      return;
+    }
     setLoading(true);
     setPayMsg(null);
     setOverrideMsg(null);
@@ -468,6 +472,11 @@ export default function VATReturn() {
       {loadError && (
         <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
           API error: {loadError}
+        </div>
+      )}
+      {data && (data as Record<string, unknown>)['_no_transactions'] && (
+        <div className="mb-4 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-xs text-yellow-300 font-mono break-all">
+          No transactions found — {String((data as Record<string, unknown>)['_debug'] || 'no debug info')}
         </div>
       )}
       {reconBanner()}

@@ -1080,8 +1080,12 @@ async def get_all_boxes(
         )
     ).all()
 
+    # Count all transactions for this company (ignoring date) to help debug
+    total_company_txns = db.query(Transaction).filter(
+        Transaction.company_id == company_id
+    ).count()
+
     if not transactions:
-        # Return zeros so page renders (not an error)
         return {
             "box1_standard_rated_sales_net": 0.0,
             "box1_standard_rated_sales_vat": 0.0,
@@ -1103,6 +1107,7 @@ async def get_all_boxes(
             "purchase_entry_count": 0,
             "entries": [],
             "_no_transactions": True,
+            "_debug": f"company_id={company_id} period={period_start}→{period_end} total_for_company={total_company_txns}",
         }
 
     boxes = calculate_vat_return_boxes(transactions)
