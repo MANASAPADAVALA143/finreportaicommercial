@@ -8,8 +8,12 @@ import { getStoredWorkspaceId } from '../../services/workspaceService';
 
 function currentQuarter(): string {
   const d = new Date();
-  const q = Math.floor(d.getMonth() / 3) + 1;
-  return `${d.getFullYear()}-Q${q}`;
+  let q = Math.floor(d.getMonth() / 3) + 1;
+  let year = d.getFullYear();
+  // Default to previous quarter — that's the one due for filing
+  q -= 1;
+  if (q < 1) { q = 4; year -= 1; }
+  return `${year}-Q${q}`;
 }
 
 type AllBoxes = {
