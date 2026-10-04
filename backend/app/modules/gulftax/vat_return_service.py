@@ -681,7 +681,9 @@ def fetch_all_vat_return_boxes(
             "[VAT-RETURN-DEBUG] company_id=%s period=%s gt_entries=%d box9=%.2f box11=%.2f",
             company_id, period, len(gt_entries), _box9_so_far, _box11_so_far,
         )
-        if not gt_entries and _box9_so_far == 0 and _box11_so_far == 0:
+        # Always try ported DB when amounts are 0 — gt_entries may be non-empty but have 0 amounts
+        # (Supabase gulftax_transactions rows synced with 0 amounts don't count as real data)
+        if _box9_so_far == 0 and _box11_so_far == 0:
             try:
                 from app.modules.gulftax.ported.models import Transaction as PortedTransaction
                 from app.modules.gulftax.ported.models import Company as PortedCompany
