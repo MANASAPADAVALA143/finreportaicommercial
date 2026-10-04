@@ -178,6 +178,7 @@ export default function VATReturn() {
 
   const [period, setPeriod] = useState(currentQuarter());
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [data, setData] = useState<AllBoxes | null>(null);
   const [showPay, setShowPay] = useState(false);
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
@@ -212,6 +213,7 @@ export default function VATReturn() {
     setLoading(true);
     setPayMsg(null);
     setOverrideMsg(null);
+    setLoadError(null);
     try {
       const [res, summary] = await Promise.all([
         fetchVatReturnAllBoxes(period, activeCompanyId || undefined),
@@ -234,7 +236,9 @@ export default function VATReturn() {
         setFilingOverrides(null);
       }
       await loadReconStatus();
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setLoadError(msg);
       // On error show zeros rather than "—" so the page is usable
       const zeros: AllBoxes = {
         box1_standard_rated_sales_net: 0, box1_standard_rated_sales_vat: 0,
@@ -461,6 +465,11 @@ export default function VATReturn() {
         </button>
       </div>
 
+      {loadError && (
+        <div className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          API error: {loadError}
+        </div>
+      )}
       {reconBanner()}
       {overrideMsg && <p className="text-xs text-amber-300 mb-4">{overrideMsg}</p>}
 
