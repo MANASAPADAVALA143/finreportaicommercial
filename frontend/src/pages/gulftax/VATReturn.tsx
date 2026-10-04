@@ -470,6 +470,11 @@ export default function VATReturn() {
           API error: {loadError}
         </div>
       )}
+      {data && (data as Record<string, unknown>)['_no_transactions'] && (
+        <div className="mb-4 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-xs text-yellow-300 font-mono break-all">
+          No transactions found — {String((data as Record<string, unknown>)['_debug'] || 'no debug info')}
+        </div>
+      )}
       {reconBanner()}
       {overrideMsg && <p className="text-xs text-amber-300 mb-4">{overrideMsg}</p>}
 
