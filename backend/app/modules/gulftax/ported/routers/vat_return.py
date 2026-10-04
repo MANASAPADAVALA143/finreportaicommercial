@@ -1029,3 +1029,111 @@ Return only the recommendation text, no markdown or formatting."""
         "mismatches": all_mismatches,
         "recommendation": recommendation
     }
+
+
+# ── /api/gulftax/vat-return/all-boxes — endpoint the frontend VATReturn page calls ──
+gulftax_vat_router = APIRouter(prefix="/api/gulftax/vat-return", tags=["VAT Return"])
+
+
+def _parse_period(period: str):
+    """Convert '2026-Q3' or 'YYYY-MM-DD,YYYY-MM-DD' to (start, end) dates."""
+    import re
+    # Quarter format: 2026-Q3
+    m = re.match(r"^(\d{4})-Q([1-4])$", period.strip())
+    if m:
+        year, q = int(m.group(1)), int(m.group(2))
+        month_start = (q - 1) * 3 + 1
+        month_end = month_start + 2
+        from calendar import monthrange
+        day_end = monthrange(year, month_end)[1]
+        return date(year, month_start, 1), date(year, month_end, day_end)
+    # ISO date range: 2026-07-01,2026-09-30
+    if "," in period:
+        parts = period.split(",")
+        return date.fromisoformat(parts[0].strip()), date.fromisoformat(parts[1].strip())
+    # Single month: 2026-07
+    m2 = re.match(r"^(\d{4})-(\d{2})$", period.strip())
+    if m2:
+        from calendar import monthrange
+        year, month = int(m2.group(1)), int(m2.group(2))
+        return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+    raise ValueError(f"Unrecognised period format: {period!r}")
+
+
+@gulftax_vat_router.get("/all-boxes")
+async def get_all_boxes(
+    period: str = Query(..., description="e.g. 2026-Q3"),
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+):
+    """Return all FTA VAT return boxes for the given period, mapped to frontend key names."""
+    try:
+        period_start, period_end = _parse_period(period)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    transactions = db.query(Transaction).filter(
+        and_(
+            Transaction.company_id == company_id,
+            Transaction.date >= period_start,
+            Transaction.date <= period_end,
+            Transaction.is_verified == True,
+        )
+    ).all()
+
+    if not transactions:
+        # Return zeros so page renders (not an error)
+        return {
+            "box1_standard_rated_sales_net": 0.0,
+            "box1_standard_rated_sales_vat": 0.0,
+            "box2_tourist_refunds": 0.0,
+            "box2_advance_payment_vat": 0.0,
+            "box3_reverse_charge_supplies_net": 0.0,
+            "box3_reverse_charge_supplies_vat": 0.0,
+            "box4_zero_rated_supplies": 0.0,
+            "box5_exempt_supplies": 0.0,
+            "box6_imports_vat": 0.0,
+            "box7_output_adjustments": 0.0,
+            "box8_total_output_vat": 0.0,
+            "box9_standard_rated_expenses": 0.0,
+            "box10_reverse_charge_expenses": 0.0,
+            "box11_total_input_vat": 0.0,
+            "box12_net_vat_payable_or_refundable": 0.0,
+            "payable": True,
+            "sales_invoice_count": 0,
+            "purchase_entry_count": 0,
+            "entries": [],
+            "_no_transactions": True,
+        }
+
+    boxes = calculate_vat_return_boxes(transactions)
+    sales_count = sum(1 for t in transactions if (getattr(t, "transaction_type", None) or "purchase").lower() == "sale")
+    purch_count = len(transactions) - sales_count
+
+    b1_net = boxes.get("box1_standard_rated_supplies", 0.0)
+    b1_vat = b1_net * 0.05
+    b8 = boxes.get("box8_vat_payable_or_refundable", 0.0)
+    b9 = boxes.get("box9_standard_rated_purchases", 0.0)
+    b7 = boxes.get("box7_vat_on_expenses", 0.0)
+
+    return {
+        "box1_standard_rated_sales_net": b1_net,
+        "box1_standard_rated_sales_vat": b1_vat,
+        "box2_tourist_refunds": 0.0,
+        "box2_advance_payment_vat": boxes.get("box2_vat_on_supplies", 0.0),
+        "box3_reverse_charge_supplies_net": boxes.get("_rc_net_aed", 0.0),
+        "box3_reverse_charge_supplies_vat": boxes.get("_rc_vat_aed", 0.0),
+        "box4_zero_rated_supplies": boxes.get("box3_zero_rated_supplies", 0.0),
+        "box5_exempt_supplies": boxes.get("box4_exempt_supplies", 0.0),
+        "box6_imports_vat": 0.0,
+        "box7_output_adjustments": 0.0,
+        "box8_total_output_vat": boxes.get("box2_vat_on_supplies", 0.0),
+        "box9_standard_rated_expenses": b9,
+        "box10_reverse_charge_expenses": boxes.get("_rc_net_aed", 0.0),
+        "box11_total_input_vat": b7,
+        "box12_net_vat_payable_or_refundable": b8,
+        "payable": b8 >= 0,
+        "sales_invoice_count": sales_count,
+        "purchase_entry_count": purch_count,
+        "entries": [],
+    }
