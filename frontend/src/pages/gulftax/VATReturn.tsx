@@ -10,10 +10,23 @@ function currentQuarter(): string {
   const d = new Date();
   let q = Math.floor(d.getMonth() / 3) + 1;
   let year = d.getFullYear();
-  // Default to previous quarter — that's the one due for filing
+  // Default to previous quarter — the one due for filing
   q -= 1;
   if (q < 1) { q = 4; year -= 1; }
   return `${year}-Q${q}`;
+}
+
+function quarterOptions(): { value: string; label: string }[] {
+  const opts: { value: string; label: string }[] = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const quarterLabels = ['Q1 Jan–Mar', 'Q2 Apr–Jun', 'Q3 Jul–Sep', 'Q4 Oct–Dec'];
+  for (let year = currentYear - 1; year <= currentYear; year++) {
+    for (let q = 1; q <= 4; q++) {
+      opts.push({ value: `${year}-Q${q}`, label: `${year} ${quarterLabels[q - 1]}` });
+    }
+  }
+  return opts.reverse(); // newest first
 }
 
 type AllBoxes = {
@@ -429,11 +442,15 @@ export default function VATReturn() {
 
       <div className="flex items-center gap-3 mb-6 flex-wrap">
         <label className="text-sm text-gray-400">Period</label>
-        <input
+        <select
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
-          className="bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white w-32"
-        />
+          className="bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+        >
+          {quarterOptions().map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
         <button
           type="button"
           onClick={() => void load()}
