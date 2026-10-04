@@ -1028,10 +1028,14 @@ async def add_pdf_invoices_to_transactions(
             main_db = MainSessionLocal()
             try:
                 for txn in fresh:
+                    # Auto-approved invoices must land as 'posted' so VAT Return
+                    # (which filters status='posted') can read them immediately.
+                    initial_status = "posted" if getattr(txn, "is_verified", False) else "pending"
                     res = sync_pdf_txn_to_gulftax_pending(
                         main_db,
                         txn,
                         ported_company=company,
+                        initial_status=initial_status,
                     )
                     if res.get("ok") and not res.get("skipped"):
                         gulftax_pending += 1
@@ -1420,6 +1424,34 @@ async def bulk_approve_high_confidence(
             )
         )
     db.commit()
+
+    # Upgrade any pending PDF-sourced gulftax_transactions to 'posted' so VAT
+    # Return (which filters status='posted') can read them immediately.
+    try:
+        from app.core.database import SessionLocal as MainSessionLocal
+        from app.models.client_data import GulftaxTransaction
+
+        _main_db = MainSessionLocal()
+        try:
+            pending_pdf = (
+                _main_db.query(GulftaxTransaction)
+                .filter(
+                    GulftaxTransaction.company_id == company_id,
+                    GulftaxTransaction.status == "pending",
+                    GulftaxTransaction.source.in_(
+                        ("invoice_flow_pdf", "vat_classifier_approved")
+                    ),
+                )
+                .all()
+            )
+            for _row in pending_pdf:
+                _row.status = "posted"
+            if pending_pdf:
+                _main_db.commit()
+        finally:
+            _main_db.close()
+    except Exception:
+        logger.exception("Failed to upgrade pending gulftax rows to posted for company=%s", company_id)
 
     # Sync verified classifier rows → gulftax_transactions (VAT Return source)
     synced = 0

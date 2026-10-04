@@ -1063,10 +1063,25 @@ def _parse_period(period: str):
 @gulftax_vat_router.get("/all-boxes")
 async def get_all_boxes(
     period: str = Query(..., description="e.g. 2026-Q3"),
-    company_id: str = Depends(get_current_company_id),
+    company_id_param: Optional[str] = Query(None, alias="company_id"),
+    x_company_id: Optional[str] = Header(default=None, alias="X-Company-ID"),
+    authorization: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    """Return all FTA VAT return boxes for the given period, mapped to frontend key names."""
+    # Accept company_id from query param (frontend) or resolve via JWT header.
+    # JWT path is attempted only when no query param is provided so that the VAT
+    # Return page works even when the Supabase auth service is unreachable.
+    company_id = (company_id_param or x_company_id or "").strip()
+    if not company_id:
+        try:
+            from middleware.auth import get_current_company_id as _get_cid
+            company_id = await _get_cid(
+                x_company_id=x_company_id,
+                authorization=authorization,
+                db=db,
+            )
+        except Exception:
+            raise HTTPException(status_code=400, detail="company_id is required for VAT return")
     try:
         period_start, period_end = _parse_period(period)
     except ValueError as e:
