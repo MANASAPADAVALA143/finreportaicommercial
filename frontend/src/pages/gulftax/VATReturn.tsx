@@ -171,8 +171,15 @@ function entryNetAmount(e: Record<string, unknown>): number {
 }
 
 export default function VATReturn() {
-  const { activeCompany, activeCompanyId } = useCompany();
+  const { activeCompany, activeCompanyId: _ctxCompanyId } = useCompany();
   const { activeWorkspace } = useWorkspace();
+  // Fall back to gulftax_company_id so the VAT Return page works even when the
+  // FinReportAI company list hasn't loaded (GulfTax-only setup).
+  const activeCompanyId =
+    _ctxCompanyId ||
+    localStorage.getItem('gulftax_company_id') ||
+    localStorage.getItem('active_company_id') ||
+    null;
   const workspaceId =
     localStorage.getItem('active_workspace_id') || getStoredWorkspaceId() || activeWorkspace?.id || '';
 
