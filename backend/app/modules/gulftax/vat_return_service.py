@@ -673,7 +673,11 @@ def fetch_all_vat_return_boxes(
                 pass
 
         # Fallback: read ported Transaction model (AP invoice flow syncs here)
-        if not gt_entries and purchases.get("entry_count", 0) == 0:
+        # Run when there are no entries OR when entry_count > 0 but amounts are all 0
+        # (aggregate_vat_return_summary may report count > 0 with 0 amounts from Supabase)
+        _box9_so_far = float(purchases.get("box9_standard_rated_expenses") or 0)
+        _box11_so_far = float(purchases.get("box11_recoverable_input_vat") or 0)
+        if not gt_entries and _box9_so_far == 0 and _box11_so_far == 0:
             try:
                 from models import Transaction as PortedTransaction
                 # Must use the ported DB session — not the main app `db` session
