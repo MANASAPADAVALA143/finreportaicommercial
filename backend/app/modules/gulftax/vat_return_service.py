@@ -786,13 +786,12 @@ def fetch_all_vat_return_boxes(
                         float(t.amount_aed or 0)
                         for t in port_rows
                         if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
-                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
+                        and float(t.vat_amount_aed or 0) > 0
                     )
                     box11_p = sum(
                         float(t.vat_amount_aed or 0)
                         for t in port_rows
                         if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
-                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
                     )
                     box1_p_net = sum(
                         float(t.amount_aed or 0)
