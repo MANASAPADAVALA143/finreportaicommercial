@@ -202,28 +202,28 @@ app.add_middleware(RequestLoggingMiddleware)
 # Otherwise 401/403 JSONResponses from ProductRole skip CORS headers and the
 # browser reports a misleading CORS failure instead of the real auth error.
 app.add_middleware(ProductRoleMiddleware)
+
+_DEFAULT_ORIGINS = [
+    "https://finreportai.com",
+    "https://www.finreportai.com",
+    "https://finreportaicommercial.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+_env_origins = os.getenv("ALLOWED_ORIGINS", "")
+_extra_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+_ALL_ORIGINS: list[str] = list(dict.fromkeys(_DEFAULT_ORIGINS + _extra_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://finreportai.com",
-        "https://www.finreportai.com",
-        "https://finreportaicommercial.vercel.app",
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ],
+    allow_origins=_ALL_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
-_PREFLIGHT_ORIGINS: frozenset[str] = frozenset({
-    "https://finreportai.com",
-    "https://www.finreportai.com",
-    "https://finreportaicommercial.vercel.app",
-    "http://localhost:5173",
-    "http://localhost:3000",
-})
+_PREFLIGHT_ORIGINS: frozenset[str] = frozenset(_ALL_ORIGINS)
 
 
 @app.options("/{full_path:path}")
