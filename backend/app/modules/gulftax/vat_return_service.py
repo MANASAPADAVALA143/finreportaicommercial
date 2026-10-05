@@ -748,30 +748,27 @@ def fetch_all_vat_return_boxes(
                             continue
                         amounts = [round(float(t.amount_aed or 0), 2) for t in txns]
                         total = round(sum(amounts), 2)
-                        # Strategy 1: description == vendor → header row
+                        # Strategy 1: description == vendor → that row is the invoice total
+                        # Keep it, discard the partial line-item rows
                         vendor = (txns[0].vendor_or_customer or "").strip()
                         header = [t for t in txns if (t.description or "").strip() == vendor]
                         lines = [t for t in txns if t not in header]
                         if header and lines:
-                            deduped.extend(lines)
+                            deduped.extend(header)  # keep invoice total, drop line items
                             continue
-                        # Strategy 2: one row's amount == sum of the others → it's the total
-                        removed = False
-                        for i, t in enumerate(txns):
-                            amt = round(float(t.amount_aed or 0), 2)
-                            rest = round(total - amt, 2)
-                            if abs(amt - rest) < 0.05:  # amt ≈ sum of rest
-                                deduped.extend([x for x in txns if x is not t])
-                                removed = True
-                                break
-                        if not removed:
-                            # Strategy 3: remove exact-amount duplicates, keep first
-                            seen_amt: set = set()
-                            for t in txns:
-                                key = (round(float(t.amount_aed or 0), 2), t.description or "")
-                                if key not in seen_amt:
-                                    seen_amt.add(key)
-                                    deduped.append(t)
+                        # Strategy 2: for exactly 2 rows, keep the larger amount (invoice total)
+                        # The smaller is a partial line item that was also stored separately
+                        if len(txns) == 2:
+                            sorted_txns = sorted(txns, key=lambda _t: float(_t.amount_aed or 0), reverse=True)
+                            deduped.append(sorted_txns[0])
+                            continue
+                        # Strategy 3: remove exact-amount duplicates, keep first
+                        seen_amt: set = set()
+                        for t in txns:
+                            key = (round(float(t.amount_aed or 0), 2), t.description or "")
+                            if key not in seen_amt:
+                                seen_amt.add(key)
+                                deduped.append(t)
                     port_rows = deduped
 
                 # Fix box_number at read time for legacy rows stored with wrong box
