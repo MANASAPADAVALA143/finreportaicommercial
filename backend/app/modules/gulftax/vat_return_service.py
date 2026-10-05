@@ -694,28 +694,28 @@ def fetch_all_vat_return_boxes(
                 period_start.isoformat(),        # "2026-07-01"
             ]
             _vre_rows: list = []
+            # Collect all IDs that might have been used as workspace_id when entries were inserted.
+            # ws_id = body.workspace_id or tenant_id in ap_invoice_post_service, so try both.
+            # Also look up the real workspace_id from UaeCompanyProfile if available.
+            _extra_ws: list[str] = []
+            try:
+                from app.models.company_setup import UaeCompanyProfile as _UCP
+                _ucp = db.query(_UCP).filter(_UCP.workspace_id == tenant_id).first()
+                if _ucp:
+                    _extra_ws.append(str(_ucp.workspace_id))
+            except Exception:
+                pass
+            _ws_candidates = list(dict.fromkeys(filter(None, [
+                workspace_id,      # passed from frontend (may equal company_id if not set)
+                tenant_id,         # FinReportAI tenant/workspace UUID
+                company_id,        # GulfTax company UUID
+            ] + _extra_ws)))
             for _pv in _period_variants:
-                _res = (
-                    _sb.table("vat_return_entries")
-                    .select("*")
-                    .eq("company_id", company_id)
-                    .eq("period", _pv)
-                    .execute()
-                )
-                _vre_rows = _res.data or []
-                if _vre_rows:
-                    logger.info(
-                        "[VAT-RETURN-DEBUG] vat_return_entries company_id=%s period=%s rows=%d",
-                        company_id, _pv, len(_vre_rows),
-                    )
-                    break
-            if not _vre_rows and workspace_id:
-                # Also try by workspace_id in case company_id wasn't stored
-                for _pv in _period_variants:
+                for _ws in _ws_candidates:
                     _res = (
                         _sb.table("vat_return_entries")
                         .select("*")
-                        .eq("workspace_id", workspace_id)
+                        .eq("workspace_id", _ws)
                         .eq("period", _pv)
                         .execute()
                     )
@@ -723,7 +723,26 @@ def fetch_all_vat_return_boxes(
                     if _vre_rows:
                         logger.info(
                             "[VAT-RETURN-DEBUG] vat_return_entries workspace_id=%s period=%s rows=%d",
-                            workspace_id, _pv, len(_vre_rows),
+                            _ws, _pv, len(_vre_rows),
+                        )
+                        break
+                if _vre_rows:
+                    break
+            # Also try by company_id field (different column from workspace_id)
+            if not _vre_rows:
+                for _pv in _period_variants:
+                    _res = (
+                        _sb.table("vat_return_entries")
+                        .select("*")
+                        .eq("company_id", company_id)
+                        .eq("period", _pv)
+                        .execute()
+                    )
+                    _vre_rows = _res.data or []
+                    if _vre_rows:
+                        logger.info(
+                            "[VAT-RETURN-DEBUG] vat_return_entries company_id=%s period=%s rows=%d",
+                            company_id, _pv, len(_vre_rows),
                         )
                         break
             if _vre_rows:
