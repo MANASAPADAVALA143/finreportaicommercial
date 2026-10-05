@@ -217,6 +217,35 @@ app.add_middleware(
 )
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
+_PREFLIGHT_ORIGINS: frozenset[str] = frozenset({
+    "https://finreportai.com",
+    "https://www.finreportai.com",
+    "https://finreportaicommercial.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+})
+
+
+@app.options("/{full_path:path}")
+async def cors_preflight(full_path: str, request: Request) -> Response:
+    """Belt-and-suspenders CORS preflight handler.
+
+    CORSMiddleware should intercept OPTIONS before reaching the router, but
+    this catch-all guarantees a valid preflight response even if the middleware
+    stack ordering ever causes CORSMiddleware to miss it.
+    """
+    origin = request.headers.get("origin", "")
+    headers: dict[str, str] = {"Vary": "Origin"}
+    if origin in _PREFLIGHT_ORIGINS:
+        headers.update({
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "600",
+        })
+    return Response(status_code=200, headers=headers)
+
 
 # Routes
 app.include_router(auth_routes.router)

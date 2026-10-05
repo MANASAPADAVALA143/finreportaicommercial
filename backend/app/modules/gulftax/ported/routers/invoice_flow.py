@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
@@ -17,6 +17,8 @@ from database import get_db
 from middleware.auth import get_current_company_id
 from models import Company, Invoice, Transaction
 import logging
+
+
 
 try:
     from app.core.claude_model import DEFAULT_CLAUDE_MODEL
@@ -1879,7 +1881,7 @@ def demo_reset(
 
 @router.get("/repair-transactions")
 def repair_transactions(
-    company_id: str = Depends(get_current_company_id),
+    company_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Fix existing transaction data:
