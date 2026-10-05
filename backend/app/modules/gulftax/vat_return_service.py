@@ -681,113 +681,82 @@ def fetch_all_vat_return_boxes(
             "[VAT-RETURN-DEBUG] company_id=%s period=%s gt_entries=%d box9=%.2f box11=%.2f",
             company_id, period, len(gt_entries), _box9_so_far, _box11_so_far,
         )
-        # Always check the ported DB — invoice_flow stores verified transactions there.
-        # Supabase gulftax_transactions may have stale/unclassified rows with wrong amounts;
-        # ported DB data (source=invoice_flow, is_verified=True) takes priority when present.
-        if True:
-            try:
-                from app.modules.gulftax.ported.models import Invoice as PortedInvoice
-                from app.modules.gulftax.ported.models import Company as PortedCompany
-                from app.modules.gulftax.ported.database import SessionLocal as PortedSessionLocal
-                from sqlalchemy import or_
-
-                _ported_db = PortedSessionLocal()
-                try:
-                    # Read from gulftax_invoices — one row per invoice with correct totals.
-                    # invoice_date is stored as a string "YYYY-MM-DD"; filter by period.
-                    _ps = period_start.isoformat()  # "2026-07-01"
-                    _pe = period_end.isoformat()    # "2026-09-30"
-                    # Include all non-rejected invoices (pending counts — user uploaded the PDF)
-                    _excl = ["escalated"]
-                    inv_rows = (
-                        _ported_db.query(PortedInvoice)
-                        .filter(
-                            PortedInvoice.company_id == company_id,
-                            PortedInvoice.invoice_date >= _ps,
-                            PortedInvoice.invoice_date <= _pe,
-                            ~PortedInvoice.status.in_(_excl),
-                            PortedInvoice.total_aed.isnot(None),
-                        )
-                        .all()
-                    )
+        # Read from vat_return_entries (Supabase) by company_id.
+        # This table is populated by the AP invoice approval flow and has the correct
+        # net_amount and vat_amount per invoice. Try multiple period formats because
+        # entries may be stored as "2026-07", "2026-Q3", or "2026-07-01".
+        try:
+            from app.core.supabase import get_supabase as _get_sb
+            _sb = _get_sb()
+            _period_variants = [
+                period,                          # "2026-Q3"
+                period_start.strftime("%Y-%m"),  # "2026-07"
+                period_start.isoformat(),        # "2026-07-01"
+            ]
+            _vre_rows: list = []
+            for _pv in _period_variants:
+                _res = (
+                    _sb.table("vat_return_entries")
+                    .select("*")
+                    .eq("company_id", company_id)
+                    .eq("period", _pv)
+                    .execute()
+                )
+                _vre_rows = _res.data or []
+                if _vre_rows:
                     logger.info(
-                        "[VAT-RETURN-DEBUG] gulftax_invoices direct rows=%d company_id=%s %s..%s",
-                        len(inv_rows), company_id, _ps, _pe,
+                        "[VAT-RETURN-DEBUG] vat_return_entries company_id=%s period=%s rows=%d",
+                        company_id, _pv, len(_vre_rows),
                     )
-                    # Fallback: try resolving company_id via ported Company table
-                    if not inv_rows:
-                        ported_co = (
-                            _ported_db.query(PortedCompany)
-                            .filter(
-                                or_(
-                                    PortedCompany.external_id == company_id,
-                                    PortedCompany.workspace_id == company_id,
-                                )
-                            )
-                            .first()
+                    break
+            if not _vre_rows and workspace_id:
+                # Also try by workspace_id in case company_id wasn't stored
+                for _pv in _period_variants:
+                    _res = (
+                        _sb.table("vat_return_entries")
+                        .select("*")
+                        .eq("workspace_id", workspace_id)
+                        .eq("period", _pv)
+                        .execute()
+                    )
+                    _vre_rows = _res.data or []
+                    if _vre_rows:
+                        logger.info(
+                            "[VAT-RETURN-DEBUG] vat_return_entries workspace_id=%s period=%s rows=%d",
+                            workspace_id, _pv, len(_vre_rows),
                         )
-                        if ported_co:
-                            inv_rows = (
-                                _ported_db.query(PortedInvoice)
-                                .filter(
-                                    PortedInvoice.company_id == str(ported_co.id),
-                                    PortedInvoice.invoice_date >= _ps,
-                                    PortedInvoice.invoice_date <= _pe,
-                                    ~PortedInvoice.status.in_(_excl),
-                                    PortedInvoice.total_aed.isnot(None),
-                                )
-                                .all()
-                            )
-                            logger.info("[VAT-RETURN-DEBUG] gulftax_invoices via-company rows=%d", len(inv_rows))
-                finally:
-                    _ported_db.close()
-
-                if inv_rows:
-                    # gulftax_invoices: one row per invoice, no dedup needed.
-                    # Net = total_aed - vat_amount_aed (more reliable than subtotal_aed
-                    # which may have been extracted from a line-item section of the PDF).
-                    # Box 9: standard-rated purchases where vat_amount > 0.
-                    # Box 11: total input VAT.
-                    _box_map = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
-
-                    def _net(inv) -> float:
-                        total = float(inv.total_aed or 0)
-                        vat = float(inv.vat_amount_aed or 0)
-                        sub = float(inv.subtotal_aed or 0)
-                        # Prefer total - vat; fall back to subtotal_aed
-                        if total > 0 and total > vat:
-                            return round(total - vat, 2)
-                        return round(sub, 2)
-
-                    box9_p = sum(
-                        _net(inv)
-                        for inv in inv_rows
-                        if float(inv.vat_amount_aed or 0) > 0
-                        and _box_map.get(inv.vat_treatment or "", 9) == 9
-                    )
-                    box11_p = sum(float(inv.vat_amount_aed or 0) for inv in inv_rows)
-                    purchases = {
-                        **purchases,
-                        "entry_count": len(inv_rows),
-                        "box9_standard_rated_expenses": round(box9_p, 2),
-                        "box11_recoverable_input_vat": round(box11_p, 2),
+                        break
+            if _vre_rows:
+                _box_map_t = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
+                box9_p = sum(
+                    float(r.get("net_amount") or 0)
+                    for r in _vre_rows
+                    if int(r.get("box_number") or 9) == 9
+                    and float(r.get("vat_amount") or 0) > 0
+                )
+                box11_p = sum(float(r.get("vat_amount") or 0) for r in _vre_rows)
+                purchases = {
+                    **purchases,
+                    "entry_count": len(_vre_rows),
+                    "box9_standard_rated_expenses": round(box9_p, 2),
+                    "box11_recoverable_input_vat": round(box11_p, 2),
+                }
+                gt_entries = [
+                    {
+                        "id": r.get("id"),
+                        "transaction_id": r.get("transaction_id") or r.get("id"),
+                        "invoice_number": r.get("transaction_id"),
+                        "vendor_name": r.get("vendor_name"),
+                        "gross_amount": float(r.get("net_amount") or 0),
+                        "vat_amount": float(r.get("vat_amount") or 0),
+                        "fta_box": int(r.get("box_number") or 9),
+                        "direction": "input",
+                        "source": r.get("source", "vat_return_entries"),
                     }
-                    gt_entries = [
-                        {
-                            "id": inv.id,
-                            "transaction_id": inv.invoice_number or str(inv.id),
-                            "invoice_number": inv.invoice_number,
-                            "vendor_name": inv.vendor_name,
-                            "gross_amount": _net(inv),
-                            "vat_amount": float(inv.vat_amount_aed or 0),
-                            "fta_box": _box_map.get(inv.vat_treatment or "", 9),
-                            "direction": "input",
-                            "source": "invoice_flow",
-                        }
-                        for inv in inv_rows
-                    ]
-            except Exception:
-                logger.exception("Ported Invoice fallback failed")
+                    for r in _vre_rows
+                ]
+        except Exception:
+            logger.exception("vat_return_entries Supabase read failed")
 
     entries = (gt_entries if gt_entries else purchases.get("entries")) or []
     box9_net = float(purchases.get("box9_standard_rated_expenses") or 0)
