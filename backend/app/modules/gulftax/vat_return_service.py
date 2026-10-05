@@ -566,7 +566,12 @@ def fetch_all_vat_return_boxes(
     company_id: str | None,
     period: str,
 ) -> dict[str, Any]:
-    """Merge sales (UAE AR) + purchases (RDS/Supabase gulftax_transactions) + advanced VAT."""
+    """Merge sales (UAE AR) + purchases (vat_return_entries) + advanced VAT.
+
+    Purchase data comes exclusively from vat_return_entries (Supabase).
+    RDS gulftax_transactions is only used as a last resort when vat_return_entries
+    has no rows for this company+period.
+    """
     from app.services.gulftax_supabase import fetch_advance_payment_invoices, fetch_vat_return_boxes
 
     period_start, period_end = parse_period(period)
@@ -600,91 +605,14 @@ def fetch_all_vat_return_boxes(
 
     gt_entries: list[dict[str, Any]] = []
     gt_summary: dict[str, Any] = {}
-    rds_agg: dict[str, Any] | None = None
+    using_rds = False
 
+    # --- PRIMARY SOURCE: vat_return_entries (Supabase) ---
+    # Try this first. If rows are found, skip RDS entirely.
+    # Period may be stored as "2026-07", "2026-Q3", or "2026-07-01" — try all variants.
+    # Also search by date range to catch any period format in [period_start, period_end].
+    _vre_found = False
     if company_id:
-        try:
-            rds_agg = _aggregate_rds_gulftax_transactions(
-                db,
-                tenant_id=tenant_id,
-                company_id=company_id,
-                tax_period=period,
-            )
-        except Exception:
-            rds_agg = None
-
-        if rds_agg and rds_agg.get("transaction_count", 0) > 0:
-            rb = rds_agg["boxes"]
-            gt_entries = rds_agg.get("entries") or []
-            gt_summary = {
-                "transaction_count": rds_agg["transaction_count"],
-                "ap_invoiceflow_count": rds_agg.get("ap_invoiceflow_count", 0),
-            }
-            purchases = {
-                **purchases,
-                # Purchase entry count = input-side gulftax rows (not AR output)
-                "entry_count": rds_agg.get("input_count", rds_agg["entry_count"]),
-                "box9_standard_rated_expenses": rb["box9_standard_rated_expenses"],
-                "box10_reverse_charge_imports": rb["box10_reverse_charge_expenses"],
-                "box11_recoverable_input_vat": rb["box11_recoverable_input_vat"],
-            }
-            # Avoid double-counting AR: uae_sales_invoices is primary for sales boxes.
-            # Only fold gulftax OUTPUT onto sales when AR sales table contributed nothing.
-            if int(sales.get("sales_invoice_count") or 0) == 0:
-                sales["box1_standard_rated_sales_net"] = round(
-                    sales["box1_standard_rated_sales_net"] + rb["box1_standard_rated_sales_net"], 2
-                )
-                sales["box1_standard_rated_sales_vat"] = round(
-                    sales["box1_standard_rated_sales_vat"] + rb["box1_standard_rated_sales_vat"], 2
-                )
-                sales["box3_reverse_charge_supplies_net"] = round(
-                    sales["box3_reverse_charge_supplies_net"] + rb["box3_reverse_charge_supplies_net"], 2
-                )
-                sales["box3_reverse_charge_supplies_vat"] = round(
-                    sales["box3_reverse_charge_supplies_vat"] + rb["box3_reverse_charge_supplies_vat"], 2
-                )
-                sales["box4_zero_rated_supplies"] = round(
-                    sales["box4_zero_rated_supplies"] + rb["box4_zero_rated_supplies"], 2
-                )
-                sales["box6_imports_vat"] = round(
-                    sales["box6_imports_vat"] + rb["box6_imports_vat"], 2
-                )
-            else:
-                # Still pick up import VAT from gulftax DZ if sales path left it at 0
-                if not sales.get("box6_imports_vat") and rb.get("box6_imports_vat"):
-                    sales["box6_imports_vat"] = round(float(rb["box6_imports_vat"]), 2)
-        else:
-            try:
-                from app.services.gulftax_sync_service import aggregate_vat_return_summary, list_transactions
-
-                gt_summary = aggregate_vat_return_summary(company_id, period)
-                if gt_summary.get("transaction_count", 0) > 0:
-                    purchases = {
-                        **purchases,
-                        "entry_count": gt_summary["transaction_count"],
-                        "box9_standard_rated_expenses": gt_summary["box9"]["gross"],
-                        "box10_reverse_charge_imports": gt_summary["box10"]["gross"],
-                        "box11_recoverable_input_vat": round(
-                            gt_summary["box9"]["vat"] + gt_summary["box10"]["vat"], 2
-                        ),
-                    }
-                    gt_entries = list_transactions(company_id, period, workspace_id=workspace_id)
-            except Exception:
-                pass
-
-        # Fallback: read ported Transaction model (AP invoice flow syncs here)
-        # Run when there are no entries OR when entry_count > 0 but amounts are all 0
-        # (aggregate_vat_return_summary may report count > 0 with 0 amounts from Supabase)
-        _box9_so_far = float(purchases.get("box9_standard_rated_expenses") or 0)
-        _box11_so_far = float(purchases.get("box11_recoverable_input_vat") or 0)
-        logger.info(
-            "[VAT-RETURN-DEBUG] company_id=%s period=%s gt_entries=%d box9=%.2f box11=%.2f",
-            company_id, period, len(gt_entries), _box9_so_far, _box11_so_far,
-        )
-        # Read from vat_return_entries (Supabase) by company_id.
-        # This table is populated by the AP invoice approval flow and has the correct
-        # net_amount and vat_amount per invoice. Try multiple period formats because
-        # entries may be stored as "2026-07", "2026-Q3", or "2026-07-01".
         try:
             from app.core.supabase import get_supabase as _get_sb
             _sb = _get_sb()
@@ -694,9 +622,6 @@ def fetch_all_vat_return_boxes(
                 period_start.isoformat(),        # "2026-07-01"
             ]
             _vre_rows: list = []
-            # Collect all IDs that might have been used as workspace_id when entries were inserted.
-            # ws_id = body.workspace_id or tenant_id in ap_invoice_post_service, so try both.
-            # Also look up the real workspace_id from UaeCompanyProfile if available.
             _extra_ws: list[str] = []
             try:
                 from app.models.company_setup import UaeCompanyProfile as _UCP
@@ -706,10 +631,11 @@ def fetch_all_vat_return_boxes(
             except Exception:
                 pass
             _ws_candidates = list(dict.fromkeys(filter(None, [
-                workspace_id,      # passed from frontend (may equal company_id if not set)
-                tenant_id,         # FinReportAI tenant/workspace UUID
-                company_id,        # GulfTax company UUID
+                workspace_id,
+                tenant_id,
+                company_id,
             ] + _extra_ws)))
+            # Try workspace_id column × period variants
             for _pv in _period_variants:
                 for _ws in _ws_candidates:
                     _res = (
@@ -722,13 +648,13 @@ def fetch_all_vat_return_boxes(
                     _vre_rows = _res.data or []
                     if _vre_rows:
                         logger.info(
-                            "[VAT-RETURN-DEBUG] vat_return_entries workspace_id=%s period=%s rows=%d",
+                            "[VAT-RETURN] vat_return_entries workspace_id=%s period=%s rows=%d",
                             _ws, _pv, len(_vre_rows),
                         )
                         break
                 if _vre_rows:
                     break
-            # Also try by company_id field (different column from workspace_id)
+            # Try company_id column × period variants
             if not _vre_rows:
                 for _pv in _period_variants:
                     _res = (
@@ -741,12 +667,37 @@ def fetch_all_vat_return_boxes(
                     _vre_rows = _res.data or []
                     if _vre_rows:
                         logger.info(
-                            "[VAT-RETURN-DEBUG] vat_return_entries company_id=%s period=%s rows=%d",
+                            "[VAT-RETURN] vat_return_entries company_id=%s period=%s rows=%d",
                             company_id, _pv, len(_vre_rows),
                         )
                         break
+            # Broad fallback: fetch all rows for this company, filter by date range in Python.
+            # This catches rows whose period field contains an unexpected value (e.g. workspace UUID).
+            if not _vre_rows:
+                _res_all = (
+                    _sb.table("vat_return_entries")
+                    .select("*")
+                    .eq("company_id", company_id)
+                    .execute()
+                )
+                _all_rows = _res_all.data or []
+                if _all_rows:
+                    _period_strs = set(_period_variants)
+                    _vre_rows = [
+                        r for r in _all_rows
+                        if r.get("period") in _period_strs
+                        or (
+                            r.get("created_at", "") >= period_start.isoformat()
+                            and r.get("created_at", "") <= period_end.isoformat() + "T23:59:59"
+                        )
+                    ]
+                    if _vre_rows:
+                        logger.info(
+                            "[VAT-RETURN] vat_return_entries broad company_id=%s rows=%d",
+                            company_id, len(_vre_rows),
+                        )
             if _vre_rows:
-                _box_map_t = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
+                _vre_found = True
                 box9_p = sum(
                     float(r.get("net_amount") or 0)
                     for r in _vre_rows
@@ -776,6 +727,74 @@ def fetch_all_vat_return_boxes(
                 ]
         except Exception:
             logger.exception("vat_return_entries Supabase read failed")
+
+    # Only fall back to RDS gulftax_transactions when vat_return_entries has no data.
+    if not _vre_found and company_id:
+        rds_agg: dict[str, Any] | None = None
+        try:
+            rds_agg = _aggregate_rds_gulftax_transactions(
+                db,
+                tenant_id=tenant_id,
+                company_id=company_id,
+                tax_period=period,
+            )
+        except Exception:
+            rds_agg = None
+
+        if rds_agg and rds_agg.get("transaction_count", 0) > 0:
+            rb = rds_agg["boxes"]
+            gt_entries = rds_agg.get("entries") or []
+            gt_summary = {
+                "transaction_count": rds_agg["transaction_count"],
+                "ap_invoiceflow_count": rds_agg.get("ap_invoiceflow_count", 0),
+            }
+            purchases = {
+                **purchases,
+                "entry_count": rds_agg.get("input_count", rds_agg["entry_count"]),
+                "box9_standard_rated_expenses": rb["box9_standard_rated_expenses"],
+                "box10_reverse_charge_imports": rb["box10_reverse_charge_expenses"],
+                "box11_recoverable_input_vat": rb["box11_recoverable_input_vat"],
+            }
+            if int(sales.get("sales_invoice_count") or 0) == 0:
+                sales["box1_standard_rated_sales_net"] = round(
+                    sales["box1_standard_rated_sales_net"] + rb["box1_standard_rated_sales_net"], 2
+                )
+                sales["box1_standard_rated_sales_vat"] = round(
+                    sales["box1_standard_rated_sales_vat"] + rb["box1_standard_rated_sales_vat"], 2
+                )
+                sales["box3_reverse_charge_supplies_net"] = round(
+                    sales["box3_reverse_charge_supplies_net"] + rb["box3_reverse_charge_supplies_net"], 2
+                )
+                sales["box3_reverse_charge_supplies_vat"] = round(
+                    sales["box3_reverse_charge_supplies_vat"] + rb["box3_reverse_charge_supplies_vat"], 2
+                )
+                sales["box4_zero_rated_supplies"] = round(
+                    sales["box4_zero_rated_supplies"] + rb["box4_zero_rated_supplies"], 2
+                )
+                sales["box6_imports_vat"] = round(
+                    sales["box6_imports_vat"] + rb["box6_imports_vat"], 2
+                )
+            else:
+                if not sales.get("box6_imports_vat") and rb.get("box6_imports_vat"):
+                    sales["box6_imports_vat"] = round(float(rb["box6_imports_vat"]), 2)
+        else:
+            try:
+                from app.services.gulftax_sync_service import aggregate_vat_return_summary, list_transactions
+                gt_summary_sync = aggregate_vat_return_summary(company_id, period)
+                if gt_summary_sync.get("transaction_count", 0) > 0:
+                    purchases = {
+                        **purchases,
+                        "entry_count": gt_summary_sync["transaction_count"],
+                        "box9_standard_rated_expenses": gt_summary_sync["box9"]["gross"],
+                        "box10_reverse_charge_imports": gt_summary_sync["box10"]["gross"],
+                        "box11_recoverable_input_vat": round(
+                            gt_summary_sync["box9"]["vat"] + gt_summary_sync["box10"]["vat"], 2
+                        ),
+                    }
+                    gt_entries = list_transactions(company_id, period, workspace_id=workspace_id)
+                    gt_summary = gt_summary_sync
+            except Exception:
+                pass
 
     entries = (gt_entries if gt_entries else purchases.get("entries")) or []
     box9_net = float(purchases.get("box9_standard_rated_expenses") or 0)
@@ -814,8 +833,6 @@ def fetch_all_vat_return_boxes(
     )
     box12 = round(box8 - box11_vat, 2)
 
-    using_rds = bool(rds_agg and rds_agg.get("transaction_count", 0) > 0)
-
     return {
         "period": period,
         "period_start": period_start.isoformat(),
@@ -849,8 +866,6 @@ def fetch_all_vat_return_boxes(
         "advance_payment_count": advances.get("advance_payment_count", 0),
         "advance_payments_included": advances.get("advance_payments", []),
         "entries": entries,
-        "ap_invoiceflow_count": (
-            gt_summary.get("ap_invoiceflow_count", 0) if using_rds and company_id else 0
-        ),
-        "source": "gulftax_transactions" if using_rds or gt_summary.get("transaction_count") else "vat_return_entries",
+        "ap_invoiceflow_count": gt_summary.get("ap_invoiceflow_count", 0),
+        "source": "vat_return_entries" if _vre_found else "gulftax_transactions",
     }
