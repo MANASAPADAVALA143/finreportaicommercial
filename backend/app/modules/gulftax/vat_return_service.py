@@ -733,8 +733,9 @@ def fetch_all_vat_return_boxes(
                 finally:
                     _ported_db.close()
 
-                # Deduplicate: for invoices with both a header-total row (description==vendor)
-                # AND line-item rows, drop the header-total to avoid double-counting.
+                # Deduplicate: for invoices that have multiple rows, remove any row whose
+                # amount equals the sum of the other rows (that row is the header total).
+                # Also remove exact-amount duplicates (same invoice + same amount).
                 if port_rows:
                     from collections import defaultdict
                     by_inv: dict = defaultdict(list)
@@ -745,14 +746,32 @@ def fetch_all_vat_return_boxes(
                         if len(txns) <= 1:
                             deduped.extend(txns)
                             continue
-                        # Identify header rows: description matches vendor name
+                        amounts = [round(float(t.amount_aed or 0), 2) for t in txns]
+                        total = round(sum(amounts), 2)
+                        # Strategy 1: description == vendor → header row
                         vendor = (txns[0].vendor_or_customer or "").strip()
                         header = [t for t in txns if (t.description or "").strip() == vendor]
                         lines = [t for t in txns if t not in header]
                         if header and lines:
-                            deduped.extend(lines)  # keep only line items
-                        else:
-                            deduped.extend(txns)
+                            deduped.extend(lines)
+                            continue
+                        # Strategy 2: one row's amount == sum of the others → it's the total
+                        removed = False
+                        for i, t in enumerate(txns):
+                            amt = round(float(t.amount_aed or 0), 2)
+                            rest = round(total - amt, 2)
+                            if abs(amt - rest) < 0.05:  # amt ≈ sum of rest
+                                deduped.extend([x for x in txns if x is not t])
+                                removed = True
+                                break
+                        if not removed:
+                            # Strategy 3: remove exact-amount duplicates, keep first
+                            seen_amt: set = set()
+                            for t in txns:
+                                key = (round(float(t.amount_aed or 0), 2), t.description or "")
+                                if key not in seen_amt:
+                                    seen_amt.add(key)
+                                    deduped.append(t)
                     port_rows = deduped
 
                 # Fix box_number at read time for legacy rows stored with wrong box
