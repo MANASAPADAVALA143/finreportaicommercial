@@ -226,25 +226,30 @@ add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 _PREFLIGHT_ORIGINS: frozenset[str] = frozenset(_ALL_ORIGINS)
 
 
-@app.options("/{full_path:path}")
-async def cors_preflight(full_path: str, request: Request) -> Response:
-    """Belt-and-suspenders CORS preflight handler.
-
-    CORSMiddleware should intercept OPTIONS before reaching the router, but
-    this catch-all guarantees a valid preflight response even if the middleware
-    stack ordering ever causes CORSMiddleware to miss it.
-    """
+# @app.middleware("http") is added LAST → it becomes the ABSOLUTE OUTERMOST layer.
+# Every OPTIONS preflight is short-circuited here with proper CORS headers before
+# any inner middleware (CORSMiddleware, ProductRole, router) can return 405.
+# Non-OPTIONS requests also get CORS headers injected on the way out.
+@app.middleware("http")
+async def _outermost_cors(request: Request, call_next):
     origin = request.headers.get("origin", "")
-    headers: dict[str, str] = {"Vary": "Origin"}
+    if request.method == "OPTIONS":
+        hdrs: dict[str, str] = {"Vary": "Origin"}
+        if origin in _PREFLIGHT_ORIGINS:
+            hdrs.update({
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "600",
+            })
+        return Response(status_code=200, headers=hdrs)
+    response = await call_next(request)
     if origin in _PREFLIGHT_ORIGINS:
-        headers.update({
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Max-Age": "600",
-        })
-    return Response(status_code=200, headers=headers)
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers.setdefault("Vary", "Origin")
+    return response
 
 
 # Routes
