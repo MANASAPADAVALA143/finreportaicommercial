@@ -697,13 +697,16 @@ def fetch_all_vat_return_boxes(
                     # invoice_date is stored as a string "YYYY-MM-DD"; filter by period.
                     _ps = period_start.isoformat()  # "2026-07-01"
                     _pe = period_end.isoformat()    # "2026-09-30"
+                    # Include all non-rejected invoices (pending counts — user uploaded the PDF)
+                    _excl = ["escalated"]
                     inv_rows = (
                         _ported_db.query(PortedInvoice)
                         .filter(
                             PortedInvoice.company_id == company_id,
                             PortedInvoice.invoice_date >= _ps,
                             PortedInvoice.invoice_date <= _pe,
-                            PortedInvoice.status.in_(["approved", "posted", "reviewed"]),
+                            ~PortedInvoice.status.in_(_excl),
+                            PortedInvoice.total_aed.isnot(None),
                         )
                         .all()
                     )
@@ -730,7 +733,8 @@ def fetch_all_vat_return_boxes(
                                     PortedInvoice.company_id == str(ported_co.id),
                                     PortedInvoice.invoice_date >= _ps,
                                     PortedInvoice.invoice_date <= _pe,
-                                    PortedInvoice.status.in_(["approved", "posted", "reviewed"]),
+                                    ~PortedInvoice.status.in_(_excl),
+                                    PortedInvoice.total_aed.isnot(None),
                                 )
                                 .all()
                             )
@@ -739,21 +743,29 @@ def fetch_all_vat_return_boxes(
                     _ported_db.close()
 
                 if inv_rows:
-                    # gulftax_invoices has one row per invoice — no dedup needed.
-                    # subtotal_aed = net amount (excl. VAT); vat_amount_aed = VAT.
-                    # Box 9: standard-rated purchases (vat_amount > 0).
-                    # Box 11: total input VAT across all purchase invoices.
+                    # gulftax_invoices: one row per invoice, no dedup needed.
+                    # Net = total_aed - vat_amount_aed (more reliable than subtotal_aed
+                    # which may have been extracted from a line-item section of the PDF).
+                    # Box 9: standard-rated purchases where vat_amount > 0.
+                    # Box 11: total input VAT.
                     _box_map = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
+
+                    def _net(inv) -> float:
+                        total = float(inv.total_aed or 0)
+                        vat = float(inv.vat_amount_aed or 0)
+                        sub = float(inv.subtotal_aed or 0)
+                        # Prefer total - vat; fall back to subtotal_aed
+                        if total > 0 and total > vat:
+                            return round(total - vat, 2)
+                        return round(sub, 2)
+
                     box9_p = sum(
-                        float(inv.subtotal_aed or 0)
+                        _net(inv)
                         for inv in inv_rows
                         if float(inv.vat_amount_aed or 0) > 0
                         and _box_map.get(inv.vat_treatment or "", 9) == 9
                     )
-                    box11_p = sum(
-                        float(inv.vat_amount_aed or 0)
-                        for inv in inv_rows
-                    )
+                    box11_p = sum(float(inv.vat_amount_aed or 0) for inv in inv_rows)
                     purchases = {
                         **purchases,
                         "entry_count": len(inv_rows),
@@ -766,7 +778,7 @@ def fetch_all_vat_return_boxes(
                             "transaction_id": inv.invoice_number or str(inv.id),
                             "invoice_number": inv.invoice_number,
                             "vendor_name": inv.vendor_name,
-                            "gross_amount": float(inv.subtotal_aed or 0),
+                            "gross_amount": _net(inv),
                             "vat_amount": float(inv.vat_amount_aed or 0),
                             "fta_box": _box_map.get(inv.vat_treatment or "", 9),
                             "direction": "input",
