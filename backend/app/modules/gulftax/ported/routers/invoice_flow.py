@@ -1877,7 +1877,7 @@ def demo_reset(
     }
 
 
-@router.post("/repair-transactions")
+@router.get("/repair-transactions")
 def repair_transactions(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
