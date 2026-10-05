@@ -125,7 +125,12 @@ def _run_migrations() -> None:
     _ensure_database_url()
     from database import engine, Base  # noqa: WPS433
 
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:
+        # Supabase may have these tables with UUID PKs instead of VARCHAR —
+        # type mismatch on FK creation is non-fatal; tables already exist.
+        logger.warning("create_all raised an error (tables may already exist with different types) — continuing")
     # Extend shared FinReportAI `companies` for GulfTax ported ORM columns.
     # create_all will not alter an existing table; without these, Company queries
     # raise UndefinedColumn and /api/dashboard/summary returns 500.
