@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from app.services.auth_service import decode_token
 from app.services.supabase_auth_service import (
@@ -153,7 +153,17 @@ def _json_error(request: Request, status_code: int, detail: str) -> JSONResponse
 class ProductRoleMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
-            return await call_next(request)
+            origin = request.headers.get("origin", "")
+            headers: dict[str, str] = {"Vary": "Origin"}
+            if origin in _CORS_ORIGINS:
+                headers.update({
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "600",
+                })
+            return Response(status_code=200, headers=headers)
 
         path = request.url.path
         if not path.startswith("/api/") or _is_public(path):
