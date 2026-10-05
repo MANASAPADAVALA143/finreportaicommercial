@@ -686,29 +686,33 @@ def fetch_all_vat_return_boxes(
         # ported DB data (source=invoice_flow, is_verified=True) takes priority when present.
         if True:
             try:
-                from app.modules.gulftax.ported.models import Transaction as PortedTransaction
+                from app.modules.gulftax.ported.models import Invoice as PortedInvoice
                 from app.modules.gulftax.ported.models import Company as PortedCompany
                 from app.modules.gulftax.ported.database import SessionLocal as PortedSessionLocal
                 from sqlalchemy import or_
 
                 _ported_db = PortedSessionLocal()
                 try:
-                    port_rows = (
-                        _ported_db.query(PortedTransaction)
+                    # Read from gulftax_invoices — one row per invoice with correct totals.
+                    # invoice_date is stored as a string "YYYY-MM-DD"; filter by period.
+                    _ps = period_start.isoformat()  # "2026-07-01"
+                    _pe = period_end.isoformat()    # "2026-09-30"
+                    inv_rows = (
+                        _ported_db.query(PortedInvoice)
                         .filter(
-                            PortedTransaction.company_id == company_id,
-                            PortedTransaction.date >= period_start,
-                            PortedTransaction.date <= period_end,
+                            PortedInvoice.company_id == company_id,
+                            PortedInvoice.invoice_date >= _ps,
+                            PortedInvoice.invoice_date <= _pe,
+                            PortedInvoice.status.in_(["approved", "posted", "reviewed"]),
                         )
                         .all()
                     )
                     logger.info(
-                        "[VAT-RETURN-DEBUG] ported direct rows=%d company_id=%s %s..%s",
-                        len(port_rows), company_id, period_start, period_end,
+                        "[VAT-RETURN-DEBUG] gulftax_invoices direct rows=%d company_id=%s %s..%s",
+                        len(inv_rows), company_id, _ps, _pe,
                     )
-                    # If no rows, try resolving company_id via the ported Company table
-                    # (external_id or workspace_id may equal the FinReportAI company UUID)
-                    if not port_rows:
+                    # Fallback: try resolving company_id via ported Company table
+                    if not inv_rows:
                         ported_co = (
                             _ported_db.query(PortedCompany)
                             .filter(
@@ -719,98 +723,59 @@ def fetch_all_vat_return_boxes(
                             )
                             .first()
                         )
-                        logger.info("[VAT-RETURN-DEBUG] ported Company lookup external_id/workspace_id=%s → %s", company_id, ported_co)
                         if ported_co:
-                            port_rows = (
-                                _ported_db.query(PortedTransaction)
+                            inv_rows = (
+                                _ported_db.query(PortedInvoice)
                                 .filter(
-                                    PortedTransaction.company_id == str(ported_co.id),
-                                    PortedTransaction.date >= period_start,
-                                    PortedTransaction.date <= period_end,
+                                    PortedInvoice.company_id == str(ported_co.id),
+                                    PortedInvoice.invoice_date >= _ps,
+                                    PortedInvoice.invoice_date <= _pe,
+                                    PortedInvoice.status.in_(["approved", "posted", "reviewed"]),
                                 )
                                 .all()
                             )
-                            logger.info("[VAT-RETURN-DEBUG] ported via-company rows=%d", len(port_rows))
+                            logger.info("[VAT-RETURN-DEBUG] gulftax_invoices via-company rows=%d", len(inv_rows))
                 finally:
                     _ported_db.close()
 
-                # Deduplicate: for invoices that have multiple rows, remove any row whose
-                # amount equals the sum of the other rows (that row is the header total).
-                # Also remove exact-amount duplicates (same invoice + same amount).
-                if port_rows:
-                    from collections import defaultdict
-                    by_inv: dict = defaultdict(list)
-                    for t in port_rows:
-                        by_inv[t.invoice_number or str(t.id)].append(t)
-                    deduped: list = []
-                    for inv_num, txns in by_inv.items():
-                        if len(txns) <= 1:
-                            deduped.extend(txns)
-                            continue
-                        # Invoice total row always has the largest amount_aed;
-                        # line-item rows are fractions of it — keep only the max.
-                        deduped.append(max(txns, key=lambda _t: float(_t.amount_aed or 0)))
-                    port_rows = deduped
-
-                # Fix box_number at read time for legacy rows stored with wrong box
-                _box_map = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
-                for _t in port_rows:
-                    _correct = _box_map.get(getattr(_t, "vat_treatment", None) or "", 9)
-                    if getattr(_t, "box_number", 9) != _correct:
-                        object.__setattr__(_t, "box_number", _correct) if hasattr(_t, "__slots__") else setattr(_t, "box_number", _correct)
-
-                if port_rows:
+                if inv_rows:
+                    # gulftax_invoices has one row per invoice — no dedup needed.
+                    # subtotal_aed = net amount (excl. VAT); vat_amount_aed = VAT.
+                    # Box 9: standard-rated purchases (vat_amount > 0).
+                    # Box 11: total input VAT across all purchase invoices.
+                    _box_map = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
                     box9_p = sum(
-                        float(t.amount_aed or 0)
-                        for t in port_rows
-                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
-                        and float(t.vat_amount_aed or 0) > 0
+                        float(inv.subtotal_aed or 0)
+                        for inv in inv_rows
+                        if float(inv.vat_amount_aed or 0) > 0
+                        and _box_map.get(inv.vat_treatment or "", 9) == 9
                     )
                     box11_p = sum(
-                        float(t.vat_amount_aed or 0)
-                        for t in port_rows
-                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
-                    )
-                    box1_p_net = sum(
-                        float(t.amount_aed or 0)
-                        for t in port_rows
-                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "sale"
-                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
-                    )
-                    box1_p_vat = sum(
-                        float(t.vat_amount_aed or 0)
-                        for t in port_rows
-                        if (getattr(t, "transaction_type", None) or "purchase").lower() == "sale"
-                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
+                        float(inv.vat_amount_aed or 0)
+                        for inv in inv_rows
                     )
                     purchases = {
                         **purchases,
-                        "entry_count": len(port_rows),
+                        "entry_count": len(inv_rows),
                         "box9_standard_rated_expenses": round(box9_p, 2),
                         "box11_recoverable_input_vat": round(box11_p, 2),
                     }
-                    if int(sales.get("sales_invoice_count") or 0) == 0 and box1_p_net:
-                        sales["box1_standard_rated_sales_net"] = round(
-                            sales["box1_standard_rated_sales_net"] + box1_p_net, 2
-                        )
-                        sales["box1_standard_rated_sales_vat"] = round(
-                            sales["box1_standard_rated_sales_vat"] + box1_p_vat, 2
-                        )
                     gt_entries = [
                         {
-                            "id": t.id,
-                            "transaction_id": getattr(t, "invoice_number", None) or str(t.id),
-                            "invoice_number": getattr(t, "invoice_number", None),
-                            "vendor_name": getattr(t, "vendor_or_customer", None),
-                            "gross_amount": float(t.amount_aed or 0),
-                            "vat_amount": float(t.vat_amount_aed or 0),
-                            "direction": "input" if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase" else "output",
-                            "source": getattr(t, "source", "invoice_flow_auto"),
+                            "id": inv.id,
+                            "transaction_id": inv.invoice_number or str(inv.id),
+                            "invoice_number": inv.invoice_number,
+                            "vendor_name": inv.vendor_name,
+                            "gross_amount": float(inv.subtotal_aed or 0),
+                            "vat_amount": float(inv.vat_amount_aed or 0),
+                            "fta_box": _box_map.get(inv.vat_treatment or "", 9),
+                            "direction": "input",
+                            "source": "invoice_flow",
                         }
-                        for t in port_rows
+                        for inv in inv_rows
                     ]
             except Exception:
-                logger.exception("Ported Transaction fallback failed")
+                logger.exception("Ported Invoice fallback failed")
 
     entries = (gt_entries if gt_entries else purchases.get("entries")) or []
     box9_net = float(purchases.get("box9_standard_rated_expenses") or 0)
