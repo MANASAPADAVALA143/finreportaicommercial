@@ -671,31 +671,6 @@ def fetch_all_vat_return_boxes(
                             company_id, _pv, len(_vre_rows),
                         )
                         break
-            # Broad fallback: fetch all rows for this company, filter by date range in Python.
-            # This catches rows whose period field contains an unexpected value (e.g. workspace UUID).
-            if not _vre_rows:
-                _res_all = (
-                    _sb.table("vat_return_entries")
-                    .select("*")
-                    .eq("company_id", company_id)
-                    .execute()
-                )
-                _all_rows = _res_all.data or []
-                if _all_rows:
-                    _period_strs = set(_period_variants)
-                    _vre_rows = [
-                        r for r in _all_rows
-                        if r.get("period") in _period_strs
-                        or (
-                            r.get("created_at", "") >= period_start.isoformat()
-                            and r.get("created_at", "") <= period_end.isoformat() + "T23:59:59"
-                        )
-                    ]
-                    if _vre_rows:
-                        logger.info(
-                            "[VAT-RETURN] vat_return_entries broad company_id=%s rows=%d",
-                            company_id, len(_vre_rows),
-                        )
             if _vre_rows:
                 _vre_found = True
                 box9_p = sum(
