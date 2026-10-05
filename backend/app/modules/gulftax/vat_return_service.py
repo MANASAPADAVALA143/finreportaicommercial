@@ -732,6 +732,36 @@ def fetch_all_vat_return_boxes(
                             logger.info("[VAT-RETURN-DEBUG] ported via-company rows=%d", len(port_rows))
                 finally:
                     _ported_db.close()
+
+                # Deduplicate: for invoices with both a header-total row (description==vendor)
+                # AND line-item rows, drop the header-total to avoid double-counting.
+                if port_rows:
+                    from collections import defaultdict
+                    by_inv: dict = defaultdict(list)
+                    for t in port_rows:
+                        by_inv[t.invoice_number or str(t.id)].append(t)
+                    deduped: list = []
+                    for inv_num, txns in by_inv.items():
+                        if len(txns) <= 1:
+                            deduped.extend(txns)
+                            continue
+                        # Identify header rows: description matches vendor name
+                        vendor = (txns[0].vendor_or_customer or "").strip()
+                        header = [t for t in txns if (t.description or "").strip() == vendor]
+                        lines = [t for t in txns if t not in header]
+                        if header and lines:
+                            deduped.extend(lines)  # keep only line items
+                        else:
+                            deduped.extend(txns)
+                    port_rows = deduped
+
+                # Fix box_number at read time for legacy rows stored with wrong box
+                _box_map = {"zero_rated": 4, "exempt": 5, "out_of_scope": 5, "reverse_charge": 10}
+                for _t in port_rows:
+                    _correct = _box_map.get(getattr(_t, "vat_treatment", None) or "", 9)
+                    if getattr(_t, "box_number", 9) != _correct:
+                        object.__setattr__(_t, "box_number", _correct) if hasattr(_t, "__slots__") else setattr(_t, "box_number", _correct)
+
                 if port_rows:
                     box9_p = sum(
                         float(t.amount_aed or 0)
@@ -743,6 +773,7 @@ def fetch_all_vat_return_boxes(
                         float(t.vat_amount_aed or 0)
                         for t in port_rows
                         if (getattr(t, "transaction_type", None) or "purchase").lower() == "purchase"
+                        and (getattr(t, "vat_treatment", None) or "standard_rated") == "standard_rated"
                     )
                     box1_p_net = sum(
                         float(t.amount_aed or 0)
