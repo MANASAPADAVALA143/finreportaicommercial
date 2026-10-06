@@ -93,16 +93,19 @@ class ResetPasswordBody(BaseModel):
 
 
 def _audit(db: Session, user_id: str, action: str, module: str, details: dict, ip: str | None) -> None:
-    db.add(
-        AuditLog(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            action=action,
-            module=module,
-            details=details,
-            ip_address=ip,
+    try:
+        db.add(
+            AuditLog(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                action=action,
+                module=module,
+                details=details,
+                ip_address=ip,
+            )
         )
-    )
+    except Exception:
+        pass
 
 
 def _user_payload(user: User, company: Company | None) -> dict:

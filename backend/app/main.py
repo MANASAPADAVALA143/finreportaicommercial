@@ -147,10 +147,25 @@ os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
 
 
 def _run_critical_migrations() -> None:
-    """Add columns that must exist for login to work. Runs independently of init_db."""
+    """Ensure tables and columns exist for login/register. Runs independently of init_db."""
     try:
         from app.core.database import engine as _engine
         from sqlalchemy import text as _text
+
+        # Create audit log table if missing (Postgres only — SQLite handled by create_all)
+        with _engine.begin() as conn:
+            conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS rbac_audit_log (
+                    id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    action VARCHAR(128) NOT NULL,
+                    module VARCHAR(64) NOT NULL,
+                    details JSONB NOT NULL DEFAULT '{}',
+                    ip_address VARCHAR(64),
+                    timestamp TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
+                )
+            """))
+
         _cols_to_add = [
             ("rbac_users", "product_role", "VARCHAR(32) DEFAULT 'full_access'"),
             ("rbac_users", "tenant_id", "VARCHAR(36)"),
