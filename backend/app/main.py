@@ -198,9 +198,6 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORSMiddleware added first = outermost layer (Starlette reverses add_middleware order).
-# It intercepts OPTIONS preflights before any inner middleware can return 405,
-# and injects Access-Control-Allow-Origin on every response on the way out.
 _CORS_ORIGINS = [
     "https://finreportai.com",
     "https://www.finreportai.com",
@@ -208,6 +205,15 @@ _CORS_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000",
 ]
+
+# Inner middlewares first (added first = innermost in Starlette's reversed build order)
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(ProductRoleMiddleware)
+add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
+
+# CORSMiddleware added LAST = outermost. It must wrap everything so CORS headers
+# are present on ALL responses (200, 401, 403, 500) regardless of which inner
+# middleware or handler produced the response.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
@@ -222,9 +228,6 @@ app.add_middleware(
         "Origin",
     ],
 )
-app.add_middleware(ProductRoleMiddleware)
-app.add_middleware(RequestLoggingMiddleware)
-add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
 
 
 # Routes
