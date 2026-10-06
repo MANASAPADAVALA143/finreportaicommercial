@@ -6,8 +6,17 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import Boolean, Column, DateTime, Enum as SAEnum, ForeignKey, JSON, String
+from sqlalchemy.dialects.postgresql import UUID
 
 from app.core.database import Base
+
+
+def _uuid_col(*args, **kw):
+    """String(36) on SQLite, native UUID on Postgres — both accept str values."""
+    from app.core.database import engine
+    if engine.dialect.name == "postgresql":
+        return Column(UUID(as_uuid=False), *args, **kw)
+    return Column(String(36), *args, **kw)
 
 
 class UserRole(str, Enum):
@@ -30,7 +39,7 @@ class ProductRole(str, Enum):
 class Company(Base):
     __tablename__ = "rbac_companies"
 
-    id = Column(String(36), primary_key=True)
+    id = _uuid_col(primary_key=True)
     name = Column(String(256), nullable=False)
     plan = Column(String(32), nullable=False, default="starter")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -41,8 +50,8 @@ class RbacUser(Base):
 
     __tablename__ = "rbac_users"
 
-    id = Column(String(36), primary_key=True)
-    company_id = Column(String(36), ForeignKey("rbac_companies.id"), nullable=False, index=True)
+    id = _uuid_col(primary_key=True)
+    company_id = _uuid_col(ForeignKey("rbac_companies.id"), nullable=False, index=True)
     name = Column(String(256), nullable=False)
     email = Column(String(256), nullable=False, unique=True, index=True)
     password_hash = Column(String(512), nullable=False)
@@ -61,8 +70,8 @@ User = RbacUser
 class AuditLog(Base):
     __tablename__ = "rbac_audit_log"
 
-    id = Column(String(36), primary_key=True)
-    user_id = Column(String(36), ForeignKey("rbac_users.id"), nullable=False, index=True)
+    id = _uuid_col(primary_key=True)
+    user_id = _uuid_col(ForeignKey("rbac_users.id"), nullable=False, index=True)
     action = Column(String(128), nullable=False)
     module = Column(String(64), nullable=False)
     details = Column(JSON, nullable=False, default=dict)
