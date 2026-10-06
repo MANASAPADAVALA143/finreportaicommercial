@@ -171,7 +171,10 @@ def register(body: RegisterBody, request: Request, response: Response, db: Sessi
 
 @router.post("/login")
 def login(body: LoginBody, request: Request, response: Response, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email.lower().strip()).first()
+    try:
+        user = db.query(User).filter(User.email == body.email.lower().strip()).first()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}") from exc
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not user.is_active:
