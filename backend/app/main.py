@@ -188,6 +188,7 @@ def _run_critical_migrations() -> None:
             import app.models.client_data  # noqa: F401
             import app.models.ap_payment_run  # noqa: F401
             import app.models.industry_config  # noqa: F401
+            import app.modules.gulftax.ported.models  # noqa: F401 - gulftax_invoices etc.
         except Exception as _ie:
             logger.warning("Some model imports failed during critical migrations: %s", _ie)
 
