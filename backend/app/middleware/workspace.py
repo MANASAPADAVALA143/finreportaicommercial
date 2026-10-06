@@ -56,6 +56,46 @@ def validate_workspace(
         workspace_id = user.company_id
 
     ws = db.get(Workspace, workspace_id)
+
+    # Fallback: find any workspace the user is a member of
+    if not ws or not ws.is_active:
+        member_row = (
+            db.query(WorkspaceMember)
+            .filter_by(user_id=user.id)
+            .first()
+        )
+        if member_row:
+            ws = db.get(Workspace, member_row.workspace_id)
+
+    # Last resort: auto-create a workspace using the company_id so future lookups hit directly
+    if not ws or not ws.is_active:
+        import uuid as _uuid
+        from app.models.users import Company as _Company
+        company = db.get(_Company, user.company_id)
+        ws = Workspace(
+            id=user.company_id,
+            name=company.name if company else "My Workspace",
+            legal_entity_name=company.name if company else "My Workspace",
+            country="UAE",
+            currency="AED",
+            fiscal_year_start_month=1,
+            fiscal_year_end_month=12,
+            industry="general",
+        )
+        db.add(ws)
+        db.add(WorkspaceMember(
+            id=str(_uuid.uuid4()),
+            workspace_id=ws.id,
+            user_id=user.id,
+            role=WorkspaceRole.owner,
+        ))
+        try:
+            db.commit()
+            db.refresh(ws)
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=503, detail="Could not initialise workspace")
+
     if not ws or not ws.is_active:
         raise HTTPException(status_code=404, detail="Workspace not found")
 

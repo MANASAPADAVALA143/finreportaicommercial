@@ -151,22 +151,34 @@ def register(body: RegisterBody, request: Request, response: Response, db: Sessi
     db.commit()
     db.refresh(user)
     try:
-        from app.services.workspace_service import create_workspace
         from app.core.database import SessionLocal as _SL
+        from app.models.workspace import Workspace as _WS, WorkspaceMember as _WM, WorkspaceRole as _WR, WorkspaceVATSettings as _WVAT
         _ws_db = _SL()
         try:
-            create_workspace(
-                _ws_db,
+            # Use company.id as workspace ID so validate_workspace can find it by company_id
+            _ws = _WS(
+                id=company.id,
                 name=body.company_name.strip(),
                 legal_entity_name=body.company_name.strip(),
-                trn_number=None,
                 country="UAE",
                 currency="AED",
                 fiscal_year_start_month=1,
                 fiscal_year_end_month=12,
-                industry=None,
-                owner_user_id=user.id,
+                industry="general",
             )
+            _ws_db.add(_ws)
+            _ws_db.flush()
+            _ws_db.add(_WM(
+                id=str(uuid.uuid4()),
+                workspace_id=_ws.id,
+                user_id=user.id,
+                role=_WR.owner,
+            ))
+            _ws_db.add(_WVAT(
+                id=str(uuid.uuid4()),
+                workspace_id=_ws.id,
+            ))
+            _ws_db.commit()
         finally:
             _ws_db.close()
     except Exception:
