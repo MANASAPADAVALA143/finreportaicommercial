@@ -197,66 +197,27 @@ app = FastAPI(
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.add_middleware(RequestLoggingMiddleware)
-# ProductRole must be *inside* CORS: last add_middleware = outermost.
-# Otherwise 401/403 JSONResponses from ProductRole skip CORS headers and the
-# browser reports a misleading CORS failure instead of the real auth error.
-app.add_middleware(ProductRoleMiddleware)
 
-_DEFAULT_ORIGINS = [
+# CORSMiddleware added first = outermost layer (Starlette reverses add_middleware order).
+# It intercepts OPTIONS preflights before any inner middleware can return 405,
+# and injects Access-Control-Allow-Origin on every response on the way out.
+_CORS_ORIGINS = [
     "https://finreportai.com",
     "https://www.finreportai.com",
     "https://finreportaicommercial.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
 ]
-_env_origins = os.getenv("ALLOWED_ORIGINS", "")
-_extra_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
-_ALL_ORIGINS: list[str] = list(dict.fromkeys(_DEFAULT_ORIGINS + _extra_origins))
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_ALL_ORIGINS,
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ProductRoleMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 add_mcp_api_key_middleware(app, settings.CLIENT_API_KEY)
-
-_PREFLIGHT_ORIGINS: frozenset[str] = frozenset(_ALL_ORIGINS)
-
-
-# @app.middleware("http") is added LAST → it becomes the ABSOLUTE OUTERMOST layer.
-# Every OPTIONS preflight is short-circuited here with proper CORS headers before
-# any inner middleware (CORSMiddleware, ProductRole, router) can return 405.
-# Non-OPTIONS requests also get CORS headers injected on the way out.
-@app.middleware("http")
-async def _outermost_cors(request: Request, call_next):
-    origin = request.headers.get("origin", "")
-    if request.method == "OPTIONS":
-        hdrs: dict[str, str] = {"Vary": "Origin"}
-        if origin in _PREFLIGHT_ORIGINS:
-            # Echo back whatever headers the browser is requesting.
-            # Access-Control-Allow-Headers: * does NOT work with credentials:include
-            # (the spec treats * literally, not as a wildcard when credentials are present).
-            requested_headers = request.headers.get(
-                "access-control-request-headers",
-                "content-type, authorization, x-workspace-id",
-            )
-            hdrs.update({
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": requested_headers,
-                "Access-Control-Max-Age": "600",
-            })
-        return Response(status_code=200, headers=hdrs)
-    response = await call_next(request)
-    if origin in _PREFLIGHT_ORIGINS:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Vary"] = "Origin"
-    return response
 
 
 # Routes
