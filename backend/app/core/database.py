@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
@@ -19,6 +19,15 @@ engine = create_engine(
     echo=settings.DEBUG,
     connect_args=get_engine_connect_args(),
 )
+
+# Ensure search_path=public on every Postgres connection so tables in the
+# public schema are always visible regardless of the role's default path.
+if engine.dialect.name == "postgresql":
+    @event.listens_for(engine, "connect")
+    def _set_search_path(dbapi_conn, _conn_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("SET search_path TO public")
+        cursor.close()
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
