@@ -176,6 +176,15 @@ def _run_critical_migrations() -> None:
                     conn.execute(_text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {definition}"))
             except Exception as e:
                 logger.warning("Migration %s.%s skipped: %s", table, col, e)
+
+        # Drop unique constraint on rbac_companies.name — company names need not be globally unique
+        try:
+            with _engine.begin() as conn:
+                conn.execute(_text(
+                    "ALTER TABLE rbac_companies DROP CONSTRAINT IF EXISTS rbac_companies_name_key"
+                ))
+        except Exception as e:
+            logger.warning("Drop rbac_companies_name_key skipped: %s", e)
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 
