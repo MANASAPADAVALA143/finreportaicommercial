@@ -185,6 +185,39 @@ def _run_critical_migrations() -> None:
                 ))
         except Exception as e:
             logger.warning("Drop rbac_companies_name_key skipped: %s", e)
+
+        # Ensure workspaces table exists (init_db may run after first request)
+        try:
+            with _engine.begin() as conn:
+                conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS workspaces (
+                        id VARCHAR(36) PRIMARY KEY,
+                        name VARCHAR(256) NOT NULL,
+                        legal_entity_name VARCHAR(256) NOT NULL,
+                        trn_number VARCHAR(20),
+                        country VARCHAR(64) NOT NULL DEFAULT 'UAE',
+                        currency VARCHAR(3) NOT NULL DEFAULT 'AED',
+                        fiscal_year_start_month INTEGER NOT NULL DEFAULT 1,
+                        fiscal_year_end_month INTEGER NOT NULL DEFAULT 12,
+                        industry VARCHAR(128) DEFAULT 'general',
+                        industry_label VARCHAR(128) DEFAULT 'Cost Center',
+                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.execute(_text("""
+                    CREATE TABLE IF NOT EXISTS workspace_members (
+                        id VARCHAR(36) PRIMARY KEY,
+                        workspace_id VARCHAR(36) NOT NULL REFERENCES workspaces(id),
+                        user_id VARCHAR(36) NOT NULL REFERENCES rbac_users(id),
+                        role VARCHAR(32) NOT NULL DEFAULT 'accountant',
+                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+                        CONSTRAINT uq_workspace_user UNIQUE (workspace_id, user_id)
+                    )
+                """))
+        except Exception as e:
+            logger.warning("Workspace table creation skipped: %s", e)
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 
