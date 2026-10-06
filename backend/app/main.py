@@ -255,7 +255,7 @@ async def _outermost_cors(request: Request, call_next):
     if origin in _PREFLIGHT_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers.setdefault("Vary", "Origin")
+        response.headers["Vary"] = "Origin"
     return response
 
 
