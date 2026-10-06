@@ -199,6 +199,18 @@ def _run_critical_migrations() -> None:
             except Exception as _te:
                 logger.warning("Table %s create skipped: %s", _tbl.name, _te)
 
+        # ── Step 2b: gulftax has its own Base/engine — create those tables too ──
+        try:
+            from app.modules.gulftax.ported.database import Base as _GTBase, engine as _GTEngine
+            import app.modules.gulftax.ported.models as _gt_models  # noqa: F401
+            for _tbl in _GTBase.metadata.sorted_tables:
+                try:
+                    _tbl.create(bind=_GTEngine, checkfirst=True)
+                except Exception as _te:
+                    logger.warning("GulfTax table %s create skipped: %s", _tbl.name, _te)
+        except Exception as _gte:
+            logger.warning("GulfTax Base create_all skipped: %s", _gte)
+
         # ── Step 3: safe column additions ────────────────────────────────────────
         _cols_to_add = [
             ("rbac_users", "product_role", "VARCHAR(32) DEFAULT 'full_access'"),
