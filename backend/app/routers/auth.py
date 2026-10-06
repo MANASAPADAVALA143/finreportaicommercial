@@ -123,7 +123,11 @@ def _user_payload(user: User, company: Company | None) -> dict:
 
 @router.post("/register")
 def register(body: RegisterBody, request: Request, response: Response, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == body.email.lower().strip()).first():
+    try:
+        existing = db.query(User).filter(User.email == body.email.lower().strip()).first()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database error: {exc}") from exc
+    if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
     company = Company(id=str(uuid.uuid4()), name=body.company_name.strip(), plan="starter")
