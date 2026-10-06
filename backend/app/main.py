@@ -146,6 +146,25 @@ _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
 os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
 
 
+def _run_critical_migrations() -> None:
+    """Add columns that must exist for login to work. Runs independently of init_db."""
+    try:
+        from app.core.database import engine as _engine
+        from sqlalchemy import text as _text
+        _cols_to_add = [
+            ("rbac_users", "product_role", "VARCHAR(32) DEFAULT 'full_access'"),
+            ("rbac_users", "tenant_id", "VARCHAR(36)"),
+        ]
+        for table, col, definition in _cols_to_add:
+            try:
+                with _engine.begin() as conn:
+                    conn.execute(_text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {definition}"))
+            except Exception as e:
+                logger.warning("Migration %s.%s skipped: %s", table, col, e)
+    except Exception as e:
+        logger.exception("Critical migration failed: %s", e)
+
+
 def _init_db_safe() -> None:
     try:
         init_db()
@@ -171,7 +190,8 @@ def _has_agentic_runs_schema(db) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run DB migrations synchronously first so columns exist before any request arrives.
+    # Critical column migrations first — must complete before any login request.
+    await asyncio.to_thread(_run_critical_migrations)
     await asyncio.to_thread(_init_db_safe)
     if settings.ENABLE_CFO_SCHEDULER:
         setup_scheduler()
