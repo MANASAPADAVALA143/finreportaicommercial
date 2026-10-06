@@ -152,18 +152,23 @@ def register(body: RegisterBody, request: Request, response: Response, db: Sessi
     db.refresh(user)
     try:
         from app.services.workspace_service import create_workspace
-        create_workspace(
-            db,
-            name=body.company_name.strip(),
-            legal_entity_name=body.company_name.strip(),
-            trn_number=None,
-            country="UAE",
-            currency="AED",
-            fiscal_year_start_month=1,
-            fiscal_year_end_month=12,
-            industry=None,
-            owner_user_id=user.id,
-        )
+        from app.core.database import SessionLocal as _SL
+        _ws_db = _SL()
+        try:
+            create_workspace(
+                _ws_db,
+                name=body.company_name.strip(),
+                legal_entity_name=body.company_name.strip(),
+                trn_number=None,
+                country="UAE",
+                currency="AED",
+                fiscal_year_start_month=1,
+                fiscal_year_end_month=12,
+                industry=None,
+                owner_user_id=user.id,
+            )
+        finally:
+            _ws_db.close()
     except Exception:
         pass
 
