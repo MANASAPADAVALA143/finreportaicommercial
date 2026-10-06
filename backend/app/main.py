@@ -217,6 +217,30 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_CORS_ORIGINS_SET = frozenset([
+    "https://finreportai.com",
+    "https://www.finreportai.com",
+    "https://finreportaicommercial.vercel.app",
+    "http://localhost:5173",
+    "http://localhost:3000",
+])
+
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    origin = request.headers.get("origin", "")
+    headers: dict[str, str] = {}
+    if origin in _CORS_ORIGINS_SET:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {exc}"},
+        headers=headers,
+    )
+
+app.add_exception_handler(Exception, _unhandled_exception_handler)
+
 _CORS_ORIGINS = [
     "https://finreportai.com",
     "https://www.finreportai.com",
