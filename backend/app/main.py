@@ -147,80 +147,78 @@ os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
 
 
 def _run_critical_migrations() -> None:
-    """Ensure tables and columns exist for login/register. Runs independently of init_db."""
+    """Ensure ALL tables exist by creating them individually. One failure never blocks others."""
     try:
-        from app.core.database import engine as _engine
+        from app.core.database import engine as _engine, Base as _Base
         from sqlalchemy import text as _text
 
-        # Create audit log table if missing (Postgres only — SQLite handled by create_all)
-        with _engine.begin() as conn:
-            conn.execute(_text("""
-                CREATE TABLE IF NOT EXISTS rbac_audit_log (
-                    id UUID PRIMARY KEY,
-                    user_id UUID NOT NULL,
-                    action VARCHAR(128) NOT NULL,
-                    module VARCHAR(64) NOT NULL,
-                    details JSONB NOT NULL DEFAULT '{}',
-                    ip_address VARCHAR(64),
-                    timestamp TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
-                )
-            """))
+        # ── Step 1: import every model so they register with Base.metadata ──────
+        try:
+            import app.db.models  # noqa: F401
+            import app.models.ifrs_statement  # noqa: F401
+            import app.models.bank_recon  # noqa: F401
+            import app.models.bookkeeping  # noqa: F401
+            import app.models.connector_client  # noqa: F401
+            import app.models.r2r_learning  # noqa: F401
+            import app.models.fpa_suite  # noqa: F401
+            import app.models.ifrs_agentic  # noqa: F401
+            import app.models.financial_statement_vault  # noqa: F401
+            import app.models.cfo_command_center  # noqa: F401
+            import app.models.audit_intelligence  # noqa: F401
+            import app.models.history_models  # noqa: F401
+            import app.models.month_end_close  # noqa: F401
+            import app.models.earnings_review  # noqa: F401
+            import app.models.gl_reconciliation  # noqa: F401
+            import app.models.financial_model  # noqa: F401
+            import app.models.users  # noqa: F401
+            import app.models.uae_accounting  # noqa: F401
+            import app.models.uae_accounting_full  # noqa: F401
+            import app.models.fpa_master  # noqa: F401
+            import app.models.pipeline  # noqa: F401
+            import app.models.workspace  # noqa: F401
+            import app.models.uae_ap  # noqa: F401
+            import app.models.company_setup  # noqa: F401
+            import app.models.workspace_notification  # noqa: F401
+            import app.models.workspace_audit  # noqa: F401
+            import app.models.crm  # noqa: F401
+            import app.models.ifrs16_lease  # noqa: F401
+            import app.models.ifrs15_contract  # noqa: F401
+            import app.models.ifrs9_ecl  # noqa: F401
+            import app.models.uae_account_classification  # noqa: F401
+            import app.models.client_data  # noqa: F401
+            import app.models.ap_payment_run  # noqa: F401
+            import app.models.industry_config  # noqa: F401
+        except Exception as _ie:
+            logger.warning("Some model imports failed during critical migrations: %s", _ie)
 
+        # ── Step 2: create every table individually (checkfirst=True = IF NOT EXISTS) ──
+        for _tbl in _Base.metadata.sorted_tables:
+            try:
+                _tbl.create(bind=_engine, checkfirst=True)
+            except Exception as _te:
+                logger.warning("Table %s create skipped: %s", _tbl.name, _te)
+
+        # ── Step 3: safe column additions ────────────────────────────────────────
         _cols_to_add = [
             ("rbac_users", "product_role", "VARCHAR(32) DEFAULT 'full_access'"),
             ("rbac_users", "tenant_id", "VARCHAR(36)"),
         ]
-        for table, col, definition in _cols_to_add:
+        for _table, _col, _definition in _cols_to_add:
             try:
                 with _engine.begin() as conn:
-                    conn.execute(_text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {definition}"))
-            except Exception as e:
-                logger.warning("Migration %s.%s skipped: %s", table, col, e)
+                    conn.execute(_text(f"ALTER TABLE {_table} ADD COLUMN IF NOT EXISTS {_col} {_definition}"))
+            except Exception as _e:
+                logger.warning("Migration %s.%s skipped: %s", _table, _col, _e)
 
-        # Drop unique constraint on rbac_companies.name — company names need not be globally unique
+        # ── Step 4: drop non-essential unique constraints ─────────────────────────
         try:
             with _engine.begin() as conn:
                 conn.execute(_text(
                     "ALTER TABLE rbac_companies DROP CONSTRAINT IF EXISTS rbac_companies_name_key"
                 ))
-        except Exception as e:
-            logger.warning("Drop rbac_companies_name_key skipped: %s", e)
+        except Exception as _e:
+            logger.warning("Drop rbac_companies_name_key skipped: %s", _e)
 
-        # Ensure workspaces table exists (init_db may run after first request)
-        try:
-            with _engine.begin() as conn:
-                conn.execute(_text("""
-                    CREATE TABLE IF NOT EXISTS workspaces (
-                        id VARCHAR(36) PRIMARY KEY,
-                        name VARCHAR(256) NOT NULL,
-                        legal_entity_name VARCHAR(256) NOT NULL,
-                        trn_number VARCHAR(20),
-                        country VARCHAR(64) NOT NULL DEFAULT 'UAE',
-                        currency VARCHAR(3) NOT NULL DEFAULT 'AED',
-                        fiscal_year_start_month INTEGER NOT NULL DEFAULT 1,
-                        fiscal_year_end_month INTEGER NOT NULL DEFAULT 12,
-                        industry VARCHAR(128) DEFAULT 'general',
-                        industry_label VARCHAR(128) DEFAULT 'Cost Center',
-                        is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
-                    )
-                """))
-        except Exception as e:
-            logger.warning("workspaces table creation skipped: %s", e)
-        try:
-            with _engine.begin() as conn:
-                conn.execute(_text("""
-                    CREATE TABLE IF NOT EXISTS workspace_members (
-                        id VARCHAR(36) PRIMARY KEY,
-                        workspace_id VARCHAR(36) NOT NULL,
-                        user_id VARCHAR(36) NOT NULL,
-                        role VARCHAR(32) NOT NULL DEFAULT 'accountant',
-                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
-                    )
-                """))
-        except Exception as e:
-            logger.warning("workspace_members table creation skipped: %s", e)
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 
