@@ -236,11 +236,18 @@ async def _outermost_cors(request: Request, call_next):
     if request.method == "OPTIONS":
         hdrs: dict[str, str] = {"Vary": "Origin"}
         if origin in _PREFLIGHT_ORIGINS:
+            # Echo back whatever headers the browser is requesting.
+            # Access-Control-Allow-Headers: * does NOT work with credentials:include
+            # (the spec treats * literally, not as a wildcard when credentials are present).
+            requested_headers = request.headers.get(
+                "access-control-request-headers",
+                "content-type, authorization, x-workspace-id",
+            )
             hdrs.update({
                 "Access-Control-Allow-Origin": origin,
                 "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Headers": requested_headers,
                 "Access-Control-Max-Age": "600",
             })
         return Response(status_code=200, headers=hdrs)
