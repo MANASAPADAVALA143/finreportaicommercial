@@ -166,21 +166,29 @@ def init_db():
         pass  # Non-SQLite or table doesn't exist yet — create_all handles it
 
     # ORM columns missing on existing DBs (SQLite + PostgreSQL)
+    # Each ALTER TABLE runs in its own transaction so one failure doesn't roll back others.
     try:
         from sqlalchemy import inspect, text
 
         insp = inspect(engine)
         if insp.has_table("rbac_users"):
             rbac_cols = {c["name"] for c in insp.get_columns("rbac_users")}
-            with engine.begin() as conn:
-                if "product_role" not in rbac_cols:
-                    conn.execute(
-                        text(
-                            "ALTER TABLE rbac_users ADD COLUMN product_role VARCHAR(32) DEFAULT 'full_access'"
+            if "product_role" not in rbac_cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE rbac_users ADD COLUMN product_role VARCHAR(32) DEFAULT 'full_access'"
+                            )
                         )
-                    )
-                if "tenant_id" not in rbac_cols:
-                    conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
+                except Exception:
+                    pass
+            if "tenant_id" not in rbac_cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
+                except Exception:
+                    pass
         # UAE fixed assets — dashboard/_apply_company filters company_id; column missing on some RDS DBs
         if insp.has_table("uae_fixed_assets"):
             fa_cols = {c["name"] for c in insp.get_columns("uae_fixed_assets")}

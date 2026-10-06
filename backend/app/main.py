@@ -171,9 +171,8 @@ def _has_agentic_runs_schema(db) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run DB setup in a thread so startup does not block the server from accepting
-    # connections (slow/unreachable DB or SQLite on a synced drive otherwise looks like a hung tab).
-    asyncio.create_task(asyncio.to_thread(_init_db_safe))
+    # Run DB migrations synchronously first so columns exist before any request arrives.
+    await asyncio.to_thread(_init_db_safe)
     if settings.ENABLE_CFO_SCHEDULER:
         setup_scheduler()
         if not scheduler.running:
@@ -385,10 +384,29 @@ async def health():
     import os as _os
     from pathlib import Path as _Path
     from app.core.config import settings as _settings
+    from app.core.database import engine as _engine
+    from sqlalchemy import text as _text
     _k = _os.environ.get("ANTHROPIC_API_KEY", "")
     _env = _Path(__file__).resolve().parent.parent / ".env"
     _sb_url = bool((_settings.SUPABASE_URL or "").strip())
     _sb_key = bool((_settings.SUPABASE_KEY or "").strip())
+    _db_ok = False
+    _db_error = ""
+    _user_count = None
+    try:
+        with _engine.connect() as _conn:
+            _conn.execute(_text("SELECT 1"))
+            _db_ok = True
+        try:
+            from app.core.database import SessionLocal as _SL
+            from app.models.users import User as _U
+            _s = _SL()
+            _user_count = _s.query(_U).count()
+            _s.close()
+        except Exception as _ue:
+            _db_error = f"users query: {_ue}"
+    except Exception as _de:
+        _db_error = str(_de)
     return {
         "status": "healthy",
         "ai_key_set": bool(_k),
@@ -398,6 +416,10 @@ async def health():
         "env_file_exists": _env.exists(),
         "supabase_configured": _sb_url and _sb_key,
         "file": __file__,
+        "database_url_driver": _settings.DATABASE_URL.split("://")[0] if _settings.DATABASE_URL else "EMPTY",
+        "db_ok": _db_ok,
+        "db_error": _db_error,
+        "user_count": _user_count,
     }
 
 
