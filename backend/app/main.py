@@ -206,18 +206,21 @@ def _run_critical_migrations() -> None:
                         updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
                     )
                 """))
+        except Exception as e:
+            logger.warning("workspaces table creation skipped: %s", e)
+        try:
+            with _engine.begin() as conn:
                 conn.execute(_text("""
                     CREATE TABLE IF NOT EXISTS workspace_members (
                         id VARCHAR(36) PRIMARY KEY,
-                        workspace_id VARCHAR(36) NOT NULL REFERENCES workspaces(id),
-                        user_id VARCHAR(36) NOT NULL REFERENCES rbac_users(id),
+                        workspace_id VARCHAR(36) NOT NULL,
+                        user_id VARCHAR(36) NOT NULL,
                         role VARCHAR(32) NOT NULL DEFAULT 'accountant',
-                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
-                        CONSTRAINT uq_workspace_user UNIQUE (workspace_id, user_id)
+                        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
                     )
                 """))
         except Exception as e:
-            logger.warning("Workspace table creation skipped: %s", e)
+            logger.warning("workspace_members table creation skipped: %s", e)
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 
