@@ -38,22 +38,29 @@ export function logSupabaseInvoiceError(
   });
 }
 
-/** Insert or update by invoice_number; strips unknown columns when schema lags behind app. */
+/** Insert or update by (company_id, invoice_number); strips unknown columns when schema lags behind app. */
 export async function upsertInvoiceRow(
   payload: Record<string, unknown>,
 ): Promise<{ data: Invoice | null; error: PostgrestError | null }> {
   let current = { ...payload };
+  let onConflict = 'company_id,invoice_number';
   const maxAttempts = Object.keys(current).length + 5;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const { data, error } = await supabase
       .from('invoices')
-      .upsert(current, { onConflict: 'invoice_number' })
+      .upsert(current, { onConflict })
       .select()
       .single();
 
     if (!error) {
       return { data: data as Invoice, error: null };
+    }
+
+    // Per-company unique index not migrated yet: fall back to the legacy global key.
+    if (error.code === '42P10' && onConflict !== 'invoice_number') {
+      onConflict = 'invoice_number';
+      continue;
     }
 
     const stripped = stripMissingColumn(current, error);

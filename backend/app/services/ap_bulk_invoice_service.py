@@ -218,23 +218,31 @@ def _save_invoice(sb: Any, payload: dict[str, Any], company_id: str, inv_no: str
                 except Exception as insert_exc:
                     msg = str(insert_exc)
                     if "duplicate" in msg.lower() or "23505" in msg:
-                        # invoice_number is globally unique: never take over another company's row
-                        owner = (
-                            sb.table("invoices")
-                            .select("id,company_id")
-                            .eq("invoice_number", inv_no)
-                            .limit(1)
-                            .execute()
-                        )
-                        owner_row = _row_data(owner)
-                        owner_cid = str((owner_row or {}).get("company_id") or "")
-                        if owner_row and owner_cid != str(company_id) and not _same_workspace(
-                            sb, owner_cid, str(company_id)
-                        ):
-                            return None, (
-                                f"Invoice number {inv_no} already exists under another company"
+                        if "company_id" not in msg and "invoices_company_invoice_number_key" not in msg:
+                            # Legacy global UNIQUE(invoice_number) still present: never take over
+                            # another company's row.
+                            owner = (
+                                sb.table("invoices")
+                                .select("id,company_id")
+                                .eq("invoice_number", inv_no)
+                                .limit(1)
+                                .execute()
                             )
-                        res = sb.table("invoices").upsert(working, on_conflict="invoice_number").execute()
+                            owner_row = _row_data(owner)
+                            owner_cid = str((owner_row or {}).get("company_id") or "")
+                            if owner_row and owner_cid != str(company_id) and not _same_workspace(
+                                sb, owner_cid, str(company_id)
+                            ):
+                                return None, (
+                                    f"Invoice number {inv_no} already exists under another company"
+                                )
+                            res = sb.table("invoices").upsert(working, on_conflict="invoice_number").execute()
+                        else:
+                            res = (
+                                sb.table("invoices")
+                                .upsert(working, on_conflict="company_id,invoice_number")
+                                .execute()
+                            )
                         saved = _row_data(res) or _fetch_invoice(sb, company_id, inv_no)
                     else:
                         raise

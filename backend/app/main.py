@@ -343,14 +343,17 @@ def _run_critical_migrations() -> None:
                 logger.warning("Drop gulftax_transactions.ap_invoice_id FK skipped: %s", _e)
 
         # ── Step 6: AP data quality (source category columns, duplicate trigger) on Supabase ──
-        _ap_sql = Path(__file__).resolve().parent.parent / "supabase_sql" / "004_ap_data_quality.sql"
-        if _engine.dialect.name == "postgresql" and _ap_sql.exists():
+        _sql_dir = Path(__file__).resolve().parent.parent / "supabase_sql"
+        for _ap_file in ("004_ap_data_quality.sql", "005_invoice_number_per_company.sql"):
+            _ap_sql = _sql_dir / _ap_file
+            if _engine.dialect.name != "postgresql" or not _ap_sql.exists():
+                continue
             try:
                 with _engine.begin() as conn:
                     if conn.execute(_text("SELECT to_regclass('public.invoices')")).scalar():
                         conn.exec_driver_sql(_ap_sql.read_text(encoding="utf-8"))
             except Exception as _e:
-                logger.warning("AP data quality migration skipped: %s", _e)
+                logger.warning("AP migration %s skipped: %s", _ap_file, _e)
 
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
