@@ -1088,6 +1088,7 @@ class ApInvoiceSyncItem(BaseModel):
     blocked_input_vat: bool = False
     blocked_reason: Optional[str] = None
     box_number: Optional[int] = None
+    ap_status: Optional[str] = None
 
 
 class SyncApInvoicesRequest(BaseModel):
@@ -1186,6 +1187,10 @@ async def sync_ap_invoices_to_vat_classifier(
         # Invalid TRN always goes to review regardless of confidence
         if not trn_valid and inv.vendor_trn and review_tier == "auto_approve":
             review_tier = "review_required"
+        # Not yet approved in AP: visible for classification, but not ready for the VAT return
+        ap_pending = bool(inv.ap_status) and inv.ap_status not in ("Approved", "Paid")
+        if ap_pending and review_tier == "auto_approve":
+            review_tier = "review_required"
 
         txn = Transaction(
             company_id=company_id,
@@ -1205,7 +1210,7 @@ async def sync_ap_invoices_to_vat_classifier(
             source_invoice_id=None,
             source_metadata={"invoice_id": inv.invoice_id, "currency": inv.currency,
                              "blocked": is_blocked, "blocked_reason": inv.blocked_reason if is_blocked else None,
-                             "review_tier": review_tier},
+                             "review_tier": review_tier, "ap_status": inv.ap_status},
             classification_flags=trn_flag or None,
         )
         db.add(txn)

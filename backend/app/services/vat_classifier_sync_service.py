@@ -152,14 +152,27 @@ def upsert_classifier_transaction(
         q = db.query(Transaction).filter(
             Transaction.company_id == ported_cid,
             Transaction.transaction_type == tx_type,
-            Transaction.source == source,
         )
         if inv_no:
+            # Any source: AP upload pushes the same invoice as invoice_flow_auto/resync first.
             q = q.filter(Transaction.invoice_number == inv_no)
+        else:
+            q = q.filter(Transaction.source == source)
         if party:
             q = q.filter(Transaction.vendor_or_customer == party)
         existing = q.first()
         if existing:
+            meta = dict(existing.source_metadata or {})
+            if meta.get("ap_status") and meta.get("ap_status") not in ("Approved", "Paid"):
+                # Now approved and posted in GulfTax: lift the AP-pending hold.
+                meta["ap_status"] = "Approved"
+                blocked = bool(meta.get("blocked"))
+                if not blocked and float(existing.confidence_score or 0) >= 85 and not existing.classification_flags:
+                    meta["review_tier"] = "auto_approve"
+                    existing.is_verified = True
+                existing.source_metadata = meta
+                db.add(existing)
+                db.commit()
             return {
                 "ok": True,
                 "skipped": True,

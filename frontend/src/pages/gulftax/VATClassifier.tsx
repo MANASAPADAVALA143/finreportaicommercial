@@ -532,14 +532,10 @@ export default function VATClassifier() {
         setUploadMsg('No AP invoices found for this company.');
         return;
       }
-      // Same rule as the VAT return: only approved (incl. paid) invoices carry input VAT.
-      const invoices = allInvoices.filter((inv: any) => ['Approved', 'Paid'].includes(String(inv.status || '')));
-      const awaiting = allInvoices.length - invoices.length;
-      if (!invoices.length) {
-        setUploadMsg(`No approved AP invoices yet (${awaiting} awaiting approval).`);
-        return;
-      }
-      const payload = invoices.map((inv: any) => ({
+      const awaiting = allInvoices.filter(
+        (inv: any) => !['Approved', 'Paid'].includes(String(inv.status || '')),
+      ).length;
+      const payload = allInvoices.map((inv: any) => ({
         invoice_id: inv.id,
         invoice_number: String(inv.invoice_number || ''),
         vendor_name: String(inv.vendor_name || inv.supplier_name || 'Unknown'),
@@ -556,25 +552,14 @@ export default function VATClassifier() {
         blocked_reason: inv.blocked_reason || undefined,
         box_number: inv.box_number || undefined,
         source: 'invoice_flow_resync',
+        ap_status: String(inv.status || ''),
       }));
-      // Call sync endpoint directly (await so we know when done)
-      const { joinApiUrl } = await import('../../utils/backendOrigin');
-      const { getStoredAccessToken } = await import('../../utils/authToken');
-      const { workspaceHeaders } = await import('../../services/workspaceService');
-      const token = getStoredAccessToken();
-      const headers = workspaceHeaders(token, { 'Content-Type': 'application/json' });
-      const res = await fetch(joinApiUrl('/api/vat/sync-from-ap-invoices'), {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        body: JSON.stringify({ invoices: payload }),
-      });
-      if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
-      const data = await res.json();
+      const { pushApInvoicesToVatClassifier } = await import('../../lib/ap-invoice/gulfTaxService');
+      const data = await pushApInvoicesToVatClassifier(payload);
       await fetchSaved();
       setUploadMsg(
         `✅ AP invoices found ${allInvoices.length} · new synced ${data.saved_count} · already in classifier ${data.skipped_count}` +
-          (awaiting ? ` · awaiting approval ${awaiting}` : ''),
+          (awaiting ? ` · ${awaiting} awaiting AP approval (shown as Review Required)` : ''),
       );
     } catch (err: any) {
       setError(err?.message || 'Failed to sync from AP Invoices.');

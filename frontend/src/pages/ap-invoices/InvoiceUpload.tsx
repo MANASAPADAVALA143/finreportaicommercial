@@ -1996,6 +1996,7 @@ export function InvoiceUpload() {
             source: 'invoice_flow_auto',
             gulftax_confidence: (invoice as { gulftax_confidence?: number }).gulftax_confidence ?? undefined,
             gulftax_decision: (invoice as { gulftax_decision?: string }).gulftax_decision ?? undefined,
+            ap_status: String(invoice.status ?? ''),
           }))
         );
       }

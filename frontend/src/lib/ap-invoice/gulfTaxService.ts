@@ -153,22 +153,33 @@ export interface ApInvoiceSyncItem {
   blocked_input_vat?: boolean;
   blocked_reason?: string;
   box_number?: number;
+  /** AP workflow status; unapproved invoices land in the classifier as Review Required. */
+  ap_status?: string;
 }
 
-/** Fire-and-forget: push AP invoices into GulfTax VAT classifier after bulk import */
+export type VatClassifierSyncResult = { saved_count: number; skipped_count: number };
+
+/**
+ * Push AP invoices into the GulfTax VAT classifier. Goes through gulfTaxClient so the
+ * X-Company-Id header matches the company the VAT Classifier page reads.
+ */
+export async function pushApInvoicesToVatClassifier(
+  invoices: ApInvoiceSyncItem[],
+): Promise<VatClassifierSyncResult> {
+  if (!invoices.length) return { saved_count: 0, skipped_count: 0 };
+  const { gulfTaxClient } = await import('../../services/gulfTaxClient');
+  const { data } = await gulfTaxClient.post<VatClassifierSyncResult>(
+    '/api/vat/sync-from-ap-invoices',
+    { invoices } as unknown as Record<string, unknown>,
+    { timeout: 120_000 },
+  );
+  return data;
+}
+
+/** Fire-and-forget variant used after AP uploads */
 export function syncApInvoicesToVatClassifier(invoices: ApInvoiceSyncItem[]): void {
   if (!invoices.length) return;
-  void (async () => {
-    try {
-      const res = await fetch(joinApiUrl('/api/vat/sync-from-ap-invoices'), {
-        method: 'POST',
-        headers: authHeaders(),
-        credentials: 'include',
-        body: JSON.stringify({ invoices }),
-      });
-      if (!res.ok) console.warn('[GulfTax sync] non-OK response', res.status);
-    } catch (err) {
-      console.warn('[GulfTax sync] failed (non-critical):', err);
-    }
-  })();
+  void pushApInvoicesToVatClassifier(invoices).catch((err) => {
+    console.warn('[GulfTax sync] failed (non-critical):', err);
+  });
 }
