@@ -1302,6 +1302,7 @@ Return JSON only:
     # score > 60  → hard block (Finance Manager escalation required)
     auto_approved = False
     transactions_created = 0
+    priced_lines = 0
     high_flags = [f for f in risk.flags if f.severity == "HIGH"]
 
     if risk.risk_score < 30 and len(high_flags) == 0:
@@ -1387,6 +1388,7 @@ Return JSON only:
                     amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
+                priced_lines += 1
                 exists = db.query(Transaction).filter(
                     and_(
                         Transaction.company_id == company_id,
@@ -1421,8 +1423,8 @@ Return JSON only:
                 ))
                 transactions_created += 1
 
-        # Fallback: empty line_items OR all lines had zero/missing amounts
-        if transactions_created == 0:
+        # Fallback: empty line_items OR all lines had zero/missing amounts (not when lines already exist)
+        if priced_lines == 0:
             transactions_created += _add_header_total_txn(
                 source="invoice_flow_auto",
                 reasoning=f"Auto-approved (risk score {risk.risk_score}/100) from Invoice Flow #{inv.id}",
@@ -1588,6 +1590,7 @@ def review_invoice(
 
     # ── Auto-create Transaction records on approval (Art. 48 single source of truth) ──
     transactions_created = 0
+    priced_lines = 0
     if inv.status == "approved":
         # Resolve invoice date
         inv_date: date
@@ -1648,6 +1651,7 @@ def review_invoice(
                     amount = round(float(li.get("amount") or li.get("line_total") or li.get("total") or 0), 2)
                 if amount <= 0:
                     continue
+                priced_lines += 1
 
                 exists = db.query(Transaction).filter(
                     and_(
@@ -1683,7 +1687,7 @@ def review_invoice(
                 ))
                 transactions_created += 1
 
-        if transactions_created == 0:
+        if priced_lines == 0:
             transactions_created += _add_header_total_txn(
                 source="invoice_flow_reviewed",
                 reasoning=f"Approved by reviewer from Invoice Flow invoice #{inv.id} · {inv.filename or ''}",
