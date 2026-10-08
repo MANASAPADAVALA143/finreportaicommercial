@@ -23,7 +23,7 @@ interface RiskFlag {
 }
 
 interface ProcessedInvoice {
-  invoice_id: number;
+  invoice_id: number | string;
   filename: string;
   vendor_name?: string;
   vendor_trn?: string;
@@ -73,8 +73,8 @@ export default function InvoiceFlowPage() {
   const [results, setResults] = useState<ProcessedInvoice[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [einvoiceLoading, setEinvoiceLoading] = useState<number | null>(null);
-  const [einvoiceMsg, setEinvoiceMsg] = useState<Record<number, string>>({});
+  const [einvoiceLoading, setEinvoiceLoading] = useState<number | string | null>(null);
+  const [einvoiceMsg, setEinvoiceMsg] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false); // prevents double-submit race condition
 
@@ -252,7 +252,7 @@ export default function InvoiceFlowPage() {
     processingRef.current = false;
   };
 
-  const handleGenerateEinvoice = async (invoiceId: number) => {
+  const handleGenerateEinvoice = async (invoiceId: number | string) => {
     if (!invoiceId || einvoiceLoading === invoiceId) return;
     setEinvoiceLoading(invoiceId);
     setEinvoiceMsg((prev) => {
@@ -490,7 +490,7 @@ export default function InvoiceFlowPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {inv.invoice_id > 0 && (
+                    {!!inv.invoice_id && (
                       <button
                         type="button"
                         onClick={() => void handleGenerateEinvoice(inv.invoice_id)}
@@ -509,13 +509,13 @@ export default function InvoiceFlowPage() {
                   </div>
                 </div>
               )}
-              {inv.invoice_id > 0 && einvoiceMsg[inv.invoice_id] && (
+              {!!inv.invoice_id && einvoiceMsg[inv.invoice_id] && (
                 <p className={`text-[11px] ${einvoiceMsg[inv.invoice_id].includes("saved") ? "text-green" : "text-red"}`}>
                   {einvoiceMsg[inv.invoice_id]}
                 </p>
               )}
 
-              {inv.invoice_id > 0 && (
+              {!!inv.invoice_id && (
                 <div className="flex gap-2 pt-1">
                   {!inv.auto_approved && (
                     <Link

@@ -3,7 +3,7 @@ import os
 import uuid
 import tempfile
 from datetime import date, datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -99,7 +99,7 @@ class TransactionResponse(BaseModel):
     source_file_name: Optional[str] = None
     vendor_trn: Optional[str] = None
     source_metadata: Optional[Dict[str, Any]] = None
-    source_invoice_id: Optional[int] = None
+    source_invoice_id: Optional[Union[int, str]] = None
     created_at: datetime
 
 

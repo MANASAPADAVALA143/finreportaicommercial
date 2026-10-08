@@ -5,7 +5,7 @@ import math
 import os
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from anthropic import Anthropic
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/invoice", tags=["invoice-flow"])
 
+# gulftax_invoices.id is SERIAL in the ported schema but uuid on the Supabase/Render DB.
+InvoiceId = Union[int, str]
+
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 claude_client = Anthropic(api_key=anthropic_api_key) if anthropic_api_key else None
 
@@ -44,7 +47,7 @@ def _sync_invoice_flow_txns_to_gulftax(
     db: Session,
     *,
     company_id: str,
-    invoice_id: int,
+    invoice_id: InvoiceId,
 ) -> Dict[str, Any]:
     """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return).
 
@@ -220,7 +223,7 @@ class RiskResult(BaseModel):
 
 
 class ClassifyRiskRequest(BaseModel):
-    invoice_id: int
+    invoice_id: InvoiceId
     extracted: ExtractedInvoice
 
 
@@ -299,7 +302,7 @@ def run_all_anomaly_checks(
     extracted: ExtractedInvoice,
     company_id: str,
     db: Session,
-    invoice_id: int = 0,
+    invoice_id: InvoiceId = 0,
     vat_treatment: str = "standard_rated",
 ) -> RiskResult:
     flags: List[AnomalyFlag] = []
@@ -1531,7 +1534,7 @@ def list_invoices(
 
 @router.post("/invoices/{invoice_id}/review")
 def review_invoice(
-    invoice_id: int,
+    invoice_id: InvoiceId,
     payload: ReviewAction,
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
@@ -1681,7 +1684,7 @@ def review_invoice(
 
 @router.post("/{invoice_id}/generate-einvoice")
 def generate_einvoice(
-    invoice_id: int,
+    invoice_id: InvoiceId,
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
