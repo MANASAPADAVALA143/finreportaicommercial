@@ -6,12 +6,21 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
 
 from app.core.database import Base
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+def _uuid_col(*args, **kw):
+    """String(36) on SQLite, native UUID on Postgres (Supabase DDL in 046) — both accept str values."""
+    from app.core.database import engine
+    if engine.dialect.name == "postgresql":
+        return Column(UUID(as_uuid=False), *args, **kw)
+    return Column(String(36), *args, **kw)
 
 
 # Canonical industry keys → display + default cost-center label
@@ -52,7 +61,7 @@ class IndustryConfig(Base):
 
     __tablename__ = "industry_config"
 
-    id = Column(String(36), primary_key=True, default=_uuid)
+    id = _uuid_col(primary_key=True, default=_uuid)
     industry = Column(String(64), nullable=False, unique=True, index=True)
     industry_label = Column(String(128), nullable=False, default="General Business")
     cost_center_label = Column(String(64), nullable=False, default="Cost Center")
@@ -77,9 +86,9 @@ class CostCenter(Base):
         UniqueConstraint("tenant_id", "company_id", "code", name="uq_cost_center_tenant_co_code"),
     )
 
-    id = Column(String(36), primary_key=True, default=_uuid)
+    id = _uuid_col(primary_key=True, default=_uuid)
     tenant_id = Column(String(64), nullable=False, index=True)
-    company_id = Column(String(64), nullable=False, index=True)
+    company_id = _uuid_col(nullable=False, index=True)
     name = Column(String(256), nullable=False)
     code = Column(String(64), nullable=False)
     description = Column(Text, nullable=True)
