@@ -1114,17 +1114,29 @@ async def sync_ap_invoices_to_vat_classifier(
             skipped += 1
             continue
 
-        # Dedup by invoice_number
+        # Dedup by vendor TRN + invoice number; two vendors may share an invoice number.
         if inv.invoice_number:
-            existing = (
+            from app.services.vendor_normalize import same_vendor
+
+            inv_trn = "".join(ch for ch in (inv.vendor_trn or "") if ch.isalnum()).upper()
+            matches = (
                 db.query(Transaction)
                 .filter(
                     Transaction.company_id == company_id,
                     Transaction.invoice_number == inv.invoice_number,
                 )
-                .first()
+                .all()
             )
-            if existing:
+            is_dup = False
+            for m in matches:
+                m_trn = "".join(ch for ch in (m.vendor_trn or "") if ch.isalnum()).upper()
+                if inv_trn and m_trn:
+                    is_dup = inv_trn == m_trn
+                else:
+                    is_dup = same_vendor(inv.vendor_name or "", m.vendor_or_customer or "")
+                if is_dup:
+                    break
+            if is_dup:
                 skipped += 1
                 continue
 

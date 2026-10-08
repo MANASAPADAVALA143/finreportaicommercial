@@ -516,18 +516,27 @@ export default function VATClassifier() {
     setError(null);
     setUploadMsg(null);
     try {
+      const { resolveApSupabaseCompanyId } = await import('../../lib/ap-invoice/workspaceCompanySync');
       const companyId =
-        activeWorkspace?.id ||
+        (await resolveApSupabaseCompanyId().catch(() => '')) ||
         localStorage.getItem('active_company_id') ||
         localStorage.getItem('gnanova_company_id') ||
+        activeWorkspace?.id ||
         '';
       if (!companyId) {
         setError('No company ID found — please select a company first.');
         return;
       }
-      const invoices = await listInvoicesViaApi(companyId, 1000);
-      if (!invoices.length) {
+      const allInvoices = await listInvoicesViaApi(companyId, 1000);
+      if (!allInvoices.length) {
         setUploadMsg('No AP invoices found for this company.');
+        return;
+      }
+      // Same rule as the VAT return: only approved (incl. paid) invoices carry input VAT.
+      const invoices = allInvoices.filter((inv: any) => ['Approved', 'Paid'].includes(String(inv.status || '')));
+      const awaiting = allInvoices.length - invoices.length;
+      if (!invoices.length) {
+        setUploadMsg(`No approved AP invoices yet (${awaiting} awaiting approval).`);
         return;
       }
       const payload = invoices.map((inv: any) => ({
@@ -563,7 +572,10 @@ export default function VATClassifier() {
       if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
       const data = await res.json();
       await fetchSaved();
-      setUploadMsg(`✅ Synced ${data.saved_count} invoices from AP (${data.skipped_count} already existed).`);
+      setUploadMsg(
+        `✅ AP invoices found ${allInvoices.length} · new synced ${data.saved_count} · already in classifier ${data.skipped_count}` +
+          (awaiting ? ` · awaiting approval ${awaiting}` : ''),
+      );
     } catch (err: any) {
       setError(err?.message || 'Failed to sync from AP Invoices.');
     } finally {

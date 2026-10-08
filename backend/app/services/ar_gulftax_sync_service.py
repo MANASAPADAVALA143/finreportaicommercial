@@ -424,6 +424,17 @@ def sync_ap_invoice_to_rds_gulftax(
             resolved_company_id,
         )
 
+    from app.services.gulftax_sync_service import find_gulftax_duplicate
+
+    dup = find_gulftax_duplicate(invoice, resolved_company_id)
+    if dup:
+        return {
+            "ok": False,
+            "duplicate": dup["kind"],
+            "duplicate_of": dup,
+            "error": f"duplicate_{dup['kind']}:{dup.get('invoice_number') or dup.get('transaction_id')}",
+        }
+
     row = build_transaction_row(invoice, company_id=resolved_company_id, workspace_id=ws)
     row["tenant_id"] = ws
     row["transaction_date"] = date.fromisoformat(str(row["transaction_date"])[:10])

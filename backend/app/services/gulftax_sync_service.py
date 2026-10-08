@@ -225,6 +225,91 @@ def _existing_for_invoice(invoice_id: str) -> bool:
         return False
 
 
+def _trn_key(raw: Any) -> str:
+    return "".join(ch for ch in str(raw or "") if ch.isalnum()).upper()
+
+
+def find_gulftax_duplicate(invoice: dict[str, Any], company_id: str) -> dict[str, Any] | None:
+    """Another gulftax_transactions row for the same supplier invoice (any source).
+
+    exact    : same vendor TRN + invoice number (same vendor when a TRN is missing)
+    strong   : same vendor TRN + invoice date + gross amount, different invoice number
+    possible : same normalised vendor + invoice date + gross amount, no TRN to confirm
+    Two vendors sharing an invoice number (different TRNs) are not duplicates.
+    """
+    from app.services.vendor_normalize import same_vendor
+
+    invoice_id = str(invoice.get("id") or "")
+    inv_no = str(invoice.get("invoice_number") or "").strip()
+    vendor = invoice.get("vendor_name") or ""
+    trn = _trn_key(invoice.get("vendor_trn") or invoice.get("gstin"))
+    inv_date = str(invoice.get("invoice_date") or "")[:10]
+    gross = round(float(invoice.get("total_amount") or 0), 2)
+
+    try:
+        from app.core.supabase import get_supabase
+
+        sb = get_supabase()
+        cols = "id,ap_invoice_id,invoice_number,vendor_name,vendor_trn,transaction_date,gross_amount,source"
+        candidates: list[dict[str, Any]] = []
+        if inv_no:
+            res = (
+                sb.table("gulftax_transactions")
+                .select(cols)
+                .eq("company_id", company_id)
+                .ilike("invoice_number", inv_no)
+                .in_("status", ["posted", "pending"])
+                .limit(20)
+                .execute()
+            )
+            candidates.extend(res.data or [])
+        if inv_date and gross > 0:
+            res = (
+                sb.table("gulftax_transactions")
+                .select(cols)
+                .eq("company_id", company_id)
+                .eq("transaction_date", inv_date)
+                .eq("gross_amount", gross)
+                .in_("status", ["posted", "pending"])
+                .limit(20)
+                .execute()
+            )
+            candidates.extend(res.data or [])
+    except Exception as exc:
+        logger.warning("GulfTax duplicate lookup failed for %s: %s", invoice_id, exc)
+        return None
+
+    best: dict[str, Any] | None = None
+    rank = {"exact": 3, "strong": 2, "possible": 1}
+    for row in candidates:
+        if invoice_id and str(row.get("ap_invoice_id") or "") == invoice_id:
+            continue
+        row_trn = _trn_key(row.get("vendor_trn"))
+        both_trn = bool(trn) and bool(row_trn)
+        same_supplier = (trn == row_trn) if both_trn else same_vendor(vendor, row.get("vendor_name") or "")
+        if not same_supplier:
+            continue
+        same_no = bool(inv_no) and str(row.get("invoice_number") or "").strip().lower() == inv_no.lower()
+        same_date_amt = (
+            str(row.get("transaction_date") or "")[:10] == inv_date
+            and round(float(row.get("gross_amount") or 0), 2) == gross
+        )
+        if same_no:
+            kind = "exact"
+        elif same_date_amt:
+            kind = "strong" if both_trn else "possible"
+        else:
+            continue
+        if best is None or rank[kind] > rank[best["kind"]]:
+            best = {
+                "kind": kind,
+                "transaction_id": row.get("id"),
+                "invoice_number": row.get("invoice_number"),
+                "source": row.get("source"),
+            }
+    return best
+
+
 def sync_approved_invoice_to_gulftax(
     invoice_id: str,
     company_id: str,
@@ -323,6 +408,15 @@ def sync_approved_invoice_to_gulftax(
             company_err,
             resolved_company_id,
         )
+
+    dup = find_gulftax_duplicate(invoice, resolved_company_id)
+    if dup:
+        return {
+            "ok": False,
+            "duplicate": dup["kind"],
+            "duplicate_of": dup,
+            "error": f"duplicate_{dup['kind']}:{dup.get('invoice_number') or dup.get('transaction_id')}",
+        }
 
     row = build_transaction_row(
         invoice, company_id=resolved_company_id, workspace_id=tenant_id or workspace_id
@@ -529,6 +623,16 @@ def sync_ap_invoice_gulftax_after_approve(
             pass
 
     rds_result: dict[str, Any] = {"ok": True, "skipped": True}
+    if sync_result.get("duplicate"):
+        return {
+            "ok": False,
+            "synced": False,
+            "skipped": False,
+            "duplicate": sync_result["duplicate"],
+            "supabase": sync_result,
+            "rds": rds_result,
+            "error": sync_result.get("error"),
+        }
     try:
         from app.services.ar_gulftax_sync_service import sync_ap_invoice_to_rds_gulftax
 
@@ -578,24 +682,45 @@ def sync_period(
         sb = get_supabase()
         inv_res = (
             sb.table("invoices")
-            .select("id, status, company_id, invoice_date")
+            .select("id, status, company_id, invoice_date, invoice_number, vendor_name, total_amount")
             .eq("company_id", company_id)
-            .in_("status", list(POSTABLE_AP_STATUSES))
             .gte("invoice_date", period_start.isoformat())
             .lte("invoice_date", period_end.isoformat())
             .execute()
         )
-        invoices = inv_res.data or []
+        all_in_period = inv_res.data or []
     except Exception as exc:
         logger.exception("sync_period invoice fetch failed")
         return {"ok": False, "error": str(exc), "synced": 0, "skipped": 0}
 
+    invoices = [i for i in all_in_period if (i.get("status") or "").strip() in POSTABLE_AP_STATUSES]
     company = _fetch_company_config(company_id)
     ws_id = workspace_id or company.get("workspace_id") or company_id
 
     synced = 0
     skipped = 0
+    duplicates_blocked = 0
+    needs_review = 0
     errors: list[str] = []
+    items: list[dict[str, Any]] = []
+
+    def _item(inv: dict[str, Any], result: str, detail: str = "") -> None:
+        items.append(
+            {
+                "invoice_id": inv.get("id"),
+                "invoice_number": inv.get("invoice_number"),
+                "vendor_name": inv.get("vendor_name"),
+                "total_amount": inv.get("total_amount"),
+                "status": inv.get("status"),
+                "result": result,
+                "detail": detail,
+            }
+        )
+
+    for inv in all_in_period:
+        if (inv.get("status") or "").strip() not in POSTABLE_AP_STATUSES:
+            _item(inv, "awaiting_approval", f"Status {inv.get('status') or 'unknown'} — syncs once approved")
+
     for inv in invoices:
         iid = inv.get("id")
         if not iid:
@@ -603,6 +728,22 @@ def sync_period(
 
         sup_result = sync_approved_invoice_to_gulftax(iid, company_id, workspace_id=ws_id)
         sup_skipped = bool(sup_result.get("skipped"))
+        dup_kind = sup_result.get("duplicate")
+        if dup_kind:
+            dup_of = sup_result.get("duplicate_of") or {}
+            label = {
+                "exact": "Exact duplicate (same vendor TRN + invoice number)",
+                "strong": "Strong duplicate (same vendor TRN + date + amount)",
+                "possible": "Possible duplicate (same vendor + date + amount)",
+            }[dup_kind]
+            detail = f"{label} of {dup_of.get('invoice_number') or 'existing GulfTax row'}"
+            if dup_kind == "possible":
+                needs_review += 1
+                _item(inv, "needs_review", detail)
+            else:
+                duplicates_blocked += 1
+                _item(inv, "duplicate_blocked", detail)
+            continue
         if not sup_result.get("ok") and not sup_skipped:
             errors.append(f"{iid}:supabase:{sup_result.get('error')}")
 
@@ -630,8 +771,13 @@ def sync_period(
         sup_new = bool(sup_result.get("ok")) and not sup_skipped
         if sup_new or rds_new:
             synced += 1
+            _item(inv, "synced", f"Posted to {sup_result.get('fta_box') or 'GulfTax'}")
         elif sup_skipped and (db is None or rds_skipped):
             skipped += 1
+            _item(inv, "already_in_gulftax", "Already exists in GulfTax — skipped")
+        else:
+            needs_review += 1
+            _item(inv, "needs_review", str(sup_result.get("error") or "Sync failed"))
 
     # Also promote any Invoice Flow PDF rows that are still 'pending' for this
     # period into 'posted' so Recon Bot and VAT Return can read them.
@@ -663,6 +809,12 @@ def sync_period(
         "synced": synced,
         "skipped": skipped,
         "total_invoices": len(invoices),
+        "found": len(all_in_period),
+        "already_in_gulftax": skipped,
+        "duplicates_blocked": duplicates_blocked,
+        "needs_review": needs_review,
+        "awaiting_approval": len(all_in_period) - len(invoices),
+        "items": items,
         "pdf_promoted": pdf_promoted,
         "errors": errors[:20],
     }

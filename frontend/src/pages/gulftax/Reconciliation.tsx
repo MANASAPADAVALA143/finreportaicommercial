@@ -8,6 +8,7 @@ import {
   fetchVatReconHistory,
   runVatRecon,
   syncGulfTaxPeriod,
+  type GulfTaxSyncPeriodResult,
   type GulfTaxTransaction,
   type VatPeriodOption,
   type VatReconHistoryItem,
@@ -24,6 +25,14 @@ interface MismatchRow {
   return_amount?: number;
   difference?: number;
 }
+
+const SYNC_RESULT_LABEL: Record<string, { label: string; cls: string }> = {
+  synced: { label: 'New — synced', cls: 'text-teal-300' },
+  already_in_gulftax: { label: 'Already in GulfTax — skipped', cls: 'text-muted' },
+  duplicate_blocked: { label: 'Duplicate — blocked', cls: 'text-red-300' },
+  needs_review: { label: 'Needs review', cls: 'text-amber-300' },
+  awaiting_approval: { label: 'Awaiting approval', cls: 'text-muted2' },
+};
 
 function fmtAed(n: number | undefined): string {
   const v = Number(n);
@@ -44,6 +53,7 @@ export default function ReconPage() {
   const [txRows, setTxRows] = useState<GulfTaxTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<GulfTaxSyncPeriodResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VatReconRunResult | null>(null);
@@ -103,9 +113,11 @@ export default function ReconPage() {
   const handleSyncPeriod = async () => {
     if (!activeCompanyId) return;
     setSyncMsg(null);
+    setSyncResult(null);
     try {
       const r = await syncGulfTaxPeriod(taxPeriod, activeCompanyId);
-      setSyncMsg(`Synced ${r.synced} invoice(s), skipped ${r.skipped} already in GulfTax.`);
+      if (r.items) setSyncResult(r);
+      else setSyncMsg(`Synced ${r.synced} invoice(s), skipped ${r.skipped} already in GulfTax.`);
       await loadTransactions();
       await loadPeriods();
     } catch (e) {
@@ -213,6 +225,51 @@ export default function ReconPage() {
           </div>
         </div>
         {syncMsg && <p className="text-xs text-teal-300 mb-3">{syncMsg}</p>}
+        {syncResult && (
+          <div className="mb-4 rounded-[10px] border border-border bg-[rgba(4,12,30,0.5)] p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-white">Sync results — {taxPeriod}</p>
+              <button type="button" onClick={() => setSyncResult(null)} className="text-[11px] text-muted hover:text-white">
+                Hide
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
+              {[
+                ['AP invoices found', syncResult.found ?? syncResult.total_invoices],
+                ['Already in GulfTax', syncResult.already_in_gulftax ?? syncResult.skipped],
+                ['New invoices synced', syncResult.synced],
+                ['Duplicates blocked', syncResult.duplicates_blocked ?? 0],
+                ['Needs review', syncResult.needs_review ?? 0],
+                ['Awaiting approval', syncResult.awaiting_approval ?? 0],
+              ].map(([label, count]) => (
+                <div key={String(label)} className="rounded-[8px] border border-border px-3 py-2">
+                  <p className="text-[10px] uppercase text-muted2">{label}</p>
+                  <p className="text-lg font-semibold text-white font-mono">{count}</p>
+                </div>
+              ))}
+            </div>
+            {(syncResult.items?.length ?? 0) > 0 && (
+              <div className="max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {syncResult.items!.map((it) => {
+                      const meta = SYNC_RESULT_LABEL[it.result] ?? { label: it.result, cls: 'text-muted' };
+                      return (
+                        <tr key={it.invoice_id} className="border-b border-border/40">
+                          <td className="py-1.5 pr-3 font-mono">{it.invoice_number || '—'}</td>
+                          <td className="py-1.5 pr-3">{it.vendor_name || '—'}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono">{fmtAed(Number(it.total_amount))}</td>
+                          <td className={`py-1.5 pr-3 font-semibold ${meta.cls}`}>{meta.label}</td>
+                          <td className="py-1.5 text-muted">{it.detail}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

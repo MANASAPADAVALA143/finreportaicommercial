@@ -158,10 +158,33 @@ export async function fetchGulfTaxTransactions(period: string, companyIdParam?: 
   });
 }
 
+export type GulfTaxSyncItem = {
+  invoice_id: string;
+  invoice_number: string | null;
+  vendor_name: string | null;
+  total_amount: number | null;
+  status: string | null;
+  result: 'synced' | 'already_in_gulftax' | 'duplicate_blocked' | 'needs_review' | 'awaiting_approval';
+  detail: string;
+};
+
+export type GulfTaxSyncPeriodResult = {
+  synced: number;
+  skipped: number;
+  total_invoices: number;
+  found?: number;
+  already_in_gulftax?: number;
+  duplicates_blocked?: number;
+  needs_review?: number;
+  awaiting_approval?: number;
+  items?: GulfTaxSyncItem[];
+  errors?: string[];
+};
+
 export async function syncGulfTaxPeriod(period: string, companyIdParam?: string) {
   const cid = companyIdParam || companyId();
   if (!cid) throw new Error('company_id is required');
-  return post<{ synced: number; skipped: number; total_invoices: number }>('/api/gulftax/sync-period', {
+  return post<GulfTaxSyncPeriodResult>('/api/gulftax/sync-period', {
     tax_period: period,
     company_id: cid,
   });
