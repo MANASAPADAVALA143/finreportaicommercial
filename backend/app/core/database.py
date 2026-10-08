@@ -4,6 +4,15 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 
+def pin_psycopg2(url: str) -> str:
+    """SQLAlchemy 2.1 maps bare postgresql:// to psycopg 3, whose typed binds break
+    String model columns that are uuid in the DB; psycopg2 sends untyped literals."""
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg2://" + url[len(prefix):]
+    return url
+
+
 def get_engine_connect_args() -> dict:
     """Driver options per URL (avoids long hangs when Postgres is down)."""
     if "sqlite" in settings.DATABASE_URL:
@@ -15,7 +24,7 @@ def get_engine_connect_args() -> dict:
 
 # Create SQLAlchemy engine (SQLite needs check_same_thread=False for FastAPI)
 engine = create_engine(
-    settings.DATABASE_URL,
+    pin_psycopg2(settings.DATABASE_URL),
     echo=settings.DEBUG,
     connect_args=get_engine_connect_args(),
 )

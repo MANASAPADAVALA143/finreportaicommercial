@@ -12,6 +12,12 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./gulftax.db")
 
+for _prefix in ("postgresql://", "postgres://"):
+    if DATABASE_URL.startswith(_prefix):
+        # Same driver pin as app.core.database.pin_psycopg2 (see its docstring).
+        DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len(_prefix):]
+        break
+
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
