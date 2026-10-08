@@ -146,6 +146,41 @@ _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
 os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
 
 
+def _add_missing_columns(engine, metadata) -> None:
+    """Add model columns missing from tables that already exist (create checkfirst skips those).
+
+    Columns are added as nullable with no constraints so this never fails on existing rows.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    try:
+        insp = inspect(engine)
+        existing_tables = set(insp.get_table_names())
+    except Exception as e:
+        logger.warning("Column reconcile skipped (inspect failed): %s", e)
+        return
+    for tbl in metadata.sorted_tables:
+        if tbl.name not in existing_tables:
+            continue
+        try:
+            have = {c["name"] for c in insp.get_columns(tbl.name)}
+        except Exception as e:
+            logger.warning("Column reconcile for %s skipped: %s", tbl.name, e)
+            continue
+        for col in tbl.columns:
+            if col.name in have:
+                continue
+            try:
+                col_type = col.type.compile(dialect=engine.dialect)
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        f'ALTER TABLE "{tbl.name}" ADD COLUMN IF NOT EXISTS "{col.name}" {col_type}'
+                    ))
+                logger.info("Added missing column %s.%s (%s)", tbl.name, col.name, col_type)
+            except Exception as e:
+                logger.warning("Add column %s.%s skipped: %s", tbl.name, col.name, e)
+
+
 def _run_critical_migrations() -> None:
     """Ensure ALL tables exist by creating them individually. One failure never blocks others."""
     try:
@@ -198,6 +233,7 @@ def _run_critical_migrations() -> None:
                 _tbl.create(bind=_engine, checkfirst=True)
             except Exception as _te:
                 logger.warning("Table %s create skipped: %s", _tbl.name, _te)
+        _add_missing_columns(_engine, _Base.metadata)
 
         # ── Step 2b: gulftax has its own Base/engine — create those tables too ──
         try:
@@ -208,6 +244,7 @@ def _run_critical_migrations() -> None:
                     _tbl.create(bind=_GTEngine, checkfirst=True)
                 except Exception as _te:
                     logger.warning("GulfTax table %s create skipped: %s", _tbl.name, _te)
+            _add_missing_columns(_GTEngine, _GTBase.metadata)
         except Exception as _gte:
             logger.warning("GulfTax Base create_all skipped: %s", _gte)
 
@@ -333,13 +370,22 @@ app.add_middleware(
     allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # Any header the frontend sends that is missing here makes Starlette answer the
+    # preflight with 400, which the browser reports as a CORS failure.
     allow_headers=[
         "Content-Type",
         "Authorization",
         "Accept",
-        "X-Workspace-ID",
-        "X-Requested-With",
         "Origin",
+        "X-Requested-With",
+        "X-Workspace-ID",
+        "X-Tenant-ID",
+        "X-Company-ID",
+        "X-API-Key",
+        "X-Product-Role",
+        "X-User-ID",
+        "X-User-Email",
+        "X-User-Role",
     ],
 )
 
