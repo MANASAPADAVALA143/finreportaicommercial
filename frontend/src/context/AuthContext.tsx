@@ -133,7 +133,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           scheduleRefresh(j.access_token);
         }
       } catch {
-        sessionStorage.removeItem(REFRESH_KEY);
+        // Must also drop the persisted token/user, or /login restores them and redirects back.
+        clearAllAuthStorage();
         setAccessToken(null);
         setUser(null);
         window.location.href = '/login';
@@ -373,7 +374,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const restoreFromBackend = async () => {
       const storedToken = localStorage.getItem('token');
       const storedUser = localStorage.getItem('user');
-      if (storedToken && storedUser) {
+      const storedExp = storedToken ? parseJwt(storedToken).exp : undefined;
+      if (storedToken && storedExp && storedExp * 1000 <= Date.now()) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      } else if (storedToken && storedUser) {
         try {
           const parsed = JSON.parse(storedUser) as AuthUser;
           if (!cancelled) {
