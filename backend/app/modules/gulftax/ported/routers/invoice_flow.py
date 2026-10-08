@@ -49,19 +49,28 @@ def _sync_invoice_flow_txns_to_gulftax(
     company_id: str,
     invoice_id: InvoiceId,
 ) -> Dict[str, Any]:
-    """Push Invoice Flow → Classifier transactions into gulftax_transactions (VAT Return).
+    """Push an Invoice Flow invoice into gulftax_transactions (VAT Return / Recon).
 
-    1) All lines → gulftax with source=invoice_flow_pdf, status=pending (immediate).
-    2) Verified lines → also sync as vat_classifier_approved / posted for VAT Return.
+    One row per invoice (source=invoice_flow_pdf) carrying the invoice totals; line
+    transactions stay in the classifier table so the VAT Return never double counts.
+    Posted once any line is verified; blocked when every priced line is entertainment.
     """
     try:
         from app.core.database import SessionLocal as MainSessionLocal
+        from app.services.gulftax_sync_service import _norm_treatment
+        from app.services.vat_box_mapping import assign_box_number
         from app.services.vat_classifier_sync_service import (
-            sync_approved_classifier_transactions_to_gulftax,
-            sync_pdf_txn_to_gulftax_pending,
+            sync_invoice_record_to_gulftax_pending,
         )
 
         company = db.query(Company).filter(Company.id == company_id).first()
+        inv = (
+            db.query(Invoice)
+            .filter(Invoice.company_id == company_id, Invoice.id == invoice_id)
+            .first()
+        )
+        if inv is None:
+            return {"ok": False, "synced": 0, "skipped": 0, "errors": 1}
         all_txns = (
             db.query(Transaction)
             .filter(
@@ -70,39 +79,50 @@ def _sync_invoice_flow_txns_to_gulftax(
             )
             .all()
         )
-        pending_synced = 0
-        pending_errors = 0
+        for t in all_txns:
+            side = (t.transaction_type or "purchase").lower()
+            t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 9
+        if all_txns:
+            db.commit()
+
+        posted = inv.status in ("approved", "auto_approved") or any(
+            getattr(t, "is_verified", False) for t in all_txns
+        )
+        priced = [t for t in all_txns if float(t.vat_amount_aed or 0) > 0] or all_txns
+        all_blocked = bool(priced) and all(
+            _norm_treatment(getattr(t, "vat_treatment", None)) == "blocked" for t in priced
+        )
         main_db = MainSessionLocal()
         try:
-            for t in all_txns:
-                side = (t.transaction_type or "purchase").lower()
-                from app.services.vat_box_mapping import assign_box_number
-
-                t.box_number = assign_box_number(side, getattr(t, "vat_treatment", None)) or 9
-                res = sync_pdf_txn_to_gulftax_pending(
-                    main_db, t, ported_company=company
-                )
-                if res.get("ok") and not res.get("skipped"):
-                    pending_synced += 1
-                elif not res.get("ok"):
-                    pending_errors += 1
-            if all_txns:
-                db.commit()
+            res = sync_invoice_record_to_gulftax_pending(
+                main_db,
+                inv,
+                ported_company=company,
+                initial_status="posted" if posted else "pending",
+                vat_treatment="blocked" if all_blocked else None,
+            )
         finally:
             main_db.close()
-
-        verified = [t for t in all_txns if getattr(t, "is_verified", False)]
-        approve_res = sync_approved_classifier_transactions_to_gulftax(
-            classifier_txns=verified,
-            ported_company=company,
+        logger.info(
+            "Invoice Flow gulftax sync company_id=%s invoice_id=%s transaction_id=%s "
+            "status=%s blocked=%s ok=%s",
+            company_id,
+            invoice_id,
+            res.get("transaction_id"),
+            res.get("status"),
+            all_blocked,
+            res.get("ok"),
         )
+        ok = bool(res.get("ok"))
+        changed = ok and not (res.get("skipped") and not res.get("updated"))
         return {
-            "ok": approve_res.get("ok", True) and pending_errors == 0,
-            "pending_synced": pending_synced,
-            "pending_errors": pending_errors,
-            "synced": approve_res.get("synced", 0),
-            "skipped": approve_res.get("skipped", 0),
-            "errors": approve_res.get("errors", 0),
+            "ok": ok,
+            "pending_synced": 0,
+            "pending_errors": 0 if ok else 1,
+            "synced": 1 if changed else 0,
+            "skipped": 1 if ok and not changed else 0,
+            "errors": 0 if ok else 1,
+            "error": res.get("error"),
         }
     except Exception:
         logger.exception(
@@ -1043,7 +1063,10 @@ def extract_excel_invoices(
             main_db = MainSessionLocal()
             try:
                 sync_invoice_record_to_gulftax_pending(
-                    main_db, inv, initial_status=_gt_status
+                    main_db,
+                    inv,
+                    ported_company=db.query(Company).filter(Company.id == company_id).first(),
+                    initial_status=_gt_status,
                 )
             finally:
                 main_db.close()
@@ -1447,45 +1470,17 @@ Return JSON only:
     # Always push pending gulftax row from the Invoice (even review/escalated).
     # Previously only auto-approve (transactions_created > 0) synced — so most
     # PDF extracts never produced source=invoice_flow_pdf.
-    gulftax_synced = 0
-    gulftax_pending = 0
-    gulftax_pending_error = None
-    try:
-        from app.core.database import SessionLocal as MainSessionLocal
-        from app.services.vat_classifier_sync_service import (
-            sync_invoice_record_to_gulftax_pending,
-        )
-
-        company = db.query(Company).filter(Company.id == company_id).first()
-        main_db = MainSessionLocal()
-        try:
-            _gt_status = "posted" if auto_approved else "pending"
-            pending_res = sync_invoice_record_to_gulftax_pending(
-                main_db, inv, ported_company=company, initial_status=_gt_status
-            )
-            if pending_res.get("ok") and not pending_res.get("skipped"):
-                gulftax_pending = 1
-            elif not pending_res.get("ok"):
-                gulftax_pending_error = pending_res.get("error")
-                logger.warning(
-                    "invoice_flow_pdf pending sync failed invoice=%s err=%s",
-                    inv.id,
-                    gulftax_pending_error,
-                )
-        finally:
-            main_db.close()
-    except Exception as exc:
-        gulftax_pending_error = str(exc)
-        logger.exception(
-            "invoice_flow_pdf pending sync exception invoice=%s", inv.id
-        )
-
-    if transactions_created > 0:
-        sync_res = _sync_invoice_flow_txns_to_gulftax(
-            db, company_id=company_id, invoice_id=inv.id
-        )
-        gulftax_synced = int(sync_res.get("synced") or 0) + int(
-            sync_res.get("pending_synced") or 0
+    sync_res = _sync_invoice_flow_txns_to_gulftax(
+        db, company_id=company_id, invoice_id=inv.id
+    )
+    gulftax_synced = int(sync_res.get("synced") or 0)
+    gulftax_pending = gulftax_synced if not auto_approved else 0
+    gulftax_pending_error = sync_res.get("error")
+    if not sync_res.get("ok"):
+        logger.warning(
+            "invoice_flow_pdf sync failed invoice=%s err=%s",
+            inv.id,
+            gulftax_pending_error,
         )
 
     # Determine blocked_input_vat from flags — entertainment/Article 54 flags mean VAT is non-recoverable
@@ -1697,7 +1692,7 @@ def review_invoice(
     db.refresh(inv)
 
     gulftax_synced = 0
-    if transactions_created > 0:
+    if transactions_created > 0 or inv.status == "approved":
         sync_res = _sync_invoice_flow_txns_to_gulftax(
             db, company_id=company_id, invoice_id=inv.id
         )
@@ -1988,7 +1983,17 @@ def repair_transactions(
             fixed_boxes += 1
 
     db.commit()
+
+    # Step 3: re-sync every invoice into gulftax_transactions (VAT Return / Recon source)
+    gulftax_synced = gulftax_errors = 0
+    for inv_obj in db.query(Invoice).filter(Invoice.company_id == company_id).all():
+        res = _sync_invoice_flow_txns_to_gulftax(db, company_id=company_id, invoice_id=inv_obj.id)
+        gulftax_synced += int(res.get("synced") or 0)
+        gulftax_errors += int(res.get("errors") or 0)
+
     return {
         "deleted_duplicate_header_rows": deleted_duplicates,
         "fixed_box_numbers": fixed_boxes,
+        "gulftax_synced": gulftax_synced,
+        "gulftax_errors": gulftax_errors,
     }

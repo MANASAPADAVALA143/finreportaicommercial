@@ -317,6 +317,31 @@ def _run_critical_migrations() -> None:
         except Exception as _e:
             logger.warning("Drop rbac_companies_name_key skipped: %s", _e)
 
+        # ── Step 5: gulftax_transactions.ap_invoice_id holds synthetic ids for Invoice Flow /
+        # VAT Classifier rows; the Supabase DDL's FK to invoices(id) rejects every such insert.
+        if _engine.dialect.name == "postgresql":
+            try:
+                with _engine.begin() as conn:
+                    conn.execute(_text("""
+                        DO $$
+                        DECLARE r record;
+                        BEGIN
+                          FOR r IN
+                            SELECT c.conname
+                            FROM pg_constraint c
+                            JOIN pg_attribute a
+                              ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+                            WHERE c.conrelid = to_regclass('public.gulftax_transactions')
+                              AND c.contype = 'f'
+                              AND a.attname = 'ap_invoice_id'
+                          LOOP
+                            EXECUTE format('ALTER TABLE public.gulftax_transactions DROP CONSTRAINT %I', r.conname);
+                          END LOOP;
+                        END $$;
+                    """))
+            except Exception as _e:
+                logger.warning("Drop gulftax_transactions.ap_invoice_id FK skipped: %s", _e)
+
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 

@@ -816,6 +816,7 @@ def sync_invoice_record_to_gulftax_pending(
     ported_company: Any | None = None,
     workspace_id: str | None = None,
     initial_status: str = "pending",
+    vat_treatment: str | None = None,
 ) -> dict[str, Any]:
     """Write gulftax row from Invoice Flow `invoices` row (no classifier txn needed).
 
@@ -839,7 +840,9 @@ def sync_invoice_record_to_gulftax_pending(
     pseudo.invoice_number = getattr(invoice, "invoice_number", None)
     pseudo.vendor_or_customer = getattr(invoice, "vendor_name", None)
     pseudo.vendor_trn = getattr(invoice, "vendor_trn", None)
-    pseudo.vat_treatment = getattr(invoice, "vat_treatment", None) or "standard_rated"
+    pseudo.vat_treatment = (
+        vat_treatment or getattr(invoice, "vat_treatment", None) or "standard_rated"
+    )
     inv_date = getattr(invoice, "invoice_date", None)
     if isinstance(inv_date, str):
         try:
@@ -871,6 +874,7 @@ def sync_invoice_record_to_gulftax_pending(
         ported_company=ported_company,
         workspace_id=workspace_id,
         initial_status=initial_status,
+        update_existing=True,
     )
 
 
@@ -881,6 +885,7 @@ def sync_pdf_txn_to_gulftax_pending(
     ported_company: Any | None = None,
     workspace_id: str | None = None,
     initial_status: str = "pending",
+    update_existing: bool = False,
 ) -> dict[str, Any]:
     """Invoice Flow PDF → gulftax_transactions immediately.
 
@@ -945,12 +950,51 @@ def sync_pdf_txn_to_gulftax_pending(
             )
             .first()
         )
-        if existing:
+        if existing and not update_existing:
             return {
                 "ok": True,
                 "skipped": True,
                 "reason": "already_synced",
                 "transaction_id": existing.id,
+            }
+        if existing:
+            updates = {
+                "status": initial_status,
+                "vat_category": vat_category,
+                "gross_amount": gross,
+                "vat_amount": vat,
+                "tax_period": tax_period,
+                "transaction_date": tx_date,
+            }
+            if existing.status == "posted" and initial_status != "posted":
+                updates.pop("status")
+            changed = False
+            for field, value in updates.items():
+                current = getattr(existing, field)
+                if isinstance(value, float):
+                    differs = round(float(current or 0), 2) != value
+                else:
+                    differs = current != value
+                if differs:
+                    setattr(existing, field, value)
+                    changed = True
+            if not existing.vendor_trn and getattr(classifier_txn, "vendor_trn", None):
+                existing.vendor_trn = classifier_txn.vendor_trn
+                changed = True
+            if changed:
+                try:
+                    db.commit()
+                except Exception as exc:
+                    db.rollback()
+                    logger.exception("PDF→gulftax update failed for txn id=%s", txn_id)
+                    return {"ok": False, "error": str(exc)}
+            return {
+                "ok": True,
+                "skipped": not changed,
+                "updated": changed,
+                "reason": "updated" if changed else "already_synced",
+                "transaction_id": existing.id,
+                "status": existing.status,
             }
 
     try:
