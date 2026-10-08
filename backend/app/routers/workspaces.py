@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -216,7 +217,8 @@ def list_workspace_users(
         raise HTTPException(status_code=403, detail="Workspace mismatch")
     rows = (
         db.query(WorkspaceMember, User)
-        .join(User, User.id == WorkspaceMember.user_id)
+        # rbac_users.id is uuid on Postgres while workspace_members.user_id is varchar.
+        .join(User, cast(User.id, String) == WorkspaceMember.user_id)
         .filter(WorkspaceMember.workspace_id == workspace_id)
         .all()
     )

@@ -11,6 +11,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from app.models.company_setup import (
@@ -424,7 +425,8 @@ def _controls_dict(c: AccountingControls) -> dict[str, Any]:
 def list_workspace_users_for_roles(db: Session, workspace_id: str) -> list[dict[str, Any]]:
     rows = (
         db.query(WorkspaceMember, User)
-        .join(User, WorkspaceMember.user_id == User.id)
+        # rbac_users.id is uuid on Postgres while workspace_members.user_id is varchar.
+        .join(User, WorkspaceMember.user_id == cast(User.id, String))
         .filter(WorkspaceMember.workspace_id == workspace_id)
         .all()
     )
