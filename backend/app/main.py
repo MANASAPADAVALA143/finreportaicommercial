@@ -181,6 +181,60 @@ def _add_missing_columns(engine, metadata) -> None:
                 logger.warning("Add column %s.%s skipped: %s", tbl.name, col.name, e)
 
 
+def _create_table_lenient(engine, tbl) -> None:
+    """Create tbl without FK constraints, typing FK columns like the live referenced column.
+
+    Fallback for when the normal create fails because the Supabase DDL gave referenced ids
+    a different type (usually uuid) than the model, so the FK constraint is rejected.
+    """
+    from sqlalchemy.schema import CreateTable
+
+    insp = inspect(engine)
+    if insp.has_table(tbl.name):
+        return
+    swapped = []
+    for col in tbl.columns:
+        for fk in col.foreign_keys:
+            ref_table, ref_col = fk.target_fullname.split(".")[-2:]
+            try:
+                ref_type = next(
+                    c["type"] for c in insp.get_columns(ref_table) if c["name"] == ref_col
+                )
+            except Exception:
+                continue
+            if ref_type.compile(dialect=engine.dialect) != col.type.compile(dialect=engine.dialect):
+                swapped.append((col, col.type))
+                col.type = ref_type
+            break
+    try:
+        with engine.begin() as conn:
+            conn.execute(CreateTable(tbl, include_foreign_key_constraints=[]))
+    finally:
+        for col, original_type in swapped:
+            col.type = original_type
+    for idx in tbl.indexes:
+        try:
+            idx.create(bind=engine, checkfirst=True)
+        except Exception as e:
+            logger.warning("Index %s on %s skipped: %s", idx.name, tbl.name, e)
+    logger.info(
+        "Created %s without FK constraints (retyped: %s)",
+        tbl.name,
+        ", ".join(f"{c.name}->{c.type}" for c, _ in swapped) or "none",
+    )
+
+
+def _create_table(engine, tbl, label: str = "Table") -> None:
+    try:
+        tbl.create(bind=engine, checkfirst=True)
+    except Exception as e:
+        logger.warning("%s %s create failed, retrying without FKs: %s", label, tbl.name, e)
+        try:
+            _create_table_lenient(engine, tbl)
+        except Exception as e2:
+            logger.warning("%s %s create skipped: %s", label, tbl.name, e2)
+
+
 def _run_critical_migrations() -> None:
     """Ensure ALL tables exist by creating them individually. One failure never blocks others."""
     try:
@@ -229,10 +283,7 @@ def _run_critical_migrations() -> None:
 
         # ── Step 2: create every table individually (checkfirst=True = IF NOT EXISTS) ──
         for _tbl in _Base.metadata.sorted_tables:
-            try:
-                _tbl.create(bind=_engine, checkfirst=True)
-            except Exception as _te:
-                logger.warning("Table %s create skipped: %s", _tbl.name, _te)
+            _create_table(_engine, _tbl)
         _add_missing_columns(_engine, _Base.metadata)
 
         # ── Step 2b: gulftax has its own Base/engine — create those tables too ──
@@ -240,10 +291,7 @@ def _run_critical_migrations() -> None:
             from app.modules.gulftax.ported.database import Base as _GTBase, engine as _GTEngine
             import app.modules.gulftax.ported.models as _gt_models  # noqa: F401
             for _tbl in _GTBase.metadata.sorted_tables:
-                try:
-                    _tbl.create(bind=_GTEngine, checkfirst=True)
-                except Exception as _te:
-                    logger.warning("GulfTax table %s create skipped: %s", _tbl.name, _te)
+                _create_table(_GTEngine, _tbl, "GulfTax table")
             _add_missing_columns(_GTEngine, _GTBase.metadata)
         except Exception as _gte:
             logger.warning("GulfTax Base create_all skipped: %s", _gte)
