@@ -6,6 +6,7 @@ import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getPendingBadDebtTotal } from '../../services/vatAdvanced.service';
 import { setMemoryAccessToken } from '../../utils/authToken';
+import { useGulfTaxPeriod } from '../../hooks/useGulfTaxPeriod';
 
 interface DashboardSummary {
   current_period: {
@@ -96,6 +97,7 @@ export default function GulfTaxDashboard() {
   const [loadError, setLoadError] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [pendingBadDebt, setPendingBadDebt] = useState(0);
+  const { period: taxPeriod } = useGulfTaxPeriod();
 
   // Keep gulftax clients in sync with the same AuthContext token companies/workspaces use
   useEffect(() => {
@@ -103,7 +105,7 @@ export default function GulfTaxDashboard() {
   }, [accessToken]);
 
   useEffect(() => {
-    if (!companyId || !accessToken) {
+    if (!companyId || !accessToken || !taxPeriod) {
       if (!accessToken) {
         setLoadState("loading");
       }
@@ -119,7 +121,10 @@ export default function GulfTaxDashboard() {
         }
         if (companyId) headers["X-Company-Id"] = companyId;
 
-        const res = await authFetch("/api/dashboard/summary", { headers });
+        const res = await authFetch(
+          `/api/dashboard/summary?period=${encodeURIComponent(taxPeriod)}`,
+          { headers },
+        );
         if (!res.ok) {
           const text = await res.text();
           let detail = text || `API error ${res.status}`;
@@ -148,7 +153,7 @@ export default function GulfTaxDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [companyId, accessToken, activeWorkspace?.id, authFetch]);
+  }, [companyId, accessToken, activeWorkspace?.id, authFetch, taxPeriod]);
 
   useEffect(() => {
     if (!activeWorkspace?.id || !accessToken) return;

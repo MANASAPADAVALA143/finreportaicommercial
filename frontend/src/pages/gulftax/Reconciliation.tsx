@@ -14,6 +14,7 @@ import {
   type VatReconRunResult,
 } from '../../services/gulfTaxApi';
 import { useCompany } from '../../context/CompanyContext';
+import { quarterOptions, useGulfTaxPeriod } from '../../hooks/useGulfTaxPeriod';
 
 interface MismatchRow {
   invoice_number?: string;
@@ -35,15 +36,10 @@ function fmtAed(n: number | undefined): string {
   }).format(v);
 }
 
-function currentQuarter(): string {
-  const d = new Date();
-  const q = Math.floor(d.getMonth() / 3) + 1;
-  return `${d.getFullYear()}-Q${q}`;
-}
-
 export default function ReconPage() {
   const { activeCompanyId } = useCompany();
-  const [taxPeriod, setTaxPeriod] = useState(currentQuarter());
+  const { period: sharedPeriod, setPeriod: setTaxPeriod } = useGulfTaxPeriod();
+  const taxPeriod = sharedPeriod ?? '';
   const [periodOptions, setPeriodOptions] = useState<VatPeriodOption[]>([]);
   const [txRows, setTxRows] = useState<GulfTaxTransaction[]>([]);
   const [txLoading, setTxLoading] = useState(false);
@@ -58,13 +54,10 @@ export default function ReconPage() {
     try {
       const res = await fetchVatPeriods(activeCompanyId);
       setPeriodOptions(res.periods || []);
-      if (res.periods?.length && !res.periods.some((p) => p.tax_period === taxPeriod)) {
-        setTaxPeriod(res.periods[0].tax_period);
-      }
     } catch {
       setPeriodOptions([]);
     }
-  }, [activeCompanyId, taxPeriod]);
+  }, [activeCompanyId]);
 
   const loadHistory = useCallback(async () => {
     if (!activeCompanyId) return;
@@ -77,7 +70,7 @@ export default function ReconPage() {
   }, [activeCompanyId]);
 
   const loadTransactions = useCallback(async () => {
-    if (!activeCompanyId) return;
+    if (!activeCompanyId || !taxPeriod) return;
     setTxLoading(true);
     try {
       const res = await fetchGulfTaxTransactions(taxPeriod, activeCompanyId);
@@ -192,21 +185,16 @@ export default function ReconPage() {
               onChange={(e) => setTaxPeriod(e.target.value)}
               className="rounded-[8px] bg-[rgba(4,12,30,0.85)] border border-border px-3 py-2 text-white text-sm min-w-[7rem]"
             >
-              {periodOptions.length === 0 && (
-                <option value={taxPeriod}>{taxPeriod}</option>
-              )}
-              {periodOptions.map((p) => (
-                <option key={p.tax_period} value={p.tax_period}>
-                  {p.tax_period} ({p.transaction_count})
-                </option>
-              ))}
+              {!taxPeriod && <option value="">Loading…</option>}
+              {quarterOptions(taxPeriod).map((opt) => {
+                const count = periodOptions.find((p) => p.tax_period === opt.value)?.transaction_count;
+                return (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}{count ? ` (${count})` : ''}
+                  </option>
+                );
+              })}
             </select>
-            <input
-              value={taxPeriod}
-              onChange={(e) => setTaxPeriod(e.target.value)}
-              className="rounded-[8px] bg-[rgba(4,12,30,0.85)] border border-border px-3 py-2 text-white text-sm w-28"
-              placeholder="2026-Q2"
-            />
             <button
               type="button"
               onClick={() => void loadTransactions()}

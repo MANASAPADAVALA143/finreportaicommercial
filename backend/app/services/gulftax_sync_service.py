@@ -46,8 +46,8 @@ def _norm_treatment(raw: str | None) -> str:
         return "reverse_charge"
     if t in ("out_of_scope", "outofscope"):
         return "out_of_scope"
-    if t in ("blocked", "non_recoverable"):
-        return "standard"
+    if t in ("blocked", "non_recoverable", "entertainment", "entertainment_restricted"):
+        return "blocked"
     return "standard"
 
 
@@ -452,6 +452,8 @@ def aggregate_vat_return_summary(company_id: str, tax_period: str) -> dict[str, 
     for r in rows:
         box = (r.get("fta_box") or "box9").lower()
         if box not in summary:
+            continue
+        if r.get("vat_category") == "blocked" and r.get("direction") != "output":
             continue
         gross = float(r.get("gross_amount") or 0)
         vat = float(r.get("vat_amount") or 0)

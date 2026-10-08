@@ -5,29 +5,7 @@ import { fetchVatReturnAllBoxes, fetchVatReturnSummary, fetchVatReconStatus, rec
 import { useCompany } from '../../context/CompanyContext';
 import { useWorkspace } from '../../context/WorkspaceContext';
 import { getStoredWorkspaceId } from '../../services/workspaceService';
-
-function currentQuarter(): string {
-  const d = new Date();
-  let q = Math.floor(d.getMonth() / 3) + 1;
-  let year = d.getFullYear();
-  // Default to previous quarter — the one due for filing
-  q -= 1;
-  if (q < 1) { q = 4; year -= 1; }
-  return `${year}-Q${q}`;
-}
-
-function quarterOptions(): { value: string; label: string }[] {
-  const opts: { value: string; label: string }[] = [];
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const quarterLabels = ['Q1 Jan–Mar', 'Q2 Apr–Jun', 'Q3 Jul–Sep', 'Q4 Oct–Dec'];
-  for (let year = currentYear - 1; year <= currentYear; year++) {
-    for (let q = 1; q <= 4; q++) {
-      opts.push({ value: `${year}-Q${q}`, label: `${year} ${quarterLabels[q - 1]}` });
-    }
-  }
-  return opts.reverse(); // newest first
-}
+import { quarterOptions, useGulfTaxPeriod } from '../../hooks/useGulfTaxPeriod';
 
 type AllBoxes = {
   box1_standard_rated_sales_net: number;
@@ -183,7 +161,8 @@ export default function VATReturn() {
   const workspaceId =
     localStorage.getItem('active_workspace_id') || getStoredWorkspaceId() || activeWorkspace?.id || '';
 
-  const [period, setPeriod] = useState(currentQuarter());
+  const { period: sharedPeriod, setPeriod } = useGulfTaxPeriod();
+  const period = sharedPeriod ?? '';
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [data, setData] = useState<AllBoxes | null>(null);
@@ -203,7 +182,7 @@ export default function VATReturn() {
   const [filingOverrideAcknowledged, setFilingOverrideAcknowledged] = useState(false);
 
   const loadReconStatus = async () => {
-    if (!activeCompanyId) {
+    if (!activeCompanyId || !period) {
       setReconStatus(null);
       return;
     }
@@ -221,6 +200,7 @@ export default function VATReturn() {
       setLoadError('No company selected — please select a company from the top menu.');
       return;
     }
+    if (!period) return;
     setLoading(true);
     setPayMsg(null);
     setOverrideMsg(null);
@@ -456,13 +436,14 @@ export default function VATReturn() {
       )}
 
       <div className="flex items-center gap-3 mb-6 flex-wrap">
-        <label className="text-sm text-gray-400">Period</label>
+        <label className="text-sm text-gray-400">Tax Period</label>
         <select
           value={period}
           onChange={(e) => setPeriod(e.target.value)}
           className="bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
         >
-          {quarterOptions().map((opt) => (
+          {!period && <option value="">Loading…</option>}
+          {quarterOptions(period).map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))}
         </select>

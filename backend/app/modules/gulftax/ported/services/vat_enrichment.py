@@ -154,19 +154,36 @@ def enrich_transaction_row(
     if resolved_side not in ("sale", "purchase"):
         resolved_side = "purchase"
     treatment = getattr(txn, "vat_treatment", None) or dt["vat_treatment"]
-    entertainment = dt["entertainment_flag"]
-    rc = dt["reverse_charge_flag"]
-    import_vat = dt["import_vat_flag"]
+    # Invoice Flow lines were already cleared by the invoice-level risk engine (auto-approve
+    # or reviewer); their stored treatment wins over description keyword heuristics.
+    source = getattr(txn, "source", None) or "vat_classifier"
+    invoice_cleared = source in ("invoice_flow_auto", "invoice_flow_reviewed") and bool(txn.is_verified)
+    if invoice_cleared:
+        entertainment = treatment == "entertainment_restricted"
+        rc = treatment == "reverse_charge"
+        import_vat = treatment == "import_vat"
+    else:
+        entertainment = dt["entertainment_flag"] or treatment == "entertainment_restricted"
+        rc = dt["reverse_charge_flag"]
+        import_vat = dt["import_vat_flag"]
     blocked = entertainment
     box_number = coerce_box_number(resolved_side, treatment, stored_box)
 
-    tier = dt["review_tier"]
-    if conf is not None and conf < threshold_0_100 and tier == "auto_approve":
-        tier = "review_required"
+    if invoice_cleared:
+        tier = "blocked" if entertainment else "auto_approve"
+    else:
+        tier = dt["review_tier"]
+        if entertainment:
+            tier = "blocked"
+        elif conf is not None and conf < threshold_0_100 and tier == "auto_approve":
+            tier = "review_required"
 
     explanation = stored_reasoning or dt["explanation"]
     flags: List[Dict[str, str]] = list(stored_flags) if stored_flags else list(dt["flags"])
-    missing_trn = any(f.get("code") == "missing_trn" for f in flags)
+    if invoice_cleared:
+        missing_trn = resolved_side == "purchase" and not validate_trn(vendor_trn)["valid"]
+    else:
+        missing_trn = any(f.get("code") == "missing_trn" for f in flags)
 
     if not stored_flags:
         flags = build_risk_flags(
@@ -177,7 +194,16 @@ def enrich_transaction_row(
             review_required=tier == "review_required",
         )
 
-    blocked_vat = round(vat_amt * 0.5, 2) if entertainment else 0.0
+    # Invoice-level entertainment (Art. 53) blocks the full VAT; keyword-detected rows keep 50%.
+    if entertainment and (invoice_cleared or treatment == "entertainment_restricted"):
+        blocked_vat = round(vat_amt, 2)
+        entertainment_label = "Blocked — non-recoverable"
+    elif entertainment:
+        blocked_vat = round(vat_amt * 0.5, 2)
+        entertainment_label = "Art.54 — 50% recovery"
+    else:
+        blocked_vat = 0.0
+        entertainment_label = None
 
     return {
         "id": txn.id,
@@ -197,12 +223,12 @@ def enrich_transaction_row(
         "vendor_trn": getattr(txn, "vendor_trn", None),
         "source_invoice_id": getattr(txn, "source_invoice_id", None),
         "entertainment_flag": entertainment,
-        "entertainment_label": "Art.54 — 50% recovery" if entertainment else None,
+        "entertainment_label": entertainment_label,
         "reverse_charge_flag": rc,
         "import_vat_flag": import_vat,
         "blocked_input_vat": blocked,
         "blocked_vat_amount": blocked_vat,
-        "blocked_reason": dt["blocked_reason"] if entertainment else None,
+        "blocked_reason": (dt["blocked_reason"] or entertainment_label) if entertainment else None,
         "review_tier": tier,
         "box_number": box_number,
         "flags": flags,

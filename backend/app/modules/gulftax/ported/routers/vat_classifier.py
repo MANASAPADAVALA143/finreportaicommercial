@@ -21,7 +21,7 @@ from services.vat_enrichment import apply_post_classification_rules, enrich_tran
 from services.pdf_invoice_extractor import extract_and_classify_invoice, MAX_FILES
 
 from database import get_db
-from models import Transaction, Company, AuditLog
+from models import Transaction, Company, AuditLog, Invoice
 import logging
 
 load_dotenv()
@@ -1271,11 +1271,83 @@ async def get_transactions_enriched(
     if period_end:
         query = query.filter(Transaction.date <= period_end)
     rows = query.order_by(Transaction.date.desc()).limit(limit).all()
+    _backfill_vendor_trn_from_invoices(db, company_id, rows)
     enriched = [enrich_transaction_row(t) for t in rows]
     tiers = {"auto_approve": 0, "review_required": 0, "blocked": 0}
     for e in enriched:
         tiers[e["review_tier"]] = tiers.get(e["review_tier"], 0) + 1
-    return {"transactions": enriched, "tier_counts": tiers, "period_start": str(period_start) if period_start else None, "period_end": str(period_end) if period_end else None}
+    return {
+        "transactions": enriched,
+        "tier_counts": tiers,
+        "invoice_summary": _invoice_summary(db, company_id, period_start, period_end, len(enriched)),
+        "period_start": str(period_start) if period_start else None,
+        "period_end": str(period_end) if period_end else None,
+    }
+
+
+def _backfill_vendor_trn_from_invoices(db: Session, company_id: str, rows: List[Transaction]) -> None:
+    """Invoice Flow lines created before TRN propagation carry no vendor_trn — copy it from the source invoice."""
+    missing = {t.source_invoice_id for t in rows if not t.vendor_trn and t.source_invoice_id}
+    if not missing:
+        return
+    try:
+        trn_by_invoice = {
+            inv_id: trn
+            for inv_id, trn in db.query(Invoice.id, Invoice.vendor_trn)
+            .filter(Invoice.company_id == company_id, Invoice.id.in_(list(missing)))
+            .all()
+            if trn
+        }
+        changed = False
+        for t in rows:
+            trn = trn_by_invoice.get(t.source_invoice_id) if not t.vendor_trn else None
+            if trn:
+                t.vendor_trn = trn
+                changed = True
+        if changed:
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("vendor_trn backfill failed company_id=%s", company_id)
+
+
+_PENDING_INVOICE_STATUSES = ("pending", "review", "escalated")
+_BLOCKED_VAT_FLAGS = ("entertainment_blocked_vat", "blocked_input_vat")
+
+
+def _invoice_summary(
+    db: Session,
+    company_id: str,
+    period_start: Optional[date],
+    period_end: Optional[date],
+    line_transaction_count: int,
+) -> Dict[str, Any]:
+    """Invoice-level counts so the UI never presents line transactions as invoices."""
+    try:
+        q = db.query(Invoice).filter(Invoice.company_id == company_id)
+        if period_start:
+            q = q.filter(Invoice.invoice_date >= period_start.isoformat())
+        if period_end:
+            q = q.filter(Invoice.invoice_date <= period_end.isoformat())
+        invoices = q.all()
+    except Exception:
+        db.rollback()
+        logger.exception("invoice summary failed company_id=%s", company_id)
+        invoices = []
+    pending = [i for i in invoices if (i.status or "") in _PENDING_INVOICE_STATUSES]
+    pending_blocked_vat = sum(
+        float(f.get("vat_at_risk_aed") or 0)
+        for i in pending
+        for f in (i.risk_flags or [])
+        if isinstance(f, dict) and f.get("flag") in _BLOCKED_VAT_FLAGS
+    )
+    return {
+        "invoice_count": len(invoices),
+        "line_transaction_count": line_transaction_count,
+        "approved_invoices": sum(1 for i in invoices if (i.status or "") in ("auto_approved", "approved", "posted")),
+        "pending_review_invoices": len(pending),
+        "pending_blocked_vat_aed": round(pending_blocked_vat, 2),
+    }
 
 
 def _transaction_flagged(t: Transaction) -> bool:

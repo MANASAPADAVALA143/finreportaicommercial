@@ -7,6 +7,15 @@ import { resolveClassifierEntityType } from '../../lib/gulftax/vatAdvanced';
 import { listInvoicesViaApi } from '../../lib/ap-invoice/listInvoicesService';
 import { syncApInvoicesToVatClassifier } from '../../lib/ap-invoice/gulfTaxService';
 import { useCompany } from '../../context/CompanyContext';
+import { quarterOptions, useGulfTaxPeriod } from '../../hooks/useGulfTaxPeriod';
+
+interface InvoiceSummary {
+  invoice_count: number;
+  line_transaction_count: number;
+  approved_invoices: number;
+  pending_review_invoices: number;
+  pending_blocked_vat_aed: number;
+}
 
 interface ClassificationResult {
   description: string;
@@ -69,7 +78,7 @@ interface SavedTransaction {
   source?: string;
   source_file_name?: string | null;
   source_metadata?: Record<string, unknown> | null;
-  source_invoice_id?: number | null;
+  source_invoice_id?: number | string | null;
   entertainment_flag?: boolean;
   entertainment_label?: string | null;
   reverse_charge_flag?: boolean;
@@ -153,17 +162,11 @@ export default function VATClassifier() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
 
-  // Period filter — default to empty (show all) so Invoice Flow uploads are visible regardless of date
-  const [selectedPeriod, setSelectedPeriod] = useState<string>('');
-
-  // Build period_start / period_end from selected YYYY-MM
-  const periodStart = selectedPeriod ? `${selectedPeriod}-01` : undefined;
-  const periodEnd = selectedPeriod
-    ? new Date(new Date(periodStart!).getFullYear(), new Date(periodStart!).getMonth() + 1, 0)
-        .toISOString().slice(0, 10)
-    : undefined;
+  const { period: selectedPeriod, setPeriod: setSelectedPeriod, periodStart, periodEnd, label: periodLabel } = useGulfTaxPeriod();
+  const [invoiceSummary, setInvoiceSummary] = useState<InvoiceSummary | null>(null);
 
   const fetchSaved = useCallback(async () => {
+    if (!selectedPeriod) return;
     setLoadingSaved(true);
     try {
       const ps = periodStart ? `&period_start=${periodStart}` : '';
@@ -171,6 +174,7 @@ export default function VATClassifier() {
       const { data } = await apiClient.get(`/api/vat/transactions/enriched?limit=500${ps}${pe}`);
       setSavedTxns(Array.isArray(data.transactions) ? data.transactions : []);
       setTierCounts(data.tier_counts || { auto_approve: 0, review_required: 0, blocked: 0 });
+      setInvoiceSummary(data.invoice_summary ?? null);
     } catch {
       try {
         const ps = periodStart ? `&period_start=${periodStart}` : '';
@@ -183,7 +187,7 @@ export default function VATClassifier() {
     } finally {
       setLoadingSaved(false);
     }
-  }, [periodStart, periodEnd]);
+  }, [selectedPeriod, periodStart, periodEnd]);
 
   useEffect(() => { fetchSaved(); }, [fetchSaved]);
 
@@ -614,12 +618,13 @@ export default function VATClassifier() {
   };
 
   const renderFlags = (flags?: RiskFlag[]) => {
-    if (!flags || flags.length === 0) {
-      return <span className="text-muted2" title="No risk flags">⚪</span>;
+    const exceptions = (flags || []).filter((f) => f.code !== "clear");
+    if (exceptions.length === 0) {
+      return <span className="text-green" title="No exceptions">✓</span>;
     }
     return (
       <div className="flex flex-wrap gap-1">
-        {flags.map((f) => (
+        {exceptions.map((f) => (
           <span
             key={f.code}
             title={f.tooltip}
@@ -644,6 +649,12 @@ export default function VATClassifier() {
   const blockedVAT = savedTxns
     .filter(t => t.blocked_input_vat)
     .reduce((s, t) => s + (t.blocked_vat_amount || t.vat_amount_aed || 0), 0);
+  const pendingBlockedVAT = invoiceSummary?.pending_blocked_vat_aed ?? 0;
+  const totalBlockedVAT = blockedVAT + pendingBlockedVAT;
+  const fmtAed2 = (n: number) => n.toLocaleString("en-AE", { minimumFractionDigits: 2 });
+  const countsLabel = invoiceSummary
+    ? `${invoiceSummary.invoice_count} invoice${invoiceSummary.invoice_count !== 1 ? "s" : ""} · ${savedTxns.length} line transaction${savedTxns.length !== 1 ? "s" : ""}`
+    : `${savedTxns.length} line transaction${savedTxns.length !== 1 ? "s" : ""}`;
 
   // Source-filtered view
   const sourceFiltered = sourceFilter === "all"
@@ -682,32 +693,28 @@ export default function VATClassifier() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Period picker */}
+          {/* Period picker — shared tax period across GulfTax modules */}
           <div className="flex items-center gap-2 border border-border rounded-lg px-3 py-1.5 bg-card">
-            <span className="text-[11px] text-muted2 uppercase tracking-wide">Period</span>
-            <input
-              type="month"
-              value={selectedPeriod}
+            <span className="text-[11px] text-muted2 uppercase tracking-wide">Tax Period</span>
+            <select
+              value={selectedPeriod ?? ""}
               onChange={(e) => setSelectedPeriod(e.target.value)}
               className="bg-transparent text-[12px] font-mono text-white border-none outline-none cursor-pointer"
-            />
-            {selectedPeriod && (
-              <button
-                type="button"
-                onClick={() => setSelectedPeriod("")}
-                title="Show all periods"
-                className="text-[10px] text-muted2 hover:text-white ml-1"
-              >
-                ✕
-              </button>
-            )}
+            >
+              {!selectedPeriod && <option value="">Loading…</option>}
+              {quarterOptions(selectedPeriod).map((opt) => (
+                <option key={opt.value} value={opt.value} className="bg-card">
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
           <button
             type="button"
             onClick={() => setActiveView("saved")}
             className={`px-4 py-2 rounded-[8px] text-[12px] font-medium transition-all ${activeView === "saved" ? "bg-gold-pale text-gold-lt border border-border-g" : "text-muted border border-transparent hover:border-border-g hover:text-white"}`}
           >
-            📋 Saved ({savedTxns.length})
+            📋 Saved ({countsLabel})
           </button>
           <button
             type="button"
@@ -724,8 +731,9 @@ export default function VATClassifier() {
         <>
         {selectedPeriod && (
           <div className="mb-3 text-[12px] text-muted2">
-            Showing <span className="text-white font-medium">{savedTxns.length} transaction{savedTxns.length !== 1 ? 's' : ''}</span> for{' '}
-            <span className="text-gold font-medium">{new Date(periodStart + 'T00:00:00').toLocaleDateString('en-AE', { month: 'long', year: 'numeric' })}</span>
+            Showing <span className="text-white font-medium">{countsLabel}</span> for{' '}
+            <span className="text-gold font-medium">{periodLabel}</span>
+            {periodStart && periodEnd && <span className="font-mono"> ({periodStart} → {periodEnd})</span>}
           </div>
         )}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -733,7 +741,7 @@ export default function VATClassifier() {
             { label: "Total Sales (Output)", value: `AED ${totalSales.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-green", sub: `Output VAT: AED ${outputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}` },
             { label: "Total Purchases (Input)", value: `AED ${totalPurchases.toLocaleString("en-AE", {minimumFractionDigits: 0})}`, color: "text-amber", sub: `Input VAT: AED ${inputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}` },
             { label: "Recoverable Input VAT", value: `AED ${inputVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}`, color: "text-blue-300", sub: "Box 9 — deductible" },
-            { label: "Blocked / Non-Recoverable", value: `AED ${blockedVAT.toLocaleString("en-AE", {minimumFractionDigits: 2})}`, color: blockedVAT > 0 ? "text-red-400" : "text-muted2", sub: blockedVAT > 0 ? "Entertainment / Article 54" : "None" },
+            { label: "Blocked / Non-Recoverable", value: `AED ${fmtAed2(totalBlockedVAT)}`, color: totalBlockedVAT > 0 ? "text-red-400" : "text-muted2", sub: totalBlockedVAT > 0 ? `Posted AED ${fmtAed2(blockedVAT)} · Pending review AED ${fmtAed2(pendingBlockedVAT)}` : "None" },
           ].map(card => (
             <div key={card.label} className="bg-gradient-to-br from-card to-[#071228] border border-border rounded-2xl p-5">
               <p className="text-[11px] text-muted2 uppercase tracking-wide mb-1">{card.label}</p>
@@ -858,6 +866,9 @@ export default function VATClassifier() {
                 <span className={`ml-1.5 font-mono ${tab.color}`}>{tierCounts[tab.key] ?? 0}</span>
               </button>
             ))}
+            <span className="ml-auto self-center text-[10px] text-muted2 font-mono uppercase">
+              Counts are line transactions · {countsLabel}
+            </span>
           </div>
 
           {loadingSaved ? (
@@ -913,7 +924,7 @@ export default function VATClassifier() {
                           </span>
                           {t.entertainment_flag && (
                             <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[rgba(255,183,0,0.15)] text-amber border border-amber/30">
-                              Art.54 — 50% recovery
+                              {t.entertainment_label || "Art.54 — 50% recovery"}
                             </span>
                           )}
                           {t.import_vat_flag && (

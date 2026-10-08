@@ -7,6 +7,7 @@ import { getActiveCompanyId } from '../../context/CompanyContext';
 import { getStoredAccessToken } from '../../utils/authToken';
 import { supabase } from '../../lib/supabase';
 import { Link } from 'react-router-dom';
+import { useGulfTaxPeriod } from '../../hooks/useGulfTaxPeriod';
 
 type Stage = "idle" | "uploading" | "extracting" | "classifying" | "done" | "error";
 
@@ -77,6 +78,7 @@ export default function InvoiceFlowPage() {
   const [einvoiceMsg, setEinvoiceMsg] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false); // prevents double-submit race condition
+  const { period: taxPeriod } = useGulfTaxPeriod();
 
   const EXCEL_TYPES = [
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -207,6 +209,7 @@ export default function InvoiceFlowPage() {
           const riskRes = await apiClient.post("/api/invoice/classify-and-risk", {
             invoice_id,
             extracted,
+            tax_period: taxPeriod || undefined,
           });
           const { vat_result, risk_flags, overall_risk, auto_approved, transactions_created,
                   blocked_input_vat, blocked_vat_amount, review_tier } = riskRes.data;

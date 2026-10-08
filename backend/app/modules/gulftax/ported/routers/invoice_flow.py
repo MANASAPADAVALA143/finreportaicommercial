@@ -225,6 +225,7 @@ class RiskResult(BaseModel):
 class ClassifyRiskRequest(BaseModel):
     invoice_id: InvoiceId
     extracted: ExtractedInvoice
+    tax_period: Optional[str] = None  # selected VAT period e.g. 2026-Q3
 
 
 class ReviewAction(BaseModel):
@@ -304,6 +305,7 @@ def run_all_anomaly_checks(
     db: Session,
     invoice_id: InvoiceId = 0,
     vat_treatment: str = "standard_rated",
+    tax_period: Optional[str] = None,
 ) -> RiskResult:
     flags: List[AnomalyFlag] = []
 
@@ -518,16 +520,28 @@ def run_all_anomaly_checks(
             vat_at_risk_aed=round(subtotal * 0.05, 2),
         ))
 
-    # ANOMALY 10 — Tax period mismatch
+    # ANOMALY 10 — Tax period mismatch: compare against the selected VAT period; without
+    # one, only flag once the invoice's own quarter is past its filing deadline.
     if inv_date:
-        today = date.today()
-        quarter_start = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1)
-        if inv_date < quarter_start - timedelta(days=90):
+        from services.tax_period import filing_deadline, parse_quarter, quarter_key
+
+        selected = parse_quarter(tax_period)
+        if selected:
+            is_prior_period = inv_date < selected[0]
+            period_desc = f"the selected VAT period {tax_period} ({selected[0]} to {selected[1]})"
+        else:
+            own_start, own_end = parse_quarter(quarter_key(inv_date))
+            is_prior_period = date.today() > filing_deadline(own_end)
+            period_desc = (
+                f"the open VAT period (its own period {quarter_key(inv_date)} "
+                f"was due for filing on {filing_deadline(own_end)})"
+            )
+        if is_prior_period:
             flags.append(AnomalyFlag(
                 flag_id=10, flag="tax_period_mismatch", category="vat_compliance",
                 severity="LOW",
                 title="Invoice Pre-dates Current VAT Period — Please Verify",
-                what_is_wrong=f"Invoice date {inv_date_s} is from a prior VAT quarter. Late claims are permitted under Article 79 but should be reviewed to confirm the claim has not already been included in an earlier return.",
+                what_is_wrong=f"Invoice date {inv_date_s} falls before {period_desc}. Late claims are permitted under Article 79 but should be reviewed to confirm the claim has not already been included in an earlier return.",
                 action_required="Confirm this invoice was not already included in a prior VAT return. If the claim was missed, it can generally be included in the next available return. Consult your VAT advisor for claims older than 12 months.",
                 uae_law_reference="Article 79, UAE VAT Law — input tax recovery period; FTA Public Clarification VATP006",
                 vat_at_risk_aed=round(vat_shown, 2),
@@ -1267,7 +1281,11 @@ Return JSON only:
 
     print(f"[classify-and-risk] running anomaly checks", flush=True)
     # Run all 23 anomaly checks
-    risk = run_all_anomaly_checks(ex, company_id, db, payload.invoice_id, vat_result.get("vat_treatment", "standard_rated"))
+    risk = run_all_anomaly_checks(
+        ex, company_id, db, payload.invoice_id,
+        vat_result.get("vat_treatment", "standard_rated"),
+        tax_period=payload.tax_period,
+    )
     print(f"[classify-and-risk] anomaly checks done, score={risk.risk_score}", flush=True)
 
     # ── Persist classification + risk results ─────────────────────────────────
@@ -1333,6 +1351,7 @@ Return JSON only:
                 date=inv_date,
                 description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
                 vendor_or_customer=inv.vendor_name,
+                vendor_trn=inv.vendor_trn,
                 invoice_number=inv.invoice_number,
                 transaction_type="purchase",
                 vat_treatment=vat_treatment,
@@ -1387,6 +1406,7 @@ Return JSON only:
                     date=inv_date,
                     description=desc,
                     vendor_or_customer=inv.vendor_name,
+                    vendor_trn=inv.vendor_trn,
                     invoice_number=inv.invoice_number,
                     transaction_type="purchase",
                     vat_treatment=li_treatment,
@@ -1479,6 +1499,12 @@ Return JSON only:
         _review_tier = "auto_approve"
     else:
         _review_tier = "review_required"
+
+    logger.info(
+        "Invoice classified company_id=%s tax_period_id=%s invoice_id=%s status=%s "
+        "risk_score=%s transactions_created=%s",
+        company_id, payload.tax_period, inv.id, inv.status, risk.risk_score, transactions_created,
+    )
 
     return {
         "invoice_id": inv.id,
@@ -1597,6 +1623,7 @@ def review_invoice(
                 date=inv_date,
                 description=inv.vendor_name or f"Invoice #{inv.invoice_number}",
                 vendor_or_customer=inv.vendor_name,
+                vendor_trn=inv.vendor_trn,
                 invoice_number=inv.invoice_number,
                 transaction_type="purchase",
                 vat_treatment=vat_treatment,
@@ -1641,6 +1668,7 @@ def review_invoice(
                     date=inv_date,
                     description=desc,
                     vendor_or_customer=inv.vendor_name,
+                    vendor_trn=inv.vendor_trn,
                     invoice_number=inv.invoice_number,
                     transaction_type="purchase",
                     vat_treatment=vat_treatment,

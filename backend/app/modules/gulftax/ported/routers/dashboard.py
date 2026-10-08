@@ -1,7 +1,7 @@
 """Dashboard summary API."""
 from calendar import monthrange
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import and_, func
@@ -20,17 +20,6 @@ def _add_months(d0: date, months: int) -> date:
     m = total % 12 + 1
     day = min(d0.day, monthrange(y, m)[1])
     return date(y, m, day)
-
-
-def _calendar_quarter(today: date) -> Tuple[date, date, str]:
-    q = (today.month - 1) // 3 + 1
-    start_month = 3 * (q - 1) + 1
-    start = date(today.year, start_month, 1)
-    if q == 4:
-        end = date(today.year, 12, 31)
-    else:
-        end = date(today.year, start_month + 3, 1) - timedelta(days=1)
-    return start, end, f"Q{q} {today.year}"
 
 
 def _vat_filing_deadline(period_end: date) -> date:
@@ -75,19 +64,38 @@ def _real_vat_kpis(
         fr_db.close()
 
 
+@router.get("/active-period")
+async def active_tax_period(
+    period: Optional[str] = Query(None, description="Selected tax period e.g. 2026-Q3"),
+    company_id: str = Depends(get_current_company_id),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Default tax period shared by Classifier, VAT Return, Recon and Dashboard."""
+    from services.tax_period import resolve_active_period
+
+    return resolve_active_period(db, company_id, requested=period)
+
+
 @router.get("/summary")
 async def dashboard_summary(
+    period: Optional[str] = Query(None, description="Selected tax period e.g. 2026-Q3"),
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
     x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
 ) -> Dict[str, Any]:
+    from services.tax_period import resolve_active_period
+
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
     today = date.today()
-    period_start, period_end, label = _calendar_quarter(today)
+    active = resolve_active_period(db, company_id, requested=period)
+    tax_period = active["tax_period"]
+    period_start = date.fromisoformat(active["start_date"])
+    period_end = date.fromisoformat(active["end_date"])
+    label = active["label"]
     filing_deadline = _vat_filing_deadline(period_end)
     days_to_filing = _days_between(today, filing_deadline)
 
@@ -99,8 +107,6 @@ async def dashboard_summary(
         or str(getattr(company, "workspace_id", None) or "").strip()
         or active_company
     )
-    q = (today.month - 1) // 3 + 1
-    tax_period = f"{today.year}-Q{q}"
 
     estimated_payable_aed = 0.0
     transactions_classified = 0
@@ -114,27 +120,6 @@ async def dashboard_summary(
         estimated_payable_aed = float(vat_kpis["estimated_payable_aed"])
         transactions_classified = int(vat_kpis["transactions_classified"])
         transactions_needing_review = int(vat_kpis["transactions_needing_review"])
-        # If current quarter empty, fall back to prior quarter with data
-        if transactions_classified == 0 and estimated_payable_aed == 0:
-            prev = today.month - 3
-            py, pm = (today.year, prev) if prev > 0 else (today.year - 1, prev + 12)
-            pq = (pm - 1) // 3 + 1
-            prev_period = f"{py}-Q{pq}"
-            prev_kpis = _real_vat_kpis(
-                workspace_id=workspace_id,
-                company_id=active_company,
-                period=prev_period,
-            )
-            if (
-                int(prev_kpis["transactions_classified"]) > 0
-                or float(prev_kpis["estimated_payable_aed"]) != 0
-            ):
-                estimated_payable_aed = float(prev_kpis["estimated_payable_aed"])
-                transactions_classified = int(prev_kpis["transactions_classified"])
-                period_start, period_end, label = _calendar_quarter(date(py, max(pm, 1), 1))
-                filing_deadline = _vat_filing_deadline(period_end)
-                days_to_filing = _days_between(today, filing_deadline)
-                tax_period = prev_period
     except Exception:
         # Do NOT fall back to ported Transaction table for VAT KPIs.
         estimated_payable_aed = 0.0
@@ -265,6 +250,7 @@ async def dashboard_summary(
             "end_date": period_end.isoformat(),
             "label": label,
             "tax_period": tax_period,
+            "source": active["source"],
         },
         "vat": {
             "estimated_payable_aed": round(float(estimated_payable_aed), 2),

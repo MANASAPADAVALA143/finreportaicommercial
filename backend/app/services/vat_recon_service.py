@@ -111,6 +111,26 @@ def ensure_ported_company_for_recon(
         except Exception:
             logger.exception("ap_companies lookup failed for %s", cid)
 
+    # companies.workspace_id is unique on Supabase — reuse the workspace's row
+    # (often auto-provisioned as "Workspace xxxx") instead of inserting a duplicate.
+    if ws:
+        row = ported_db.query(Company).filter(Company.workspace_id == ws).first()
+        if row:
+            changed = False
+            if not row.external_id:
+                row.external_id = cid
+                changed = True
+            if name != "FinReportAI Company" and (row.name or "").startswith(("Workspace ", "FinReportAI Company")):
+                row.name = name[:255]
+                changed = True
+            if changed:
+                ported_db.commit()
+            logger.info(
+                "Recon reusing companies row id=%s for company_id=%s workspace_id=%s",
+                row.id, cid, ws,
+            )
+            return row.id
+
     suffix = cid.replace("-", "")[:8] or "demo"
     new_row = Company(
         id=cid,
@@ -383,6 +403,11 @@ def run_vat_recon(
     ported_db.add(row)
     ported_db.commit()
     ported_db.refresh(row)
+    logger.info(
+        "VAT recon run reconciliation_run_id=%s company_id=%s finreport_company_id=%s "
+        "tenant_id=%s tax_period_id=%s status=%s transactions=%s",
+        row.id, ported_cid, finreport_cid, tenant_id, period, status, tx_count,
+    )
 
     return {
         "id": row.id,

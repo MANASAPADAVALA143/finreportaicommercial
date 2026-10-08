@@ -214,6 +214,20 @@ export type VatReconHistoryItem = {
   created_at: string | null;
 };
 
+export type ActiveTaxPeriod = {
+  tax_period: string;
+  start_date: string;
+  end_date: string;
+  label: string;
+  long_label: string;
+  filing_deadline: string;
+  source: 'selected' | 'latest_activity' | 'filing_due';
+};
+
+export async function fetchActiveTaxPeriod() {
+  return get<ActiveTaxPeriod>('/api/dashboard/active-period');
+}
+
 export async function fetchVatPeriods(companyIdParam?: string) {
   const cid = companyIdParam || companyId();
   if (!cid) throw new Error('company_id is required');

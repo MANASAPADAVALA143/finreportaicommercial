@@ -3,9 +3,11 @@
 # Do not add auth models here; use app.models.users.User (RbacUser).
 
 """SQLAlchemy database models for GulfTax AI"""
+import re
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, JSON, Date, Numeric
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, JSON, Date, Numeric, event, select
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -34,6 +36,8 @@ class Company(Base):
     settings = Column(JSON, nullable=True, default=dict)
     external_id = Column(String(64), nullable=True, index=True)
     workspace_id = Column(String(64), nullable=True, index=True)
+    # NOT NULL + UNIQUE on the shared Supabase `companies` table; filled by _assign_company_slug.
+    slug = Column(String(128), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     transactions = relationship("Transaction", back_populates="company")
@@ -43,6 +47,23 @@ class Company(Base):
     einvoicing_assessments = relationship("EInvoicingAssessment", back_populates="company")
     audit_logs = relationship("AuditLog", back_populates="company")
     user_companies = relationship("UserCompany", back_populates="company")
+
+
+def slugify_company_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:100] or "company"
+
+
+@event.listens_for(Company, "before_insert")
+def _assign_company_slug(_mapper, connection, target: Company) -> None:
+    if target.slug:
+        return
+    if not target.id:
+        target.id = str(uuid.uuid4())
+    base = slugify_company_name(target.name)
+    taken = connection.execute(
+        select(Company.__table__.c.id).where(Company.__table__.c.slug == base).limit(1)
+    ).first()
+    target.slug = f"{base}-{str(target.id).replace('-', '')[:8]}" if taken else base
 
 
 class UserCompany(Base):

@@ -461,6 +461,7 @@ def _aggregate_rds_gulftax_transactions(
             "direction": direction,
             "source": tx.source,
             "designated_zone": bool(tx.designated_zone),
+            "blocked_input_vat": (tx.vat_category or "") == "blocked",
         }
         entries.append(entry)
 
@@ -470,6 +471,10 @@ def _aggregate_rds_gulftax_transactions(
             input_count += 1
         else:
             output_count += 1
+
+        # Blocked input VAT (e.g. entertainment, Art. 53) is non-recoverable — keep it out of Box 9/11.
+        if entry["blocked_input_vat"] and direction == "input":
+            continue
 
         if tx.designated_zone and kind == "goods":
             supplier = tx.dz_supplier_location or "mainland"

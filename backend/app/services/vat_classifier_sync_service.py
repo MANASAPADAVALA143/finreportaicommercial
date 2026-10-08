@@ -28,6 +28,8 @@ def _category_to_vat_treatment(raw: str | None) -> str:
         return "reverse_charge"
     if t in ("out_of_scope", "outofscope"):
         return "out_of_scope"
+    if t == "blocked":
+        return "entertainment_restricted"
     return "standard_rated"
 
 
