@@ -4,6 +4,7 @@ import { getMyCompany, getCompanyConfig } from './companyService';
 import { getAgentAutonomyConfig } from './agentConfigService';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 import { deriveInvoiceRiskDisplayScore } from './invoiceRiskDisplay';
+import { normalizeVendorName, sameVendor } from './apSourceMapping';
 import type { Invoice } from './supabase';
 
 export interface MatchTolerance {
@@ -150,12 +151,7 @@ function pctDiffVatAware(a: number, b: number): number {
 }
 
 function vendorTokensMatch(a: string, b: string): boolean {
-  const av = a.trim().toLowerCase();
-  const bv = b.trim().toLowerCase();
-  if (!av || !bv) return false;
-  const aw = av.split(/\s+/)[0] || '';
-  const bw = bv.split(/\s+/)[0] || '';
-  return av.includes(bv) || bv.includes(av) || (aw.length > 2 && bv.includes(aw)) || (bw.length > 2 && av.includes(bw));
+  return sameVendor(a, b);
 }
 
 /** Numeric 0–100 risk for agent threshold checks (GulfTax score preferred). */
@@ -622,7 +618,9 @@ export async function runAutoMatch(
     // Do NOT backfill every orphan GRN onto this PO — that previously attached
     // all of a vendor's receipts to whichever PO was matched first.
     if ((!grnRows || grnRows.length === 0) && inv.vendor_name && companyId) {
-      const vv = escapeIlike(String(inv.vendor_name).trim());
+      const vv = escapeIlike(
+        normalizeVendorName(String(inv.vendor_name)).split(' ')[0] || String(inv.vendor_name).trim(),
+      );
       let qVendor = supabase
         .from('goods_receipts')
         .select('*, grn_line_items(*)')
@@ -641,9 +639,12 @@ export async function runAutoMatch(
         const best = scored[0];
         const bestAmt = Number((best as { received_amount?: number }).received_amount ?? 0);
         const withinAmt =
-          targetAmt > 0 && pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct;
-        // Only use vendor fallback when amount is plausibly the same receipt
-        if (withinAmt || targetAmt <= 0) {
+          targetAmt > 0 &&
+          bestAmt > 0 &&
+          vendorTokensMatch(String(inv.vendor_name), String((best as { vendor_name?: string }).vendor_name ?? '')) &&
+          pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct;
+        // Only use vendor fallback when it is plausibly the same receipt
+        if (withinAmt) {
           grnRows = [best];
           const orphan = !(best as Record<string, unknown>).po_id;
           if (orphan && poId && withinAmt) {
@@ -669,10 +670,7 @@ export async function runAutoMatch(
           const vv = String(inv.vendor_name).trim().toLowerCase();
           const targetAmt = poAmount > 0 ? poAmount : invoiceAmount;
           const scored = allGrns
-            .filter((g) => {
-              const vn = String(g.vendor_name || '').toLowerCase();
-              return vn.includes(vv) || vv.includes(vn) || vendorTokensMatch(vv, vn);
-            })
+            .filter((g) => vendorTokensMatch(vv, String(g.vendor_name || '')))
             .sort(
               (a, b) =>
                 Math.abs(Number(a.received_amount ?? 0) - targetAmt) -
@@ -681,7 +679,7 @@ export async function runAutoMatch(
           const best = scored[0];
           if (best) {
             const bestAmt = Number(best.received_amount ?? 0);
-            if (targetAmt <= 0 || pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct) {
+            if (targetAmt > 0 && bestAmt > 0 && pctDiffVatAware(bestAmt, targetAmt) <= tolerance.price_variance_pct) {
               grnRows = [best] as typeof grnRows;
             }
           }
@@ -820,7 +818,13 @@ export async function runAutoMatch(
   const grnExists = !!checks.grn_exists;
   const invoiceMatchStatus = mapEngineToInvoiceStatus(engine, grnExists);
 
+  // Imported approval status is the system of record; settled invoices never move back to Approved.
+  const workflowOpen =
+    !['Approved', 'Paid', 'Rejected'].includes(String(inv.status ?? '')) &&
+    String((inv as { payment_status?: string | null }).payment_status ?? '').toLowerCase() !== 'paid' &&
+    String((inv as { source?: string | null }).source ?? '') !== 'excel';
   let autoApproved =
+    workflowOpen &&
     withinTolerance &&
     tolerance.auto_approve_on_full_match &&
     (engine === 'full_match' || engine === 'partial_match');

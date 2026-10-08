@@ -152,13 +152,13 @@ const statusColors: Record<string, string> = {
 
 /** Human-readable label for a status value. Handles known values plus any
  * raw snake_case value (e.g. "review_required") that leaks in from a sync path. */
-function formatStatusLabel(status: string | null | undefined): string {
+function formatStatusLabel(status: string | null | undefined, source?: string | null): string {
   const s = String(status ?? '').trim();
   if (!s) return 'Unknown';
   if (s === 'review_required') return 'Needs Review';
   if (s === 'auto_approve') return 'Approved';
   if (s === 'blocked') return 'Blocked';
-  if (s === 'Processing') return 'AI Processing';
+  if (s === 'Processing') return source === 'excel' ? 'Pending Approval' : 'AI Processing';
   if (/[A-Z\s]/.test(s) && !s.includes('_')) return s; // already human-formatted (e.g. "Approved", "On Hold")
   return s
     .split(/[_\s]+/)
@@ -179,6 +179,7 @@ function invoicePaymentPill(inv: Invoice): { label: string; title?: string; vari
     };
   }
   if (inv.payment_status === 'overdue') return { label: 'Overdue', variant: 'overdue' };
+  if (inv.payment_status === 'scheduled') return { label: 'Scheduled', variant: 'pending' };
   const raw = inv.due_date;
   if (raw) {
     const due = new Date(raw);
@@ -917,6 +918,8 @@ export function InvoiceList() {
                 po_id: inv.po_id ?? null,
                 description: (inv as { description?: string | null }).description ?? null,
                 created_at: inv.created_at ?? null,
+                status: inv.status ?? null,
+                payment_status: inv.payment_status ?? null,
               },
               'list-backfill',
             );
@@ -2083,7 +2086,7 @@ export function InvoiceList() {
                     >
                       <div className="flex flex-wrap items-center gap-1">
                         <Badge variant="outline" className={statusColors[invoice.status] || statusColors.review_required}>
-                          {formatStatusLabel(invoice.status)}
+                          {formatStatusLabel(invoice.status, (invoice as { source?: string | null }).source)}
                         </Badge>
                         {invoice.duplicate_flag === true && (
                           <Badge
@@ -2143,19 +2146,25 @@ export function InvoiceList() {
                       onClick={() => setSelectedInvoice(invoice)}
                     >
                       {(() => {
-                        const category =
-                          (invoice.ifrs_category || '').trim() ||
-                          (invoice.vat_treatment || '').trim();
+                        const category = (invoice.ifrs_category || '').trim();
                         if (category) {
                           const rawConf = Number(invoice.ifrs_confidence ?? 0);
                         // Normalize: backend sometimes stores 0-1 (e.g. 0.95) instead of 0-100
                         const conf = rawConf > 0 && rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf);
-                          const showConf = Boolean((invoice.ifrs_category || '').trim()) && conf > 0;
+                          const fromSource = String(invoice.ifrs_explanation ?? '').startsWith('Source category');
+                          const business = String(invoice.expense_category ?? '').trim();
+                          const showConf = !fromSource && conf > 0;
                           return (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                               <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
                                 {category}
                               </span>
+                              {business && business !== category ? (
+                                <span style={{ fontSize: '11px', color: '#6b7280' }}>Business: {business}</span>
+                              ) : null}
+                              {fromSource ? (
+                                <span style={{ fontSize: '10px', color: '#0e9f6e', fontWeight: 600 }}>Source data</span>
+                              ) : null}
                               {showConf ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                   <div

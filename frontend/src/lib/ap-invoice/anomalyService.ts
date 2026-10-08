@@ -204,6 +204,14 @@ function isPlaceholderTrn(raw: string | null | undefined): boolean {
   return false;
 }
 
+/** 0–100: the strongest flag dominates, each further flag adds 15% of its score, open approval adds 10. */
+function compositeRiskScore(flags: AnomalyEngineFlag[], ctx: { pendingApproval: boolean }): number {
+  const scores = flags.map((f) => Number(f.risk_score) || 0).sort((a, b) => b - a);
+  let score = scores.length ? scores[0] + scores.slice(1).reduce((s, x) => s + x * 0.15, 0) : 5;
+  if (ctx.pendingApproval) score += 10;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 function riskLevelFromScore(score: number): string {
   if (score >= 60) return 'High';
   if (score >= 30) return 'Medium';
@@ -216,6 +224,13 @@ export async function persistAnomalies(
   result: AnomalyEngineResult,
   actor: string | null,
 ): Promise<InvoiceAnomaly[]> {
+  // Replace prior open flags from this pipeline so re-scans don't duplicate or go stale
+  await supabase
+    .from('invoice_anomalies')
+    .delete()
+    .eq('invoice_id', invoiceId)
+    .eq('status', 'open');
+
   if (!result.flags.length) {
     // Still write a computed low score so risk_score is not a stale default
     await supabase
@@ -229,13 +244,6 @@ export async function persistAnomalies(
       .eq('id', invoiceId);
     return [];
   }
-
-  // Replace prior open flags from this pipeline so re-scans don't duplicate
-  await supabase
-    .from('invoice_anomalies')
-    .delete()
-    .eq('invoice_id', invoiceId)
-    .eq('status', 'open');
 
   const rows = result.flags.map((f) => ({
     invoice_id: invoiceId,
@@ -295,7 +303,7 @@ export function riskCheckToEngineResult(result: {
     explanation?: string;
   }>;
 }): AnomalyEngineResult {
-  const scoreMap: Record<string, number> = { low: 25, medium: 50, high: 75, critical: 90 };
+  const scoreMap: Record<string, number> = { low: 10, medium: 35, high: 70, critical: 90 };
   const flags: AnomalyEngineFlag[] = (result.risk_flags || []).map((f) => {
     const sevRaw = String(f.severity || 'medium').toLowerCase();
     const severity = (
@@ -361,6 +369,8 @@ export async function scanInvoiceAnomalies(
     notes?: string | null;
     description?: string | null;
     created_at?: string | null;
+    status?: string | null;
+    payment_status?: string | null;
   },
   actor: string | null = 'system-anomaly-scan',
 ): Promise<AnomalyEngineResult> {
@@ -370,7 +380,7 @@ export async function scanInvoiceAnomalies(
 
   const { data: historyRows } = await supabase
     .from('invoices')
-    .select('id,invoice_number,vendor_name,total_amount,invoice_date,due_date,vendor_email,vendor_trn,gstin,status')
+    .select('id,invoice_number,vendor_name,total_amount,invoice_date,due_date,vendor_email,vendor_trn,gstin,status,po_number')
     .eq('company_id', companyId)
     .neq('id', invoice.id)
     .limit(500);
@@ -508,6 +518,7 @@ export async function scanInvoiceAnomalies(
     notes: invoice.notes,
     description: invoice.description,
     created_at: invoice.created_at,
+    po_number: poNum || null,
     po_date: poDate,
     grn_date: grnDate,
   };
@@ -522,6 +533,8 @@ export async function scanInvoiceAnomalies(
       vendor_email: invoice.vendor_email ?? null,
       total_amount: Number(invoice.total_amount),
       company_id: companyId,
+      status: invoice.status ?? null,
+      payment_status: invoice.payment_status ?? null,
     },
     history.map((h) => ({
       invoice_number: String(h.invoice_number),
@@ -581,7 +594,11 @@ export async function scanInvoiceAnomalies(
   }
 
   const flags = [...merged.values()];
-  const overall = flags.length ? Math.max(...flags.map((f) => f.risk_score)) : 0;
+  const settled =
+    invoice.status === 'Paid' || ['paid', 'scheduled'].includes(String(invoice.payment_status || '').toLowerCase());
+  const overall = compositeRiskScore(flags, {
+    pendingApproval: invoice.status === 'Processing' && !settled,
+  });
   const result: AnomalyEngineResult = {
     overall_risk_score: overall,
     flags,
@@ -623,6 +640,8 @@ export async function scanInvoicesAnomaliesBatch(
           notes: inv.notes,
           description: inv.description,
           created_at: inv.created_at,
+          status: inv.status,
+          payment_status: inv.payment_status,
         },
         actor,
       );
@@ -663,6 +682,8 @@ export function detectAndPersistAnomaliesAsync(
           notes: (invoice.notes as string) || null,
           description: (invoice.description as string) || null,
           created_at: (invoice.created_at as string) || null,
+          status: (invoice.status as string) || null,
+          payment_status: (invoice.payment_status as string) || null,
         },
         actor,
       );

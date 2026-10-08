@@ -78,6 +78,8 @@ export async function detectAnomalies(
     vendor_email: string | null;
     total_amount: number;
     company_id?: string;
+    status?: string | null;
+    payment_status?: string | null;
   },
   existingInvoices: Array<{
     invoice_number: string;
@@ -160,13 +162,15 @@ export async function detectAnomalies(
     });
   }
 
-  // 6. Check for overdue invoice (due date is in the past)
-  if (dueDate < today) {
+  // 6. Overdue — a payables-ageing issue, not fraud risk; paid or scheduled invoices are settled.
+  const paymentState = String(invoiceData.payment_status ?? '').toLowerCase();
+  const settled = invoiceData.status === 'Paid' || paymentState === 'paid' || paymentState === 'scheduled';
+  if (dueDate < today && !settled) {
     flags.push({
       type: 'overdue_invoice',
-      severity: 'high',
+      severity: 'medium',
       message: 'Overdue Invoice',
-      explanation: `This invoice is already past its due date. Immediate action may be required.`,
+      explanation: `This invoice is past its due date and not yet paid or scheduled for payment.`,
     });
   }
 

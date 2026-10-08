@@ -82,6 +82,7 @@ const BULK_COLUMN_MAP: Record<string, string> = {
   vat_rate: 'vat_rate',
   'vat rate': 'vat_rate',
   'tax rate': 'vat_rate',
+  tax_rate: 'vat_rate',
   vat_treatment: 'vat_treatment',
   'vat treatment': 'vat_treatment',
   'tax treatment': 'vat_treatment',
@@ -107,6 +108,16 @@ const BULK_COLUMN_MAP: Record<string, string> = {
   'cost center': 'cost_center',
   department: 'department',
   status: 'status',
+  approval: 'approval_status',
+  'approval status': 'approval_status',
+  'payment status': 'payment_status',
+  category: 'category',
+  'expense category': 'category',
+  'business category': 'category',
+  'gl category': 'gl_category',
+  'account type': 'gl_category',
+  'vendor code': 'vendor_code',
+  'supplier code': 'vendor_code',
   reference: 'reference',
   ref: 'reference',
   po_number: 'po_number',
@@ -148,10 +159,16 @@ function normalizeBulkColumnKey(rawKey: string): string {
 
 export function normalizeBulkRow(row: Record<string, unknown>): Record<string, unknown> {
   const normalized: Record<string, unknown> = {};
+  const fromExactColumn = new Set<string>();
   for (const [rawKey, value] of Object.entries(row)) {
     const key = normalizeBulkColumnKey(rawKey);
-    const mappedKey = BULK_COLUMN_MAP[key] ?? key.replace(/\s+/g, '_');
+    const underscored = key.replace(/\s+/g, '_');
+    const mappedKey = BULK_COLUMN_MAP[key] ?? underscored;
+    const exact = underscored === mappedKey;
+    // A column literally named e.g. "total_amount" beats an alias such as "amount" (net).
+    if (!exact && fromExactColumn.has(mappedKey)) continue;
     normalized[mappedKey] = value;
+    if (exact) fromExactColumn.add(mappedKey);
   }
   return normalized;
 }

@@ -127,6 +127,11 @@ export type Invoice = {
   bank_ref?: string | null;
   reconciled_at?: string | null;
   payment_status?: 'unpaid' | 'scheduled' | 'paid' | 'overdue' | 'frozen' | null;
+  /** Source business category (e.g. "Audit & Compliance") — distinct from ifrs_category. */
+  expense_category?: string | null;
+  /** Account type from the source GL (e.g. "Operating Expenses", "Fixed Assets"). */
+  gl_category?: string | null;
+  vendor_code?: string | null;
   scheduled_payment_date?: string | null;
   payment_reference?: string | null;
   /** UTR / NEFT / IMPS / cheque reference (primary display for bank recon). */

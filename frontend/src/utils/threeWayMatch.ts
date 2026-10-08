@@ -17,11 +17,10 @@ export function resolveDisplayMatchStatus(inv: {
   grn_confirmed?: boolean | null;
 }): MatchStatus | string {
   const raw = String(inv.match_status || '').trim();
+  // 3-way needs receipt evidence: an engine result AND a linked GRN.
+  if (raw === 'three_way_matched') return inv.grn_id ? raw : 'matched';
   if (raw && raw !== 'no_po') return raw;
-  if (inv.po_id) {
-    if (inv.grn_id || inv.grn_confirmed) return 'three_way_matched';
-    return 'matched';
-  }
+  if (inv.po_id) return 'matched';
   return raw || 'no_po';
 }
 

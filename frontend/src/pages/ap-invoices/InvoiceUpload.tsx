@@ -63,6 +63,7 @@ import {
 import { safeStr, safeNum, apiErrorMessage } from '../../utils/safeRender';
 import { classifyAPInvoiceEmbedded, syncApInvoicesToVatClassifier } from '../../lib/ap-invoice/gulfTaxService';
 import { notifyApInvoiceUploaded } from '../../services/notificationService';
+import { glAccountNameFor, ifrsFromSourceCategory, workflowFromSource } from '../../lib/ap-invoice/apSourceMapping';
 import {
   findBulkExcelHeaderRowIndex,
   normalizeBulkRow,
@@ -1385,16 +1386,6 @@ export function InvoiceUpload() {
               return;
             }
 
-            const n8nRiskFlags = n8nData?.risk_flags ?? n8nData?.riskFlags ?? null;
-            const n8nRiskFlagCount = n8nData?.risk_flag_count ?? n8nData?.riskFlagCount ?? (Array.isArray(n8nRiskFlags) ? n8nRiskFlags.length : 0);
-            const rawRiskScore = n8nData?.risk_score;
-            const riskScoreText =
-              rawRiskScore == null ? null
-              : typeof rawRiskScore === 'string' && ['low', 'medium', 'high'].includes(String(rawRiskScore).toLowerCase())
-                ? String(rawRiskScore).toLowerCase()
-                : typeof rawRiskScore === 'number'
-                  ? (rawRiskScore >= 60 ? 'high' : rawRiskScore >= 30 ? 'medium' : 'low')
-                  : null;
             const glRes = await resolveGLAccount(supabase, cat, null, {
               vendorName: invoice.vendor_name,
               description: '',
@@ -1411,6 +1402,7 @@ export function InvoiceUpload() {
               gl_confirmed: filledFromN8n ? true : glRes.gl_confirmed,
               gl_suggestion_source: filledFromN8n ? ('manual' as const) : glRes.gl_suggestion_source,
             };
+            // Risk is owned by the anomaly scan; only classification fields come from n8n.
             const { error } = await supabase
               .from('invoices')
               .update({
@@ -1418,11 +1410,6 @@ export function InvoiceUpload() {
                 ifrs_confidence: n8nData?.ifrs_confidence ?? 0,
                 ifrs_explanation: n8nData?.ifrs_explanation ?? null,
                 ...invoiceGlFieldsFromResult(glMerged),
-                risk_level: risk,
-                risk_score: riskScoreText,
-                risk_flags: Array.isArray(n8nRiskFlags) ? n8nRiskFlags : (typeof n8nRiskFlags === 'string' ? (() => { try { const p = JSON.parse(n8nRiskFlags as string); return Array.isArray(p) ? p : []; } catch { return []; } })() : []),
-                risk_flag_count: n8nRiskFlagCount,
-                risk_details: typeof n8nRiskFlags === 'string' ? n8nRiskFlags : (Array.isArray(n8nRiskFlags) ? JSON.stringify(n8nRiskFlags) : null),
                 updated_at: new Date().toISOString(),
               })
               .eq('id', invoice.id);
@@ -1607,6 +1594,11 @@ export function InvoiceUpload() {
             sgst_amount: rowNorm.sgst_amount ? parseAmount(rowNorm.sgst_amount) : null,
             igst_amount: rowNorm.igst_amount ? parseAmount(rowNorm.igst_amount) : null,
             total_tax: rowNorm.total_tax ? parseAmount(rowNorm.total_tax) : null,
+            approval_status: String(rowNorm.approval_status ?? rowNorm.status ?? '').trim() || null,
+            payment_status: String(rowNorm.payment_status ?? '').trim() || null,
+            category: String(rowNorm.category ?? '').trim() || null,
+            gl_category: String(rowNorm.gl_category ?? '').trim() || null,
+            vendor_code: String(rowNorm.vendor_code ?? '').trim() || null,
           };
           parsedData.push(parsedRow);
         }
@@ -1753,7 +1745,18 @@ export function InvoiceUpload() {
         try {
           const startTime = Date.now();
           const approvalLevel = getRequiredApprovalLevel(invoiceData.total_amount);
-          const initialStatus = approvalLevel === 'none' ? 'Approved' : 'Processing';
+          const sourceWorkflow = workflowFromSource(invoiceData.approval_status, invoiceData.payment_status);
+          const initialStatus =
+            sourceWorkflow?.status ?? (approvalLevel === 'none' ? 'Approved' : 'Processing');
+          const isApproved = sourceWorkflow ? sourceWorkflow.approved : approvalLevel === 'none';
+          const sourceIfrs = ifrsFromSourceCategory(
+            invoiceData.category,
+            invoiceData.gl_code,
+            invoiceData.gl_category,
+          );
+          const sourceGlName = invoiceData.gl_code
+            ? glAccountNameFor(invoiceData.gl_code, invoiceData.gl_name, invoiceData.category)
+            : null;
 
           // UAE: classify each invoice with embedded GulfTax before insert (skipped for large batches)
           let gulfTaxFields: Record<string, unknown> = {};
@@ -1816,17 +1819,36 @@ export function InvoiceUpload() {
             processing_time_seconds: Math.floor((Date.now() - startTime) / 1000),
             approval_level: approvalLevel,
             approved_by: null,
-            approved_at: approvalLevel === 'none' ? new Date().toISOString() : null,
+            approved_at: isApproved ? new Date().toISOString() : null,
             updated_at: new Date().toISOString(),
             risk_flags: [] as unknown[],
             risk_score: null,
             risk_level: null,
             source: 'excel',
+            ...(sourceWorkflow ? { payment_status: sourceWorkflow.payment_status } : {}),
+            ...(invoiceData.category ? { expense_category: invoiceData.category } : {}),
+            ...(invoiceData.gl_category ? { gl_category: invoiceData.gl_category } : {}),
+            ...(invoiceData.vendor_code ? { vendor_code: invoiceData.vendor_code } : {}),
+            ...(sourceIfrs
+              ? {
+                  ifrs_category: sourceIfrs.ifrs_category,
+                  ifrs_explanation: sourceIfrs.ifrs_explanation,
+                  ifrs_confidence: 100,
+                }
+              : {}),
             ...(invoiceData.vendor_trn ? { vendor_trn: String(invoiceData.vendor_trn) } : {}),
             ...(invoiceData.vat_amount
-              ? { vat_amount: parseAmount(invoiceData.vat_amount), tax_amount: parseAmount(invoiceData.vat_amount) }
+              ? {
+                  vat_amount: parseAmount(invoiceData.vat_amount),
+                  tax_amount: parseAmount(invoiceData.vat_amount),
+                  tax_type: 'VAT',
+                  subtotal_amount:
+                    Math.round((invoiceData.total_amount - parseAmount(invoiceData.vat_amount)) * 100) / 100,
+                }
               : {}),
-            ...(invoiceData.vat_rate ? { vat_rate: parseAmount(invoiceData.vat_rate) } : {}),
+            ...(invoiceData.vat_rate
+              ? { vat_rate: parseAmount(invoiceData.vat_rate), tax_rate: parseAmount(invoiceData.vat_rate) }
+              : {}),
             ...(invoiceData.vat_treatment ? { vat_treatment: String(invoiceData.vat_treatment) } : {}),
             ...gulfTaxFields,
             ...(invoiceData.gstin ? { gstin: String(invoiceData.gstin), vendor_gstin: String(invoiceData.gstin) } : {}),
@@ -1846,10 +1868,10 @@ export function InvoiceUpload() {
                   gl_account_code: String(invoiceData.gl_code).trim(),
                 }
               : {}),
-            ...(invoiceData.gl_name
+            ...(sourceGlName
               ? {
-                  gl_name: String(invoiceData.gl_name).trim(),
-                  gl_account_name: String(invoiceData.gl_name).trim(),
+                  gl_name: sourceGlName,
+                  gl_account_name: sourceGlName,
                 }
               : {}),
             ...(invoiceData.property_ref
@@ -1928,17 +1950,20 @@ export function InvoiceUpload() {
             invoice = data;
           }
 
-          savedInvoices.push({
-            id: invoice.id,
-            invoice_number: invoice.invoice_number,
-            vendor_name: invoice.vendor_name,
-            total_amount: Number(invoice.total_amount),
-            description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
-            invoice_date: invoice.invoice_date,
-            due_date: invoice.due_date,
-            po_number: invoiceData.po_number ?? invoice.po_number ?? null,
-            currency: invoice.currency ?? invoiceData.currency ?? null,
-          });
+          // Rows with a source category are already classified; AI must not overwrite them.
+          if (!invoiceData.category) {
+            savedInvoices.push({
+              id: invoice.id,
+              invoice_number: invoice.invoice_number,
+              vendor_name: invoice.vendor_name,
+              total_amount: Number(invoice.total_amount),
+              description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
+              invoice_date: invoice.invoice_date,
+              due_date: invoice.due_date,
+              po_number: invoiceData.po_number ?? invoice.po_number ?? null,
+              currency: invoice.currency ?? invoiceData.currency ?? null,
+            });
+          }
 
           enrichQueue.push({ invoice, invoiceData, initialStatus });
           results.success++;
@@ -1995,6 +2020,8 @@ export function InvoiceUpload() {
                 po_id: (invoice as { po_id?: string }).po_id ?? null,
                 description: invoiceData.description ?? (invoice as { description?: string | null }).description ?? null,
                 created_at: invoice.created_at ?? null,
+                status: initialStatus,
+                payment_status: (invoice as { payment_status?: string | null }).payment_status ?? null,
               },
               'bulk-import',
             ).catch(() => null);
@@ -2003,7 +2030,7 @@ export function InvoiceUpload() {
               void runAutoMatch(invoice.id).catch(() => null);
             }
 
-            if (initialStatus === 'Approved') {
+            if (initialStatus === 'Approved' || initialStatus === 'Paid') {
               void awaitGlPostAfterApproval(invoice, companyId, (opts) =>
                 toast({ title: opts.title, description: opts.description, variant: opts.variant }),
               ).catch(() => null);

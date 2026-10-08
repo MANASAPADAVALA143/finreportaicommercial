@@ -79,8 +79,10 @@ def _parse_dt(s: str | None) -> datetime | None:
 
 
 def _same_vendor(a: str | None, b: str | None) -> bool:
-    """Case-insensitive vendor identity — required for recurring-vendor rules."""
-    return (a or "").strip().lower() == (b or "").strip().lower() and bool((a or "").strip())
+    """Normalised vendor identity — required for recurring-vendor rules."""
+    from app.services.vendor_normalize import same_vendor
+
+    return same_vendor(a, b)
 
 
 def _floored_std(std_amt: float, avg_amt: float) -> float:
@@ -363,10 +365,12 @@ def _rule_flags(
                 )
             )
 
-    # PATTERN 2: Round number
+    inv_po = (invoice.get("po_number") or "").strip().lower()
+
+    # PATTERN 2: Round number — PO-backed invoices from established vendors are expected to be round
     if amount >= 5000 and (amount % 1000 == 0 or amount % 10000 == 0):
         vendor_age = vendor.get("vendor_age_days", 999)
-        if vendor_age < 90 or amount >= 50_000:
+        if vendor_age < 90 or (amount >= 50_000 and not inv_po):
             flags.append(
                 AnomalyFlag(
                     "rule_based", "round_number", "medium", 40,
@@ -395,6 +399,9 @@ def _rule_flags(
         h_amt = float(h.get("total_amount") or 0)
         if h_amt <= 0:
             continue
+        h_po = (h.get("po_number") or "").strip().lower()
+        if inv_po and h_po and inv_po != h_po:
+            continue  # separate purchase orders → recurring billing, not a duplicate
         variance = abs(amount - h_amt) / h_amt
         h_date = _parse_date(h.get("invoice_date"))
         same_period = bool(

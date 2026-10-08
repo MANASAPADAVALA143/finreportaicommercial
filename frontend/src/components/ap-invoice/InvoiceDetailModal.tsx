@@ -1864,11 +1864,21 @@ export function InvoiceDetailModal({
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <CardContent className="space-y-4">
+                    {invoice.expense_category?.trim() && (
+                      <div className="space-y-2">
+                        <Label>Business Category (source)</Label>
+                        <p className="text-sm font-medium text-gray-800">{invoice.expense_category}</p>
+                      </div>
+                    )}
+
                     <div className="space-y-2">
-                      <Label>IFRS Category</Label>
+                      <Label>IFRS Classification</Label>
                       <p className="text-lg font-semibold text-[#1a56db]">
                         {invoice.ifrs_category?.trim() || 'Not classified'}
                       </p>
+                      {invoice.ifrs_explanation?.startsWith('Source category') && (
+                        <p className="text-xs text-gray-500">{invoice.ifrs_explanation}</p>
+                      )}
                     </div>
 
                     {(invoice.gl_account_code ?? invoice.gl_code) && (
@@ -1878,6 +1888,9 @@ export function InvoiceDetailModal({
                           {invoice.gl_account_code ?? invoice.gl_code}
                           {invoice.gl_account_name ?? invoice.gl_name ? ` — ${invoice.gl_account_name ?? invoice.gl_name}` : ''}
                         </p>
+                        {invoice.gl_category?.trim() && (
+                          <p className="text-xs text-gray-500">Account type: {invoice.gl_category}</p>
+                        )}
                         {invoice.gl_source && (
                           <span
                             className="text-xs font-semibold"

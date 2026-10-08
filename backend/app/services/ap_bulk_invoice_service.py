@@ -70,6 +70,10 @@ _SAFE_KEYS = {
     "source",
     "updated_at",
     "created_at",
+    "payment_status",
+    "expense_category",
+    "gl_category",
+    "vendor_code",
 }
 
 
@@ -166,6 +170,24 @@ def _fetch_invoice(sb: Any, company_id: str, inv_no: str) -> dict[str, Any] | No
         return None
 
 
+def _same_workspace(sb: Any, company_a: str, company_b: str) -> bool:
+    if not company_a or not company_b:
+        return False
+    try:
+        res = (
+            sb.table("companies")
+            .select("id,workspace_id")
+            .in_("id", [company_a, company_b])
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("workspace lookup for %s/%s failed: %s", company_a, company_b, exc)
+        return False
+    ws = {str(r.get("id")): str(r.get("workspace_id") or "") for r in (res.data or [])}
+    wa, wb = ws.get(company_a, ""), ws.get(company_b, "")
+    return bool(wa) and wa == wb
+
+
 def _save_invoice(sb: Any, payload: dict[str, Any], company_id: str, inv_no: str) -> tuple[dict[str, Any] | None, str]:
     """
     Insert or update without chaining .select() after upsert.
@@ -196,6 +218,22 @@ def _save_invoice(sb: Any, payload: dict[str, Any], company_id: str, inv_no: str
                 except Exception as insert_exc:
                     msg = str(insert_exc)
                     if "duplicate" in msg.lower() or "23505" in msg:
+                        # invoice_number is globally unique: never take over another company's row
+                        owner = (
+                            sb.table("invoices")
+                            .select("id,company_id")
+                            .eq("invoice_number", inv_no)
+                            .limit(1)
+                            .execute()
+                        )
+                        owner_row = _row_data(owner)
+                        owner_cid = str((owner_row or {}).get("company_id") or "")
+                        if owner_row and owner_cid != str(company_id) and not _same_workspace(
+                            sb, owner_cid, str(company_id)
+                        ):
+                            return None, (
+                                f"Invoice number {inv_no} already exists under another company"
+                            )
                         res = sb.table("invoices").upsert(working, on_conflict="invoice_number").execute()
                         saved = _row_data(res) or _fetch_invoice(sb, company_id, inv_no)
                     else:
@@ -873,6 +911,7 @@ def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0
     from datetime import datetime, timezone
 
     from app.core.supabase import get_supabase
+    from app.services.vendor_normalize import same_vendor
 
     cid = (company_id or "").strip()
     out = {
@@ -892,14 +931,14 @@ def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0
     try:
         invs = (
             sb.table("invoices")
-            .select("id,invoice_number,po_number,total_amount,tax_amount,vat_amount,match_status")
+            .select("id,invoice_number,po_number,total_amount,tax_amount,vat_amount,match_status,vendor_name")
             .eq("company_id", cid)
             .limit(2000)
             .execute()
         )
         pos = (
             sb.table("purchase_orders")
-            .select("id,po_number,po_amount")
+            .select("id,po_number,po_amount,vendor_name")
             .eq("company_id", cid)
             .limit(2000)
             .execute()
@@ -964,17 +1003,27 @@ def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0
         po_amt = float(po.get("po_amount") or 0)
         grn_amt = float((grn or {}).get("received_amount") or 0)
         inv_po_pct = _best_amount_pct(inv_amt, po_amt, vat) if po_amt else 100.0
-        inv_grn_pct = _best_amount_pct(inv_amt, grn_amt, vat) if grn and grn_amt else None
+        has_receipt = bool(grn) and grn_amt > 0
+        inv_grn_pct = _best_amount_pct(inv_amt, grn_amt, vat) if has_receipt else None
         within = inv_po_pct <= tolerance_pct and (inv_grn_pct is None or inv_grn_pct <= tolerance_pct)
+        inv_vendor = str(inv.get("vendor_name") or "")
+        po_vendor = str(po.get("vendor_name") or "")
+        vendor_ok = not inv_vendor or not po_vendor or same_vendor(inv_vendor, po_vendor)
 
-        if grn and within:
+        if not vendor_ok:
+            status = "mismatch"
+            notes = f'Vendor mismatch: invoice "{inv_vendor}" vs PO {po_no} "{po_vendor}"'
+            score = 30
+            out["mismatch"] += 1
+        elif has_receipt and within:
             status = "three_way_matched"
             notes = f"Full 3-way match: PO {po_no} · GRN · within {tolerance_pct:g}%"
             score = 95
             out["three_way_matched"] += 1
         elif within:
             status = "matched"
-            notes = f"2-way match: PO {po_no} · no GRN · within {tolerance_pct:g}%"
+            receipt_note = "GRN has no received amount" if grn else "no GRN"
+            notes = f"2-way match (PO only): PO {po_no} · {receipt_note} · within {tolerance_pct:g}%"
             score = 85
             out["matched"] += 1
             out["no_grn"] += 1
