@@ -17,6 +17,7 @@ DATABASE_URL = pin_psycopg2(os.getenv("DATABASE_URL", "sqlite:///./gulftax.db"))
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    use_insertmanyvalues=False,  # see app.core.database
 )
 return_uuid_as_str(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

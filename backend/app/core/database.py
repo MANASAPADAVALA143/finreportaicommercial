@@ -46,6 +46,9 @@ engine = create_engine(
     pin_psycopg2(settings.DATABASE_URL),
     echo=settings.DEBUG,
     connect_args=get_engine_connect_args(),
+    # Batched INSERT..RETURNING renders typed casts (p0::VARCHAR) even on psycopg2,
+    # which fail against uuid columns that models declare as String.
+    use_insertmanyvalues=False,
 )
 
 # Ensure search_path=public on every Postgres connection so tables in the
