@@ -7,21 +7,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
+from app.core.database import pin_psycopg2, return_uuid_as_str
+
 # Load repo-root .env (GulfTax standalone — single .env for frontend + backend).
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./gulftax.db")
-
-for _prefix in ("postgresql://", "postgres://"):
-    if DATABASE_URL.startswith(_prefix):
-        # Same driver pin as app.core.database.pin_psycopg2 (see its docstring).
-        DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len(_prefix):]
-        break
+DATABASE_URL = pin_psycopg2(os.getenv("DATABASE_URL", "sqlite:///./gulftax.db"))
 
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
 )
+return_uuid_as_str(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
