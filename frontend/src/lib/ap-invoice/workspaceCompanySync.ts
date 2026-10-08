@@ -349,6 +349,19 @@ export async function resolveApSupabaseCompanyId(accessToken?: string | null): P
     // Direct lookup — profile id is intended to equal AP company id
     const { data } = await supabase.from('companies').select('id').eq('id', activeId).maybeSingle();
     if (data?.id) return data.id;
+    const { data: linked } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('external_id', activeId)
+      .limit(1)
+      .maybeSingle();
+    if (linked?.id) return linked.id;
+    try {
+      const cached = localStorage.getItem(`ap_company_profile_${activeId}`);
+      if (cached) return cached;
+    } catch {
+      /* ignore */
+    }
     return activeId;
   }
 

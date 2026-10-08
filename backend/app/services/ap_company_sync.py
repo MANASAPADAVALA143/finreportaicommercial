@@ -31,6 +31,54 @@ def _apply_uae_market(sb: Any, ws: Workspace, company: dict[str, Any]) -> dict[s
     return company
 
 
+def _linked_company_for_profile(
+    sb: Any, profile_id: str, ws_id: str, name: str
+) -> dict[str, Any] | None:
+    """AP company already tied to this FinReport profile under a different id.
+
+    Matches companies.external_id first; otherwise claims the workspace's only
+    unlinked row (the auto-provisioned one that holds the workspace's invoices),
+    so the profile never gets a second, empty company.
+    """
+    try:
+        linked = (
+            sb.table("companies").select("*").eq("external_id", profile_id).limit(1).execute()
+        )
+        if linked.data:
+            return linked.data[0]
+    except Exception as exc:
+        logger.warning("companies lookup by external_id failed (%s): %s", profile_id, exc)
+
+    try:
+        rows = list(
+            (
+                sb.table("companies").select("*").eq("workspace_id", ws_id).limit(2).execute()
+            ).data
+            or []
+        )
+    except Exception as exc:
+        logger.warning("companies lookup by workspace failed (%s): %s", ws_id, exc)
+        return None
+    if len(rows) != 1 or (rows[0].get("external_id") or "").strip():
+        return None
+    row = rows[0]
+    patch: dict[str, Any] = {"external_id": profile_id}
+    if (row.get("name") or "").startswith(("Workspace ", "FinReportAI Company")) and name:
+        patch["name"] = name
+    try:
+        sb.table("companies").update(patch).eq("id", row["id"]).execute()
+    except Exception as exc:
+        logger.warning("companies external_id link failed (%s): %s", row.get("id"), exc)
+        return None
+    logger.info(
+        "Linked AP company %s to FinReport profile %s in workspace %s",
+        row["id"],
+        profile_id,
+        ws_id,
+    )
+    return {**row, **patch}
+
+
 def _link_orphan_company(sb: Any, ws: Workspace, ws_id: str) -> dict[str, Any] | None:
     """
     Pre-migration / bulk-import tenants often have a single companies row with
@@ -304,6 +352,11 @@ def sync_ap_company_for_profile(
             _ensure_company_config(sb, cid)
     except Exception as exc:
         logger.warning("companies lookup by id failed (%s): %s", cid, exc)
+
+    if not company:
+        company = _linked_company_for_profile(sb, cid, ws_id, name)
+        if company:
+            _ensure_company_config(sb, str(company["id"]))
 
     if not company:
         slug = f"{_slugify(name)}-{cid[:8]}"
