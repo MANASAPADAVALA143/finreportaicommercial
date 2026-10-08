@@ -10,6 +10,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Paid invoices were approved first, so their input VAT belongs in the return too.
+POSTABLE_AP_STATUSES = ("Approved", "Paid")
+
 
 def _is_no_content_company_config(exc: Exception) -> bool:
     """Treat Supabase/PostgREST 204 from maybe_single as a valid empty state."""
@@ -267,7 +270,7 @@ def sync_approved_invoice_to_gulftax(
         return {"ok": False, "error": "invoice_not_found"}
 
     status = (invoice.get("status") or "").strip()
-    if status != "Approved":
+    if status not in POSTABLE_AP_STATUSES:
         return {"ok": False, "error": f"invoice_not_approved:{status}"}
 
     # Prefer UAE profile company_id (same Fix 3 resolver) — never stamp a mismatched demo company.
@@ -577,7 +580,7 @@ def sync_period(
             sb.table("invoices")
             .select("id, status, company_id, invoice_date")
             .eq("company_id", company_id)
-            .eq("status", "Approved")
+            .in_("status", list(POSTABLE_AP_STATUSES))
             .gte("invoice_date", period_start.isoformat())
             .lte("invoice_date", period_end.isoformat())
             .execute()

@@ -390,13 +390,13 @@ def sync_ap_invoice_to_rds_gulftax(
             "fta_box": existing.fta_box,
         }
 
-    from app.services.gulftax_sync_service import _fetch_invoice, build_transaction_row
+    from app.services.gulftax_sync_service import POSTABLE_AP_STATUSES, _fetch_invoice, build_transaction_row
     from app.services.ap_invoice_post_service import _resolve_company_id_for_je
 
     invoice = _fetch_invoice(invoice_id)
     if not invoice:
         return {"ok": False, "error": "invoice_not_found"}
-    if (invoice.get("status") or "").strip() != "Approved":
+    if (invoice.get("status") or "").strip() not in POSTABLE_AP_STATUSES:
         return {"ok": False, "error": f"invoice_not_approved:{invoice.get('status')}"}
 
     ws = (workspace_id or "").strip() or str(invoice.get("workspace_id") or "").strip() or company_id

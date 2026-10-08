@@ -650,13 +650,14 @@ async def post_approved_invoice(
         request_from_supabase_invoice,
         _fetch_supabase_invoice,
     )
+    from app.services.gulftax_sync_service import POSTABLE_AP_STATUSES
 
     inv = _fetch_supabase_invoice(body.invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     status = (inv.get("status") or "").strip()
-    if status != "Approved":
+    if status not in POSTABLE_AP_STATUSES:
         raise HTTPException(
             status_code=422,
             detail=f"Invoice must be Approved before GL post (current: {status or 'unknown'})",
