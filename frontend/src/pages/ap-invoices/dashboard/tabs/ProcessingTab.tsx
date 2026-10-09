@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
 import { Upload } from 'lucide-react';
 import { supabase, type EmailIntakeLog } from '@/lib/ap-invoice/supabase';
+import { INVOICE_SOURCE_LABEL } from '@/lib/ap-invoice/invoiceLabels';
 import { getEffectiveExtractionScore } from '@/utils/extractionConfidence';
 import { displayDate } from '@/utils/dateUtils';
 import type { DashboardCtx } from '../types';
@@ -12,17 +13,7 @@ import { MatchPanel, StatusDistributionPanel } from '../widgets';
 import { BarRow, COLORS, EmptyState, Panel, PanelLink, Pill, Stat, pct } from '../ui';
 import { StatusPill } from './shared';
 
-const SOURCE_LABEL: Record<string, string> = {
-  upload: 'Manual upload',
-  email: 'Email',
-  email_n8n: 'Email (automation)',
-  excel: 'Excel import',
-  excel_vba: 'Excel (VBA)',
-  vendor_portal: 'Vendor portal',
-  manual: 'Manual entry',
-  whatsapp: 'WhatsApp',
-  camera: 'Camera',
-};
+const SOURCE_LABEL = INVOICE_SOURCE_LABEL;
 
 export function ProcessingTab({ ctx }: { ctx: DashboardCtx }) {
   const quality = useMemo(() => extractionQuality(ctx.period), [ctx.period]);
