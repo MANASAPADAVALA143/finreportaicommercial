@@ -1,1427 +1,394 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { supabase, type Invoice, type AuditLog } from '../../lib/ap-invoice/supabase';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../../components/ui/table';
-import { Badge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
-import { FileText, Clock, DollarSign, CheckCircle, Eye, Building2, TrendingUp, Mail } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type React from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { CalendarRange, Clock, FileText, Landmark, Receipt, RefreshCw, Upload } from 'lucide-react';
+import type { Invoice } from '../../lib/ap-invoice/supabase';
 import { InvoiceDetailModal } from '../../components/ap-invoice/InvoiceDetailModal';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  LineChart,
-  Line,
-  Legend,
-} from 'recharts';
-import { format } from 'date-fns';
+import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
 import { formatCurrency } from '../../utils/currency';
-import { displayDate } from '../../utils/dateUtils';
 import { useCompanySettings } from '../../hooks/useCompanySettings';
 import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useCompany } from '../../context/CompanyContext';
 import { useIndustryConfig } from '../../context/IndustryConfigContext';
-import { spendByTitle } from '../../services/industryConfig.service';
-import APInsightsPanel from '@/components/ap-invoices/APInsightsPanel';
-import { DuplicateAlertsCard } from '@/components/dashboard/DuplicateAlertsCard';
-import { ExtractionReviewCard } from '@/components/dashboard/ExtractionReviewCard';
-import { GstReconSummaryCard } from '@/components/dashboard/GstReconSummaryCard';
-import { AnomalyDashboardCard } from '@/components/dashboard/AnomalyDashboardCard';
-import { PaymentRunsThisMonthCard } from '@/components/dashboard/PaymentRunsThisMonthCard';
-import { fetchInvoiceById } from '../../lib/ap-invoice/invoices';
-import { getMyCompany } from '../../lib/ap-invoice/companyService';
-import { getCashFlowForecast } from '../../lib/ap-invoice/paymentService';
+import { useMarket } from '../../contexts/MarketContext';
+import { useApDashboardData } from './dashboard/useApDashboardData';
+import {
+  RANGE_PRESETS,
+  computeKpis,
+  filterByRange,
+  localDay,
+  monthKeysForRange,
+  monthLabel,
+  resolveRange,
+  type RangePreset,
+} from './dashboard/metrics';
+import { DASHBOARD_TABS, type DashboardCtx, type TabId } from './dashboard/types';
+import { ErrorBanner, EmptyState, type Tone, TONE_HEX } from './dashboard/ui';
+import { OverviewTab } from './dashboard/tabs/OverviewTab';
+import { ProcessingTab } from './dashboard/tabs/ProcessingTab';
+import { ApprovalsTab } from './dashboard/tabs/ApprovalsTab';
+import { SpendTab } from './dashboard/tabs/SpendTab';
+import { VendorsTab } from './dashboard/tabs/VendorsTab';
+import { CostCenterGlTab } from './dashboard/tabs/CostCenterGlTab';
+import { ComplianceTab } from './dashboard/tabs/ComplianceTab';
+import { PaymentsTab } from './dashboard/tabs/PaymentsTab';
+import { RecentInvoicesTab } from './dashboard/tabs/RecentInvoicesTab';
 
-const statusColors: Record<string, string> = {
-  Processing: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-  Approved: 'bg-green-100 text-green-800 border-green-200',
-  Rejected: 'bg-red-100 text-red-800 border-red-200',
-  Paid: 'bg-blue-100 text-blue-800 border-blue-200',
-  'On Hold': 'bg-orange-100 text-orange-800 border-orange-200',
-  Queried: 'bg-purple-100 text-purple-800 border-purple-200',
-};
+const TAB_IDS = new Set<string>(DASHBOARD_TABS.map((t) => t.id));
+const PRESET_IDS = new Set<string>(RANGE_PRESETS.map((p) => p.id));
 
-const COLORS = ['#FCD34D', '#34D399', '#EF4444', '#3B82F6'];
-
-function getAgentBadgeStyle(action: string): { bg: string; label: string } {
-  const a = (action || '').toLowerCase();
-  if (a.includes('classification') || a.includes('ifrs')) return { bg: 'bg-[#1a56db] text-white', label: 'Classification' };
-  if (a.includes('risk')) return { bg: 'bg-amber-500 text-white', label: 'Risk' };
-  if (a.includes('match')) return { bg: 'bg-emerald-600 text-white', label: 'Matching' };
-  return { bg: 'bg-[#1a56db] text-white', label: action || 'Activity' };
+function KpiCard({
+  label,
+  value,
+  sub,
+  extra,
+  icon: Icon,
+  tone,
+  onClick,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub: React.ReactNode;
+  extra?: React.ReactNode;
+  icon: React.ElementType;
+  tone: Tone;
+  onClick?: () => void;
+}) {
+  const body = (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[12px] font-medium text-slate-500">{label}</p>
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+          style={{ background: `${TONE_HEX[tone]}14`, color: TONE_HEX[tone] }}
+          aria-hidden
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+      </div>
+      <p className="mt-1 truncate text-2xl font-semibold tabular-nums text-slate-900">{value}</p>
+      <p className="mt-0.5 truncate text-[11.5px] text-slate-500">{sub}</p>
+      {extra}
+    </>
+  );
+  const cls = 'min-w-0 rounded-xl border border-[#E3E8EF] bg-white px-4 py-3 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)]';
+  return onClick ? (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${cls} transition-colors hover:border-[#246BFD]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40`}
+    >
+      {body}
+    </button>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
 }
 
 export function Dashboard() {
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab') ?? '';
+  const tab: TabId = TAB_IDS.has(tabParam) ? (tabParam as TabId) : 'overview';
+  const presetParam = searchParams.get('range') ?? '';
+  const preset: RangePreset = PRESET_IDS.has(presetParam) ? (presetParam as RangePreset) : 'all';
+  const customFrom = searchParams.get('from');
+  const customTo = searchParams.get('to');
+
   const { dateFormat } = useCompanySettings();
-  const { currency: baseCurrencyDisplay, fmt, fmtCompact } = useDisplayCurrency();
-  const { activeCompanyId } = useCompany();
+  const { currency: baseCurrency, fmt, fmtCompact } = useDisplayCurrency();
+  const { activeCompanyId, activeCompany } = useCompany();
   const { costCenterLabel } = useIndustryConfig();
+  const { isUAE } = useMarket();
   const workspaceId =
     localStorage.getItem('gnanova_workspace_id') ??
     localStorage.getItem('active_workspace_id') ??
     localStorage.getItem('tenantId') ??
     '';
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  const data = useApDashboardData(activeCompanyId);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
-  const [stats, setStats] = useState({
-    total: 0,
-    pending: 0,
-    monthTotal: 0,
-    monthTaxTotal: 0,
-    avgProcessingTime: 0,
-  });
-  const [loading, setLoading] = useState(true);
-  const [cashFlowWeeks, setCashFlowWeeks] = useState<
-    { label: string; unpaid: number; scheduled: number }[]
-  >([]);
-  const [matchMonth, setMatchMonth] = useState({
-    full: 0,
-    partial: 0,
-    variance: 0,
-    noPo: 0,
-    total: 0,
-  });
 
-  const monthTotalsByCurrency = useMemo(() => {
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
-    const acc: Record<string, { total: number; tax: number }> = {};
-    invoices.forEach((inv) => {
-      // Filter by the invoice's own date, not when the row was inserted —
-      // bulk imports/seed data all share today's created_at regardless of
-      // their real invoice_date spread, which made this card equal Total Open AP.
-      const invDate = new Date(inv.invoice_date || inv.created_at);
-      if (invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear) {
-        const c = (inv.currency || baseCurrencyDisplay).toUpperCase();
-        if (!acc[c]) acc[c] = { total: 0, tax: 0 };
-        acc[c].total += Number(inv.total_amount);
-        acc[c].tax += Number(inv.tax_amount || 0);
-      }
-    });
-    return acc;
-  }, [invoices, baseCurrencyDisplay]);
-
-  const monthTotalInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.total ?? 0;
-  const monthTaxInBase = monthTotalsByCurrency[baseCurrencyDisplay]?.tax ?? 0;
-  const otherCurrencyTotals = useMemo(
-    () => Object.entries(monthTotalsByCurrency).filter(([c]) => c !== baseCurrencyDisplay),
-    [monthTotalsByCurrency, baseCurrencyDisplay]
-  );
+  const now = useMemo(() => (data.loadedAt ? new Date(data.loadedAt) : new Date()), [data.loadedAt]);
 
   useEffect(() => {
-    fetchData();
-  }, [activeCompanyId]);
+    setSelectedInvoice((prev) => (prev ? data.invoices.find((i) => i.id === prev.id) ?? prev : null));
+  }, [data.invoices]);
+  const today = localDay(now);
+  const range = useMemo(
+    () => resolveRange(preset, now, { from: customFrom, to: customTo }),
+    [preset, now, customFrom, customTo],
+  );
+  const period = useMemo(() => filterByRange(data.invoices, range), [data.invoices, range]);
+  const monthKeys = useMemo(() => monthKeysForRange(range, period), [range, period]);
+  const kpis = useMemo(() => computeKpis(data.invoices, baseCurrency, now), [data.invoices, baseCurrency, now]);
 
-  async function fetchData() {
-    try {
-      const companyId = activeCompanyId || (await getMyCompany())?.id || null;
-      let invoiceData: Invoice[] = [];
-      if (companyId) {
-        try {
-          const { listInvoicesViaApi } = await import('../../lib/ap-invoice/listInvoicesService');
-          invoiceData = await listInvoicesViaApi(companyId, 500);
-        } catch (apiErr) {
-          console.warn('[AP Dashboard] list-invoices API failed, falling back to Supabase:', apiErr);
-          const invQuery = supabase
-            .from('invoices')
-            .select('*')
-            .eq('company_id', companyId)
-            .order('created_at', { ascending: false });
-          const invoicesRes = await invQuery;
-          if (invoicesRes.error) throw invoicesRes.error;
-          invoiceData = invoicesRes.data || [];
-        }
-      }
-      const [auditRes] = await Promise.all([
-        supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(4),
-      ]);
-
-      setInvoices(invoiceData);
-      setSelectedInvoice((prev) => {
-        if (!prev) return null;
-        const next = invoiceData.find((i: Invoice) => i.id === prev.id);
-        return next ?? prev;
-      });
-
-      if (!auditRes.error) setAuditLogs(auditRes.data || []);
-
-      try {
-        // Aggregate off invoices.match_status directly — the same field the
-        // Invoice List "3-Way Match" column displays — instead of the separate
-        // match_results audit table, which uses different raw engine status
-        // codes (full_match/amount_variance/etc.) that don't line up 1:1 with
-        // what's shown elsewhere, and previously folded "no_po" into "variance".
-        const acc = { full: 0, partial: 0, variance: 0, noPo: 0, total: 0 };
-        for (const inv of invoiceData) {
-          const s = String(inv.match_status || '').toLowerCase();
-          if (!s) continue;
-          acc.total += 1;
-          if (s === 'three_way_matched' || s === 'matched') acc.full += 1;
-          else if (s === 'partial') acc.partial += 1;
-          else if (s === 'no_po') acc.noPo += 1;
-          else if (s === 'mismatch') acc.variance += 1;
-        }
-        setMatchMonth(acc);
-      } catch {
-        setMatchMonth({ full: 0, partial: 0, variance: 0, noPo: 0, total: 0 });
-      }
-
-      const currentMonth = new Date().getMonth();
-      const currentYear = new Date().getFullYear();
-
-      const monthInvoices = invoiceData.filter((inv) => {
-        const invDate = new Date(inv.created_at);
-        return (
-          invDate.getMonth() === currentMonth &&
-          invDate.getFullYear() === currentYear
-        );
-      });
-
-      const monthTotal = monthInvoices.reduce(
-        (sum, inv) => sum + Number(inv.total_amount),
-        0
+  const updateParams = useCallback(
+    (patch: Record<string, string | null>) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          for (const [k, v] of Object.entries(patch)) {
+            if (v == null || v === '') next.delete(k);
+            else next.set(k, v);
+          }
+          return next;
+        },
+        { replace: true },
       );
-
-      const monthTaxTotal = monthInvoices.reduce(
-        (sum, inv) => sum + Number(inv.tax_amount || 0),
-        0
-      );
-
-      const processedInvoices = invoiceData.filter(
-        (inv) => inv.processing_time_seconds
-      );
-      const avgTime =
-        processedInvoices.length > 0
-          ? processedInvoices.reduce(
-              (sum, inv) => sum + (inv.processing_time_seconds || 0),
-              0
-            ) / processedInvoices.length
-          : 0;
-
-      setStats({
-        total: invoiceData.length,
-        pending: invoiceData.filter((inv) => inv.status === 'Processing')
-          .length,
-        monthTotal,
-        monthTaxTotal,
-        avgProcessingTime: Math.round(avgTime),
-      });
-
-      try {
-        const weeks = await getCashFlowForecast();
-        setCashFlowWeeks(weeks);
-      } catch {
-        setCashFlowWeeks([]);
-      }
-    } catch (error) {
-      console.error('Error fetching invoices:', error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const statusData = [
-    {
-      name: 'Processing',
-      value: invoices.filter((inv) => inv.status === 'Processing').length,
     },
-    {
-      name: 'Approved',
-      value: invoices.filter((inv) => inv.status === 'Approved').length,
-    },
-    {
-      name: 'Rejected',
-      value: invoices.filter((inv) => inv.status === 'Rejected').length,
-    },
-    {
-      name: 'Paid',
-      value: invoices.filter((inv) => inv.status === 'Paid').length,
-    },
-  ];
-
-  const monthlyData = Array.from({ length: 6 }, (_, i) => {
-    const month = new Date();
-    month.setMonth(month.getMonth() - (5 - i));
-    const monthInvoices = invoices.filter((inv) => {
-      const invDate = new Date(inv.created_at);
-      return (
-        invDate.getMonth() === month.getMonth() &&
-        invDate.getFullYear() === month.getFullYear()
-      );
-    });
-    return {
-      month: format(month, 'MMM'),
-      amount: monthInvoices.reduce(
-        (sum, inv) => sum + Number(inv.total_amount),
-        0
-      ),
-    };
-  });
-
-  const hasAnyEmailInvoice = useMemo(
-    () => invoices.some((inv) => inv.source === 'email'),
-    [invoices]
+    [setSearchParams],
   );
 
-  const emailInvoicesThisMonth = useMemo(() => {
-    const m = new Date().getMonth();
-    const y = new Date().getFullYear();
-    return invoices.filter((inv) => {
-      if (inv.source !== 'email') return false;
-      const d = new Date(inv.created_at);
-      return d.getMonth() === m && d.getFullYear() === y;
-    }).length;
-  }, [invoices]);
+  const goTab = useCallback((id: TabId) => updateParams({ tab: id === 'overview' ? null : id }), [updateParams]);
 
-  const apAgingWidget = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    let current = 0;
-    let d1 = 0;
-    let d2 = 0;
-    let d60 = 0;
-    let currentCount = 0;
-    let d1Count = 0;
-    let d2Count = 0;
-    let d60Count = 0;
-    for (const inv of invoices) {
-      if (inv.status === 'Paid' || inv.payment_status === 'paid') continue;
-      const amt = Number(inv.total_amount);
-      if (!inv.due_date) {
-        current += amt;
-        currentCount++;
-        continue;
-      }
-      const days = Math.floor(
-        (new Date(today).getTime() - new Date(inv.due_date).getTime()) / 86400000
-      );
-      if (days <= 0) { current += amt; currentCount++; }
-      else if (days <= 30) { d1 += amt; d1Count++; }
-      else if (days <= 60) { d2 += amt; d2Count++; }
-      else { d60 += amt; d60Count++; }
+  const reload = data.reload;
+  const ctx: DashboardCtx = useMemo(
+    () => ({
+      all: data.invoices,
+      period,
+      range,
+      monthKeys,
+      kpis,
+      today,
+      baseCurrency,
+      fmt,
+      fmtCompact,
+      dateFormat,
+      costCenterLabel,
+      companyId: data.companyId,
+      workspaceId,
+      isUAE,
+      openInvoice: setSelectedInvoice,
+      goTab,
+      reload,
+    }),
+    [data.invoices, period, range, monthKeys, kpis, today, baseCurrency, fmt, fmtCompact, dateFormat, costCenterLabel, data.companyId, workspaceId, isUAE, goTab, reload],
+  );
+
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const onTabKeyDown = (e: React.KeyboardEvent) => {
+    const ids = DASHBOARD_TABS.map((t) => t.id);
+    const i = ids.indexOf(tab);
+    let next: number | null = null;
+    if (e.key === 'ArrowRight') next = (i + 1) % ids.length;
+    else if (e.key === 'ArrowLeft') next = (i - 1 + ids.length) % ids.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = ids.length - 1;
+    if (next == null) return;
+    e.preventDefault();
+    goTab(ids[next]);
+    tabRefs.current[ids[next]]?.focus();
+  };
+
+  const companyName = activeCompany?.company_name || activeCompany?.trade_name || null;
+  const thisMonth = monthLabel(kpis.monthKey);
+
+  const renderTab = () => {
+    switch (tab) {
+      case 'processing':
+        return <ProcessingTab ctx={ctx} />;
+      case 'approvals':
+        return <ApprovalsTab ctx={ctx} />;
+      case 'spend':
+        return <SpendTab ctx={ctx} />;
+      case 'vendors':
+        return <VendorsTab ctx={ctx} />;
+      case 'gl':
+        return <CostCenterGlTab ctx={ctx} />;
+      case 'compliance':
+        return <ComplianceTab ctx={ctx} />;
+      case 'payments':
+        return <PaymentsTab ctx={ctx} />;
+      case 'invoices':
+        return <RecentInvoicesTab ctx={ctx} />;
+      default:
+        return <OverviewTab ctx={ctx} />;
     }
-    const totalOutstanding = current + d1 + d2 + d60;
-    const overdueTotal = d1 + d2 + d60;
-    return {
-      current,
-      d1,
-      d2,
-      d60,
-      currentCount,
-      d1Count,
-      d2Count,
-      d60Count,
-      totalOutstanding,
-      overdueTotal,
-      maxBar: Math.max(current, d1, d2, d60, 1),
-    };
-  }, [invoices]);
+  };
 
-  if (loading) {
-    return (
-      <div className="flex h-[calc(100vh-12rem)] items-center justify-center">
-        <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-slate-600">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const statCard = 'bg-white border border-slate-200 shadow-sm';
+  const inputCls =
+    'h-8 rounded-md border border-[#E3E8EF] bg-white px-2 text-[12px] text-slate-700 focus:border-[#246BFD] focus:outline-none focus:ring-2 focus:ring-[#246BFD]/20';
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Invoice processing overview and statistics
-        </p>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              Total Invoices
-            </CardTitle>
-            <FileText className="h-5 w-5 text-blue-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-slate-900">{stats.total}</div>
-            <p className="text-xs text-slate-500 mt-1">All time processed</p>
-          </CardContent>
-        </Card>
-
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              Pending Approvals
-            </CardTitle>
-            <Clock className="h-5 w-5 text-yellow-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-gray-900">
-              {stats.pending}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">Awaiting review</p>
-          </CardContent>
-        </Card>
-
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              This Month's Total
-            </CardTitle>
-            <DollarSign className="h-5 w-5 text-green-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-gray-900">
-              {fmt(monthTotalInBase)}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {monthTotalInBase > 0 ? `Base currency: ${baseCurrencyDisplay}` : 'No invoices in selected period'}
-            </p>
-            {otherCurrencyTotals.length > 0 && (
-              <p className="text-xs text-amber-700 mt-1">
-                Also this month:{' '}
-                {otherCurrencyTotals
-                  .map(([c, v]) => `${formatCurrency(v.total, c)}`)
-                  .join(' · ')}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              Total Tax This Month
-            </CardTitle>
-            <DollarSign className="h-5 w-5 text-purple-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-gray-900">
-              {fmt(monthTaxInBase)}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {monthTaxInBase > 0 ? `Tax in ${baseCurrencyDisplay} (same-currency invoices)` : 'No invoices in selected period'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">
-              Avg Processing Time
-            </CardTitle>
-            <CheckCircle className="h-5 w-5 text-blue-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold text-gray-900">
-              {stats.avgProcessingTime > 0 ? `${stats.avgProcessingTime}s` : '—'}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {stats.avgProcessingTime > 0 ? 'Per invoice' : 'Not enough processing history'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <DuplicateAlertsCard invoices={invoices} />
-        <ExtractionReviewCard invoices={invoices} />
-        <AnomalyDashboardCard />
-        <PaymentRunsThisMonthCard />
-
-        <Card className={statCard}>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-slate-600">3-Way match — this month</CardTitle>
-            <TrendingUp className="h-5 w-5 text-emerald-600" />
-          </CardHeader>
-          <CardContent className="text-xs text-gray-600 space-y-1.5">
-            {matchMonth.total === 0 ? (
-              <p className="text-gray-500">No match runs logged yet (run THREE-WAY-MATCH-MIGRATION.sql).</p>
-            ) : (
-              <>
-                <div className="flex justify-between gap-2">
-                  <span>Fully matched</span>
-                  <span className="font-medium text-gray-900">
-                    {matchMonth.full}{' '}
-                    <span className="text-gray-500">
-                      ({Math.round((matchMonth.full / matchMonth.total) * 100)}%)
-                    </span>
-                  </span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span>Partial match</span>
-                  <span className="font-medium text-gray-900">
-                    {matchMonth.partial}{' '}
-                    <span className="text-gray-500">
-                      ({Math.round((matchMonth.partial / matchMonth.total) * 100)}%)
-                    </span>
-                  </span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span>Variance flags</span>
-                  <span className="font-medium text-gray-900">
-                    {matchMonth.variance}{' '}
-                    <span className="text-gray-500">
-                      ({Math.round((matchMonth.variance / matchMonth.total) * 100)}%)
-                    </span>
-                  </span>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span>No PO</span>
-                  <span className="font-medium text-gray-900">
-                    {matchMonth.noPo}{' '}
-                    <span className="text-gray-500">
-                      ({Math.round((matchMonth.noPo / matchMonth.total) * 100)}%)
-                    </span>
-                  </span>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* SECTION 1: AI Live Activity Strip */}
-      <Card className="bg-white border border-slate-200 shadow-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
-            </span>
-            Multi-Agent AI — Live Activity
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          <div className="space-y-3">
-            {auditLogs.length === 0 ? (
-              <p className="text-sm text-slate-500 py-2">No recent activity</p>
-            ) : (
-              auditLogs.map((log) => {
-                const { bg, label } = getAgentBadgeStyle(log.action);
-                const message = log.field_changed
-                  ? `${log.action}${log.old_value || log.new_value ? `: ${log.field_changed}` : ''}`
-                  : log.action;
-                return (
-                  <div
-                    key={log.id}
-                    className="flex items-center justify-between gap-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium ${bg}`}>
-                        {label}
-                      </span>
-                      <span className="text-sm text-gray-700 truncate">{message}</span>
-                    </div>
-                    <span className="shrink-0 text-xs text-gray-500">
-                      {format(new Date(log.created_at), 'MMM d, HH:mm')}
-                    </span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* SECTION 2: Action Required Cards */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <Card className="bg-white border shadow-sm border-l-4 border-l-orange-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-gray-900">
-              Pending IFRS Classification
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const unclassified = invoices.filter(
-                (inv) => inv.ifrs_category == null || inv.ifrs_category === ''
-              );
-              return (
-                <>
-                  <div className="text-2xl font-bold text-gray-900">{unclassified.length}</div>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-orange-800">
-                      {unclassified.length} unclassified
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                    onClick={() => navigate('/invoices?filter=unclassified')}
-                  >
-                    Review in Invoice List
-                  </Button>
-                </>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-white border shadow-sm border-l-4 border-l-yellow-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-gray-900">
-              Approval Bottleneck
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const pending = invoices.filter((inv) => inv.status === 'Processing');
-              const cfoCount = pending.filter((inv) => inv.approval_level === 'cfo').length;
-              const managerCount = pending.filter((inv) => inv.approval_level === 'manager').length;
-              return (
-                <>
-                  <div className="flex items-center gap-6">
-                    <div>
-                      <p className="text-2xl font-bold text-gray-900">{cfoCount}</p>
-                      <p className="text-xs text-muted-foreground">CFO approvals</p>
-                    </div>
-                    <div>
-                      <p className="text-2xl font-bold text-gray-900">{managerCount}</p>
-                      <p className="text-xs text-muted-foreground">Manager approvals</p>
-                    </div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                    onClick={() => navigate('/invoices')}
-                  >
-                    Open approval queue →
-                  </Button>
-                </>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-white border shadow-sm border-l-4 border-l-amber-600">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-gray-900">
-              Top Risk Flags
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              type ParsedFlag = { message?: string; severity?: 'low' | 'medium' | 'high' | 'critical' };
-              const SEVERITY_RANK: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 };
-              const SEVERITY_STYLE: Record<string, { fg: string; bg: string; label: string }> = {
-                critical: { fg: '#9f1239', bg: '#fecdd3', label: 'Critical' },
-                high: { fg: '#e02424', bg: '#fee2e2', label: 'High' },
-                medium: { fg: '#b45309', bg: '#fef3c7', label: 'Medium' },
-                low: { fg: '#4b5563', bg: '#f3f4f6', label: 'Low' },
-              };
-
-              const perInvoiceFlags: ParsedFlag[][] = invoices.map((inv) => {
-                try {
-                  const f = (inv as { risk_flags?: unknown }).risk_flags;
-                  if (!f || f === '[]') return [];
-                  const parsed = Array.isArray(f) ? f : JSON.parse(typeof f === 'string' ? f : '[]');
-                  return Array.isArray(parsed) ? (parsed as ParsedFlag[]) : [];
-                } catch {
-                  return [];
-                }
-              });
-              const allFlags = perInvoiceFlags.flat();
-
-              // Overall severity per invoice = the worst flag it carries (falls back to
-              // the invoice's own risk_level when it has no itemised flags).
-              const invoiceSeverityCounts = { critical: 0, high: 0, medium: 0, low: 0 };
-              invoices.forEach((inv, i) => {
-                const flags = perInvoiceFlags[i];
-                let worst: string | null = null;
-                for (const f of flags) {
-                  const sev = f?.severity;
-                  if (sev && (!worst || SEVERITY_RANK[sev] > SEVERITY_RANK[worst])) worst = sev;
-                }
-                if (!worst) {
-                  const lvl = (inv as { risk_level?: string | null }).risk_level;
-                  worst = lvl && lvl in SEVERITY_RANK ? lvl : null;
-                }
-                if (worst && worst in invoiceSeverityCounts) {
-                  invoiceSeverityCounts[worst as keyof typeof invoiceSeverityCounts]++;
-                }
-              });
-              const totalFlagged = Object.values(invoiceSeverityCounts).reduce((a, b) => a + b, 0);
-
-              const flagCounts = allFlags.reduce((acc: Record<string, { count: number; severity: string }>, flag) => {
-                const msg = flag?.message ?? 'Unknown';
-                const sev = flag?.severity ?? 'low';
-                if (!acc[msg]) acc[msg] = { count: 0, severity: sev };
-                acc[msg].count += 1;
-                if (SEVERITY_RANK[sev] > SEVERITY_RANK[acc[msg].severity]) acc[msg].severity = sev;
-                return acc;
-              }, {});
-              const topFlags = Object.entries(flagCounts)
-                .sort((a, b) => SEVERITY_RANK[b[1].severity] - SEVERITY_RANK[a[1].severity] || b[1].count - a[1].count)
-                .slice(0, 4);
-
-              return topFlags.length > 0 ? (
-                <>
-                  <div className="flex items-center gap-3 pb-2 mb-2 border-b border-gray-100 text-[11px]">
-                    {(['critical', 'high', 'medium', 'low'] as const).map((sev) => (
-                      <span key={sev} className="flex items-center gap-1">
-                        <span
-                          className="inline-block h-2 w-2 rounded-full"
-                          style={{ background: SEVERITY_STYLE[sev].fg }}
-                        />
-                        <span className="text-gray-500">{SEVERITY_STYLE[sev].label}</span>
-                        <span className="font-semibold text-gray-900">{invoiceSeverityCounts[sev]}</span>
-                      </span>
-                    ))}
-                  </div>
-                  {invoiceSeverityCounts.critical > 0 ? (
-                    <p className="text-[12px] font-semibold text-rose-700 mb-2">
-                      {invoiceSeverityCounts.critical} require immediate attention
-                    </p>
-                  ) : (
-                    <p className="text-[11px] text-gray-500 mb-2">
-                      {totalFlagged} of {invoices.length} invoices carry a risk flag
-                    </p>
-                  )}
-                  <div className="space-y-1">
-                    {topFlags.map(([msg, { count, severity }]) => {
-                      const style = SEVERITY_STYLE[severity] ?? SEVERITY_STYLE.low;
-                      return (
-                        <div
-                          key={msg}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '6px 0',
-                            borderBottom: '1px solid #f3f4f6',
-                            fontSize: '12.5px',
-                          }}
-                        >
-                          <span style={{ color: '#374151' }}>{msg}</span>
-                          <span
-                            style={{
-                              fontWeight: 700,
-                              color: style.fg,
-                              background: style.bg,
-                              padding: '1px 8px',
-                              borderRadius: '20px',
-                              fontSize: '11px',
-                            }}
-                          >
-                            {Number(count)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                    onClick={() => navigate('/invoices')}
-                  >
-                    View Invoices
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <div className="text-2xl font-bold text-gray-900">0</div>
-                  <p className="text-xs text-gray-500 mt-1">No risk flags detected yet</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                    onClick={() => navigate('/invoices')}
-                  >
-                    View Invoices
-                  </Button>
-                </>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-white border shadow-sm border-l-4 border-l-red-500">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-gray-900">
-              3-Way Match Exceptions
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const matchIssues = invoices.filter(
-                (inv) => inv.match_status === 'mismatch' || inv.match_status === 'no_po'
-              );
-              const mismatchCount = matchIssues.filter((inv) => inv.match_status === 'mismatch').length;
-              const noPoCount = matchIssues.filter((inv) => inv.match_status === 'no_po').length;
-              return (
-                <>
-                  <div className="text-2xl font-bold text-gray-900">{matchIssues.length}</div>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                      Mismatch: {mismatchCount}
-                    </span>
-                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">
-                      No PO: {noPoCount}
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                    onClick={() => navigate('/invoices?filter=match_issues')}
-                  >
-                    Resolve
-                  </Button>
-                </>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        <GstReconSummaryCard />
-      </div>
-
-      {/* Charts */}
-      <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">
-        <Card className={statCard}>
-          <CardHeader>
-            <CardTitle className="text-slate-900">Monthly Invoice Amounts</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={monthlyData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="amount" fill="#3B82F6" />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card className={statCard}>
-          <CardHeader>
-            <CardTitle className="text-slate-900">Invoice Status Distribution</CardTitle>
-          </CardHeader>
-          <CardContent className="flex justify-center">
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={statusData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, value }) =>
-                    value > 0 ? `${name}: ${value}` : ''
-                  }
-                  outerRadius={100}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {statusData.map((_, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={COLORS[index % COLORS.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
-        <Card className="xl:col-span-1">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Cash flow — next 30 days</CardTitle>
-            <p className="text-xs text-muted-foreground font-normal">
-              By due date, unpaid / overdue vs scheduled ({baseCurrencyDisplay})
-            </p>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={cashFlowWeeks}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip
-                  formatter={(value: number) => fmt(value)}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="unpaid" stackId="pay" fill="#f59e0b" name="Unpaid / overdue" />
-                <Bar dataKey="scheduled" stackId="pay" fill="#3b82f6" name="Scheduled" />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Email intake + AP aging (reports) */}
-      <div className={`grid gap-6 ${hasAnyEmailInvoice ? 'lg:grid-cols-2' : ''}`}>
-        {hasAnyEmailInvoice && (
-          <Card className="border-l-4 border-l-blue-500">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Mail className="h-4 w-4 text-blue-600" />
-                Email intake
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-gray-900">{emailInvoicesThisMonth}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Invoices received by email this month
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3 w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-                onClick={() => navigate('/email-invoices')}
-              >
-                Open email inbox
-              </Button>
-            </CardContent>
-          </Card>
-        )}
-
-        <Card className="border-l-4 border-l-emerald-600 lg:col-span-1">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">AP aging</CardTitle>
-            <p className="text-xs text-muted-foreground font-normal">
-              Unpaid balances by days past due ({baseCurrencyDisplay})
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-4 gap-2 text-center">
-              {[
-                { label: 'Current', amt: apAgingWidget.current, count: apAgingWidget.currentCount, color: 'bg-emerald-500' },
-                { label: '1–30', amt: apAgingWidget.d1, count: apAgingWidget.d1Count, color: 'bg-amber-500' },
-                { label: '31–60', amt: apAgingWidget.d2, count: apAgingWidget.d2Count, color: 'bg-orange-600' },
-                { label: '60+', amt: apAgingWidget.d60, count: apAgingWidget.d60Count, color: 'bg-red-500' },
-              ].map((b) => (
-                <div key={b.label} className="space-y-1">
-                  <div className="h-16 flex items-end justify-center rounded bg-muted/50 overflow-hidden">
-                    <div
-                      className={`w-full ${b.color} rounded-t transition-all`}
-                      style={{
-                        height: `${Math.max(8, (b.amt / apAgingWidget.maxBar) * 100)}%`,
-                        minHeight: b.amt > 0 ? 12 : 4,
-                      }}
-                    />
-                  </div>
-                  <p className="text-[11px] font-semibold text-gray-900">{fmtCompact(b.amt)}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {b.label} · {b.count}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="text-sm">
-              <span className="text-muted-foreground">Total outstanding: </span>
-              <span className="font-semibold">
-                {fmt(apAgingWidget.totalOutstanding)}
-              </span>
-              <span className="text-muted-foreground">
-                {' '}
-                ({apAgingWidget.currentCount + apAgingWidget.d1Count + apAgingWidget.d2Count + apAgingWidget.d60Count} invoices)
-              </span>
-            </div>
-            {apAgingWidget.d1 + apAgingWidget.d2 + apAgingWidget.d60 > 0 && (
-              <p className="text-sm text-red-600 font-medium">
-                {(() => {
-                  const t0 = new Date();
-                  t0.setHours(0, 0, 0, 0);
-                  const overdueCount = invoices.filter((inv) => {
-                    if (inv.status === 'Paid' || inv.payment_status === 'paid') return false;
-                    if (!inv.due_date) return false;
-                    const d = new Date(inv.due_date);
-                    d.setHours(0, 0, 0, 0);
-                    return t0.getTime() > d.getTime();
-                  }).length;
-                  return (
-                    <>
-                      {overdueCount} invoices overdue —{' '}
-                      {fmt(apAgingWidget.overdueTotal)} at risk
-                    </>
-                  );
-                })()}
-              </p>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full border-[#1a56db] text-[#1a56db] hover:bg-[#1a56db]/10"
-              onClick={() => navigate('/reports/aging')}
+    <div className="mx-auto max-w-[1600px] space-y-4">
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight text-[#0B1D33]">Dashboard</h1>
+          <p className="mt-0.5 truncate text-[12.5px] text-slate-500">
+            AP InvoiceFlow{companyName ? ` · ${companyName}` : ''}
+            {data.loadedAt && ` · updated ${data.loadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-[12px] text-slate-500">
+            <CalendarRange className="h-4 w-4" aria-hidden />
+            <span className="sr-only">Date range</span>
+            <select
+              value={preset}
+              onChange={(e) => {
+                const v = e.target.value as RangePreset;
+                updateParams({ range: v === 'all' ? null : v, ...(v === 'custom' ? {} : { from: null, to: null }) });
+              }}
+              className={inputCls}
             >
-              View full report
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* SECTION 3: IFRS Category Breakdown */}
-      {(() => {
-        const total = invoices.length;
-        const byCategory = invoices.reduce((acc, inv) => {
-          const key = inv.ifrs_category && inv.ifrs_category.trim() ? inv.ifrs_category : 'Not Classified';
-          acc[key] = (acc[key] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>);
-        const notClassified = byCategory['Not Classified'] ?? 0;
-        const classified = total - notClassified;
-
-        // Category breakdown chart tells the classification story — it should show
-        // what the AI DID classify, not be dominated by the "Not Classified" bucket.
-        const classifiedChartData = Object.entries(byCategory)
-          .filter(([name]) => name !== 'Not Classified')
-          .map(([name, count]) => ({
-            name,
-            value: classified > 0 ? Math.round((count / classified) * 100) : 0,
-            count,
-          }))
-          .sort((a, b) => b.count - a.count);
-
-        return (
-          <Card className="bg-white border shadow-sm">
-            <CardHeader>
-              <CardTitle>IFRS Classification</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-6 pb-3 border-b border-gray-100">
-                <div>
-                  <p className="text-2xl font-bold text-emerald-700">{classified}</p>
-                  <p className="text-xs text-muted-foreground">Classified</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-amber-700">{notClassified}</p>
-                  <p className="text-xs text-muted-foreground">Needs Review</p>
-                </div>
-                {total > 0 && (
-                  <div className="ml-auto text-right">
-                    <p className="text-lg font-semibold text-gray-900">
-                      {Math.round((classified / total) * 100)}%
-                    </p>
-                    <p className="text-xs text-muted-foreground">classification rate</p>
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground -mt-1">Category breakdown (classified invoices)</p>
-              {classifiedChartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={Math.max(180, classifiedChartData.length * 36)}>
-                  <BarChart data={classifiedChartData} layout="vertical" margin={{ left: 12, right: 24 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" domain={[0, 100]} unit="%" />
-                    <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      formatter={(value: number, _: unknown, props: unknown) => {
-                        const arr = (props as { payload?: Array<{ payload?: { name: string; count: number } }> })?.payload;
-                        const p = Array.isArray(arr) ? arr[0]?.payload : null;
-                        return [p ? `${value}% (${p.count} invoices)` : `${value}%`, p?.name ?? ''];
-                      }}
-                    />
-                    <Bar dataKey="value" name="%" fill="#1a56db" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-8">
-                  No invoices classified yet — {notClassified} awaiting review.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })()}
-
-      {/* Vendor Analytics */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Top Vendors by Spend */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="h-5 w-5" />
-              Top Vendors by Spend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const vendorSpend = invoices.reduce((acc, inv) => {
-                const vendorName = inv.vendor_name;
-                if (!acc[vendorName]) {
-                  acc[vendorName] = {
-                    name: vendorName,
-                    totalSpend: 0,
-                    invoiceCount: 0,
-                  };
-                }
-                acc[vendorName].totalSpend += Number(inv.total_amount);
-                acc[vendorName].invoiceCount += 1;
-                return acc;
-              }, {} as Record<string, { name: string; totalSpend: number; invoiceCount: number }>);
-
-              const topVendors = Object.values(vendorSpend)
-                .sort((a, b) => b.totalSpend - a.totalSpend)
-                .slice(0, 5)
-                .map((vendor, index) => ({
-                  ...vendor,
-                  rank: index + 1,
-                }));
-
-              return topVendors.length > 0 ? (
-                <>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={topVendors} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" />
-                      <YAxis dataKey="name" type="category" width={120} />
-                      <Tooltip
-                        formatter={(value: number) => fmt(Number(value))}
-                      />
-                      <Bar dataKey="totalSpend" fill="#0A4B8F" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                  <div className="mt-4 space-y-2">
-                    {topVendors.map((vendor) => (
-                      <div
-                        key={vendor.name}
-                        className="flex items-center justify-between rounded-lg border p-2 text-sm"
-                      >
-                        <div>
-                          <span className="font-semibold">#{vendor.rank}</span>
-                          <span className="ml-2">{vendor.name}</span>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold">
-                            {fmt(vendor.totalSpend)}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {vendor.invoiceCount} invoice{vendor.invoiceCount !== 1 ? 's' : ''}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-8">
-                  No vendor data available
-                </p>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        {/* Vendor Spend Trend */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Vendor Spend Trend (Last 6 Months)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const vendorSpend = invoices.reduce((acc, inv) => {
-                const vendorName = inv.vendor_name;
-                if (!acc[vendorName]) {
-                  acc[vendorName] = {
-                    name: vendorName,
-                    totalSpend: 0,
-                    invoiceCount: 0,
-                  };
-                }
-                acc[vendorName].totalSpend += Number(inv.total_amount);
-                acc[vendorName].invoiceCount += 1;
-                return acc;
-              }, {} as Record<string, { name: string; totalSpend: number; invoiceCount: number }>);
-
-              const topVendors = Object.values(vendorSpend)
-                .sort((a, b) => b.totalSpend - a.totalSpend)
-                .slice(0, 3)
-                .map((v) => v.name);
-
-              const vendorTrendData = Array.from({ length: 6 }, (_, i) => {
-                const month = new Date();
-                month.setMonth(month.getMonth() - (5 - i));
-                const monthKey = format(month, 'MMM yyyy');
-                
-                const trend: Record<string, number | string> = { month: monthKey };
-                
-                topVendors.forEach((vendorName) => {
-                  const monthInvoices = invoices.filter((inv) => {
-                    const invDate = new Date(inv.created_at);
-                    return (
-                      inv.vendor_name === vendorName &&
-                      invDate.getMonth() === month.getMonth() &&
-                      invDate.getFullYear() === month.getFullYear()
-                    );
-                  });
-                  trend[vendorName] = monthInvoices.reduce(
-                    (sum, inv) => sum + Number(inv.total_amount),
-                    0
-                  );
-                });
-                
-                return trend;
-              });
-
-              return topVendors.length > 0 ? (
-                <ResponsiveContainer width="100%" height={300}>
-                  <LineChart data={vendorTrendData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" angle={-45} textAnchor="end" height={80} />
-                    <YAxis />
-                    <Tooltip formatter={(value: number) => fmt(Number(value))} />
-                    <Legend />
-                    {topVendors.map((vendorName, index) => (
-                      <Line
-                        key={vendorName}
-                        type="monotone"
-                        dataKey={vendorName}
-                        stroke={COLORS[index % COLORS.length]}
-                        strokeWidth={2}
-                        name={vendorName}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-8">
-                  No vendor trend data available
-                </p>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        {/* Spend by cost center + Spend by GL Account */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="h-5 w-5" />
-              {spendByTitle(costCenterLabel)}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const ccSpend = invoices
-                .filter((inv) => inv.cost_center)
-                .reduce((acc, inv) => {
-                  const key = String(inv.cost_center);
-                  if (!acc[key]) acc[key] = { name: key, totalSpend: 0, invoiceCount: 0 };
-                  acc[key].totalSpend += Number(inv.total_amount);
-                  acc[key].invoiceCount += 1;
-                  return acc;
-                }, {} as Record<string, { name: string; totalSpend: number; invoiceCount: number }>);
-              const top = Object.values(ccSpend)
-                .sort((a, b) => b.totalSpend - a.totalSpend)
-                .slice(0, 5);
-              if (top.length === 0) {
-                return (
-                  <p className="text-sm text-gray-500 text-center py-6">
-                    No {costCenterLabel.toLowerCase()} tagged invoices yet.
-                  </p>
-                );
-              }
-              return (
-                <div className="space-y-3">
-                  {top.map((row) => (
-                    <div key={row.name} className="flex items-center justify-between text-sm">
-                      <span className="font-medium text-slate-800 truncate mr-3">{row.name}</span>
-                      <span className="text-slate-600 shrink-0">
-                        {fmt(row.totalSpend)} · {row.invoiceCount} inv
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Spend by GL Account (Top 5)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(() => {
-              const glSpend = invoices
-                .filter((inv) => inv.gl_code && inv.gl_name)
-                .reduce((acc, inv) => {
-                  const glKey = `${inv.gl_code} - ${inv.gl_name}`;
-                  if (!acc[glKey]) {
-                    acc[glKey] = {
-                      code: inv.gl_code!,
-                      name: inv.gl_name!,
-                      totalSpend: 0,
-                      invoiceCount: 0,
-                    };
-                  }
-                  acc[glKey].totalSpend += Number(inv.total_amount);
-                  acc[glKey].invoiceCount += 1;
-                  return acc;
-                }, {} as Record<string, { code: string; name: string; totalSpend: number; invoiceCount: number }>);
-
-              const topGLAccounts = Object.values(glSpend)
-                .sort((a, b) => b.totalSpend - a.totalSpend)
-                .slice(0, 5)
-                .map((gl, index) => ({
-                  ...gl,
-                  label: `${gl.code} - ${gl.name}`,
-                  rank: index + 1,
-                }));
-
-              return topGLAccounts.length > 0 ? (
-                <>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={topGLAccounts} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" />
-                      <YAxis dataKey="code" type="category" width={80} />
-                      <Tooltip
-                        formatter={(value: number) => fmt(Number(value))}
-                      />
-                      <Bar dataKey="totalSpend" fill="#0A4B8F" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                  <div className="mt-4 space-y-2">
-                    {topGLAccounts.map((gl) => (
-                      <div
-                        key={gl.code}
-                        className="flex items-center justify-between rounded-lg border p-2 text-sm"
-                      >
-                        <div>
-                          <span className="font-semibold">#{gl.rank}</span>
-                          <span className="ml-2">{gl.name}</span>
-                          <span className="ml-2 text-gray-500">({gl.code})</span>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold">
-                            {fmt(gl.totalSpend)}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {gl.invoiceCount} invoice{gl.invoiceCount !== 1 ? 's' : ''}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-gray-500 text-center py-8">
-                  No GL account data available. Assign GL codes to invoices to see spending by account.
-                </p>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Recent Invoices Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Invoices</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Invoice #</TableHead>
-                <TableHead>Vendor</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {invoices.slice(0, 10).map((invoice) => (
-                <TableRow
-                  key={invoice.id}
-                  className="cursor-pointer hover:bg-gray-50"
-                  onClick={() => setSelectedInvoice(invoice)}
-                >
-                  <TableCell className="font-medium">
-                    {invoice.invoice_number}
-                  </TableCell>
-                  <TableCell>{invoice.vendor_name}</TableCell>
-                  <TableCell>
-                    {displayDate(invoice.invoice_date, dateFormat)}
-                  </TableCell>
-                  <TableCell>
-                    <span className="font-semibold">
-                      {formatCurrency(Number(invoice.total_amount), invoice.currency || baseCurrencyDisplay)}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={statusColors[invoice.status]}
-                    >
-                      {invoice.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedInvoice(invoice);
-                      }}
-                    >
-                      <Eye className="h-4 w-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
+              {RANGE_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
               ))}
-            </TableBody>
-          </Table>
-          {invoices.length === 0 && (
-            <div className="py-12 text-center text-gray-500">
-              No invoices found. Upload your first invoice to get started.
-            </div>
+            </select>
+          </label>
+          {preset === 'custom' && (
+            <>
+              <input
+                type="date"
+                aria-label="From date"
+                value={customFrom ?? ''}
+                onChange={(e) => updateParams({ from: e.target.value || null })}
+                className={inputCls}
+              />
+              <span className="text-[12px] text-slate-400">to</span>
+              <input
+                type="date"
+                aria-label="To date"
+                value={customTo ?? ''}
+                onChange={(e) => updateParams({ to: e.target.value || null })}
+                className={inputCls}
+              />
+            </>
           )}
-        </CardContent>
-      </Card>
+          <button
+            type="button"
+            onClick={() => void data.reload()}
+            disabled={data.loading || data.refreshing}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#E3E8EF] bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${data.refreshing ? 'animate-spin' : ''}`} aria-hidden /> Refresh
+          </button>
+          <Link
+            to="/ap-invoices/upload"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#246BFD] px-3 text-[12px] font-medium text-white hover:bg-[#1F5FE0] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40"
+          >
+            <Upload className="h-3.5 w-3.5" aria-hidden /> Upload
+          </Link>
+        </div>
+      </header>
 
-      {/* Invoice Detail Modal */}
+      {data.error && <ErrorBanner message={data.error} onRetry={() => void data.reload()} />}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={data.loading}>
+        {data.loading ? (
+          [0, 1, 2, 3].map((i) => <div key={i} className="h-[104px] animate-pulse rounded-xl border border-[#E3E8EF] bg-white" />)
+        ) : (
+          <>
+            <KpiCard
+              label="Total Invoices"
+              value={kpis.totalInvoices.toLocaleString()}
+              sub={range.preset === 'all' ? 'All time' : `All time · ${period.length} in ${range.label.toLowerCase()}`}
+              icon={FileText}
+              tone="primary"
+              onClick={() => goTab('invoices')}
+            />
+            <KpiCard
+              label="Pending Approvals"
+              value={kpis.pendingApprovals.toLocaleString()}
+              sub="Awaiting review"
+              icon={Clock}
+              tone="amber"
+              onClick={() => goTab('approvals')}
+            />
+            <KpiCard
+              label="This Month's Total"
+              value={fmt(kpis.monthTotal)}
+              sub={`${thisMonth} · ${kpis.monthInvoiceCount} invoice${kpis.monthInvoiceCount === 1 ? '' : 's'} by invoice date`}
+              extra={
+                kpis.otherCurrencies.length > 0 && (
+                  <p className="mt-0.5 truncate text-[11px] text-[#B45309]">
+                    Also: {kpis.otherCurrencies.map((c) => formatCurrency(c.total, c.currency)).join(' · ')}
+                  </p>
+                )
+              }
+              icon={Landmark}
+              tone="gold"
+              onClick={() => goTab('spend')}
+            />
+            <KpiCard
+              label="Total Tax This Month"
+              value={fmt(kpis.monthTax)}
+              sub={`${isUAE ? 'VAT' : 'Tax'} on ${baseCurrency} invoices dated ${thisMonth}`}
+              icon={Receipt}
+              tone="purple"
+              onClick={() => goTab('compliance')}
+            />
+          </>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-[#E3E8EF] bg-white px-1">
+        <div
+          role="tablist"
+          aria-label="Dashboard sections"
+          onKeyDown={onTabKeyDown}
+          className="flex gap-0.5 overflow-x-auto [scrollbar-width:thin]"
+        >
+          {DASHBOARD_TABS.map((t) => {
+            const active = t.id === tab;
+            return (
+              <button
+                key={t.id}
+                ref={(el) => {
+                  tabRefs.current[t.id] = el;
+                }}
+                id={`ap-tab-${t.id}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-controls={`ap-panel-${t.id}`}
+                tabIndex={active ? 0 : -1}
+                onClick={() => goTab(t.id)}
+                className={`relative shrink-0 whitespace-nowrap px-3 py-2.5 text-[12.5px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#246BFD]/40 ${
+                  active ? 'text-[#246BFD]' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {t.label}
+                {t.id === 'approvals' && kpis.pendingApprovals > 0 && (
+                  <span className="ml-1.5 rounded-full bg-[#FEF3C7] px-1.5 text-[10px] font-semibold text-[#92400E]">
+                    {kpis.pendingApprovals}
+                  </span>
+                )}
+                {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[#246BFD]" aria-hidden />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div role="tabpanel" id={`ap-panel-${tab}`} aria-labelledby={`ap-tab-${tab}`} tabIndex={0} className="focus:outline-none">
+        {data.loading ? (
+          <div className="grid gap-4 lg:grid-cols-3" aria-busy>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="h-48 animate-pulse rounded-xl border border-[#E3E8EF] bg-white" />
+            ))}
+          </div>
+        ) : !data.companyId ? (
+          <EmptyState>Select an organization in the top bar to see its AP dashboard.</EmptyState>
+        ) : (
+          renderTab()
+        )}
+      </div>
+
       {selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
           open={!!selectedInvoice}
           onClose={() => setSelectedInvoice(null)}
-          onUpdate={fetchData}
+          onUpdate={() => void data.reload()}
           onNavigateInvoice={async (id) => {
             const inv = await fetchInvoiceById(id);
             if (inv) setSelectedInvoice(inv);
           }}
         />
       )}
-
-      <APInsightsPanel workspaceId={workspaceId} companyId={activeCompanyId} />
     </div>
   );
 }
-

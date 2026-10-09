@@ -480,6 +480,16 @@ export function InvoiceList() {
     if (urlParams.get('filter') === 'unclassified') {
       setIfrsFilter('not_classified');
     }
+    if (urlParams.get('filter') === 'match_issues') {
+      setMatchStatusFilter('match_issues');
+    }
+    if (urlParams.get('filter') === 'approvals') {
+      setViewMode('approvals');
+    }
+    const statusParam = urlParams.get('status');
+    if (statusParam) {
+      setStatusFilter(statusParam);
+    }
     if (
       urlParams.get('filter') === 'needs-review' ||
       urlParams.get('tab') === 'needs-review'
@@ -1730,6 +1740,8 @@ export function InvoiceList() {
                   <SelectItem value="Approved">Approved</SelectItem>
                   <SelectItem value="Rejected">Rejected</SelectItem>
                   <SelectItem value="Paid">Paid</SelectItem>
+                  <SelectItem value="On Hold">On Hold</SelectItem>
+                  <SelectItem value="Queried">Queried</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={matchStatusFilter} onValueChange={setMatchStatusFilter}>

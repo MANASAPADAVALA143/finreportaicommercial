@@ -3,53 +3,20 @@ import type { Invoice, PaymentBatch } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 import { getMyCompany, requireCompanyId } from './companyService';
 import { notifyVendorStatusByInvoiceId } from './whatsappService';
+import {
+  buildCashFlowWeeks,
+  effectivePaymentDate,
+  isInvoiceOverdueByDate,
+  normalizedOpenPaymentStatus,
+} from './paymentStatus';
 
-/**
- * Normalize legacy / mixed-case payment_status for queue, calendar, and cash-flow logic.
- * Values like `pending` (pre-migration) must behave as `unpaid` so overdue worklists populate.
- */
-export function normalizedOpenPaymentStatus(inv: Invoice): 'unpaid' | 'overdue' | 'scheduled' | 'paid' {
-  if (inv.status === 'Paid') return 'paid';
-  const raw = String(inv.payment_status ?? 'unpaid').trim().toLowerCase();
-  if (!raw || ['pending', 'open', 'draft', 'processing'].includes(raw)) return 'unpaid';
-  if (['paid', 'complete', 'completed'].includes(raw)) return 'paid';
-  if (raw === 'scheduled') return 'scheduled';
-  if (raw === 'overdue') return 'overdue';
-  if (raw === 'frozen') return 'unpaid';
-  return 'unpaid';
-}
-
-/** Open AP balance — includes pending, overdue, processing, scheduled, frozen, null. */
-export function isInvoiceOpenForPayment(inv: {
-  status?: string | null;
-  payment_status?: string | null;
-}): boolean {
-  if (inv.status === 'Paid' || inv.status === 'Rejected') return false;
-  const ps = String(inv.payment_status ?? '').trim().toLowerCase();
-  if (ps === 'paid' || ps === 'cancelled') return false;
-  // pending, overdue, processing, unpaid, scheduled, frozen, null → open
-  return true;
-}
-
-/** Past due on calendar date — due_date < today, still open for payment. */
-export function isInvoiceOverdueByDate(
-  inv: { status?: string | null; payment_status?: string | null; due_date?: string | null },
-  today?: string,
-): boolean {
-  if (!isInvoiceOpenForPayment(inv)) return false;
-  const t = today ?? new Date().toISOString().split('T')[0];
-  const due = inv.due_date?.slice(0, 10);
-  return !!due && due < t;
-}
-
-export function effectivePaymentDate(inv: Invoice): string | null {
-  const ps = normalizedOpenPaymentStatus(inv);
-  if (ps === 'paid') return null;
-  if (ps === 'scheduled' && inv.scheduled_payment_date) {
-    return inv.scheduled_payment_date.slice(0, 10);
-  }
-  return inv.due_date ? inv.due_date.slice(0, 10) : null;
-}
+export {
+  normalizedOpenPaymentStatus,
+  isInvoiceOpenForPayment,
+  isInvoiceOverdueByDate,
+  effectivePaymentDate,
+  buildCashFlowWeeks,
+} from './paymentStatus';
 
 /** Mark selected invoices as scheduled for a given payment date */
 export async function schedulePayments(invoiceIds: string[], paymentDate: string) {
@@ -249,20 +216,6 @@ export async function markOverdueInvoices(): Promise<number> {
 
 /** Cash flow for next ~30 days — grouped by week (unpaid vs scheduled by effective pay date) */
 export async function getCashFlowForecast() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const weeks = [0, 7, 14, 21].map((offset) => {
-    const start = new Date(today);
-    start.setDate(start.getDate() + offset);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
-    return {
-      label: offset === 0 ? 'This week' : `Week ${offset / 7 + 1}`,
-      start: start.toISOString().slice(0, 10),
-      end: end.toISOString().slice(0, 10),
-    };
-  });
-
   const { data: all, error } = await supabase
     .from('invoices')
     .select('due_date, scheduled_payment_date, total_amount, payment_status, status');
@@ -272,19 +225,5 @@ export async function getCashFlowForecast() {
     'due_date' | 'scheduled_payment_date' | 'total_amount' | 'payment_status' | 'status'
   >[];
 
-  return weeks.map((week) => {
-    let unpaid = 0;
-    let scheduled = 0;
-    for (const r of rows) {
-      const inv = r as Invoice;
-      const ps = normalizedOpenPaymentStatus(inv);
-      if (ps === 'paid') continue;
-      const eff = effectivePaymentDate(inv);
-      if (!eff || eff < week.start || eff > week.end) continue;
-      const amt = Number(r.total_amount ?? 0);
-      if (ps === 'scheduled') scheduled += amt;
-      else unpaid += amt;
-    }
-    return { label: week.label, unpaid, scheduled };
-  });
+  return buildCashFlowWeeks(rows).map(({ label, unpaid, scheduled }) => ({ label, unpaid, scheduled }));
 }

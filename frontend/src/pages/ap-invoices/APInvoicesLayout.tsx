@@ -98,8 +98,8 @@ function useNavSections(isUAE: boolean, costCenterLabel: string, apLabel: string
 }
 
 const linkBase   = 'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors';
-const linkIdle   = 'text-slate-300 hover:bg-slate-800 hover:text-white';
-const linkActive = 'bg-blue-700/80 text-white';
+const linkIdle   = 'text-slate-300 hover:bg-white/[0.06] hover:text-white';
+const linkActive = 'bg-[#246BFD] text-white';
 
 function MarketToggleSidebar() {
   return (
@@ -152,7 +152,7 @@ function APInvoicesLayoutInner() {
     <div className="relative flex h-[calc(100vh-36px)] w-full bg-gray-950 text-gray-100 overflow-hidden">
       <ApWorkspaceSync />
       {/* Left sub-nav — header/footer fixed, nav scrolls */}
-      <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900 flex flex-col h-full min-h-0 overflow-hidden">
+      <aside className="w-56 shrink-0 border-r border-white/10 bg-[#0B1D33] flex flex-col h-full min-h-0 overflow-hidden">
         {/* Brand — pinned top */}
         <div className="shrink-0 px-4 py-4 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
@@ -217,7 +217,7 @@ function APInvoicesLayoutInner() {
       </aside>
 
       {/* Page content — light canvas for readable cards & text */}
-      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-slate-100">
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-[#F3F6FA]">
         <div className="p-6 min-h-full">
           <Outlet />
         </div>

@@ -15,7 +15,7 @@ export function GstReconSummaryCard() {
   const navigate = useNavigate();
   const { isUAE } = useMarket();
   const reconLabel = isUAE ? 'VAT Reconciliation' : 'GST recon';
-  const reconRoute = '/gst-recon';
+  const reconRoute = '/ap-invoices/gst-recon';
   const [summary, setSummary] = useState<{
     matched: number;
     mismatch: number;
