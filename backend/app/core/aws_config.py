@@ -21,6 +21,11 @@ EMAIL_INTAKE_PREFIX = "email-intake/"
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
+def aws_configured() -> bool:
+    """False once AWS is decommissioned (no keys) — S3 copies and SES polling are skipped."""
+    return bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
+
+
 def get_s3_client(country: str = "UAE"):
     region = "eu-central-1" if country.upper() == "UAE" else "ap-south-2"
     return boto3.client(
@@ -60,7 +65,9 @@ def upload_to_s3(
     folder: str = "uploads",
     country: str = "UAE",
 ) -> str:
-    """Upload bytes to S3 with AES-256 encryption. Returns the S3 key."""
+    """Upload bytes to S3 with AES-256 encryption. Returns the S3 key ("" when AWS is not configured)."""
+    if not aws_configured():
+        return ""
     s3 = get_s3_client(country)
     bucket = get_bucket_name(country)
     key = f"{folder}/{filename}"

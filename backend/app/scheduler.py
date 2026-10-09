@@ -37,6 +37,11 @@ def setup_ses_intake_scheduler():
     global _ses_scheduler_started
     if not settings.ENABLE_SES_EMAIL_INTAKE:
         return None
+    from app.core.aws_config import aws_configured
+
+    if not aws_configured():
+        print("SES email intake scheduler not started: AWS credentials not configured")
+        return None
     minutes = max(1, int(settings.SES_EMAIL_INTAKE_INTERVAL_MINUTES or 5))
     if not scheduler.running:
         scheduler.configure(timezone=settings.CFO_SCHEDULER_TZ)
