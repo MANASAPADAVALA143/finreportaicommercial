@@ -664,6 +664,11 @@ async def health():
         "supabase_configured": _sb_url and _sb_key,
         "file": __file__,
         "database_url_driver": _settings.DATABASE_URL.split("://")[0] if _settings.DATABASE_URL else "EMPTY",
+        "database_provider": (
+            "supabase" if "supabase" in (_settings.DATABASE_URL or "")
+            else "aws_rds" if "rds.amazonaws.com" in (_settings.DATABASE_URL or "")
+            else "other" if _settings.DATABASE_URL else "EMPTY"
+        ),
         "db_ok": _db_ok,
         "db_error": _db_error,
         "user_count": _user_count,
