@@ -1,6 +1,8 @@
 import type React from 'react';
-import { FileText, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FileText, Loader2, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Invoice } from '@/lib/ap-invoice/supabase';
+import { resolveInvoiceFileUrl } from '@/lib/ap-invoice/invoiceStorageService';
 import { COLORS, type Tone, TONE_HEX } from '@/pages/ap-invoices/dashboard/ui';
 
 export const INVOICE_STATUS_TONE: Record<string, Tone> = {
@@ -46,9 +48,26 @@ export function riskLabel(inv: Pick<Invoice, 'risk_level' | 'risk_score'>): stri
   return 'Low';
 }
 
-/** Only http(s) URLs point at a stored file; other values are intake placeholders (e.g. "email-…"). */
-export function viewableFileUrl(url: string | null | undefined): string | null {
-  return url && /^https?:\/\//i.test(url) ? url : null;
+/** Viewable URL for a stored file reference; intake placeholders (e.g. "email-…") resolve to null. */
+export function useStoredFileUrl(ref: string | null | undefined): { url: string | null; loading: boolean } {
+  const [state, setState] = useState<{ url: string | null; loading: boolean }>({ url: null, loading: !!ref });
+  useEffect(() => {
+    if (!ref) {
+      setState({ url: null, loading: false });
+      return;
+    }
+    let cancelled = false;
+    setState({ url: null, loading: true });
+    resolveInvoiceFileUrl(ref)
+      .catch(() => null)
+      .then((url) => {
+        if (!cancelled) setState({ url, loading: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ref]);
+  return state;
 }
 
 export function DetailCard({
@@ -172,12 +191,14 @@ export function Ring({
 
 export function DocumentPreview({
   url,
+  loading = false,
   fileType,
   fileRef,
   zoom,
   onZoom,
 }: {
   url: string | null;
+  loading?: boolean;
   fileType: string | null;
   fileRef: string | null;
   zoom: number;
@@ -239,6 +260,11 @@ export function DocumentPreview({
               />
             </div>
           )
+        ) : loading ? (
+          <div className="flex h-full min-h-[400px] flex-col items-center justify-center text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+            <p className="mt-3 text-sm text-slate-500">Loading document…</p>
+          </div>
         ) : (
           <div className="flex h-full min-h-[400px] flex-col items-center justify-center text-center">
             <FileText className="h-12 w-12 text-slate-300" />

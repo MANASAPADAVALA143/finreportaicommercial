@@ -1,45 +1,82 @@
 /**
  * Invoice image / file storage service (Supabase Storage).
- * Bucket: invoice-files (public)
+ * Bucket: invoice-files (private — see supabase/migrations/065_invoice_files_bucket.sql)
+ *
+ * Objects are stored under `<company_id>/<prefix>/…`; storage RLS only lets members of
+ * that company read or write them. Rows keep the storage path (not a URL) in
+ * `invoices.file_url` / `payment_proof_url`, and viewers resolve it to a short-lived
+ * signed URL with `resolveInvoiceFileUrl`.
  *
  * Provides:
- *  - uploadInvoiceFile: upload a file, return public URL
- *  - getInvoiceFileUrl: get signed URL for private bucket (if needed)
+ *  - uploadInvoiceFile: upload a file, return its storage path
+ *  - storeInvoiceFile: best-effort upload that never throws (returns path or null)
+ *  - resolveInvoiceFileUrl: turn a stored reference into a viewable URL
  *  - deleteInvoiceFile: remove from storage when invoice is deleted
  */
 import { supabase } from '@/lib/ap-invoice/supabase';
 
 const BUCKET = 'invoice-files';
+const SIGNED_URL_TTL_SECONDS = 60 * 60;
+const STORAGE_PATH_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/.+/i;
 
 export interface StorageUploadResult {
-  url: string;
   path: string;
 }
 
 /**
- * Upload an invoice file to Supabase Storage.
- * Returns the public URL and storage path.
+ * Upload an invoice file to Supabase Storage under the company's folder.
  * Sanitizes the filename and uses a timestamp prefix for uniqueness.
  */
-export async function uploadInvoiceFile(file: File, prefix = 'uploads'): Promise<StorageUploadResult> {
+export async function uploadInvoiceFile(
+  file: File,
+  companyId: string,
+  prefix = 'uploads',
+): Promise<StorageUploadResult> {
   const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  const path = `${prefix}/${Date.now()}-${Math.random().toString(36).slice(2)}-${safe}`;
+  const path = `${companyId}/${prefix}/${Date.now()}-${Math.random().toString(36).slice(2)}-${safe}`;
 
-  const { data, error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: false });
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, file, { upsert: false, contentType: file.type || undefined });
   if (error) throw new Error(`Storage upload failed: ${error.message}`);
-
-  const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(data.path);
-  return { url: urlData.publicUrl, path: data.path };
+  return { path: data.path };
 }
 
 /**
- * Get the public URL for an existing storage path.
- * Returns null if path is already a full URL (e.g. n8n-hosted files).
+ * Upload without failing the caller: invoice saves must not depend on storage.
+ * Returns the storage path, or null when there is no file/company or the upload fails.
  */
-export function getPublicUrl(pathOrUrl: string): string {
-  if (pathOrUrl.startsWith('http')) return pathOrUrl;
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(pathOrUrl);
-  return data.publicUrl;
+export async function storeInvoiceFile(
+  file: File | null | undefined,
+  companyId: string | null | undefined,
+  prefix: string,
+): Promise<string | null> {
+  if (!file || !companyId) return null;
+  try {
+    return (await uploadInvoiceFile(file, companyId, prefix)).path;
+  } catch (e) {
+    console.warn('[storage] invoice file not stored:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/**
+ * Resolve a stored file reference to a URL the browser can open.
+ * Storage paths (and legacy public URLs for this bucket) become signed URLs;
+ * other http(s) URLs pass through; intake placeholders ("email-…", "batch-…") return null.
+ */
+export async function resolveInvoiceFileUrl(ref: string | null | undefined): Promise<string | null> {
+  if (!ref) return null;
+  const path = STORAGE_PATH_RE.test(ref) ? ref : extractStoragePath(ref);
+  if (path) {
+    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
+    if (error) {
+      console.warn('[storage] signed URL failed:', error.message);
+      return null;
+    }
+    return data.signedUrl;
+  }
+  return /^https?:\/\//i.test(ref) ? ref : null;
 }
 
 /**
@@ -62,7 +99,7 @@ export function extractStoragePath(url: string): string | null {
     const marker = `/storage/v1/object/public/${BUCKET}/`;
     const idx = url.indexOf(marker);
     if (idx === -1) return null;
-    return decodeURIComponent(url.slice(idx + marker.length));
+    return decodeURIComponent(url.slice(idx + marker.length).split('?')[0]);
   } catch {
     return null;
   }

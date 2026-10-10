@@ -117,7 +117,7 @@ import { listInvoicesViaApi } from '@/lib/ap-invoice/listInvoicesService';
 import { deleteAllInvoicesViaApi } from '@/lib/ap-invoice/bulkUpsertService';
 import { generateInvoicePdf } from '@/lib/ap-invoice/generateInvoicePdf';
 import type { InvoiceLineItem } from '@/lib/ap-invoice/supabase';
-import { uploadInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
+import { storeInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal } from '@/components/invoices/InvoiceExtractionPreviewModal';
 import {
@@ -1259,7 +1259,7 @@ export function InvoiceList() {
         payment_received: false,
         company_id: company?.id ?? null,
         file_type: capturedFile?.type || 'camera-capture',
-        file_url: capturedFile ? await uploadInvoiceFile(capturedFile, 'camera').then((r) => r.url).catch(() => null) : null,
+        file_url: await storeInvoiceFile(capturedFile, company?.id, 'camera'),
         updated_at: new Date().toISOString(),
       };
       const { error } = await supabase.from('invoices').insert(row);

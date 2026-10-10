@@ -48,7 +48,7 @@ import {
 import { Upload, X, Plus, Trash2, FileText, CheckCircle, Download, FileSpreadsheet, Camera, AlertTriangle } from 'lucide-react';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal, type PreviewLineItem } from '@/components/invoices/InvoiceExtractionPreviewModal';
-import { uploadInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
+import { storeInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 import { normalizeExtractedInvoice, type NormalizedExtractedInvoice } from '../../lib/ap-invoice/cameraService';
 import { useToast } from '../../hooks/use-toast';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
@@ -748,9 +748,7 @@ export function InvoiceUpload() {
         ar_due_date: invKind === 'sales' ? values.due_date.slice(0, 10) : null,
         payment_received: false,
         company_id: companyId ?? null,
-        file_url: scanPreviewFile
-          ? await uploadInvoiceFile(scanPreviewFile, 'scan').then((r) => r.url).catch(() => null)
-          : null,
+        file_url: await storeInvoiceFile(scanPreviewFile, companyId, 'scan'),
         file_type: scanPreviewFile?.type || null,
         updated_at: new Date().toISOString(),
       };
@@ -1106,7 +1104,7 @@ export function InvoiceUpload() {
             total_amount: totalAmount,
             currency: invoiceData.currency || 'USD',
             status: initialStatus,
-            file_url: `batch-${file.name}-${i + 1}`,
+            file_url: (await storeInvoiceFile(file, companyId, 'batch')) ?? `batch-${file.name}-${i + 1}`,
             file_type: file.type || 'application/pdf',
             processing_time_seconds: Math.floor((Date.now() - startTime) / 1000),
             ifrs_category: (invoiceData.ifrs_category ?? invoiceData.category) || '',
@@ -2386,7 +2384,7 @@ export function InvoiceUpload() {
             total_amount: totalAmount,
             currency: invoiceData.currency || 'INR',
             status: initialStatus,
-            file_url: `queue-${item.file.name}`,
+            file_url: (await storeInvoiceFile(item.file, companyIdQ, 'queue')) ?? `queue-${item.file.name}`,
             file_type: item.file.type,
             processing_time_seconds: Math.floor((Date.now() - startTime) / 1000),
             ifrs_category: (invoiceData.ifrs_category ?? invoiceData.category) || '',
@@ -2717,7 +2715,10 @@ export function InvoiceUpload() {
             return formData.tax_type !== 'None' ? Number(formData.tax_rate) || 0 : 0;
           })(),
           status: 'Processing',
-          file_url: files.length > 0 ? `mock-url-${files[0].name}` : null,
+          file_url:
+            files.length > 0
+              ? (await storeInvoiceFile(files[0], companyId, 'uploads')) ?? `mock-url-${files[0].name}`
+              : null,
           file_type: files.length > 0 ? files[0].type : null,
           ifrs_category: ifrsCategory ?? null,
           ifrs_confidence: extractedData?.ifrs_confidence ?? ifrsData.ifrs_confidence ?? 0,

@@ -3,12 +3,14 @@
  * URL: /vendor-upload (or /vendor-upload?company=<company_id>)
  *
  * Vendor fills in their name/email, picks a PDF/image, and submits.
- * File goes to Supabase Storage (invoices bucket), row created with source='vendor_portal'.
+ * File goes to Supabase Storage (private invoice-files bucket, under the company's folder),
+ * row created with source='vendor_portal'.
  * If VITE_N8N_WEBHOOK_URL is set, the invoice is also sent for AI extraction.
  */
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/ap-invoice/supabase';
+import { storeInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 
 type UploadState = 'idle' | 'uploading' | 'success' | 'error';
 
@@ -35,12 +37,7 @@ export function VendorUploadPortal() {
     try {
       // 1. Upload file to Supabase Storage
       const ext = file.name.split('.').pop() ?? 'pdf';
-      const storagePath = `vendor-portal/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-      const { error: storageErr } = await supabase.storage.from('invoices').upload(storagePath, file, { upsert: false });
-      if (storageErr) throw new Error(`Upload failed: ${storageErr.message}`);
-
-      const { data: urlData } = supabase.storage.from('invoices').getPublicUrl(storagePath);
-      const fileUrl = urlData?.publicUrl ?? null;
+      const fileUrl = await storeInvoiceFile(file, companyId, 'vendor-portal');
 
       // 2. Create invoice row
       const today = new Date().toISOString().slice(0, 10);
@@ -70,7 +67,7 @@ export function VendorUploadPortal() {
 
       // 3. Optionally trigger n8n extraction webhook
       const webhookUrl = (import.meta.env.VITE_N8N_WEBHOOK_URL as string | undefined)?.trim();
-      if (webhookUrl && fileUrl) {
+      if (webhookUrl) {
         const fd = new FormData();
         fd.append('file', file, file.name);
         fd.append('source', 'vendor_portal');

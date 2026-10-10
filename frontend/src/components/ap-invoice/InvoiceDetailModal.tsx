@@ -21,6 +21,7 @@ import {
   escalateAnomalyToCFO,
 } from '@/lib/ap-invoice/anomalyService';
 import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
+import { storeInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import type { InvoiceAnomaly } from '@/lib/ap-invoice/supabase';
 import {
   getEffectiveExtractionScore,
@@ -103,7 +104,7 @@ import {
   SummaryTile,
   riskLabel,
   riskTone,
-  viewableFileUrl,
+  useStoredFileUrl,
 } from '@/components/ap-invoice/invoice-detail/parts';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
@@ -1110,13 +1111,7 @@ export function InvoiceDetailModal({
       let proofUrl: string | null = null;
       if (paymentProofFile) {
         setPaymentProofUploading(true);
-        const ext = paymentProofFile.name.split('.').pop() ?? 'jpg';
-        const path = `payment-proofs/${invoice.id}-${Date.now()}.${ext}`;
-        const { error: storErr } = await supabase.storage.from('invoices').upload(path, paymentProofFile, { upsert: true });
-        if (!storErr) {
-          const { data: urlData } = supabase.storage.from('invoices').getPublicUrl(path);
-          proofUrl = urlData?.publicUrl ?? null;
-        }
+        proofUrl = await storeInvoiceFile(paymentProofFile, company.id, `payment-proofs/${invoice.id}`);
         setPaymentProofUploading(false);
       }
 
@@ -1355,7 +1350,8 @@ export function InvoiceDetailModal({
           : 'Tax';
   const displayMatch = resolveDisplayMatchStatus(invoice);
   const matchTone = MATCH_TONE[displayMatch] ?? 'slate';
-  const fileUrl = viewableFileUrl(invoice.file_url);
+  const { url: fileUrl, loading: fileLoading } = useStoredFileUrl(invoice.file_url);
+  const { url: paymentProofUrl } = useStoredFileUrl(invoice.payment_proof_url);
   const statusTone = INVOICE_STATUS_TONE[invoice.status] ?? 'slate';
   const currentRiskTone = riskTone(riskDisplayScore, invoice.risk_level ?? invoice.risk_score);
   const openAnomalies = persistedAnomalies.filter((a) => a.status === 'open' || a.status === 'investigating').length;
@@ -1593,6 +1589,7 @@ export function InvoiceDetailModal({
                 >
                   <DocumentPreview
                     url={fileUrl}
+                    loading={fileLoading}
                     fileType={invoice.file_type}
                     fileRef={invoice.file_url}
                     zoom={zoomLevel}
@@ -3691,10 +3688,10 @@ export function InvoiceDetailModal({
             )}
             {paymentProofUploading && <p className="text-xs text-[#2563EB]">Uploading proof…</p>}
           </div>
-          {invoice.payment_proof_url && (
+          {paymentProofUrl && (
             <div className="text-sm">
               <span className="text-gray-600">Existing proof: </span>
-              <a href={invoice.payment_proof_url} target="_blank" rel="noreferrer" className="text-[#2563EB] underline text-xs">View</a>
+              <a href={paymentProofUrl} target="_blank" rel="noreferrer" className="text-[#2563EB] underline text-xs">View</a>
             </div>
           )}
         </div>
