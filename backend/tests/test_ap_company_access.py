@@ -19,7 +19,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes import ap_invoice_files, ap_invoices_rds, uae_accounting
+from app.api.routes import ap_invoice_files, ap_invoices_rds, ap_vendor_whatsapp, uae_accounting
+from app.routers import ap_ses_intake
 from app.core import company_access
 from app.core.database import get_db
 from app.middleware import auth as auth_middleware
@@ -37,6 +38,7 @@ INV_MISSING = "cccccccc-2222-4000-8000-000000000003"
 
 COMPANY_WORKSPACE = {CO_A: WS_A, CO_B: WS_B}
 INVOICE_COMPANY = {INV_A: CO_A, INV_B: CO_B}
+VENDOR_PHONE = {CO_A: "+971 50 111 2222", CO_B: "+971501113333"}
 
 
 # ── Fake Supabase ────────────────────────────────────────────────────────────
@@ -67,7 +69,10 @@ class _Query:
     def execute(self):
         if self.table != "invoices":
             return SimpleNamespace(data=[])
-        rows = [{"id": i, "company_id": c} for i, c in INVOICE_COMPANY.items()]
+        rows = [
+            {"id": i, "company_id": c, "invoice_number": f"INV-{c[:1].upper()}", "vendor_phone": VENDOR_PHONE[c]}
+            for i, c in INVOICE_COMPANY.items()
+        ]
         if self.ids is not None:
             rows = [r for r in rows if r["id"] in self.ids]
         rows = [r for r in rows if all(r.get(k) == v for k, v in self.filters.items())]
@@ -140,6 +145,27 @@ def env(monkeypatch):
     monkeypatch.setattr(company_access, "_workspace_role", lambda _db, _ctx, ws: e.roles.get(ws))
     monkeypatch.setattr(company_access, "get_supabase", lambda: e.sb)
     monkeypatch.setattr(ap_invoice_files, "get_supabase", lambda: e.sb)
+    monkeypatch.setattr(ap_vendor_whatsapp, "get_supabase", lambda: e.sb)
+
+    def _notify_from_invoice_id(invoice_id, status, **kw):
+        e.calls.append(("whatsapp_invoice", {"invoice_id": invoice_id, "status": status}))
+        return {"ok": True}
+
+    def _notify_vendor_status(**kw):
+        e.calls.append(("whatsapp_phone", {"to": kw["vendor_phone"]}))
+        return {"ok": True}
+
+    monkeypatch.setitem(sys.modules, "vendor_whatsapp", SimpleNamespace(
+        notify_from_invoice_id=_notify_from_invoice_id, notify_vendor_status=_notify_vendor_status,
+    ))
+    monkeypatch.setattr(ap_ses_intake, "fetch_intake_logs", lambda cid, limit=50: e.calls.append(("ses_logs", {"company_id": cid})) or [])
+    monkeypatch.setattr(ap_ses_intake, "test_email_intake_bucket", lambda: {"status": "connected"})
+
+    async def _process(limit=20):
+        e.calls.append(("ses_process", {"limit": limit}))
+        return {"processed": 0}
+
+    monkeypatch.setattr(ap_ses_intake, "process_pending_emails", _process)
 
     for name in (
         "bulk_upsert_invoices", "list_invoices_for_company", "delete_all_invoices_for_company",
@@ -157,7 +183,10 @@ def env(monkeypatch):
 
 def _app(override_auth: Env | None, db: Any = None) -> FastAPI:
     app = FastAPI()
-    for r in (ap_invoices_rds.router, ap_invoice_files.router, uae_accounting.router):
+    for r in (
+        ap_invoices_rds.router, ap_invoice_files.router, uae_accounting.router,
+        ap_vendor_whatsapp.router, ap_ses_intake.router,
+    ):
         app.include_router(r)
     app.dependency_overrides[get_db] = lambda: db if db is not None else SimpleNamespace()
     if override_auth is not None:
@@ -560,3 +589,84 @@ def test_auth_url_carries_signed_state(env, monkeypatch):
     assert res.status_code == 200
     state = res.json()["auth_url"].split("state=", 1)[1]
     assert uae_accounting._verify_oauth_state(state) == WS_A
+
+
+# ── Vendor WhatsApp + SES email intake ───────────────────────────────────────
+
+NOTIFY = {"to": "+971501112222", "invoice_number": "INV-A", "status": "Approved"}
+
+MESSAGING_ROUTES = [
+    ("POST", "/api/ap/vendor-whatsapp", {"invoice_id": INV_A, "status": "Approved"}),
+    ("POST", "/api/ap/vendor-whatsapp-notify", NOTIFY),
+    ("GET", f"/api/ap/ses-intake/logs?company_id={CO_A}", None),
+    ("GET", "/api/ap/ses-intake/status", None),
+    ("POST", "/api/ap/ses-intake/trigger", None),
+    ("POST", "/api/ap/ses-intake/process", None),
+]
+
+
+@pytest.mark.parametrize("method,path,body", MESSAGING_ROUTES, ids=[p for _, p, _ in MESSAGING_ROUTES])
+def test_messaging_routes_require_login(env, method, path, body):
+    res = TestClient(_app(None)).request(method, path, json=body)
+    assert res.status_code == 401, res.text
+    assert env.calls == []
+
+
+def test_whatsapp_by_own_invoice(client, env):
+    res = client.post("/api/ap/vendor-whatsapp", json={"invoice_id": INV_A, "status": "Paid"})
+    assert res.status_code == 200
+    assert env.calls == [("whatsapp_invoice", {"invoice_id": INV_A, "status": "Paid"})]
+
+
+def test_whatsapp_other_company_invoice_forbidden(client, env):
+    res = client.post("/api/ap/vendor-whatsapp", json={"invoice_id": INV_B, "status": "Paid"})
+    assert res.status_code == 403 and env.calls == []
+
+
+def test_whatsapp_raw_phone_without_invoice_rejected(client, env):
+    res = client.post("/api/ap/vendor-whatsapp", json={"vendor_phone": "+15550001111", "status": "Paid"})
+    assert res.status_code == 422 and env.calls == []
+
+
+def test_whatsapp_viewer_cannot_send(client, env):
+    env.roles[WS_A] = "viewer"
+    res = client.post("/api/ap/vendor-whatsapp", json={"invoice_id": INV_A, "status": "Paid"})
+    assert res.status_code == 403 and env.calls == []
+
+
+def test_whatsapp_notify_vendor_phone_of_own_invoice(client, env):
+    res = client.post("/api/ap/vendor-whatsapp-notify", json=NOTIFY)
+    assert res.status_code == 200
+    assert env.calls == [("whatsapp_phone", {"to": "+971501112222"})]
+
+
+@pytest.mark.parametrize("body", [
+    {**NOTIFY, "to": "+15550001111"},
+    {**NOTIFY, "to": "+971501113333"},
+    {**NOTIFY, "to": "+971501113333", "invoice_number": "INV-B"},
+    {**NOTIFY, "invoice_number": "INV-B"},
+])
+def test_whatsapp_notify_rejects_numbers_outside_callers_invoices(client, env, body):
+    res = client.post("/api/ap/vendor-whatsapp-notify", json=body)
+    assert res.status_code == 403, res.text
+    assert env.calls == []
+
+
+def test_whatsapp_notify_requires_invoice_number(client, env):
+    res = client.post("/api/ap/vendor-whatsapp-notify", json={"to": "+971501112222", "status": "Paid"})
+    assert res.status_code == 422 and env.calls == []
+
+
+def test_ses_logs_scoped_to_accessible_company(client, env):
+    assert client.get(f"/api/ap/ses-intake/logs?company_id={CO_A}").status_code == 200
+    assert env.calls == [("ses_logs", {"company_id": CO_A})]
+
+
+def test_ses_logs_other_company_forbidden(client, env):
+    assert client.get(f"/api/ap/ses-intake/logs?company_id={CO_B}").status_code == 403
+    assert env.calls == []
+
+
+def test_ses_logs_require_company(client, env):
+    assert client.get("/api/ap/ses-intake/logs").status_code == 422
+    assert env.calls == []

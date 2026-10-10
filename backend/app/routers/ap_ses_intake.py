@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
+from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services.ap_ses_intake_service import (
     fetch_intake_logs,
     process_pending_emails,
@@ -18,7 +22,10 @@ router = APIRouter(prefix="/api/ap/ses-intake", tags=["ap-ses-intake"])
 
 
 @router.post("/process")
-async def process_ses_intake(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+async def process_ses_intake(
+    limit: int = Query(20, ge=1, le=100),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+) -> dict[str, Any]:
     """Poll S3 email-intake/ prefix, OCR attachments, create invoices."""
     try:
         return await process_pending_emails(limit=limit)
@@ -29,10 +36,13 @@ async def process_ses_intake(limit: int = Query(20, ge=1, le=100)) -> dict[str, 
 
 @router.get("/logs")
 def ses_intake_logs(
-    company_id: Optional[str] = Query(None),
+    company_id: str = Query(...),
     limit: int = Query(50, ge=1, le=200),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Last N email_intake_log rows (optionally filtered by company)."""
+    """Last N email_intake_log rows for one company the caller can access."""
+    company_id = require_company_access(db, ctx, company_id, "read")
     try:
         logs = fetch_intake_logs(company_id, limit=limit)
         return {"logs": logs, "count": len(logs)}
@@ -42,7 +52,7 @@ def ses_intake_logs(
 
 
 @router.get("/status")
-def ses_intake_status() -> dict[str, Any]:
+def ses_intake_status(ctx: WorkspaceContext = Depends(validate_workspace)) -> dict[str, Any]:
     """S3 connectivity + pending object count."""
     return test_email_intake_bucket()
 
@@ -60,7 +70,10 @@ async def _bg_process() -> None:
 
 
 @router.post("/trigger")
-async def trigger_ses_intake(background_tasks: BackgroundTasks) -> dict[str, Any]:
+async def trigger_ses_intake(
+    background_tasks: BackgroundTasks,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+) -> dict[str, Any]:
     """Fire-and-return processing via BackgroundTasks."""
     background_tasks.add_task(_bg_process)
     return {"ok": True, "message": "Processing started in background"}

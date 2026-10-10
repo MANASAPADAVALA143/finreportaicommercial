@@ -254,10 +254,13 @@ export async function notifyVendorStatusWhatsApp(
       dueDate: invoice.due_date,
     }),
   };
+  const api = apiBaseUrl();
+  const isOwnApi = Boolean(api && webhookUrl.startsWith(`${api}/`));
   try {
     await fetch(webhookUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: isOwnApi ? vendorWhatsAppHeaders() : { 'Content-Type': 'application/json' },
+      ...(isOwnApi ? { credentials: 'include' as const } : {}),
       body: JSON.stringify(payload),
     });
   } catch (e) {

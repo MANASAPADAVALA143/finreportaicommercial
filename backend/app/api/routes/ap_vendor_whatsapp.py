@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.core.company_access import require_company_access, require_invoice_access
+from app.core.database import get_db
+from app.core.supabase import get_supabase
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -41,41 +48,61 @@ class VendorWhatsAppRequest(BaseModel):
 
 
 @router.post("/vendor-whatsapp")
-def vendor_whatsapp(request: Request, body: VendorWhatsAppRequest) -> dict:
+def vendor_whatsapp(
+    request: Request,
+    body: VendorWhatsAppRequest,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict:
     """
-    Fire-and-return Twilio WhatsApp to vendor.
-    Prefer invoice_id (loads phone from DB); else pass vendor_phone + invoice fields.
+    Fire-and-return Twilio WhatsApp to the vendor of an invoice the caller can change.
+    The phone number and invoice fields are always loaded from the DB; body copies are ignored.
     """
+    invoice_id = (body.invoice_id or "").strip()
+    if not invoice_id:
+        raise HTTPException(status_code=422, detail="invoice_id required")
+    require_invoice_access(db, ctx, [invoice_id], "write")
+
     try:
-        from vendor_whatsapp import notify_from_invoice_id, notify_vendor_status
+        from vendor_whatsapp import notify_from_invoice_id
     except ImportError as e:
         logger.error("vendor_whatsapp script import failed: %s", e)
         return {"ok": False, "error": f"script_import_failed: {e}"}
 
     dry_run = body.dry_run or (request.query_params.get("test") == "1")
+    return notify_from_invoice_id(invoice_id, body.status, logger=logger, dry_run=dry_run)
 
-    if body.invoice_id:
-        return notify_from_invoice_id(
-            body.invoice_id,
-            body.status,
-            logger=logger,
-            dry_run=dry_run,
-        )
 
-    if not (body.vendor_phone or "").strip():
-        return {"ok": False, "skipped": True, "reason": "no_vendor_phone"}
+def _phone_digits(phone: str | None) -> str:
+    return re.sub(r"\D", "", phone or "")
 
-    return notify_vendor_status(
-        vendor_phone=body.vendor_phone or "",
-        vendor_name=body.vendor_name or "Vendor",
-        invoice_number=body.invoice_number or "—",
-        amount=float(body.total_amount or 0),
-        currency=body.currency or "AED",
-        status=body.status,
-        due_date=body.due_date,
-        logger=logger,
-        dry_run=dry_run,
+
+def _require_vendor_phone_access(db: Session, ctx: WorkspaceContext, invoice_number: str, phone: str) -> None:
+    """The number must be the vendor phone on that invoice, in a company the caller can change."""
+    wanted = _phone_digits(phone)
+    number = (invoice_number or "").strip()
+    if not wanted or number in ("", "—"):
+        raise HTTPException(status_code=422, detail="invoice_number and to are required")
+
+    rows = (
+        get_supabase()
+        .table("invoices")
+        .select("id, company_id, vendor_phone")
+        .eq("invoice_number", number)
+        .limit(50)
+        .execute()
+        .data
+        or []
     )
+    for row in rows:
+        if _phone_digits(row.get("vendor_phone")) != wanted:
+            continue
+        try:
+            require_company_access(db, ctx, row.get("company_id"), "write")
+            return
+        except HTTPException:
+            continue
+    raise HTTPException(status_code=403, detail="Number is not the vendor phone on an invoice you can access")
 
 
 class VendorWhatsAppBatchRequest(BaseModel):
@@ -93,8 +120,13 @@ class VendorWhatsAppBatchRequest(BaseModel):
 
 
 @router.post("/vendor-whatsapp-notify")
-def vendor_whatsapp_notify(body: VendorWhatsAppBatchRequest) -> dict:
+def vendor_whatsapp_notify(
+    body: VendorWhatsAppBatchRequest,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict:
     """Accept frontend/n8n-shaped payload {to, status, ...}."""
+    _require_vendor_phone_access(db, ctx, body.invoice_number, body.to)
     try:
         from vendor_whatsapp import notify_vendor_status
     except ImportError as e:
