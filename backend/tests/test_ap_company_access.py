@@ -155,11 +155,11 @@ def env(monkeypatch):
     return e
 
 
-def _app(override_auth: Env | None) -> FastAPI:
+def _app(override_auth: Env | None, db: Any = None) -> FastAPI:
     app = FastAPI()
     for r in (ap_invoices_rds.router, ap_invoice_files.router, uae_accounting.router):
         app.include_router(r)
-    app.dependency_overrides[get_db] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_db] = lambda: db if db is not None else SimpleNamespace()
     if override_auth is not None:
         app.dependency_overrides[validate_workspace] = override_auth.ctx
     return app
@@ -427,3 +427,136 @@ def test_upload_rejects_other_company(client, env):
         files={"file": ("a.pdf", b"%PDF-1.4", "application/pdf")},
     )
     assert res.status_code == 403
+
+
+# ── UAE accounting: connections, trial balances, IFRS, stats ─────────────────
+
+
+class FakeDb:
+    """Records the SQL criteria each query filters on; every query matches nothing."""
+
+    def __init__(self):
+        self.criteria: list[str] = []
+        self.writes = 0
+
+    def query(self, *_a):
+        return self
+
+    def filter(self, *criteria):
+        self.criteria += [str(c.compile(compile_kwargs={"literal_binds": True})) for c in criteria]
+        return self
+
+    def order_by(self, *_a):
+        return self
+
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def count(self):
+        return 0
+
+    def add(self, *_a):
+        self.writes += 1
+
+    def commit(self):
+        self.writes += 1
+
+
+ACCOUNTING_ROUTES = [
+    ("GET", "/api/uae/connected-accounts"),
+    ("DELETE", "/api/uae/connected-accounts/1"),
+    ("POST", "/api/uae/sync-trial-balance"),
+    ("GET", "/api/uae/trial-balances"),
+    ("GET", "/api/uae/trial-balances/1"),
+    ("POST", "/api/uae/trial-balances/1/generate-ifrs"),
+    ("GET", "/api/uae/stats"),
+    ("GET", "/api/uae/zoho/auth-url"),
+    ("GET", "/api/uae/qbo/auth-url"),
+]
+SYNC_BODY = {"connected_account_id": 1, "from_date": "2026-01-01", "to_date": "2026-03-31"}
+
+
+@pytest.mark.parametrize("method,path", ACCOUNTING_ROUTES, ids=[p for _, p in ACCOUNTING_ROUTES])
+def test_accounting_routes_require_login(method, path):
+    db = FakeDb()
+    res = TestClient(_app(None, db)).request(
+        method, path, json=SYNC_BODY if "sync" in path else None, headers={"X-Tenant-ID": WS_B}
+    )
+    assert res.status_code == 401, res.text
+    assert db.criteria == [] and db.writes == 0
+
+
+@pytest.mark.parametrize("role,method,path,allowed", [
+    ("accountant", "DELETE", "/api/uae/connected-accounts/1", False),
+    ("finance_manager", "DELETE", "/api/uae/connected-accounts/1", True),
+    ("accountant", "GET", "/api/uae/zoho/auth-url", False),
+    ("viewer", "POST", "/api/uae/sync-trial-balance", False),
+    ("accountant", "POST", "/api/uae/sync-trial-balance", True),
+    ("auditor", "POST", "/api/uae/trial-balances/1/generate-ifrs", False),
+    ("accountant", "POST", "/api/uae/trial-balances/1/generate-ifrs", True),
+    ("viewer", "GET", "/api/uae/trial-balances", True),
+])
+def test_accounting_role_limits(env, role, method, path, allowed):
+    env.roles[WS_A] = role
+    db = FakeDb()
+    res = TestClient(_app(env, db)).request(method, path, json=SYNC_BODY if "sync" in path else None)
+    if allowed:
+        assert res.status_code in (200, 404), res.text
+    else:
+        assert res.status_code == 403, res.text
+        assert db.criteria == [] and db.writes == 0
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/uae/connected-accounts"),
+    ("DELETE", "/api/uae/connected-accounts/1"),
+    ("GET", "/api/uae/trial-balances/1"),
+    ("POST", "/api/uae/trial-balances/1/generate-ifrs"),
+    ("GET", "/api/uae/stats"),
+])
+def test_accounting_queries_scoped_to_verified_workspace(env, method, path):
+    env.roles[WS_A] = "owner"
+    db = FakeDb()
+    TestClient(_app(env, db)).request(method, path, headers={"X-Tenant-ID": WS_B})
+    tenant_filters = [c for c in db.criteria if "tenant_id" in c]
+    assert tenant_filters and all(WS_A in c and WS_B not in c for c in tenant_filters)
+
+
+def test_oauth_state_round_trip_and_tamper():
+    state = uae_accounting._sign_oauth_state(WS_A)
+    assert uae_accounting._verify_oauth_state(state) == WS_A
+    ws, exp, sig = state.rsplit(".", 2)
+    assert uae_accounting._verify_oauth_state(f"{WS_B}.{exp}.{sig}") is None
+    assert uae_accounting._verify_oauth_state(f"{ws}.{int(exp) + 999}.{sig}") is None
+    assert uae_accounting._verify_oauth_state(WS_B) is None
+    assert uae_accounting._verify_oauth_state("") is None
+
+
+def test_oauth_state_expires(monkeypatch):
+    state = uae_accounting._sign_oauth_state(WS_A)
+    real_time = uae_accounting.time.time
+    monkeypatch.setattr(uae_accounting.time, "time", lambda: real_time() + uae_accounting.OAUTH_STATE_TTL_SECONDS + 5)
+    assert uae_accounting._verify_oauth_state(state) is None
+
+
+@pytest.mark.parametrize("path", ["/api/uae/zoho/callback", "/api/uae/qbo/callback"])
+def test_oauth_callback_rejects_forged_state(path):
+    db = FakeDb()
+    res = TestClient(_app(None, db)).get(path, params={"code": "abc", "state": WS_B}, follow_redirects=False)
+    assert res.status_code in (302, 307)
+    assert "invalid_state" in res.headers["location"]
+    assert db.criteria == [] and db.writes == 0
+
+
+def test_auth_url_carries_signed_state(env, monkeypatch):
+    from app.services import zoho_connector
+
+    env.roles[WS_A] = "owner"
+    monkeypatch.setattr(zoho_connector, "ZOHO_CLIENT_ID", "client-id")
+    res = TestClient(_app(env, FakeDb())).get("/api/uae/zoho/auth-url")
+    assert res.status_code == 200
+    state = res.json()["auth_url"].split("state=", 1)[1]
+    assert uae_accounting._verify_oauth_state(state) == WS_A

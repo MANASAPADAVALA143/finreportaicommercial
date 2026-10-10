@@ -23,12 +23,15 @@ IFRS pipeline:
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
+import time
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -38,8 +41,10 @@ from app.core.company_access import (
     require_invoice_access,
     resolve_workspace,
 )
+from app.core.config import settings
 from app.core.database import get_db
-from app.middleware.workspace import WorkspaceContext, validate_workspace
+from app.middleware.workspace import WorkspaceContext, require_workspace_role, validate_workspace
+from app.models.workspace import WorkspaceRole
 from app.models.uae_accounting import (
     AccountingSource,
     ConnectedAccount,
@@ -55,10 +60,36 @@ router = APIRouter(prefix="/api/uae", tags=["UAE Accounting"])
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3006")
 
 
-# ── Tenant helper ─────────────────────────────────────────────────────────────
+# ── Access helpers ────────────────────────────────────────────────────────────
 
-def _tenant(x_tenant_id: Annotated[str | None, Header()] = None) -> str:
-    return (x_tenant_id or "default").strip()
+_manage_connections = require_workspace_role(WorkspaceRole.owner, WorkspaceRole.finance_manager)
+_write_accounting = require_workspace_role(
+    WorkspaceRole.owner, WorkspaceRole.finance_manager, WorkspaceRole.accountant
+)
+
+OAUTH_STATE_TTL_SECONDS = 15 * 60
+
+
+def _oauth_state_sig(payload: str) -> str:
+    return hmac.new(settings.SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _sign_oauth_state(workspace_id: str) -> str:
+    """OAuth `state` that binds the callback to the workspace that started the flow."""
+    payload = f"{workspace_id}.{int(time.time()) + OAUTH_STATE_TTL_SECONDS}"
+    return f"{payload}.{_oauth_state_sig(payload)}"
+
+
+def _verify_oauth_state(state: str) -> str | None:
+    try:
+        workspace_id, expires, sig = state.rsplit(".", 2)
+        if int(expires) < time.time():
+            return None
+    except ValueError:
+        return None
+    if not hmac.compare_digest(sig, _oauth_state_sig(f"{workspace_id}.{expires}")):
+        return None
+    return workspace_id or None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -67,7 +98,7 @@ def _tenant(x_tenant_id: Annotated[str | None, Header()] = None) -> str:
 
 @router.get("/zoho/auth-url", summary="Get Zoho Books OAuth URL")
 async def zoho_auth_url(
-    tenant_id: str = Query(default="default", description="Tenant ID passed as OAuth state"),
+    ctx: WorkspaceContext = Depends(_manage_connections),
 ) -> dict[str, str]:
     """Return the Zoho OAuth authorisation URL. Frontend opens this in the same window."""
     from app.services.zoho_connector import get_zoho_auth_url, ZOHO_CLIENT_ID
@@ -77,7 +108,7 @@ async def zoho_auth_url(
             status_code=503,
             detail="Zoho is not configured. Add ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET to .env",
         )
-    url = get_zoho_auth_url(state=tenant_id)
+    url = get_zoho_auth_url(state=_sign_oauth_state(ctx.workspace_id))
     return {"auth_url": url}
 
 
@@ -98,7 +129,9 @@ async def zoho_callback(
         token_expires_at,
     )
 
-    tenant_id = state
+    tenant_id = _verify_oauth_state(state)
+    if not tenant_id:
+        return RedirectResponse(url=f"{FRONTEND_URL}/uae-accounting?error=zoho_invalid_state")
 
     try:
         tokens = exchange_zoho_code(code)
@@ -170,7 +203,7 @@ async def zoho_callback(
 
 @router.get("/qbo/auth-url", summary="Get QuickBooks Online OAuth URL")
 async def qbo_auth_url(
-    tenant_id: str = Query(default="default"),
+    ctx: WorkspaceContext = Depends(_manage_connections),
 ) -> dict[str, str]:
     """Return the QBO OAuth authorisation URL."""
     from app.services.qbo_connector import get_qbo_auth_url, QBO_CLIENT_ID
@@ -180,7 +213,7 @@ async def qbo_auth_url(
             status_code=503,
             detail="QuickBooks is not configured. Add QBO_CLIENT_ID and QBO_CLIENT_SECRET to .env",
         )
-    url = get_qbo_auth_url(state=tenant_id)
+    url = get_qbo_auth_url(state=_sign_oauth_state(ctx.workspace_id))
     return {"auth_url": url}
 
 
@@ -201,7 +234,9 @@ async def qbo_callback(
         token_expires_at,
     )
 
-    tenant_id = state
+    tenant_id = _verify_oauth_state(state)
+    if not tenant_id:
+        return RedirectResponse(url=f"{FRONTEND_URL}/uae-accounting?error=qbo_invalid_state")
 
     try:
         tokens = exchange_qbo_code(code=code, realm_id=realmId)
@@ -265,9 +300,10 @@ async def qbo_callback(
 
 @router.get("/connected-accounts", summary="List all connected accounting sources")
 async def list_connected_accounts(
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    tenant_id = ctx.workspace_id
     accounts = (
         db.query(ConnectedAccount)
         .filter(ConnectedAccount.tenant_id == tenant_id, ConnectedAccount.is_active == True)
@@ -296,9 +332,10 @@ async def list_connected_accounts(
 @router.delete("/connected-accounts/{account_id}", summary="Disconnect an accounting source")
 async def disconnect_account(
     account_id: int,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(_manage_connections),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    tenant_id = ctx.workspace_id
     account = (
         db.query(ConnectedAccount)
         .filter(ConnectedAccount.id == account_id, ConnectedAccount.tenant_id == tenant_id)
@@ -327,13 +364,14 @@ class SyncRequest(BaseModel):
 @router.post("/sync-trial-balance", summary="Sync trial balance from Zoho or QuickBooks")
 async def sync_trial_balance(
     body: SyncRequest,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(_write_accounting),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
     Fetch trial balance from the connected accounting source and save to DB.
     Returns the new trial_balance_id plus summary stats.
     """
+    tenant_id = ctx.workspace_id
     account = (
         db.query(ConnectedAccount)
         .filter(
@@ -380,9 +418,10 @@ async def sync_trial_balance(
 
 @router.get("/trial-balances", summary="List all synced trial balances")
 async def list_trial_balances(
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    tenant_id = ctx.workspace_id
     tbs = (
         db.query(UAETrialBalance)
         .filter(UAETrialBalance.tenant_id == tenant_id)
@@ -412,9 +451,10 @@ async def list_trial_balances(
 @router.get("/trial-balances/{tb_id}", summary="Get full trial balance with line items")
 async def get_trial_balance(
     tb_id: int,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    tenant_id = ctx.workspace_id
     tb = (
         db.query(UAETrialBalance)
         .filter(UAETrialBalance.id == tb_id, UAETrialBalance.tenant_id == tenant_id)
@@ -477,7 +517,7 @@ async def get_trial_balance(
 )
 async def generate_ifrs_from_uae_tb(
     tb_id: int,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(_write_accounting),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
@@ -485,6 +525,7 @@ async def generate_ifrs_from_uae_tb(
     and trigger AI GL mapping. Returns the IFRS trial_balance_id so the
     frontend can redirect to /ifrs-statement with it pre-loaded.
     """
+    tenant_id = ctx.workspace_id
     uae_tb = (
         db.query(UAETrialBalance)
         .filter(UAETrialBalance.id == tb_id, UAETrialBalance.tenant_id == tenant_id)
@@ -946,9 +987,10 @@ async def gulftax_status() -> dict[str, Any]:
 
 @router.get("/stats", summary="Dashboard stats for UAE Accounting section")
 async def get_stats(
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    tenant_id = ctx.workspace_id
     connected_count = (
         db.query(ConnectedAccount)
         .filter(ConnectedAccount.tenant_id == tenant_id, ConnectedAccount.is_active == True)
