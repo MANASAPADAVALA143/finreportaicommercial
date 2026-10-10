@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access, require_invoice_access, resolve_workspace
 from app.core.database import get_db
 from app.core.tenant import assert_write_allowed, get_company_id, get_tenant_id
 from app.middleware.auth import get_current_user
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.client_data import ApInvoice, ApInvoiceLineItem
 from app.models.users import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ap/invoices", tags=["AP Invoices RDS"])
 
@@ -123,65 +128,61 @@ def list_invoices(
 def bulk_upsert_invoices(
     body: BulkUpsertIn,
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """Upsert many invoices via service role — bypasses browser RLS for Excel import."""
-    # Soft auth: prefer tenant headers; do not hard-require RBAC for AP Excel path
-    _ = db, x_tenant_id, x_workspace_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import bulk_upsert_invoices as _bulk
 
-    return _bulk(company_id=body.company_id.strip(), rows=body.invoices)
+    return _bulk(company_id=company_id, rows=body.invoices)
 
 
 @router.post("/list")
 def list_invoices_supabase(
     body: ListInvoicesIn,
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """List invoices via service role — same tenant path as Excel bulk upsert."""
-    _ = db, x_tenant_id, x_workspace_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.services.ap_bulk_invoice_service import list_invoices_for_company
 
-    return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
+    return list_invoices_for_company(company_id=company_id, limit=body.limit)
 
 
 @router.post("/delete-all")
 def delete_all_invoices(
     body: DeleteAllInvoicesIn,
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """Delete all invoices for a company via service role — bypasses browser RLS."""
-    _ = db, x_tenant_id, x_workspace_id
+    company_id = require_company_access(db, ctx, body.company_id, "manage")
     from app.services.ap_bulk_invoice_service import delete_all_invoices_for_company
 
-    return delete_all_invoices_for_company(company_id=body.company_id.strip())
+    logger.warning("ap-invoices: delete-all company=%s by user=%s", company_id, getattr(ctx.user, "id", None))
+    return delete_all_invoices_for_company(company_id=company_id)
 
 
 @router.post("/audit-log")
 def append_audit_log(
     body: AuditLogIn,
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """Insert one audit log row via service role — bypasses browser RLS."""
-    _ = db, x_tenant_id, x_workspace_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.core.supabase import get_supabase
     import uuid
     sb = get_supabase()
     try:
         sb.table("ap_audit_log").insert({
             "id": str(uuid.uuid4()),
-            "company_id": body.company_id,
+            "company_id": company_id,
             "entity_type": body.entity_type,
             "entity_id": body.entity_id,
             "action": body.action,
-            "action_by": body.action_by,
+            "action_by": getattr(ctx.user, "email", None) or body.action_by,
             "action_by_role": body.action_by_role or "System",
             "old_values": body.old_values,
             "new_values": body.new_values,
@@ -197,18 +198,17 @@ def append_audit_log(
 def count_invoices(
     body: InvoiceCountIn,
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """Count invoices for a company since a given date via service role."""
-    _ = db, x_tenant_id, x_workspace_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.core.supabase import get_supabase
     sb = get_supabase()
     try:
         res = (
             sb.table("invoices")
             .select("id", count="exact")
-            .eq("company_id", body.company_id.strip())
+            .eq("company_id", company_id)
             .gte("created_at", body.since)
             .execute()
         )
@@ -223,20 +223,25 @@ def bulk_approve_invoices(
     db: Session = Depends(get_db),
     tenant_id: str = Depends(get_tenant_id),
     company_id_hdr: str = Depends(get_company_id),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """Approve selected AP invoices and sync each to gulftax_transactions.
 
     Uses the same shared GulfTax sync helper as single-invoice approval.
     """
     assert_write_allowed()
+    require_invoice_access(db, ctx, body.invoice_ids, "write")
+    company_id = (body.company_id or company_id_hdr or "").strip()
+    if body.company_id.strip():
+        require_company_access(db, ctx, company_id, "write")
     from app.services.ap_invoice_post_service import bulk_approve_ap_invoices
 
     return bulk_approve_ap_invoices(
         invoice_ids=body.invoice_ids,
         tenant_id=tenant_id,
         db=db,
-        company_id=(body.company_id or company_id_hdr or "").strip(),
-        workspace_id=(body.workspace_id or tenant_id).strip(),
+        company_id=company_id,
+        workspace_id=resolve_workspace(db, ctx, body.workspace_id or tenant_id),
     )
 
 

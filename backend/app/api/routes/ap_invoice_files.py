@@ -18,10 +18,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access, require_invoice_access
 from app.core.database import get_db
 from app.core.supabase import get_supabase
 from app.middleware.workspace import WorkspaceContext, validate_workspace
-from app.models.users import UserRole
 
 logger = logging.getLogger(__name__)
 
@@ -31,50 +31,7 @@ BUCKET = "invoice-files"
 MAX_BYTES = 25 * 1024 * 1024
 SIGNED_URL_TTL_SECONDS = 60 * 60
 
-_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*$")
-
-
-def _is_super_admin(ctx: WorkspaceContext) -> bool:
-    role = getattr(ctx.user, "role", None)
-    return str(getattr(role, "value", role)) == UserRole.super_admin.value
-
-
-def _company_in_workspace(db: Session, company_id: str, workspace_id: str) -> bool:
-    from app.models.client_data import ApCompany
-    from app.models.company_setup import UaeCompanyProfile
-
-    row = db.get(ApCompany, company_id)
-    if row is not None:
-        return str(row.tenant_id) == str(workspace_id)
-
-    profile = db.get(UaeCompanyProfile, company_id)
-    if profile is not None:
-        return str(profile.workspace_id) == str(workspace_id)
-
-    try:
-        res = (
-            get_supabase()
-            .table("companies")
-            .select("id, workspace_id")
-            .eq("id", company_id)
-            .limit(1)
-            .execute()
-        )
-        rows = res.data or []
-        return bool(rows) and str(rows[0].get("workspace_id") or "") == str(workspace_id)
-    except Exception as exc:
-        logger.warning("invoice-files: company lookup failed for %s: %s", company_id, type(exc).__name__)
-        return False
-
-
-def _require_company_access(db: Session, ctx: WorkspaceContext, company_id: str) -> None:
-    if not _UUID_RE.match(company_id):
-        raise HTTPException(status_code=422, detail="Invalid company_id")
-    if _is_super_admin(ctx):
-        return
-    if not _company_in_workspace(db, company_id, ctx.workspace_id):
-        raise HTTPException(status_code=403, detail="No access to this company's files")
 
 
 def _signed_url(path: str) -> str:
@@ -100,7 +57,7 @@ async def upload_invoice_file(
     prefix = prefix.strip().strip("/") or "uploads"
     if not _PREFIX_RE.match(prefix):
         raise HTTPException(status_code=422, detail="Invalid prefix")
-    _require_company_access(db, ctx, company_id)
+    require_company_access(db, ctx, company_id, "write")
 
     data = await file.read(MAX_BYTES + 1)
     if not data:
@@ -137,22 +94,28 @@ def attach_invoice_file(
     """Link an already-stored file to an invoice that was captured without one (e.g. Excel import)."""
     invoice_id = body.invoice_id.strip()
     path = body.path.strip().lstrip("/")
-    if not _UUID_RE.match(invoice_id):
-        raise HTTPException(status_code=422, detail="Invalid invoice_id")
-    if ".." in path.split("/"):
+    if ".." in path.split("/") or "//" in path or "/" not in path:
         raise HTTPException(status_code=422, detail="Invalid path")
 
-    sb = get_supabase()
-    rows = sb.table("invoices").select("id, company_id").eq("id", invoice_id).limit(1).execute().data or []
-    if not rows:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    company_id = str(rows[0].get("company_id") or "")
-    _require_company_access(db, ctx, company_id)
+    company_id = require_invoice_access(db, ctx, [invoice_id], "write")[invoice_id]
     if path.split("/", 1)[0] != company_id:
         raise HTTPException(status_code=403, detail="File belongs to a different company")
+    try:
+        _signed_url(path)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="File not found in storage") from exc
 
     file_type = (body.file_type or "").strip()[:100] or None
-    sb.table("invoices").update({"file_url": path, "file_type": file_type}).eq("id", invoice_id).execute()
+    res = (
+        get_supabase()
+        .table("invoices")
+        .update({"file_url": path, "file_type": file_type})
+        .eq("id", invoice_id)
+        .eq("company_id", company_id)
+        .execute()
+    )
+    if not (res.data or []):
+        raise HTTPException(status_code=409, detail="Invoice was not updated")
     return {"path": path}
 
 
@@ -170,7 +133,7 @@ def invoice_file_signed_url(
     if ".." in path.split("/"):
         raise HTTPException(status_code=422, detail="Invalid path")
     company_id = path.split("/", 1)[0]
-    _require_company_access(db, ctx, company_id)
+    require_company_access(db, ctx, company_id, "read")
     try:
         return {"url": _signed_url(path)}
     except Exception as exc:

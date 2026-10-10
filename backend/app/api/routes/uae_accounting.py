@@ -33,7 +33,13 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import (
+    require_company_access,
+    require_invoice_access,
+    resolve_workspace,
+)
 from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.uae_accounting import (
     AccountingSource,
     ConnectedAccount,
@@ -553,6 +559,7 @@ class APApproveRequest(BaseModel):
 @router.post("/ap/classify-invoice", summary="Classify AP invoice with GulfTax AI")
 async def ap_classify_invoice(
     body: APClassifyRequest,
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
     """
     Pass an AP invoice through GulfTax AI to get:
@@ -601,23 +608,44 @@ async def ap_classify_invoice(
     }
 
 
+def _authorize_invoice_write(
+    db: Session,
+    ctx: WorkspaceContext,
+    invoice_ids: list[str],
+    company_id: str,
+    workspace_id: str,
+) -> str:
+    """Check write access to the invoices and any company the request names; return the workspace to post into."""
+    owners = require_invoice_access(db, ctx, invoice_ids, "write") if invoice_ids else {}
+    cid = (company_id or "").strip()
+    if cid and cid not in set(owners.values()):
+        require_company_access(db, ctx, cid, "write")
+    return resolve_workspace(db, ctx, workspace_id)
+
+
 @router.post("/ap-bridge/invoice-approved", summary="Alias: approve AP invoice and post JE to UAE GL")
 async def ap_bridge_invoice_approved(
     body: APApproveRequest,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Compatibility alias for embedded AP approvals → UAE GL."""
-    return await ap_approve_and_post(body, tenant_id=tenant_id, db=db)
+    return await ap_approve_and_post(body, ctx=ctx, db=db)
 
 
 @router.post("/ap/approve-and-post", summary="Approve classified invoice and post JE to UAE GL")
 async def ap_approve_and_post(
     body: APApproveRequest,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Records approval and posts journal entries + GulfTax (idempotent)."""
+    if not body.invoice_id.strip() and not body.company_id.strip():
+        raise HTTPException(status_code=422, detail="invoice_id or company_id required")
+    body.workspace_id = _authorize_invoice_write(
+        db, ctx, [body.invoice_id] if body.invoice_id.strip() else [], body.company_id, body.workspace_id
+    )
+    tenant_id = ctx.workspace_id
     if body.decision == "HARD_BLOCK":
         raise HTTPException(
             status_code=422,
@@ -638,7 +666,7 @@ class PostApprovedInvoiceIn(BaseModel):
 @router.post("/ap/post-approved-invoice", summary="Post approved AP invoice to GL + GulfTax by invoice_id")
 async def post_approved_invoice(
     body: PostApprovedInvoiceIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
@@ -652,6 +680,8 @@ async def post_approved_invoice(
     )
     from app.services.gulftax_sync_service import POSTABLE_AP_STATUSES
 
+    tenant_id = ctx.workspace_id
+    body.workspace_id = _authorize_invoice_write(db, ctx, [body.invoice_id], body.company_id, body.workspace_id)
     inv = _fetch_supabase_invoice(body.invoice_id)
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -679,13 +709,14 @@ class BulkApproveApIn(BaseModel):
 @router.post("/ap/bulk-approve", summary="Bulk approve AP invoices + sync GulfTax")
 async def bulk_approve_ap_invoices_uae(
     body: BulkApproveApIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Approve many invoices then sync gulftax_transactions via shared helper."""
     from app.services.ap_invoice_post_service import bulk_approve_ap_invoices
 
-    ws = (body.workspace_id or tenant_id or "").strip()
+    tenant_id = ctx.workspace_id
+    ws = _authorize_invoice_write(db, ctx, body.invoice_ids, body.company_id, body.workspace_id)
     return bulk_approve_ap_invoices(
         invoice_ids=body.invoice_ids,
         tenant_id=ws or tenant_id,
@@ -708,16 +739,17 @@ class SyncAfterExtractIn(BaseModel):
 )
 async def sync_ap_after_pdf_extract(
     body: SyncAfterExtractIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Call after PDF extraction saves an invoice. Does not change OCR logic."""
     from app.services.ap_invoice_post_service import maybe_sync_ap_invoice_after_pdf_extract
 
+    workspace_id = _authorize_invoice_write(db, ctx, [body.invoice_id], body.company_id, body.workspace_id)
     return maybe_sync_ap_invoice_after_pdf_extract(
         invoice_id=body.invoice_id,
         company_id=(body.company_id or "").strip(),
-        workspace_id=(body.workspace_id or tenant_id or "").strip(),
+        workspace_id=workspace_id,
         db=db,
         confidence_override=body.confidence,
     )
@@ -731,13 +763,14 @@ class BulkUpsertApIn(BaseModel):
 @router.post("/ap/bulk-upsert", summary="Bulk upsert AP invoices (service role, bypasses RLS)")
 async def bulk_upsert_ap_invoices(
     body: BulkUpsertApIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Excel / bulk import path — uses Supabase service role so browser RLS cannot block."""
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import bulk_upsert_invoices
 
-    return bulk_upsert_invoices(company_id=body.company_id.strip(), rows=body.invoices)
+    return bulk_upsert_invoices(company_id=company_id, rows=body.invoices)
 
 
 class ListApInvoicesIn(BaseModel):
@@ -748,13 +781,14 @@ class ListApInvoicesIn(BaseModel):
 @router.post("/ap/list-invoices", summary="List AP invoices (service role, bypasses RLS)")
 async def list_ap_invoices(
     body: ListApInvoicesIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Invoice List path when browser Supabase session is missing (FinReport JWT only)."""
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.services.ap_bulk_invoice_service import list_invoices_for_company
 
-    return list_invoices_for_company(company_id=body.company_id.strip(), limit=body.limit)
+    return list_invoices_for_company(company_id=company_id, limit=body.limit)
 
 
 class GetApInvoiceIn(BaseModel):
@@ -766,13 +800,14 @@ class GetApInvoiceIn(BaseModel):
 @router.post("/ap/get-invoice", summary="Get one AP invoice by id or invoice_number (service role)")
 async def get_ap_invoice(
     body: GetApInvoiceIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.services.ap_bulk_invoice_service import get_invoice_for_match
 
     return get_invoice_for_match(
-        company_id=body.company_id.strip(),
+        company_id=company_id,
         invoice_id=(body.invoice_id or "").strip() or None,
         invoice_number=(body.invoice_number or "").strip() or None,
     )
@@ -787,13 +822,14 @@ class PatchApInvoiceIn(BaseModel):
 @router.post("/ap/patch-invoice", summary="Patch AP invoice match fields (service role)")
 async def patch_ap_invoice(
     body: PatchApInvoiceIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import patch_invoice_for_match
 
     return patch_invoice_for_match(
-        company_id=body.company_id.strip(),
+        company_id=company_id,
         invoice_id=body.invoice_id.strip(),
         fields=body.fields or {},
     )
@@ -807,12 +843,13 @@ class ListApPosIn(BaseModel):
 @router.post("/ap/list-purchase-orders", summary="List purchase orders (service role)")
 async def list_ap_purchase_orders(
     body: ListApPosIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.services.ap_bulk_invoice_service import list_purchase_orders_for_company
 
-    return list_purchase_orders_for_company(company_id=body.company_id.strip(), limit=body.limit)
+    return list_purchase_orders_for_company(company_id=company_id, limit=body.limit)
 
 
 class BulkUpsertPosIn(BaseModel):
@@ -823,13 +860,14 @@ class BulkUpsertPosIn(BaseModel):
 @router.post("/ap/bulk-upsert-purchase-orders", summary="Bulk upsert POs (service role, bypasses RLS)")
 async def bulk_upsert_ap_purchase_orders(
     body: BulkUpsertPosIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import bulk_upsert_purchase_orders
 
     return bulk_upsert_purchase_orders(
-        company_id=body.company_id.strip(),
+        company_id=company_id,
         rows=body.purchase_orders,
     )
 
@@ -841,12 +879,13 @@ class EnsureWorkspacePosIn(BaseModel):
 @router.post("/ap/ensure-workspace-matches", summary="Copy sibling-workspace POs and relink GRNs")
 async def ensure_workspace_ap_matches(
     body: EnsureWorkspacePosIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import ensure_workspace_pos_and_relink_grns
 
-    return ensure_workspace_pos_and_relink_grns(company_id=body.company_id.strip())
+    return ensure_workspace_pos_and_relink_grns(company_id=company_id)
 
 
 class BulkUpsertGrnsIn(BaseModel):
@@ -857,13 +896,14 @@ class BulkUpsertGrnsIn(BaseModel):
 @router.post("/ap/bulk-upsert-goods-receipts", summary="Bulk upsert GRNs (service role, bypasses RLS)")
 async def bulk_upsert_ap_goods_receipts(
     body: BulkUpsertGrnsIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "write")
     from app.services.ap_bulk_invoice_service import bulk_upsert_goods_receipts
 
     return bulk_upsert_goods_receipts(
-        company_id=body.company_id.strip(),
+        company_id=company_id,
         rows=body.goods_receipts,
     )
 
@@ -877,13 +917,14 @@ class ListApGrnsIn(BaseModel):
 @router.post("/ap/list-goods-receipts", summary="List goods receipts (service role)")
 async def list_ap_goods_receipts(
     body: ListApGrnsIn,
-    tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _ = tenant_id
+    company_id = require_company_access(db, ctx, body.company_id, "read")
     from app.services.ap_bulk_invoice_service import list_goods_receipts_for_company
 
     return list_goods_receipts_for_company(
-        company_id=body.company_id.strip(),
+        company_id=company_id,
         po_id=(body.po_id or "").strip() or None,
         limit=body.limit,
     )
