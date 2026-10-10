@@ -629,12 +629,10 @@ async def root():
 @app.get("/health")
 async def health():
     import os as _os
-    from pathlib import Path as _Path
     from app.core.config import settings as _settings
     from app.core.database import engine as _engine
     from sqlalchemy import text as _text
     _k = _os.environ.get("ANTHROPIC_API_KEY", "")
-    _env = _Path(__file__).resolve().parent.parent / ".env"
     _sb_url = bool((_settings.SUPABASE_URL or "").strip())
     _sb_key = bool((_settings.SUPABASE_KEY or "").strip())
     _db_ok = False
@@ -651,18 +649,15 @@ async def health():
             _user_count = _s.query(_U).count()
             _s.close()
         except Exception as _ue:
-            _db_error = f"users query: {_ue}"
+            logger.warning("Health check users query failed: %s", _ue)
+            _db_error = f"users query: {type(_ue).__name__}"
     except Exception as _de:
-        _db_error = str(_de)
+        logger.warning("Health check DB connection failed: %s", _de)
+        _db_error = type(_de).__name__
     return {
         "status": "healthy",
         "ai_key_set": bool(_k),
-        "ai_key_prefix": _k[:12] if _k else "EMPTY",
-        "cwd": _os.getcwd(),
-        "env_file_path": str(_env),
-        "env_file_exists": _env.exists(),
         "supabase_configured": _sb_url and _sb_key,
-        "file": __file__,
         "database_url_driver": _settings.DATABASE_URL.split("://")[0] if _settings.DATABASE_URL else "EMPTY",
         "database_provider": (
             "supabase" if "supabase" in (_settings.DATABASE_URL or "")
@@ -1489,18 +1484,3 @@ if __name__ == "__main__":
         limit_max_requests=100,
         timeout_keep_alive=5,
     )
-
-@app.get("/debug-env")
-async def debug_env():
-    import os
-    from pathlib import Path
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    cwd = os.getcwd()
-    env_path = Path(__file__).resolve().parent.parent / ".env"
-    return {
-        "key_set": bool(key),
-        "key_prefix": key[:15] if key else "EMPTY",
-        "cwd": cwd,
-        "env_path": str(env_path),
-        "env_exists": env_path.exists()
-    }
