@@ -63,6 +63,7 @@ backend/outputs/
 *.db
 *.sqlite
 *.sqlite3
+chromadb_data/
 
 # Temporary files
 *.tmp

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -12,6 +15,8 @@ from app.services.supabase_auth_service import (
     product_role_from_supabase,
     verify_supabase_token,
 )
+
+logger = logging.getLogger(__name__)
 
 PUBLIC_PREFIXES = (
     "/health",
@@ -30,6 +35,9 @@ PUBLIC_PREFIXES = (
     "/api/ap/integrations/zoho/callback",
     "/api/ap/integrations/qbo/callback",
     "/api/connections/zoho/callback",
+    "/api/uae/zoho/callback",
+    "/api/uae/qbo/callback",
+    "/api/ap/whatsapp-intake/webhook",
     "/api/ap/app-settings",
     # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
     "/api/agent/extract-image",
@@ -118,6 +126,17 @@ _CORS_ORIGINS = frozenset(
 )
 
 
+def auth_gate_mode() -> str:
+    """How requests without a bearer token are handled on non-public /api/ paths.
+
+    off     — let them through as guest (legacy behaviour)
+    log     — let them through, but log `guest-access <method> <path>` so callers can be found
+    enforce — reject with 401
+    """
+    mode = os.getenv("AUTH_GATE_MODE", "log").strip().lower()
+    return mode if mode in {"off", "log", "enforce"} else "log"
+
+
 def _is_public(path: str) -> bool:
     return any(path == p or path.startswith(f"{p}/") for p in PUBLIC_PREFIXES)
 
@@ -161,7 +180,11 @@ class ProductRoleMiddleware(BaseHTTPMiddleware):
 
         auth = request.headers.get("authorization") or request.headers.get("Authorization")
         if not auth or not auth.startswith("Bearer "):
-            # Temporary guest mode — frontend login is disabled; restore auth gate later.
+            mode = auth_gate_mode()
+            if mode == "enforce":
+                return _json_error(request, 401, "Missing bearer token")
+            if mode == "log":
+                logger.warning("guest-access %s %s", request.method, path)
             request.state.user_id = "guest"
             request.state.user_role = "guest"
             request.state.product_role = "full_access"
