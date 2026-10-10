@@ -7,6 +7,10 @@
  * `invoices.file_url` / `payment_proof_url`, and viewers resolve it to a short-lived
  * signed URL with `resolveInvoiceFileUrl`.
  *
+ * Users signed in only through the backend have no Supabase session, so storage RLS
+ * rejects their browser calls; both upload and signing then go through
+ * `/api/ap/invoice-files`, which checks company access server-side.
+ *
  * Provides:
  *  - uploadInvoiceFile: upload a file, return its storage path
  *  - storeInvoiceFile: best-effort upload that never throws (returns path or null)
@@ -14,6 +18,8 @@
  *  - deleteInvoiceFile: remove from storage when invoice is deleted
  */
 import { supabase } from '@/lib/ap-invoice/supabase';
+import { isBackendConfigured, joinApiUrl } from '@/utils/backendOrigin';
+import { workspaceHeaders } from '@/utils/workspaceHeaders';
 
 const BUCKET = 'invoice-files';
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -38,8 +44,51 @@ export async function uploadInvoiceFile(
   const { data, error } = await supabase.storage
     .from(BUCKET)
     .upload(path, file, { upsert: false, contentType: file.type || undefined });
-  if (error) throw new Error(`Storage upload failed: ${error.message}`);
-  return { path: data.path };
+  if (!error) return { path: data.path };
+
+  if (!isBackendConfigured()) throw new Error(`Storage upload failed: ${error.message}`);
+  return uploadViaBackend(file, companyId, prefix);
+}
+
+async function uploadViaBackend(file: File, companyId: string, prefix: string): Promise<StorageUploadResult> {
+  const { 'Content-Type': _json, ...headers } = workspaceHeaders();
+  const form = new FormData();
+  form.append('file', file);
+  form.append('company_id', companyId);
+  form.append('prefix', prefix);
+  const res = await fetch(joinApiUrl('/api/ap/invoice-files/upload'), {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: form,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Storage upload failed (${res.status}): ${detail}`);
+  }
+  const body = (await res.json()) as { path?: string };
+  if (!body.path) throw new Error('Storage upload failed: no path returned');
+  return { path: body.path };
+}
+
+async function signedUrlViaBackend(path: string): Promise<string | null> {
+  if (!isBackendConfigured()) return null;
+  try {
+    const res = await fetch(joinApiUrl('/api/ap/invoice-files/signed-url'), {
+      method: 'POST',
+      headers: workspaceHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      console.warn('[storage] signed URL via API failed:', res.status);
+      return null;
+    }
+    return ((await res.json()) as { url?: string }).url ?? null;
+  } catch (e) {
+    console.warn('[storage] signed URL via API failed:', e instanceof Error ? e.message : e);
+    return null;
+  }
 }
 
 /**
@@ -70,11 +119,8 @@ export async function resolveInvoiceFileUrl(ref: string | null | undefined): Pro
   const path = STORAGE_PATH_RE.test(ref) ? ref : extractStoragePath(ref);
   if (path) {
     const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
-    if (error) {
-      console.warn('[storage] signed URL failed:', error.message);
-      return null;
-    }
-    return data.signedUrl;
+    if (!error && data?.signedUrl) return data.signedUrl;
+    return signedUrlViaBackend(path);
   }
   return /^https?:\/\//i.test(ref) ? ref : null;
 }
