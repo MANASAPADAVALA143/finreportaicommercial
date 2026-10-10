@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, type ReactNode } from 'react';
 import { useMarket } from '@/contexts/MarketContext';
 import { CostCenterSelect } from '@/components/industry/CostCenterSelect';
 import { PropertyCombobox } from '@/components/ap-invoice/PropertyCombobox';
@@ -21,14 +21,14 @@ import {
   escalateAnomalyToCFO,
 } from '@/lib/ap-invoice/anomalyService';
 import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
-import { storeInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
+import { attachDocumentToInvoice, storeInvoiceFile } from '@/lib/ap-invoice/invoiceStorageService';
 import type { InvoiceAnomaly } from '@/lib/ap-invoice/supabase';
 import {
   getEffectiveExtractionScore,
   getExtractionScoreSource,
   getParsedFieldConfidences,
 } from '@/utils/extractionConfidence';
-import { deriveInvoiceRiskDisplayScore } from '@/lib/ap-invoice/invoiceRiskDisplay';
+import { listRisk, paymentLabel } from '@/pages/ap-invoices/invoice-list/listModel';
 import {
   Dialog,
   DialogContent,
@@ -89,6 +89,9 @@ import {
   ShieldCheck,
   Sparkles,
   Wallet,
+  Maximize2,
+  Minimize2,
+  X,
 } from 'lucide-react';
 import { COLORS, Pill, TONE_HEX, type Tone } from '@/pages/ap-invoices/dashboard/ui';
 import { INVOICE_SOURCE_LABEL } from '@/lib/ap-invoice/invoiceLabels';
@@ -194,6 +197,43 @@ interface InvoiceDetailModalProps {
   onUpdate: () => void;
   /** Open another invoice in this modal (e.g. duplicate original). */
   onNavigateInvoice?: (invoiceId: string) => void | Promise<void>;
+  /** `drawer` renders inline (the caller owns the side-panel container); `dialog` is the full modal. */
+  variant?: 'dialog' | 'drawer';
+  /** Controlled tab — when set, the caller decides which tab opens (e.g. Risk from the list). */
+  tab?: DetailTabKey;
+  onTabChange?: (tab: DetailTabKey) => void;
+  /** Switch between the side drawer and the full-size dialog. */
+  onToggleExpand?: () => void;
+}
+
+export type DetailTabKey = 'details' | 'matching' | 'risk' | 'approval' | 'activity';
+
+function DetailFrame({
+  drawer,
+  open,
+  onClose,
+  children,
+}: {
+  drawer: boolean;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  if (drawer) {
+    return <div className="idm-drawer flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#F3F6FB]">{children}</div>;
+  }
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DialogContent className="flex h-[94vh] w-[96vw] max-w-[1480px] flex-col gap-0 overflow-hidden bg-[#F3F6FA] p-0">
+        {children}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function InvoiceDetailModal({
@@ -202,7 +242,12 @@ export function InvoiceDetailModal({
   onClose,
   onUpdate,
   onNavigateInvoice,
+  variant = 'dialog',
+  tab,
+  onTabChange,
+  onToggleExpand,
 }: InvoiceDetailModalProps) {
+  const isDrawer = variant === 'drawer';
   const { toast } = useToast();
   const { dateFormat } = useCompanySettings();
   const { isUAE } = useMarket();
@@ -255,10 +300,18 @@ export function InvoiceDetailModal({
   const [paymentProofUploading, setPaymentProofUploading] = useState(false);
   const [persistedAnomalies, setPersistedAnomalies] = useState<InvoiceAnomaly[]>([]);
   const [anomalyActionLoading, setAnomalyActionLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('details');
+  const [internalTab, setInternalTab] = useState<DetailTabKey>('details');
+  const activeTab: DetailTabKey = tab ?? internalTab;
+  const setActiveTab = (next: string) => {
+    const key = next as DetailTabKey;
+    if (onTabChange) onTabChange(key);
+    else setInternalTab(key);
+  };
+  const [attaching, setAttaching] = useState(false);
+  const attachInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    setActiveTab('details');
-  }, [invoice.id]);
+    if (tab === undefined) setInternalTab('details');
+  }, [invoice.id, tab]);
   const autoPoMatchAttemptedKeyRef = useRef<string | null>(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -292,14 +345,69 @@ export function InvoiceDetailModal({
     }
   }, [invoice?.risk_flags]);
 
-  const riskDisplayScore = useMemo(() => {
-    if (typeof invoice.risk_score === 'number' && invoice.risk_score > 0) {
-      return Math.round(invoice.risk_score);
+  /** Only the saved score is shown — an unscored invoice must never read as Low risk. */
+  const riskInfo = useMemo(() => listRisk(invoice), [invoice]);
+  const riskDisplayScore = riskInfo.score;
+
+  /**
+   * One row per distinct issue. Persisted anomalies (newest first) win over the matching
+   * `risk_flags` entry so their actions stay available; older records of the same code
+   * stay in the audit table and are only counted here.
+   */
+  const riskItems = useMemo(() => {
+    type RiskItem = {
+      key: string;
+      code: string;
+      severity: string;
+      message: string;
+      explanation?: string;
+      anomaly?: InvoiceAnomaly;
+      /** Every still-open record of this issue, so one action clears the duplicates too. */
+      openIds: string[];
+      earlier: number;
+    };
+    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
+    const groups = new Map<string, InvoiceAnomaly[]>();
+    for (const a of persistedAnomalies) {
+      const k = norm(a.flag_code) || norm(a.flag_reason) || a.id;
+      groups.set(k, [...(groups.get(k) ?? []), a]);
     }
-    const derived = deriveInvoiceRiskDisplayScore(invoice);
-    if (derived != null) return derived;
-    return parsedRiskFlags.length > 0 ? 38 : 12;
-  }, [invoice, parsedRiskFlags.length]);
+    const items: RiskItem[] = [];
+    for (const list of groups.values()) {
+      const latest = list[0];
+      items.push({
+        key: `a-${latest.id}`,
+        code: latest.flag_code || '',
+        severity: norm(latest.severity) || 'medium',
+        message: latest.flag_reason || latest.flag_code || 'Anomaly',
+        anomaly: latest,
+        openIds: list.filter((a) => a.status === 'open' || a.status === 'investigating').map((a) => a.id),
+        earlier: list.length - 1,
+      });
+    }
+    const covered = new Set(items.flatMap((i) => [norm(i.code), norm(i.message)]).filter(Boolean));
+    (parsedRiskFlags as { type?: string; code?: string; severity?: string; message?: string; explanation?: string }[]).forEach(
+      (f, i) => {
+        const code = norm(f.type ?? f.code);
+        const msg = norm(f.message);
+        if ((code && covered.has(code)) || (msg && covered.has(msg))) return;
+        if (code) covered.add(code);
+        if (msg) covered.add(msg);
+        items.push({
+          key: `f-${i}`,
+          code: f.type ?? f.code ?? '',
+          severity: norm(f.severity) || 'medium',
+          message: f.message || f.type || 'Risk flag',
+          explanation: f.explanation,
+          openIds: [],
+          earlier: 0,
+        });
+      },
+    );
+    const rank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    return items.sort((a, b) => (rank[b.severity] ?? 0) - (rank[a.severity] ?? 0));
+  }, [persistedAnomalies, parsedRiskFlags]);
+  const openRiskItems = riskItems.filter((i) => !i.anomaly || i.openIds.length > 0).length;
 
   const SEVERITY = {
     critical: { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b', icon: '🚨', label: 'Critical' },
@@ -1047,13 +1155,15 @@ export function InvoiceDetailModal({
   }
 
   async function handleAnomalyAction(
-    anomalyId: string,
+    anomalyIds: string | string[],
     status: 'investigating' | 'false_positive',
   ) {
     setAnomalyActionLoading(true);
     try {
       const actor = workEmail || 'AP User';
-      await resolveAnomaly(anomalyId, status, actor);
+      for (const id of Array.isArray(anomalyIds) ? anomalyIds : [anomalyIds]) {
+        await resolveAnomaly(id, status, actor);
+      }
       const updated = await getAnomaliesForInvoice(invoice.id);
       setPersistedAnomalies(updated);
       toast({
@@ -1330,9 +1440,39 @@ export function InvoiceDetailModal({
     }
   }
 
+  async function handleAttachDocument(file: File | undefined) {
+    if (!file) return;
+    setAttaching(true);
+    try {
+      await attachDocumentToInvoice(invoice, file);
+      logAction('invoice.updated', 'invoice', invoice.id, getInvoiceflowWorkEmail(), {
+        change: 'document_attached',
+        invoice_number: invoice.invoice_number,
+        file_name: file.name,
+        file_type: file.type || null,
+      });
+      toast({ title: 'Document attached', description: file.name });
+      onUpdate();
+    } catch (e) {
+      toast({
+        title: 'Could not attach document',
+        description: e instanceof Error ? e.message : 'Upload failed',
+        variant: 'destructive',
+      });
+    } finally {
+      setAttaching(false);
+      if (attachInputRef.current) attachInputRef.current.value = '';
+    }
+  }
+
   const childDialogOpen = duplicateAlertOpen || markPaidOpen;
 
-  const currency = invoice.currency || 'USD';
+  const rawCurrency = String(invoice.currency ?? '').trim();
+  const currency = !rawCurrency
+    ? isUAE ? 'AED' : 'INR'
+    : /[\u062F\u0625]|Ø¯/.test(rawCurrency)
+      ? 'AED'
+      : rawCurrency.toUpperCase();
   const money = (n: number | null | undefined) => formatCurrency(Number(n ?? 0), currency);
   const isPaid = invoice.status === 'Paid' || invoice.payment_status === 'paid';
   const taxAmount = Number(invoice.tax_amount ?? invoice.vat_amount ?? invoice.gst_amount ?? 0);
@@ -1353,7 +1493,8 @@ export function InvoiceDetailModal({
   const { url: fileUrl, loading: fileLoading } = useStoredFileUrl(invoice.file_url);
   const { url: paymentProofUrl } = useStoredFileUrl(invoice.payment_proof_url);
   const statusTone = INVOICE_STATUS_TONE[invoice.status] ?? 'slate';
-  const currentRiskTone = riskTone(riskDisplayScore, invoice.risk_level ?? invoice.risk_score);
+  const currentRiskTone = riskTone(riskDisplayScore, riskInfo.tier);
+  const payment = paymentLabel(invoice);
   const openAnomalies = persistedAnomalies.filter((a) => a.status === 'open' || a.status === 'investigating').length;
   const extractionScore = getEffectiveExtractionScore(invoice);
   const extractionSource = getExtractionScoreSource(invoice);
@@ -1394,13 +1535,14 @@ export function InvoiceDetailModal({
 
   return (
     <>
-    <Dialog
-      open={open && !childDialogOpen}
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-    >
-      <DialogContent className="flex h-[94vh] w-[96vw] max-w-[1480px] flex-col gap-0 overflow-hidden bg-[#F3F6FA] p-0">
+    <DetailFrame drawer={isDrawer} open={open && !childDialogOpen} onClose={onClose}>
+        <input
+          ref={attachInputRef}
+          type="file"
+          accept="application/pdf,image/*"
+          className="hidden"
+          onChange={(e) => void handleAttachDocument(e.target.files?.[0])}
+        />
         <DuplicateWarningBanner
           invoice={invoice}
           performedByEmail={workEmail}
@@ -1408,7 +1550,139 @@ export function InvoiceDetailModal({
           onNavigateInvoice={onNavigateInvoice}
         />
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-          <div className="shrink-0 border-b border-[#E3E8EF] bg-white px-6 pt-4">
+          <div className={`shrink-0 border-b border-[#E3E8EF] bg-white ${isDrawer ? 'px-4 pt-3' : 'px-6 pt-4'}`}>
+            {isDrawer ? (
+              <div className="space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h2 className="truncate text-[17px] font-bold tracking-tight text-[#0B1D33]" title={invoice.invoice_number}>
+                        {invoice.invoice_number}
+                      </h2>
+                      <Pill tone={statusTone}>{INVOICE_STATUS_LABEL[invoice.status] ?? invoice.status}</Pill>
+                    </div>
+                    <p className="mt-0.5 truncate text-[13px] font-semibold text-[#152238]" title={invoice.vendor_name || undefined}>
+                      {invoice.vendor_name || '—'}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {onToggleExpand && (
+                      <button
+                        type="button"
+                        onClick={onToggleExpand}
+                        className="rounded-md p-1.5 text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#152238]"
+                        aria-label="Expand to full view"
+                        title="Expand to full view"
+                      >
+                        <Maximize2 className="h-4 w-4" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="rounded-md p-1.5 text-[#64748B] hover:bg-[#F1F5F9] hover:text-[#152238]"
+                      aria-label="Close invoice details"
+                      title="Close (Esc)"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Pill
+                    tone={payment.state === 'paid' ? 'teal' : payment.state === 'overdue' ? 'red' : payment.state === 'scheduled' ? 'primary' : 'slate'}
+                  >
+                    {payment.label}
+                  </Pill>
+                  {isPaid && !invoice.bank_reconciled && <Pill tone="amber">Bank recon pending</Pill>}
+                  {invoice.ifrs_category ? (
+                    <Pill tone="gold">{invoice.ifrs_category}</Pill>
+                  ) : (
+                    <Pill tone="slate">IFRS not classified</Pill>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2">
+                  {[
+                    { label: 'Net', value: money(netAmount) },
+                    { label: `${taxLabel}${taxRate != null ? ` (${taxRate}%)` : ''}`, value: money(taxAmount) },
+                    { label: 'Total', value: money(invoice.total_amount), strong: true },
+                  ].map((a) => (
+                    <div key={a.label} className="min-w-0">
+                      <p className="truncate text-[10px] font-medium uppercase tracking-wide text-[#64748B]">{a.label}</p>
+                      <p className={`truncate text-[13px] tabular-nums ${a.strong ? 'font-bold text-[#0B1D33]' : 'font-semibold text-[#152238]'}`} title={a.value}>
+                        {a.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {invoice.status === 'Processing' && activeTab !== 'approval' && (
+                    <Button size="sm" className="h-7 bg-[#1765F5] px-2.5 text-[12px] hover:bg-[#0F55D8]" onClick={() => setActiveTab('approval')}>
+                      <UserCheck className="mr-1 h-3.5 w-3.5" />
+                      Review approval
+                    </Button>
+                  )}
+                  {invoice.status === 'Approved' && !isPaid && activeTab !== 'approval' && (
+                    <Button size="sm" className="h-7 bg-[#1765F5] px-2.5 text-[12px] hover:bg-[#0F55D8]" onClick={() => setActiveTab('approval')}>
+                      <CheckCircle className="mr-1 h-3.5 w-3.5" />
+                      Record payment
+                    </Button>
+                  )}
+                  {fileUrl && (
+                    <Button variant="outline" size="sm" className="h-7 px-2.5 text-[12px]" asChild>
+                      <a href={fileUrl} target="_blank" rel="noreferrer" download title="Download original invoice file">
+                        <Download className="mr-1 h-3.5 w-3.5" />
+                        Download
+                      </a>
+                    </Button>
+                  )}
+                  {isEditing ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2.5 text-[12px]"
+                        onClick={() => {
+                          setIsEditing(false);
+                          setEditedInvoice(invoice);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button size="sm" onClick={handleSave} disabled={loading} className="h-7 bg-[#1765F5] px-2.5 text-[12px] hover:bg-[#0F55D8]">
+                        <Save className="mr-1 h-3.5 w-3.5" />
+                        Save
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-[12px]"
+                      onClick={() => {
+                        setIsEditing(true);
+                        setActiveTab('details');
+                      }}
+                    >
+                      <Edit2 className="mr-1 h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-7 w-7 p-0"
+                    onClick={handleDelete}
+                    disabled={loading}
+                    aria-label="Delete invoice"
+                    title="Delete invoice"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-[#DC2626]" />
+                  </Button>
+                </div>
+              </div>
+            ) : (
+            <>
             <DialogHeader className="space-y-0 pr-8 text-left">
               <p className="text-xs text-slate-500">
                 Invoices <span aria-hidden>›</span>{' '}
@@ -1510,6 +1784,17 @@ export function InvoiceDetailModal({
                   >
                     <Trash2 className="h-4 w-4 text-[#DC2626]" />
                   </Button>
+                  {onToggleExpand && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onToggleExpand}
+                      aria-label="Collapse to side panel"
+                      title="Collapse to side panel"
+                    >
+                      <Minimize2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
             </DialogHeader>
@@ -1548,43 +1833,47 @@ export function InvoiceDetailModal({
                 />
               </button>
             </div>
+            </>
+            )}
 
-            <TabsList className="mt-3 h-auto w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0">
-              <TabsTrigger value="details" className={tabTrigger}>
-                <FileText className="mr-1.5 h-4 w-4" />
+            <TabsList
+              className={`h-auto w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 ${isDrawer ? 'mt-2' : 'mt-3'}`}
+            >
+              <TabsTrigger value="details" className={tabTrigger} title="Details">
+                {!isDrawer && <FileText className="mr-1.5 h-4 w-4" />}
                 Details
               </TabsTrigger>
-              <TabsTrigger value="matching" className={tabTrigger}>
-                <ShieldCheck className="mr-1.5 h-4 w-4" />
-                Matching &amp; Accounting
+              <TabsTrigger value="matching" className={tabTrigger} title="Matching & Accounting">
+                {!isDrawer && <ShieldCheck className="mr-1.5 h-4 w-4" />}
+                {isDrawer ? 'Matching' : 'Matching & Accounting'}
               </TabsTrigger>
-              <TabsTrigger value="risk" className={tabTrigger}>
-                <AlertCircle className="mr-1.5 h-4 w-4" />
-                Risk &amp; Compliance
-                {parsedRiskFlags.length + openAnomalies > 0 && (
+              <TabsTrigger value="risk" className={tabTrigger} title="Risk & Compliance">
+                {!isDrawer && <AlertCircle className="mr-1.5 h-4 w-4" />}
+                {isDrawer ? 'Risk' : 'Risk & Compliance'}
+                {openRiskItems > 0 && (
                   <span className="ml-1.5 rounded-full bg-[#FEF3C7] px-1.5 text-[10px] font-semibold text-[#92400E]">
-                    {parsedRiskFlags.length + openAnomalies}
+                    {openRiskItems}
                   </span>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="approval" className={tabTrigger}>
-                <UserCheck className="mr-1.5 h-4 w-4" />
-                Approval &amp; Payment
+              <TabsTrigger value="approval" className={tabTrigger} title="Approval & Payment">
+                {!isDrawer && <UserCheck className="mr-1.5 h-4 w-4" />}
+                {isDrawer ? 'Approval' : 'Approval & Payment'}
               </TabsTrigger>
-              <TabsTrigger value="activity" className={tabTrigger}>
-                <Clock className="mr-1.5 h-4 w-4" />
-                Activity &amp; Audit Trail
+              <TabsTrigger value="activity" className={tabTrigger} title="Activity & Audit Trail">
+                {!isDrawer && <Clock className="mr-1.5 h-4 w-4" />}
+                {isDrawer ? 'Activity' : 'Activity & Audit Trail'}
               </TabsTrigger>
             </TabsList>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className={`min-h-0 flex-1 overflow-y-auto ${isDrawer ? 'px-3 py-3' : 'px-5 py-4'}`}>
             <TabsContent value="details" className="mt-0 focus-visible:ring-0 focus-visible:ring-offset-0">
-              <div className="grid gap-4 xl:grid-cols-12">
+              <div className={`grid gap-4 ${isDrawer ? '' : 'xl:grid-cols-12'}`}>
                 <DetailCard
                   title="Invoice Document"
                   icon={<FileText className="h-4 w-4 text-[#DC2626]" />}
-                  className="self-start overflow-hidden xl:sticky xl:top-0 xl:col-span-4"
+                  className={`self-start overflow-hidden ${isDrawer ? 'order-last' : 'xl:sticky xl:top-0 xl:col-span-4'}`}
                   bodyClassName=""
                 >
                   <DocumentPreview
@@ -1594,6 +1883,9 @@ export function InvoiceDetailModal({
                     fileRef={invoice.file_url}
                     zoom={zoomLevel}
                     onZoom={setZoomLevel}
+                    compact={isDrawer}
+                    attaching={attaching}
+                    onAttach={invoice.company_id ? () => attachInputRef.current?.click() : undefined}
                   />
                 </DetailCard>
 
@@ -1908,45 +2200,46 @@ export function InvoiceDetailModal({
                       icon={<AlertCircle className="h-4 w-4" style={{ color: TONE_HEX[currentRiskTone] }} />}
                       action={
                         <button type="button" className={linkButton} onClick={() => setActiveTab('risk')}>
-                          View all{parsedRiskFlags.length + persistedAnomalies.length > 0
-                            ? ` (${parsedRiskFlags.length + persistedAnomalies.length})`
-                            : ''}
+                          View all{riskItems.length > 0 ? ` (${riskItems.length})` : ''}
                         </button>
                       }
                     >
                       <div className="flex items-center gap-4">
                         <Ring
-                          value={riskDisplayScore}
-                          size={96}
+                          value={riskDisplayScore ?? 0}
+                          size={isDrawer ? 80 : 96}
                           stroke={9}
                           color={TONE_HEX[currentRiskTone]}
-                          label={`Risk score ${riskDisplayScore} of 100`}
+                          label={riskDisplayScore != null ? `Risk score ${riskDisplayScore} of 100` : 'Risk not scored'}
                         >
-                          <span className="text-xl font-bold text-slate-900">{riskDisplayScore}</span>
-                          <span className="text-[10px] text-slate-500">Risk score</span>
+                          <span className="text-xl font-bold text-slate-900">{riskDisplayScore ?? '—'}</span>
+                          <span className="text-[10px] text-slate-500">{riskDisplayScore != null ? 'Risk score' : 'Not scored'}</span>
                         </Ring>
                         <div className="min-w-0 flex-1">
-                          <Pill tone={riskTone(0, riskLabel(invoice))}>{riskLabel(invoice)} risk</Pill>
+                          <Pill tone={currentRiskTone}>
+                            {riskInfo.tier ? `${riskInfo.tier[0].toUpperCase()}${riskInfo.tier.slice(1)} risk` : 'Not scored'}
+                          </Pill>
                           <p className="mt-1 text-[11px] text-slate-500">
-                            {parsedRiskFlags.length} flag{parsedRiskFlags.length !== 1 ? 's' : ''} detected
+                            {riskItems.length} issue{riskItems.length !== 1 ? 's' : ''} found
+                            {!riskInfo.scored ? ' · risk scan has not saved a score yet' : ''}
                           </p>
-                          {parsedRiskFlags.length > 0 ? (
+                          {riskItems.length > 0 ? (
                             <ul className="mt-2 space-y-1.5">
-                              {parsedRiskFlags
-                                .slice(0, 3)
-                                .map((flag: { severity?: string; message?: string }, i: number) => (
-                                  <li key={i} className="flex items-center justify-between gap-2 text-[12px]">
-                                    <span className="min-w-0 truncate text-slate-700" title={flag.message}>
-                                      {flag.message}
-                                    </span>
-                                    <Pill tone={severityTone(flag.severity)}>
-                                      {SEVERITY[(flag.severity as keyof typeof SEVERITY) || 'low']?.label ?? 'Low'}
-                                    </Pill>
-                                  </li>
-                                ))}
+                              {riskItems.slice(0, 3).map((item) => (
+                                <li key={item.key} className="flex items-center justify-between gap-2 text-[12px]">
+                                  <span className="min-w-0 truncate text-slate-700" title={item.message}>
+                                    {item.message}
+                                  </span>
+                                  <Pill tone={severityTone(item.severity)}>
+                                    {SEVERITY[item.severity as keyof typeof SEVERITY]?.label ?? item.severity}
+                                  </Pill>
+                                </li>
+                              ))}
                             </ul>
-                          ) : (
+                          ) : riskInfo.scored ? (
                             <p className="mt-2 text-xs text-[#047857]">No risk flags detected for this invoice.</p>
+                          ) : (
+                            <p className="mt-2 text-xs text-slate-500">No scan result saved for this invoice.</p>
                           )}
                         </div>
                       </div>
@@ -2640,248 +2933,130 @@ export function InvoiceDetailModal({
                     </CardHeader>
                     <CardContent>
                       <div>
-                        {/* Score header */}
                         <div
+                          className="mb-4 flex items-center gap-3 rounded-lg border px-4 py-3"
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '12px',
-                            padding: '14px 16px',
-                            background:
-                              (invoice?.risk_level ?? invoice?.risk_score) === 'High' || invoice?.risk_score === 'high'
-                                ? '#fee2e2'
-                                : (invoice?.risk_level ?? invoice?.risk_score) === 'Medium' || invoice?.risk_score === 'medium'
-                                ? '#fff7ed'
-                                : '#f0fdf4',
-                            borderRadius: '8px',
-                            marginBottom: '14px',
-                            border: `1px solid ${
-                              (invoice?.risk_level ?? invoice?.risk_score) === 'High' || invoice?.risk_score === 'high'
-                                ? '#fca5a5'
-                                : (invoice?.risk_level ?? invoice?.risk_score) === 'Medium' || invoice?.risk_score === 'medium'
-                                ? '#fed7aa'
-                                : '#bbf7d0'
-                            }`,
+                            background: `${TONE_HEX[currentRiskTone]}12`,
+                            borderColor: `${TONE_HEX[currentRiskTone]}55`,
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: '22px',
-                              fontWeight: 800,
-                              color:
-                                riskDisplayScore >= 60 ||
-                                (invoice?.risk_level ?? invoice?.risk_score) === 'High' ||
-                                invoice?.risk_score === 'high'
-                                  ? '#ef4444'
-                                  : riskDisplayScore >= 30 ||
-                                      (invoice?.risk_level ?? invoice?.risk_score) === 'Medium' ||
-                                      invoice?.risk_score === 'medium'
-                                    ? '#f97316'
-                                    : '#22c55e',
-                            }}
-                          >
-                            {riskDisplayScore}
+                          <span className="text-[22px] font-extrabold tabular-nums" style={{ color: TONE_HEX[currentRiskTone] }}>
+                            {riskDisplayScore ?? '—'}
                           </span>
-                          <div style={{ flex: 1 }}>
-                            <div
-                              style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                marginBottom: '4px',
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontSize: '13px',
-                                  fontWeight: 700,
-                                  color:
-                                    riskDisplayScore >= 60 ||
-                                    (invoice?.risk_level ?? invoice?.risk_score) === 'High' ||
-                                    invoice?.risk_score === 'high'
-                                      ? '#ef4444'
-                                      : riskDisplayScore >= 30 ||
-                                          (invoice?.risk_level ?? invoice?.risk_score) === 'Medium' ||
-                                          invoice?.risk_score === 'medium'
-                                        ? '#f97316'
-                                        : '#22c55e',
-                                }}
-                              >
-                                {invoice?.risk_level ?? (invoice?.risk_score === 'high' ? 'High' : invoice?.risk_score === 'medium' ? 'Medium' : 'Low')} Risk
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-1 flex justify-between gap-2">
+                              <span className="text-[13px] font-bold" style={{ color: TONE_HEX[currentRiskTone] }}>
+                                {riskInfo.tier ? `${riskInfo.tier[0].toUpperCase()}${riskInfo.tier.slice(1)} risk` : 'Not scored'}
                               </span>
-                              <span style={{ fontSize: '12px', color: '#6b7280' }}>
-                                {parsedRiskFlags.length} flag{parsedRiskFlags.length !== 1 ? 's' : ''} detected
+                              <span className="text-[12px] text-slate-500">
+                                {riskItems.length} issue{riskItems.length !== 1 ? 's' : ''}
                               </span>
                             </div>
-                            <div
-                              style={{
-                                height: '6px',
-                                background: '#e5e7eb',
-                                borderRadius: '3px',
-                                overflow: 'hidden',
-                              }}
-                            >
+                            <div className="h-1.5 overflow-hidden rounded bg-slate-200">
                               <div
-                                style={{
-                                  width: `${Math.min(100, riskDisplayScore)}%`,
-                                  height: '100%',
-                                  background:
-                                    riskDisplayScore >= 60 ||
-                                    (invoice?.risk_level ?? invoice?.risk_score) === 'High' ||
-                                    invoice?.risk_score === 'high'
-                                      ? '#ef4444'
-                                      : riskDisplayScore >= 30 ||
-                                          (invoice?.risk_level ?? invoice?.risk_score) === 'Medium' ||
-                                          invoice?.risk_score === 'medium'
-                                        ? '#f97316'
-                                        : '#22c55e',
-                                  borderRadius: '3px',
-                                  transition: 'width 0.6s ease',
-                                }}
+                                className="h-full rounded transition-[width] duration-500"
+                                style={{ width: `${Math.min(100, riskDisplayScore ?? 0)}%`, background: TONE_HEX[currentRiskTone] }}
                               />
                             </div>
+                            {!riskInfo.scored && (
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                No score saved yet — run 3-Way Match &amp; Classify from the invoice list to score this invoice.
+                              </p>
+                            )}
                           </div>
                         </div>
 
-                        {/* Individual flag cards */}
-                        {parsedRiskFlags.length > 0 ? (
-                          parsedRiskFlags.map((flag: { severity?: string; message?: string; explanation?: string }, i: number) => {
-                            const cfg = SEVERITY[(flag.severity as keyof typeof SEVERITY) || 'low'] || SEVERITY.low;
+                        {riskItems.length === 0 ? (
+                          <div
+                            className={`rounded-lg border p-3.5 text-center text-[13px] font-semibold ${
+                              riskInfo.scored
+                                ? 'border-[#bbf7d0] bg-[#f0fdf4] text-[#166534]'
+                                : 'border-slate-200 bg-slate-50 text-slate-600'
+                            }`}
+                          >
+                            {riskInfo.scored ? 'No risk flags detected for this invoice' : 'No risk scan result saved for this invoice'}
+                          </div>
+                        ) : (
+                          riskItems.map((item) => {
+                            const cfg = SEVERITY[item.severity as keyof typeof SEVERITY] || SEVERITY.medium;
+                            const a = item.anomaly;
+                            const status = a
+                              ? item.openIds.length > 0 && !item.openIds.includes(a.id)
+                                ? 'open'
+                                : a.status
+                              : null;
                             return (
                               <div
-                                key={i}
-                                style={{
-                                  background: cfg.bg,
-                                  border: `1px solid ${cfg.border}`,
-                                  borderRadius: '8px',
-                                  padding: '12px 14px',
-                                  marginBottom: '8px',
-                                }}
+                                key={item.key}
+                                className="mb-2 rounded-lg border px-3.5 py-3"
+                                style={{ background: cfg.bg, borderColor: cfg.border }}
                               >
-                                <div
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '8px',
-                                    marginBottom: flag.explanation ? '6px' : '0',
-                                  }}
-                                >
-                                  <span style={{ fontSize: '15px' }}>{cfg.icon}</span>
-                                  <span
-                                    style={{
-                                      fontSize: '13px',
-                                      fontWeight: 700,
-                                      color: cfg.text,
-                                      flex: 1,
-                                    }}
-                                  >
-                                    {flag.message}
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[15px]" aria-hidden>
+                                    {cfg.icon}
+                                  </span>
+                                  <span className="min-w-0 flex-1 text-[13px] font-bold" style={{ color: cfg.text }}>
+                                    {item.message}
                                   </span>
                                   <span
-                                    style={{
-                                      fontSize: '10px',
-                                      fontWeight: 700,
-                                      padding: '2px 8px',
-                                      borderRadius: '20px',
-                                      background: cfg.border,
-                                      color: cfg.text,
-                                      whiteSpace: 'nowrap' as const,
-                                    }}
+                                    className="whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                    style={{ background: cfg.border, color: cfg.text }}
                                   >
                                     {cfg.label}
                                   </span>
                                 </div>
-                                {flag.explanation && (
-                                  <p
-                                    style={{
-                                      fontSize: '12px',
-                                      color: cfg.text,
-                                      opacity: 0.85,
-                                      lineHeight: '1.55',
-                                      margin: '0 0 0 23px',
-                                    }}
-                                  >
-                                    {flag.explanation}
+                                {(item.code || status || item.earlier > 0) && (
+                                  <p className="mt-1 pl-[23px] text-[11px]" style={{ color: cfg.text, opacity: 0.8 }}>
+                                    {[
+                                      item.code ? item.code.replace(/_/g, ' ') : null,
+                                      status ? status.replace(/_/g, ' ') : null,
+                                      item.earlier > 0
+                                        ? `${item.earlier} earlier record${item.earlier === 1 ? '' : 's'} in audit history`
+                                        : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
                                   </p>
+                                )}
+                                {item.explanation && (
+                                  <p className="mt-1.5 pl-[23px] text-[12px] leading-relaxed" style={{ color: cfg.text, opacity: 0.85 }}>
+                                    {item.explanation}
+                                  </p>
+                                )}
+                                {a && item.openIds.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap gap-1.5 pl-[23px]">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 bg-white px-2.5 text-[12px]"
+                                      disabled={anomalyActionLoading}
+                                      onClick={() => void handleAnomalyAction(item.openIds, 'investigating')}
+                                    >
+                                      Investigate
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 bg-white px-2.5 text-[12px]"
+                                      disabled={anomalyActionLoading}
+                                      onClick={() => void handleAnomalyAction(item.openIds, 'false_positive')}
+                                    >
+                                      False positive
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      className="h-7 px-2.5 text-[12px]"
+                                      disabled={anomalyActionLoading}
+                                      onClick={() => void handleAnomalyEscalate(a)}
+                                    >
+                                      Escalate
+                                    </Button>
+                                  </div>
                                 )}
                               </div>
                             );
                           })
-                        ) : (
-                          <div
-                            style={{
-                              background: '#f0fdf4',
-                              border: '1px solid #bbf7d0',
-                              borderRadius: '8px',
-                              padding: '14px',
-                              textAlign: 'center',
-                              fontSize: '13px',
-                              fontWeight: 600,
-                              color: '#166534',
-                            }}
-                          >
-                            ✅ No risk flags detected for this invoice
-                          </div>
-                        )}
-
-                        {/* Persisted anomalies from invoice_anomalies table */}
-                        {persistedAnomalies.length > 0 && (
-                          <div style={{ marginTop: '16px' }}>
-                            <p style={{ fontSize: '12px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
-                              Detected anomalies ({persistedAnomalies.length})
-                            </p>
-                            {persistedAnomalies.map((a) => {
-                              const sev = a.severity ?? 'medium';
-                              const cfg = SEVERITY[sev as keyof typeof SEVERITY] || SEVERITY.medium;
-                              return (
-                                <div
-                                  key={a.id}
-                                  style={{
-                                    background: cfg.bg,
-                                    border: `1px solid ${cfg.border}`,
-                                    borderRadius: '8px',
-                                    padding: '10px 12px',
-                                    marginBottom: '8px',
-                                  }}
-                                >
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                                    <span style={{ fontSize: '12px', fontWeight: 700, color: cfg.text }}>
-                                      {a.flag_code?.replace(/_/g, ' ')}
-                                    </span>
-                                    <span style={{ fontSize: '10px', color: cfg.text }}>{a.status}</span>
-                                  </div>
-                                  <p style={{ fontSize: '12px', color: cfg.text, margin: '4px 0 0' }}>{a.flag_reason}</p>
-                                  {a.status === 'open' || a.status === 'investigating' ? (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        disabled={anomalyActionLoading}
-                                        onClick={() => void handleAnomalyAction(a.id, 'investigating')}
-                                      >
-                                        Investigate
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        disabled={anomalyActionLoading}
-                                        onClick={() => void handleAnomalyAction(a.id, 'false_positive')}
-                                      >
-                                        Mark False Positive
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="destructive"
-                                        disabled={anomalyActionLoading}
-                                        onClick={() => void handleAnomalyEscalate(a)}
-                                      >
-                                        Escalate to CFO
-                                      </Button>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              );
-                            })}
-                          </div>
                         )}
                       </div>
                     </CardContent>
@@ -3562,8 +3737,7 @@ export function InvoiceDetailModal({
             </TabsContent>
           </div>
         </Tabs>
-      </DialogContent>
-    </Dialog>
+    </DetailFrame>
 
     {/* Duplicate alert before payment — exclusive of main detail modal */}
     <Dialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>

@@ -1,41 +1,57 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase, type Invoice } from '@/lib/ap-invoice/supabase';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
-  Search,
-  Download,
-  Eye,
-  Calendar,
-  FileSpreadsheet,
-  Trash2,
-  Zap,
+  AlertTriangle,
+  Camera,
   CheckCircle2,
   ChevronDown,
-  ChevronUp,
-  SlidersHorizontal,
+  Download,
+  FileSpreadsheet,
+  MoreHorizontal,
+  RefreshCw,
+  Trash2,
+  Upload,
+  Zap,
 } from 'lucide-react';
-import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
+import {
+  COLUMNS_STORAGE_KEY,
+  DEFAULT_SORT,
+  EMPTY_FILTERS,
+  invoiceProperty,
+  matchesFilters,
+  matchesStage,
+  matchesView,
+  OPTIONAL_COLUMNS,
+  PAGE_SIZE_STORAGE_KEY,
+  PAGE_SIZES,
+  sortInvoices,
+  type ListFilters,
+  type OptionalColumn,
+  type SortState,
+  type StageFilter,
+  type ViewMode,
+} from './invoice-list/listModel';
+import { ListPipeline } from './invoice-list/ListPipeline';
+import { ListToolbar, type FilterOptions } from './invoice-list/ListToolbar';
+import { InvoiceTable, statusLabel, type DetailTab, type GlDisplay } from './invoice-list/InvoiceTable';
+import {
+  PIPELINE_STAGE_KEYS,
+  pipelineStages,
+  type PipelineStage,
+  type PipelineStageKey,
+} from './dashboard/metrics';
+import type { StageFilterState } from './dashboard/types';
 import { InvoiceDetailModal } from '@/components/ap-invoice/InvoiceDetailModal';
 import { listInvoiceAnomalies, scanInvoiceAnomalies } from '@/lib/ap-invoice/anomalyService';
 import { bulkApproveApInvoices } from '@/lib/ap-invoice/bulkApproveService';
@@ -362,33 +378,34 @@ export function InvoiceList() {
   const { dateFormat } = useCompanySettings();
   const { activeCompanyId } = useCompany();
   const tallySettings = useErpSettings();
-  const [showExport, setShowExport] = useState(false);
-  /** Secondary filters (search / property / IFRS / source / dates) — collapsed until needed. */
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [filteredInvoices, setFilteredInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [costCenterFilter, setCostCenterFilter] = useState<string>('all');
-  const [propertyFilter, setPropertyFilter] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'all' | 'approvals' | 'duplicates' | 'needs_review' | 'anomalies'>('all');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
+  const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [stageFilter, setStageFilter] = useState<StageFilter>(null);
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [anomalyInvoiceIds, setAnomalyInvoiceIds] = useState<Set<string>>(new Set());
-  const [confidenceSort, setConfidenceSort] = useState<'none' | 'high_first' | 'low_first'>('none');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(() => {
+    const stored = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(stored) ? stored : 10;
+  });
+  const [columns, setColumns] = useState<Set<OptionalColumn>>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(COLUMNS_STORAGE_KEY) || '[]');
+      const known = new Set(OPTIONAL_COLUMNS.map((c) => c.key));
+      return new Set((Array.isArray(raw) ? raw : []).filter((k): k is OptionalColumn => known.has(k)));
+    } catch {
+      return new Set();
+    }
+  });
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [drawerTab, setDrawerTab] = useState<DetailTab>('details');
+  const [drawerExpanded, setDrawerExpanded] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [ifrsFilter, setIfrsFilter] = useState<string>('all');
-  const [matchStatusFilter, setMatchStatusFilter] = useState<string>('all');
-  const [riskFilter, setRiskFilter] = useState<string>('all');
-  const [sourceFilter, setSourceFilter] = useState<string>('all');
-  const [sourceReceivedAtFilter, setSourceReceivedAtFilter] = useState<string | null>(null);
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
-  /** Matches DB: `purchase` (AP) / `sales` (AR). UI labels stay AP / AR. */
-  const [invoiceKindFilter, setInvoiceKindFilter] = useState<'all' | 'purchase' | 'sales'>('all');
   const [cameraOpen, setCameraOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewNorm, setPreviewNorm] = useState<NormalizedExtractedInvoice | null>(null);
@@ -398,68 +415,11 @@ export function InvoiceList() {
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [seedingGst, setSeedingGst] = useState(false);
-  const [advanceFilter, setAdvanceFilter] = useState(false);
   const [pintAeInvoice, setPintAeInvoice] = useState<Invoice | null>(null);
-  const itemsPerPage = 20;
 
-  const costCenterOptions = Array.from(
-    new Set(invoices.map((inv) => (inv.cost_center || '').trim()).filter(Boolean)),
-  ).sort();
-  const propertyOptions = Array.from(
-    new Set(
-      invoices
-        .map((inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)))
-        .filter(Boolean),
-    ),
-  ).sort();
-  /** Hide empty / duplicate cost-center picker (e.g. "All Propertys" when label is Property). */
-  const showCostCenterFilter = costCenterOptions.length > 0;
-  const showPropertyFilter = propertyOptions.length > 0;
-  const showPropertyColumn = true;
-  const costCenterIsPropertyLabel = /^propert/i.test(costCenterLabel.trim());
-  /** Don't show a second blank "Property" column when cost centers are empty or label duplicates property_ref. */
-  const showCostCenterColumn = showCostCenterFilter && !costCenterIsPropertyLabel;
-  const advancedFiltersActive =
-    Boolean(searchTerm.trim()) ||
-    costCenterFilter !== 'all' ||
-    propertyFilter !== 'all' ||
-    ifrsFilter !== 'all' ||
-    sourceFilter !== 'all' ||
-    Boolean(startDate) ||
-    Boolean(endDate) ||
-    Boolean(sourceReceivedAtFilter);
-  const filtersExpanded = showAdvancedFilters || advancedFiltersActive;
-  const costCenterAllLabel = /y$/i.test(costCenterLabel)
-    ? `All ${costCenterLabel.replace(/y$/i, 'ies')}`
-    : `All ${costCenterLabel}s`;
-
-  const STEPPER_LABELS = [
-    'Uploaded',
-    'AI Extracted',
-    'IFRS Classify',
-    '3-Way Match',
-    'Risk Score',
-    'Approval',
-    'GL Coded',
-    'Paid',
-  ];
-
-  function getCurrentStepperStep(invList: Invoice[]): number {
-    if (invList.length === 0) return 1;
-    if (invList.some((i) => !i.ifrs_category?.trim())) return 3;
-    if (
-      invList.some((i) => {
-        if (i.match_status === 'three_way_matched') return false;
-        const s = i.match_status;
-        return !s || s === 'no_po' || s === 'partial' || s === 'mismatch' || s === 'matched';
-      })
-    )
-      return 4;
-    if (invList.some((i) => i.risk_score == null)) return 5;
-    if (invList.some((i) => i.status === 'Processing')) return 6;
-    if (invList.some((i) => !(i.gl_account_code ?? i.gl_code)?.trim())) return 7;
-    return 8;
-  }
+  const patchFilters = useCallback((patch: Partial<ListFilters>) => {
+    setFilters((prev) => ({ ...prev, ...patch }));
+  }, []);
 
   useEffect(() => {
     void retryPendingGlPosts();
@@ -468,44 +428,37 @@ export function InvoiceList() {
     void loadEffectiveCoaMappings()
       .then(setCoaMappings)
       .catch(() => setCoaMappings([]));
-    // Check for vendor filter in URL
+    // Deep links from the dashboard, vendor pages and email intake.
     const urlParams = new URLSearchParams(window.location.search);
+    const filterParam = urlParams.get('filter');
+    const patch: Partial<ListFilters> = {};
     const vendorFilter = urlParams.get('vendor');
-    if (vendorFilter) {
-      setSearchTerm(vendorFilter);
-    }
-    if (urlParams.get('filter') === 'duplicates') {
-      setViewMode('duplicates');
-    }
-    if (urlParams.get('filter') === 'unclassified') {
-      setIfrsFilter('not_classified');
-    }
-    if (urlParams.get('filter') === 'match_issues') {
-      setMatchStatusFilter('match_issues');
-    }
-    if (urlParams.get('filter') === 'approvals') {
-      setViewMode('approvals');
-    }
+    if (vendorFilter) patch.search = vendorFilter;
+    if (filterParam === 'unclassified') patch.ifrs = 'not_classified';
+    if (filterParam === 'match_issues') patch.match = 'match_issues';
     const statusParam = urlParams.get('status');
-    if (statusParam) {
-      setStatusFilter(statusParam);
-    }
-    if (
-      urlParams.get('filter') === 'needs-review' ||
-      urlParams.get('tab') === 'needs-review'
-    ) {
-      setViewMode('needs_review');
-    }
-    if (urlParams.get('tab') === 'anomalies') {
-      setViewMode('anomalies');
-    }
-    if (urlParams.get('advance') === '1') {
-      setAdvanceFilter(true);
-    }
+    if (statusParam) patch.status = statusParam;
+    if (urlParams.get('advance') === '1') patch.advanceOnly = true;
     const receivedAt = urlParams.get('receivedAt');
     if (receivedAt) {
-      setSourceReceivedAtFilter(decodeURIComponent(receivedAt));
-      setSourceFilter('email');
+      patch.receivedAt = decodeURIComponent(receivedAt);
+      patch.source = 'email';
+    }
+    if (Object.keys(patch).length > 0) patchFilters(patch);
+    if (filterParam === 'duplicates') setViewMode('duplicates');
+    if (filterParam === 'approvals') setViewMode('approvals');
+    if (filterParam === 'needs-review' || urlParams.get('tab') === 'needs-review') {
+      setViewMode('needs_review');
+    }
+    if (urlParams.get('tab') === 'anomalies') setViewMode('anomalies');
+    const stageParam = urlParams.get('stage') as PipelineStageKey | null;
+    if (stageParam && PIPELINE_STAGE_KEYS.has(stageParam)) {
+      const stateParam = urlParams.get('state');
+      const state: StageFilterState =
+        stateParam === 'done' || stateParam === 'pending' || stateParam === 'issue' || stateParam === 'na'
+          ? stateParam
+          : 'open';
+      setStageFilter({ stage: stageParam, state });
     }
   }, [workspaceId, activeCompanyId]);
 
@@ -533,55 +486,133 @@ export function InvoiceList() {
     return () => window.removeEventListener('ap-company-synced', onSynced);
   }, [accessToken, workspaceId]);
 
-  useEffect(() => {
-    filterInvoices();
-  }, [
-    invoices,
-    searchTerm,
-    statusFilter,
-    costCenterFilter,
-    propertyFilter,
-    startDate,
-    endDate,
-    viewMode,
-    anomalyInvoiceIds,
-    ifrsFilter,
-    matchStatusFilter,
-    riskFilter,
-    confidenceSort,
-    sourceFilter,
-    sourceReceivedAtFilter,
-    invoiceKindFilter,
-    advanceFilter,
-  ]);
+  // Filtering is staged so each control counts against the right population:
+  // view chips count the base set, the pipeline counts the active view, the table shows the stage slice.
+  const baseFiltered = useMemo(() => {
+    const today = new Date();
+    return invoices.filter((inv) => matchesFilters(inv, filters, today));
+  }, [invoices, filters]);
 
-  /** IFRS dropdown only lists categories present on loaded invoices; reset stale values (e.g. after data refresh). */
-  useEffect(() => {
-    if (ifrsFilter === 'all' || ifrsFilter === 'not_classified') return;
-    const categories = new Set(
-      invoices.map((inv) => (inv.ifrs_category || '').trim()).filter(Boolean)
-    );
-    if (!categories.has(ifrsFilter)) {
-      setIfrsFilter('all');
+  const viewCounts = useMemo(() => {
+    const counts = {} as Record<ViewMode, number>;
+    for (const v of ['all', 'approvals', 'duplicates', 'needs_review', 'anomalies'] as ViewMode[]) {
+      counts[v] = baseFiltered.filter((inv) => matchesView(inv, v, anomalyInvoiceIds)).length;
     }
-  }, [invoices, ifrsFilter]);
+    return counts;
+  }, [baseFiltered, anomalyInvoiceIds]);
+
+  const viewFiltered = useMemo(
+    () => baseFiltered.filter((inv) => matchesView(inv, viewMode, anomalyInvoiceIds)),
+    [baseFiltered, viewMode, anomalyInvoiceIds],
+  );
+
+  const listStages = useMemo(() => pipelineStages(viewFiltered), [viewFiltered]);
+
+  const filteredInvoices = useMemo(
+    () => sortInvoices(viewFiltered.filter((inv) => matchesStage(inv, stageFilter)), sort),
+    [viewFiltered, stageFilter, sort],
+  );
+
+  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
+  const page = Math.min(currentPage, totalPages);
+  const paginatedInvoices = filteredInvoices.slice((page - 1) * pageSize, page * pageSize);
+
+  // Only an explicit change of the result definition sends the user back to page 1;
+  // background refreshes (approve, save, sync) keep the current page.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, viewMode, stageFilter, sort, pageSize]);
+
+  useEffect(() => {
+    localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(pageSize));
+  }, [pageSize]);
+
+  useEffect(() => {
+    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify([...columns]));
+  }, [columns]);
+
+  const filterOptions = useMemo<FilterOptions>(() => {
+    const uniq = (values: (string | null | undefined)[]) =>
+      Array.from(new Set(values.map((v) => (v || '').trim()).filter(Boolean))).sort();
+    const gl = new Map<string, string>();
+    for (const inv of invoices) {
+      const d = displayGlFromCoaMap(inv, coaMappings);
+      if (d?.source === 'stored' && !gl.has(d.code)) gl.set(d.code, d.name || '');
+    }
+    return {
+      statuses: uniq(invoices.map((inv) => inv.status)),
+      ifrs: uniq(invoices.map((inv) => inv.ifrs_category)),
+      gl: [...gl.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([code, name]) => ({ code, name })),
+      property: uniq(invoices.map(invoiceProperty)),
+      costCenter: uniq(invoices.map((inv) => inv.cost_center)),
+    };
+  }, [invoices, coaMappings]);
+
+  /** Dropdown options only list values present on loaded invoices; drop stale picks after a refresh. */
+  useEffect(() => {
+    if (loading) return;
+    const stale: Partial<ListFilters> = {};
+    if (filters.ifrs !== 'all' && filters.ifrs !== 'not_classified' && !filterOptions.ifrs.includes(filters.ifrs)) {
+      stale.ifrs = 'all';
+    }
+    if (filters.gl !== 'all' && filters.gl !== 'uncoded' && !filterOptions.gl.some((g) => g.code === filters.gl)) {
+      stale.gl = 'all';
+    }
+    if (Object.keys(stale).length > 0) patchFilters(stale);
+  }, [loading, filterOptions, filters.ifrs, filters.gl, patchFilters]);
+
+  const classifyTargets = useMemo(() => {
+    const stale = new Set(['mismatch', 'no_po', 'partial', 'unmatched', '']);
+    return invoices.filter((inv) => inv.status === 'Processing' || stale.has(inv.match_status || ''));
+  }, [invoices]);
+
+  const staleMatchTargets = useMemo(
+    () => invoices.filter((inv) => ['mismatch', 'no_po', 'partial'].includes(inv.match_status || '')),
+    [invoices],
+  );
 
   function clearInvoiceListFilters() {
-    setSearchTerm('');
-    setStatusFilter('all');
-    setCostCenterFilter('all');
+    setFilters(EMPTY_FILTERS);
     setViewMode('all');
-    setIfrsFilter('all');
-    setMatchStatusFilter('all');
-    setRiskFilter('all');
-    setSourceFilter('all');
-    setSourceReceivedAtFilter(null);
-    setStartDate('');
-    setEndDate('');
-    setConfidenceSort('none');
-    setInvoiceKindFilter('all');
+    setStageFilter(null);
+    setSort(DEFAULT_SORT);
     navigate('/ap-invoices/list', { replace: true });
   }
+
+  function changeView(next: ViewMode) {
+    setViewMode(next);
+    if (window.location.search) navigate('/ap-invoices/list', { replace: true });
+  }
+
+  function openInvoice(inv: Invoice, tab: DetailTab = 'details') {
+    setSelectedInvoice(inv);
+    setDrawerTab(tab);
+  }
+
+  function closeInvoice() {
+    setSelectedInvoice(null);
+    setDrawerExpanded(false);
+  }
+
+  // Bulk actions operate on what is visible, so drop selections that a filter has hidden.
+  useEffect(() => {
+    const visible = new Set(filteredInvoices.map((inv) => inv.id));
+    setSelectedIds((prev) => {
+      const next = prev.filter((id) => visible.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [filteredInvoices]);
+
+  const drawerOpen = !!selectedInvoice && !drawerExpanded;
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')) return;
+      closeInvoice();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerOpen]);
 
   async function deleteDebugInvoicesOnce() {
     try {
@@ -885,12 +916,14 @@ export function InvoiceList() {
       }
 
       setInvoices(invoiceList);
+      setLoadError(null);
       setSelectedInvoice((prev) => pickUpdatedInvoice(prev, invoiceList));
 
       void refreshAnomalyInvoiceIds(companyId, invoiceList);
       void markEscalationDueIfNeeded(invoiceList, companyId);
     } catch (error) {
       console.error('Error fetching invoices:', error);
+      setLoadError(error instanceof Error ? error.message : 'Invoices could not be loaded.');
     } finally {
       if (!opts?.quiet) setLoading(false);
     }
@@ -1026,125 +1059,12 @@ export function InvoiceList() {
     }
   }
 
-  function filterInvoices() {
-    let filtered = invoices;
-
-    // Filter by view mode (All vs Approvals)
-    if (viewMode === 'approvals') {
-      filtered = filtered.filter(
-        (inv) =>
-          inv.approval_level &&
-          inv.approval_level !== 'none' &&
-          !inv.approved_by &&
-          inv.status === 'Processing'
-      );
-    } else if (viewMode === 'duplicates') {
-      filtered = filtered.filter((inv) => inv.duplicate_flag === true);
-    } else if (viewMode === 'needs_review') {
-      filtered = filtered.filter((inv) => invoiceNeedsExtractionReview(inv));
-    } else if (viewMode === 'anomalies') {
-      filtered = filtered.filter(
-        (inv) => anomalyInvoiceIds.has(inv.id) || invoiceMatchesAnomalyTab(inv),
-      );
-    }
-
-    if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      filtered = filtered.filter(
-        (inv) =>
-          inv.invoice_number.toLowerCase().includes(q) ||
-          inv.vendor_name.toLowerCase().includes(q) ||
-          (inv.property_ref || '').toLowerCase().includes(q)
-      );
-    }
-
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter((inv) => inv.status === statusFilter);
-    }
-
-    if (costCenterFilter !== 'all') {
-      filtered = filtered.filter((inv) => (inv.cost_center || '') === costCenterFilter);
-    }
-
-    if (propertyFilter !== 'all') {
-      filtered = filtered.filter(
-        (inv) => effectivePropertyRef(inv.property_ref, invoiceGlCode(inv)) === propertyFilter,
-      );
-    }
-
-    if (startDate) {
-      filtered = filtered.filter(
-        (inv) => new Date(inv.invoice_date) >= new Date(startDate)
-      );
-    }
-
-    if (endDate) {
-      filtered = filtered.filter(
-        (inv) => new Date(inv.invoice_date) <= new Date(endDate)
-      );
-    }
-
-    if (ifrsFilter === 'not_classified') {
-      filtered = filtered.filter((inv) => !inv.ifrs_category || String(inv.ifrs_category).trim() === '');
-    } else if (ifrsFilter !== 'all') {
-      filtered = filtered.filter((inv) => (inv.ifrs_category || '').trim() === ifrsFilter);
-    }
-
-    if (matchStatusFilter === 'match_issues') {
-      filtered = filtered.filter(
-        (inv) => inv.match_status === 'mismatch' || inv.match_status === 'no_po'
-      );
-    } else if (matchStatusFilter !== 'all') {
-      filtered = filtered.filter((inv) => (inv.match_status || '') === matchStatusFilter);
-    }
-
-    if (riskFilter !== 'all') {
-      filtered = filtered.filter((inv) => invoiceRiskTierForFilter(inv) === riskFilter);
-    }
-
-    if (sourceFilter !== 'all') {
-      filtered = filtered.filter((inv) => (inv.source || 'upload') === sourceFilter);
-    }
-
-    if (sourceReceivedAtFilter) {
-      const target = new Date(sourceReceivedAtFilter).getTime();
-      filtered = filtered.filter((inv) => {
-        if (!inv.source_email_received_at) return false;
-        return new Date(inv.source_email_received_at).getTime() === target;
-      });
-    }
-
-    if (invoiceKindFilter === 'purchase') {
-      filtered = filtered.filter((inv) => inv.invoice_type !== 'sales');
-    } else if (invoiceKindFilter === 'sales') {
-      filtered = filtered.filter((inv) => inv.invoice_type === 'sales');
-    }
-
-    if (advanceFilter) {
-      filtered = filtered.filter((inv) => inv.is_advance_payment === true);
-    }
-
-    let out = filtered;
-    if (confidenceSort === 'high_first') {
-      out = [...out].sort(
-        (a, b) => getEffectiveExtractionScore(b) - getEffectiveExtractionScore(a)
-      );
-    } else if (confidenceSort === 'low_first') {
-      out = [...out].sort(
-        (a, b) => getEffectiveExtractionScore(a) - getEffectiveExtractionScore(b)
-      );
-    }
-
-    setFilteredInvoices(out);
-    setCurrentPage(1);
-  }
-
   function toggleSelectAll() {
-    if (selectedIds.length === paginatedInvoices.length) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(paginatedInvoices.map((inv) => inv.id));
-    }
+    const pageIds = paginatedInvoices.map((inv) => inv.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.includes(id));
+    setSelectedIds((prev) =>
+      allSelected ? prev.filter((id) => !pageIds.includes(id)) : Array.from(new Set([...prev, ...pageIds])),
+    );
   }
 
   function toggleSelectInvoice(id: string) {
@@ -1189,7 +1109,6 @@ export function InvoiceList() {
       }
 
       setInvoices([]);
-      setFilteredInvoices([]);
       setSelectedIds([]);
       setSelectedInvoice(null);
       setDeleteAllDialogOpen(false);
@@ -1216,7 +1135,7 @@ export function InvoiceList() {
       const n = normalizeExtractedInvoice(res.invoice);
       setPreviewNorm({
         ...n,
-        invoice_kind: invoiceKindFilter === 'sales' ? 'sales' : n.invoice_kind,
+        invoice_kind: filters.kind === 'sales' ? 'sales' : n.invoice_kind,
       });
       setPreviewConfidence(res.confidence);
       setPreviewOpen(true);
@@ -1423,1127 +1342,280 @@ export function InvoiceList() {
     URL.revokeObjectURL(url);
   }
 
-  const totalPages = Math.ceil(filteredInvoices.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedInvoices = filteredInvoices.slice(
-    startIndex,
-    startIndex + itemsPerPage
-  );
+  async function downloadInvoicePdf(invoice: Invoice) {
+    let lineItems: InvoiceLineItem[] = [];
+    try {
+      const { data } = await supabase
+        .from('invoice_line_items')
+        .select('*')
+        .eq('invoice_id', invoice.id)
+        .order('created_at');
+      lineItems = (data ?? []) as InvoiceLineItem[];
+    } catch { /* ignore — fallback to single row */ }
+    generateInvoicePdf(invoice, '', lineItems);
+  }
 
-  if (loading) {
+  function glDisplayFor(inv: Invoice): GlDisplay {
+    const d = displayGlFromCoaMap(inv, coaMappings);
+    return d ? { code: d.code, name: d.name, suggested: d.source !== 'stored' } : null;
+  }
+
+  function selectStage(stage: PipelineStage) {
+    setStageFilter((prev) => {
+      if (prev?.stage === stage.key) return null;
+      return { stage: stage.key, state: stage.pending + stage.issue > 0 ? 'open' : 'done' };
+    });
+  }
+
+  if (loading && invoices.length === 0) {
     return (
       <div className="flex h-[calc(100vh-12rem)] items-center justify-center">
         <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading invoices...</p>
+          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-b-2 border-[#1765F5]"></div>
+          <p className="mt-4 text-[13px] text-[#64748B]">Loading invoices…</p>
         </div>
       </div>
     );
   }
 
-  return (
+  const runDisabledReason = bulkProcessing
+    ? 'A bulk run is already in progress'
+    : classifyTargets.length === 0
+      ? 'Nothing to run — no invoices are pending approval or carry an unresolved match result'
+      : undefined;
+  const exportItems: { label: string; run: () => void }[] = [
+    { label: 'Invoice data (Excel)', run: () => void exportExcel(filteredInvoices) },
+    { label: 'Tally XML', run: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
+    { label: 'QuickBooks IIF', run: () => downloadQBIIF(filteredInvoices) },
+    { label: 'Xero CSV', run: () => downloadXeroCSV(filteredInvoices) },
+    { label: 'Zoho Books CSV', run: () => exportZohoCSV(filteredInvoices) },
+    { label: 'SAP CSV', run: () => exportSAPCSV(filteredInvoices) },
+  ];
+  const selectedRows = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
+
+  const emptyState = loadError && invoices.length === 0 ? (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Invoice List</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage and review all invoices
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            disabled={
-              bulkProcessing ||
-              invoices.filter((i) => {
-                const processing = i.status === 'Processing';
-                const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
-                  String(i.match_status || '').toLowerCase(),
-                );
-                return processing || needsMatch;
-              }).length === 0
-            }
-            onClick={() => void handleBulkClassifyAndMatch()}
-            className="border-[#0A4B8F] text-[#0A4B8F] hover:bg-blue-50"
-          >
-            <Zap className="mr-2 h-4 w-4" />
-            {bulkProcessing
-              ? 'Processing…'
-              : `Run 3-Way Match & Classify (${
-                  invoices.filter((i) => {
-                    const processing = i.status === 'Processing';
-                    const needsMatch = ['mismatch', 'no_po', 'partial', 'unmatched', ''].includes(
-                      String(i.match_status || '').toLowerCase(),
-                    );
-                    return processing || needsMatch;
-                  }).length
-                })`}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={
-              bulkProcessing ||
-              invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
-                .length === 0
-            }
-            onClick={() => void handleBulkRerunStaleMatches()}
-            title="Recompute match_status for invoices whose cached result is mismatch/partial/no-PO, without waiting for a new upload"
-            className="border-amber-600 text-amber-800 hover:bg-amber-50"
-          >
-            {bulkProcessing
-              ? 'Processing…'
-              : `Re-run Stale Matches (${
-                  invoices.filter((i) => ['mismatch', 'no_po', 'partial'].includes(String(i.match_status || '').toLowerCase()))
-                    .length
-                })`}
-          </Button>
-          {!isUAE && (
-            <Button
-              variant="outline"
-              disabled={seedingGst}
-              onClick={() => void handleSeedGstDemo()}
-              title="Seed 5 GST invoices (TCS, Reliance, Infosys, Amazon India, HDFC Bank) into this list"
-              className="border-orange-600 text-orange-800 hover:bg-orange-50"
-            >
-              {seedingGst ? 'Seeding…' : '🎯 Seed GST Demo Invoices'}
-            </Button>
-          )}
-          {selectedIds.length > 0 && (
-            <>
+      <AlertTriangle className="mx-auto h-6 w-6 text-[#DC2626]" aria-hidden />
+      <p className="font-semibold text-[#152238]">Invoices could not be loaded</p>
+      <p className="mx-auto max-w-md text-[12px] text-[#64748B]">{loadError}</p>
+      <Button size="sm" variant="outline" onClick={() => void fetchInvoices()}>
+        <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry
+      </Button>
+    </div>
+  ) : invoices.length === 0 ? (
+    <div className="space-y-3">
+      <p className="font-semibold text-[#152238]">No invoices yet for this company</p>
+      <p className="text-[12px] text-[#64748B]">Upload PDFs or images, import Excel, or forward invoices by email.</p>
+      <Button size="sm" className="bg-[#1765F5] hover:bg-[#0F55D8]" onClick={() => navigate('/ap-invoices/upload')}>
+        <Upload className="mr-1.5 h-3.5 w-3.5" /> Upload invoices
+      </Button>
+    </div>
+  ) : (
+    <div className="space-y-3">
+      <p className="font-semibold text-[#152238]">No invoices match the current filters</p>
+      <p className="text-[12px] text-[#64748B]">
+        {invoices.length} invoice{invoices.length === 1 ? ' is' : 's are'} loaded — widen the search, stage or filters to see them.
+      </p>
+      <Button size="sm" variant="outline" onClick={clearInvoiceListFilters}>
+        Reset filters
+      </Button>
+    </div>
+  );
+
+  return (
+    <div className="flex items-start gap-4 text-[#152238]">
+      <div className="min-w-0 flex-1 space-y-3">
+        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0">
+            <h1 className="text-[24px] font-bold leading-tight tracking-tight text-[#0B1D33]">Invoice List</h1>
+            <p className="mt-0.5 text-[13px] text-[#64748B]">Manage and review all invoices</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span title={runDisabledReason ?? 'Classify IFRS categories and re-run 3-way match for invoices pending approval or with an unresolved match'}>
               <Button
                 variant="outline"
+                size="sm"
+                disabled={!!runDisabledReason}
+                onClick={() => void handleBulkClassifyAndMatch()}
+                className="h-9 border-[#1765F5] bg-white text-[#1765F5] hover:bg-[#EEF4FF] hover:text-[#1765F5]"
+              >
+                <Zap className="mr-1.5 h-4 w-4" aria-hidden />
+                {bulkProcessing ? 'Processing…' : `Run 3-Way Match & Classify (${classifyTargets.length})`}
+              </Button>
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  disabled={filteredInvoices.length === 0}
+                  title={filteredInvoices.length === 0 ? 'No invoices in the current view to export' : undefined}
+                  className="h-9 bg-[#1765F5] text-white hover:bg-[#0F55D8]"
+                >
+                  <Download className="mr-1.5 h-4 w-4" aria-hidden />
+                  Export
+                  <ChevronDown className="ml-1 h-3.5 w-3.5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel className="text-[11px] font-normal text-[#64748B]">
+                  Exports the {filteredInvoices.length} invoice{filteredInvoices.length === 1 ? '' : 's'} in the current view
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {exportItems.map((item) => (
+                  <DropdownMenuItem key={item.label} onSelect={item.run} className="text-[13px]">
+                    <FileSpreadsheet className="mr-2 h-3.5 w-3.5 text-[#64748B]" aria-hidden />
+                    {item.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 w-9 bg-white p-0" aria-label="More actions">
+                  <MoreHorizontal className="h-4 w-4" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuItem
+                  disabled={bulkProcessing || staleMatchTargets.length === 0}
+                  onSelect={() => void handleBulkRerunStaleMatches()}
+                  className="text-[13px]"
+                >
+                  <RefreshCw className="mr-2 h-3.5 w-3.5 text-[#64748B]" aria-hidden />
+                  Re-run stale matches ({staleMatchTargets.length})
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate('/ap-invoices/upload')} className="text-[13px]">
+                  <Upload className="mr-2 h-3.5 w-3.5 text-[#64748B]" aria-hidden />
+                  Upload invoices
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setCameraOpen(true)} className="text-[13px]">
+                  <Camera className="mr-2 h-3.5 w-3.5 text-[#64748B]" aria-hidden />
+                  Capture with camera
+                </DropdownMenuItem>
+                {!isUAE && (
+                  <DropdownMenuItem disabled={seedingGst} onSelect={() => void handleSeedGstDemo()} className="text-[13px]">
+                    <Zap className="mr-2 h-3.5 w-3.5 text-[#64748B]" aria-hidden />
+                    {seedingGst ? 'Seeding…' : 'Seed GST demo invoices'}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={invoices.length === 0}
+                  onSelect={() => setDeleteAllDialogOpen(true)}
+                  className="text-[13px] text-[#DC2626] focus:text-[#DC2626]"
+                >
+                  <Trash2 className="mr-2 h-3.5 w-3.5" aria-hidden />
+                  Delete all invoices…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </header>
+
+        {loadError && invoices.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2 text-[12px] text-[#92400E]">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">Latest refresh failed — showing the last loaded data. {loadError}</span>
+            <Button size="sm" variant="outline" className="h-7 bg-white" onClick={() => void fetchInvoices({ quiet: true })}>
+              Retry
+            </Button>
+          </div>
+        )}
+
+        <ListPipeline stages={listStages} selected={stageFilter} onSelect={selectStage} />
+
+        <ListToolbar
+          filters={filters}
+          onFiltersChange={setFilters}
+          view={viewMode}
+          onViewChange={changeView}
+          viewCounts={viewCounts}
+          stage={stageFilter}
+          onStageChange={setStageFilter}
+          options={filterOptions}
+          costCenterLabel={costCenterLabel}
+          statusLabel={statusLabel}
+          showAdvanceFilter={filters.advanceOnly || invoices.some((inv) => inv.is_advance_payment === true)}
+        />
+
+        {selectedRows.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#C7D7FE] bg-[#EEF4FF] px-3 py-2 text-[13px]">
+            <span className="font-semibold text-[#0B1D33]">
+              {selectedRows.length} selected
+            </span>
+            <div className="ml-auto flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 bg-white"
                 disabled={bulkProcessing}
                 onClick={() => void handleBulkApproveSelected()}
-                className="border-green-700 text-green-800 hover:bg-green-50"
               >
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-                {bulkProcessing ? 'Approving…' : `Bulk Approve (${selectedIds.length})`}
+                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-[#00A884]" aria-hidden />
+                {bulkProcessing ? 'Approving…' : 'Approve selected'}
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const selected = filteredInvoices.filter((inv) => selectedIds.includes(inv.id));
-                  void exportExcel(selected);
-                }}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Export Selected ({selectedIds.length})
+              <Button size="sm" variant="outline" className="h-8 bg-white" onClick={() => void exportExcel(selectedRows)}>
+                <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                Export selected
               </Button>
-            </>
-          )}
-          <div className="relative">
-            <Button
-              onClick={() => setShowExport(!showExport)}
-              className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
-            >
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-              Export ▾
-            </Button>
-            {showExport && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowExport(false)} aria-hidden />
-                <div className="absolute right-0 top-full mt-1 z-50 min-w-[220px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-                  {[
-                    { icon: '📥', label: 'Raw Invoice Data (Excel)', fn: () => void exportExcel(filteredInvoices) },
-                    { icon: '📊', label: 'Tally XML', fn: () => downloadTallyXML(filteredInvoices, toTallySettings(tallySettings)) },
-                    { icon: '🟢', label: 'QuickBooks IIF', fn: () => downloadQBIIF(filteredInvoices) },
-                    { icon: '⚫', label: 'Xero CSV', fn: () => downloadXeroCSV(filteredInvoices) },
-                    { icon: '📘', label: 'Zoho Books CSV', fn: () => exportZohoCSV(filteredInvoices) },
-                    { icon: '🔷', label: 'SAP CSV', fn: () => exportSAPCSV(filteredInvoices) },
-                  ].map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => {
-                        item.fn();
-                        setShowExport(false);
-                      }}
-                      className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm font-medium hover:bg-gray-100"
-                    >
-                      {item.icon} {item.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+              <Button size="sm" variant="ghost" className="h-8" onClick={() => setSelectedIds([])}>
+                Clear selection
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
+
+        <InvoiceTable
+          rows={paginatedInvoices}
+          total={filteredInvoices.length}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          sort={sort}
+          onSortChange={setSort}
+          columns={columns}
+          onColumnsChange={setColumns}
+          selectedIds={selectedIds}
+          onToggleRow={toggleSelectInvoice}
+          onTogglePage={toggleSelectAll}
+          activeId={selectedInvoice?.id ?? null}
+          onOpen={openInvoice}
+          currencyOf={(inv) => normalizeCurrencyCode(inv.currency, market)}
+          glDisplay={glDisplayFor}
+          dateFormat={dateFormat}
+          isUAE={isUAE}
+          costCenterLabel={costCenterLabel}
+          onDownloadPdf={(inv) => void downloadInvoicePdf(inv)}
+          onValidatePint={setPintAeInvoice}
+          empty={emptyState}
+        />
       </div>
 
-      {/* AP Process Stepper */}
-      <Card className="border border-gray-200 overflow-visible">
-        <CardContent className="py-4 px-4 overflow-visible">
-          <div className="flex items-start justify-between gap-1 overflow-x-auto overflow-y-visible pb-1">
-            {STEPPER_LABELS.map((label, index) => {
-              const step = index + 1;
-              const currentStep = getCurrentStepperStep(filteredInvoices);
-              const isCompleted = step < currentStep;
-              const isCurrent = step === currentStep;
-              return (
-                <div key={label} className="flex flex-1 min-w-[4.5rem] items-start">
-                  <div className="flex flex-col items-center flex-1 min-w-0">
-                    <div
-                      className={`relative z-10 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 border-2 ${
-                        isCompleted
-                          ? 'bg-emerald-100 border-emerald-600'
-                          : isCurrent
-                            ? 'bg-[#1a56db] border-[#1a56db]'
-                            : 'bg-white border-gray-300'
-                      }`}
-                      style={{ color: isCurrent ? '#ffffff' : isCompleted ? '#047857' : '#1f2937' }}
-                    >
-                      {step}
-                    </div>
-                    <span
-                      className={`mt-1.5 text-[11px] leading-tight truncate w-full text-center ${
-                        isCurrent ? 'text-[#1a56db] font-medium' : isCompleted ? 'text-green-700' : 'text-gray-600'
-                      }`}
-                    >
-                      {label}
-                    </span>
-                  </div>
-                  {index < STEPPER_LABELS.length - 1 && (
-                    <div
-                      className={`flex-1 h-0.5 mt-4 mx-0.5 min-w-[8px] self-start ${
-                        step < currentStep ? 'bg-green-500' : 'bg-gray-200'
-                      }`}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Filters */}
-      <Card>
-        <CardContent className={filtersExpanded ? 'py-3' : 'py-2'}>
-          <div className={filtersExpanded ? 'space-y-3' : 'space-y-0'}>
-            <div
-              className={`flex flex-wrap gap-2 ${
-                filtersExpanded ? 'border-b border-gray-100 pb-3' : 'pb-0'
-              }`}
-            >              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === 'all' ? 'default' : 'outline'}
-                className={viewMode === 'all' ? 'bg-[#0A4B8F]' : ''}
-                onClick={() => {
-                  setViewMode('all');
-                  navigate('/ap-invoices/list', { replace: true });
-                }}
-              >
-                All
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === 'approvals' ? 'default' : 'outline'}
-                className={viewMode === 'approvals' ? 'bg-[#0A4B8F]' : ''}
-                onClick={() => {
-                  setViewMode('approvals');
-                  navigate('/ap-invoices/list', { replace: true });
-                }}
-              >
-                Approval queue
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === 'duplicates' ? 'default' : 'outline'}
-                className={viewMode === 'duplicates' ? 'bg-amber-700 hover:bg-amber-800' : ''}
-                onClick={() => {
-                  setViewMode('duplicates');
-                  navigate('/ap-invoices/list?filter=duplicates', { replace: true });
-                }}
-              >
-                Duplicates
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === 'needs_review' ? 'default' : 'outline'}
-                className={
-                  viewMode === 'needs_review'
-                    ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600'
-                    : ''
-                }
-                onClick={() => {
-                  setViewMode('needs_review');
-                  navigate('/ap-invoices/list?tab=needs-review', { replace: true });
-                }}
-              >
-                Needs review
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={viewMode === 'anomalies' ? 'default' : 'outline'}
-                className={viewMode === 'anomalies' ? 'bg-red-700 hover:bg-red-800 text-white' : ''}
-                onClick={() => {
-                  setViewMode('anomalies');
-                  navigate('/ap-invoices/list?tab=anomalies', { replace: true });
-                }}
-              >
-                Anomaly
-                {(anomalyInvoiceIds.size > 0 ||
-                  invoices.some((i) => invoiceMatchesAnomalyTab(i))) && (
-                  <span className="ml-1.5 rounded-full bg-white/20 px-1.5 text-[10px] font-semibold tabular-nums">
-                    {viewMode === 'anomalies'
-                      ? filteredInvoices.length
-                      : new Set([
-                          ...anomalyInvoiceIds,
-                          ...invoices.filter((i) => invoiceMatchesAnomalyTab(i)).map((i) => i.id),
-                        ]).size}
-                  </span>
-                )}
-              </Button>
-              <span className="mx-1 hidden sm:inline text-gray-300">|</span>
-              <Button
-                type="button"
-                size="sm"
-                variant={invoiceKindFilter === 'all' ? 'default' : 'outline'}
-                className={invoiceKindFilter === 'all' ? 'bg-slate-700' : ''}
-                onClick={() => setInvoiceKindFilter('all')}
-              >
-                All types
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={invoiceKindFilter === 'purchase' ? 'default' : 'outline'}
-                className={invoiceKindFilter === 'purchase' ? 'bg-[#0A4B8F]' : ''}
-                title="Accounts payable (vendor bills)"
-                onClick={() => setInvoiceKindFilter('purchase')}
-              >
-                AP
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={invoiceKindFilter === 'sales' ? 'default' : 'outline'}
-                className={invoiceKindFilter === 'sales' ? 'bg-teal-700 hover:bg-teal-800' : ''}
-                title="Accounts receivable (customer bills)"
-                onClick={() => setInvoiceKindFilter('sales')}
-              >
-                AR
-              </Button>
-              <span className="mx-1 hidden sm:inline text-gray-300">|</span>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="h-8 w-[140px] text-sm">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="Processing">Processing</SelectItem>
-                  <SelectItem value="Approved">Approved</SelectItem>
-                  <SelectItem value="Rejected">Rejected</SelectItem>
-                  <SelectItem value="Paid">Paid</SelectItem>
-                  <SelectItem value="On Hold">On Hold</SelectItem>
-                  <SelectItem value="Queried">Queried</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={matchStatusFilter} onValueChange={setMatchStatusFilter}>
-                <SelectTrigger className="h-8 w-[150px] text-sm">
-                  <SelectValue placeholder="Match" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Match Status</SelectItem>
-                  <SelectItem value="three_way_matched">✅ 3-Way Matched</SelectItem>
-                  <SelectItem value="matched">✅ PO Matched</SelectItem>
-                  <SelectItem value="partial">⚠️ Partial</SelectItem>
-                  <SelectItem value="mismatch">❌ Mismatch</SelectItem>
-                  <SelectItem value="no_po">— No PO</SelectItem>
-                  <SelectItem value="match_issues">⚠️ Match exceptions</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="h-8 w-[110px] text-sm">
-                  <SelectValue placeholder="Risk" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Risk</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
-                </SelectContent>
-              </Select>
-              {/* Period month picker */}
-              <div className="flex items-center gap-1 border border-gray-200 rounded-md px-2 h-8 bg-white text-sm">
-                <span className="text-gray-400 text-xs whitespace-nowrap">Period</span>
-                <input
-                  type="month"
-                  className="border-none outline-none bg-transparent text-xs text-gray-700 cursor-pointer w-[110px]"
-                  value={startDate ? startDate.slice(0, 7) : ''}
-                  onChange={(e) => {
-                    const m = e.target.value; // "YYYY-MM"
-                    if (m) {
-                      setStartDate(`${m}-01`);
-                      const lastDay = new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)), 0).getDate();
-                      setEndDate(`${m}-${String(lastDay).padStart(2, '0')}`);
-                    } else {
-                      setStartDate('');
-                      setEndDate('');
-                    }
-                  }}
-                  title="Filter by invoice month"
-                />
-                {startDate && (
-                  <button
-                    type="button"
-                    className="text-gray-400 hover:text-gray-700 text-xs ml-0.5"
-                    onClick={() => { setStartDate(''); setEndDate(''); }}
-                    title="Clear period filter"
-                  >✕</button>
-                )}
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant={filtersExpanded ? 'default' : 'outline'}
-                className={filtersExpanded ? 'bg-[#0A4B8F]' : ''}
-                onClick={() => {
-                  if (filtersExpanded) {
-                    setShowAdvancedFilters(false);
-                    setSearchTerm('');
-                    setCostCenterFilter('all');
-                    setPropertyFilter('all');
-                    setIfrsFilter('all');
-                    setSourceFilter('all');
-                    setStartDate('');
-                    setEndDate('');
-                    if (sourceReceivedAtFilter) {
-                      setSourceReceivedAtFilter(null);
-                      navigate('/ap-invoices/list', { replace: true });
-                    }
-                  } else {
-                    setShowAdvancedFilters(true);
-                  }
-                }}
-                title={
-                  filtersExpanded
-                    ? 'Hide extra filters and clear them'
-                    : 'Show search, property, IFRS, source, dates'
-                }
-              >
-                <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" />
-                {filtersExpanded ? 'Hide filters' : 'Show filters'}
-                {filtersExpanded ? (
-                  <ChevronUp className="ml-1 h-3.5 w-3.5" />
-                ) : (
-                  <ChevronDown className="ml-1 h-3.5 w-3.5" />
-                )}
-              </Button>
-            </div>
-            {filtersExpanded && (
-            <>
-            <div className="flex flex-col gap-4 md:flex-row flex-wrap">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                <Input
-                  placeholder="Search by invoice #, vendor, or property..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
-              {showCostCenterFilter && (
-              <Select value={costCenterFilter} onValueChange={setCostCenterFilter}>
-                <SelectTrigger className="w-full md:w-[180px]">
-                  <SelectValue placeholder={costCenterLabel} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">{costCenterAllLabel}</SelectItem>
-                  {costCenterOptions.map((cc) => (
-                      <SelectItem key={cc} value={cc}>
-                        {cc}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-              )}
-              {showPropertyFilter && (
-              <Select value={propertyFilter} onValueChange={setPropertyFilter}>
-                <SelectTrigger className="w-full md:w-[180px]">
-                  <SelectValue placeholder="Property" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Properties</SelectItem>
-                  {propertyOptions.map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {p}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-              )}
-              <Select value={ifrsFilter} onValueChange={setIfrsFilter}>
-                <SelectTrigger className="w-full md:w-[200px]">
-                  <SelectValue placeholder="IFRS Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All IFRS</SelectItem>
-                  <SelectItem value="not_classified">Not Classified</SelectItem>
-                  {Array.from(new Set(invoices.map((inv) => (inv.ifrs_category || '').trim()).filter(Boolean))).sort().map((cat) => (
-                    <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={sourceFilter}
-                onValueChange={(v) => {
-                  setSourceFilter(v);
-                  if (sourceReceivedAtFilter) {
-                    setSourceReceivedAtFilter(null);
-                    navigate('/ap-invoices/list', { replace: true });
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full md:w-[140px]">
-                  <SelectValue placeholder="Source" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All sources</SelectItem>
-                  <SelectItem value="upload">Upload</SelectItem>
-                  <SelectItem value="email">Email</SelectItem>
-                  <SelectItem value="email_n8n">Email (n8n)</SelectItem>
-                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                  <SelectItem value="camera">Camera</SelectItem>
-                  <SelectItem value="excel">Excel</SelectItem>
-                  <SelectItem value="excel_vba">Excel (VBA)</SelectItem>
-                  <SelectItem value="vendor_portal">Portal</SelectItem>
-                  <SelectItem value="manual">Manual</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {sourceReceivedAtFilter && (
-              <p className="text-xs text-muted-foreground">
-                Filtered by email intake time.{' '}
-                <button
-                  type="button"
-                  className="text-[#0A4B8F] underline font-medium"
-                  onClick={() => {
-                    setSourceReceivedAtFilter(null);
-                    setSourceFilter('all');
-                    navigate('/ap-invoices/list', { replace: true });
-                  }}
-                >
-                  Clear
-                </button>
-              </p>
-            )}
-            <div className="flex flex-col gap-4 md:flex-row md:items-center">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-gray-500" />
-                <span className="text-sm text-gray-700 font-medium">Date Range:</span>
-              </div>
-              <div className="flex flex-1 gap-4">
-                <div className="flex-1 space-y-1">
-                  <Label className="text-xs text-gray-600">From</Label>
-                  <Input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </div>
-                <div className="flex-1 space-y-1">
-                  <Label className="text-xs text-gray-600">To</Label>
-                  <Input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </div>
-                {(startDate || endDate) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setStartDate('');
-                      setEndDate('');
-                    }}
-                    className="self-end"
-                  >
-                    Clear
-                  </Button>
-                )}
-              </div>
-            </div>
-            </>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Invoice Table */}
-      <Card>
-        <CardHeader className="flex flex-col gap-2 space-y-0 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle>
-            {filteredInvoices.length} Invoice{filteredInvoices.length !== 1 ? 's' : ''}
-          </CardTitle>
-          {invoices.length > 0 && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0 border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-              onClick={() => setDeleteAllDialogOpen(true)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete all invoices
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent className="pt-0">          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[50px]">
-                    <Checkbox
-                      checked={
-                        paginatedInvoices.length > 0 &&
-                        selectedIds.length === paginatedInvoices.length
-                      }
-                      onCheckedChange={toggleSelectAll}
-                    />
-                  </TableHead>
-                  <TableHead>Invoice #</TableHead>
-                  <TableHead>Vendor</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  {isUAE && <TableHead>VAT Timing</TableHead>}
-                  <TableHead>Payment</TableHead>
-                  <TableHead>IFRS Category</TableHead>
-                  <TableHead className="hidden lg:table-cell">
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 text-left font-medium hover:text-primary"
-                      onClick={() =>
-                        setConfidenceSort((prev) =>
-                          prev === 'none' ? 'high_first' : prev === 'high_first' ? 'low_first' : 'none'
-                        )
-                      }
-                    >
-                      Confidence
-                      <span className="text-muted-foreground text-xs font-normal">
-                        {confidenceSort === 'high_first'
-                          ? '↓'
-                          : confidenceSort === 'low_first'
-                            ? '↑'
-                            : ''}
-                      </span>
-                    </button>
-                  </TableHead>
-                  <TableHead>3-Way Match</TableHead>
-                  <TableHead>GL Account</TableHead>
-                  {showPropertyColumn && <TableHead>Property</TableHead>}
-                  {showCostCenterColumn && <TableHead>{costCenterLabel}</TableHead>}
-                  <TableHead>Risk</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedInvoices.map((invoice) => (
-                  <TableRow
-                    key={invoice.id}
-                    className="hover:bg-gray-50"
-                  >
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={selectedIds.includes(invoice.id)}
-                        onCheckedChange={() => toggleSelectInvoice(invoice.id)}
-                      />
-                    </TableCell>
-                    <TableCell
-                      className="font-medium cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        {invoice.invoice_number}
-                        {invoice.invoice_type === 'sales' && (
-                          <Badge className="border-teal-200 bg-teal-50 text-teal-900 text-[10px] px-1.5 py-0">AR</Badge>
-                        )}
-                        {invoice.ifrs_category && (
-                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
-                            {invoice.ifrs_category}
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {invoice.vendor_name}
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      <span className="font-bold">
-                        {formatCurrency(
-                          Number(invoice.total_amount),
-                          normalizeCurrencyCode(invoice.currency, market)
-                        )}
-                      </span>
-                      <br />
-                      <span className="text-[11px] text-gray-500">
-                        {normalizeCurrencyCode(invoice.currency, market)}
-                      </span>
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant="outline" className={statusColors[invoice.status] || statusColors.review_required}>
-                          {formatStatusLabel(invoice.status, (invoice as { source?: string | null }).source)}
-                        </Badge>
-                        {invoice.duplicate_flag === true && (
-                          <Badge
-                            variant="outline"
-                            className="border-amber-300 bg-amber-50 text-amber-900 text-[10px] px-1.5 py-0 font-medium"
-                          >
-                            Possible duplicate
-                          </Badge>
-                        )}
-                        {invoice.tally_synced === true && (
-                          <Badge
-                            variant="outline"
-                            className="border-green-300 bg-green-50 text-green-800 text-[10px] px-1.5 py-0 font-medium"
-                          >
-                            Tally ✓
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    {isUAE && (
-                      <TableCell
-                        className="cursor-pointer"
-                        onClick={() => setSelectedInvoice(invoice)}
-                      >
-                        {invoice.is_advance_payment ? (
-                          <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px]">
-                            ⚡ VAT Due on Receipt
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-gray-600 border-gray-200 text-[10px]">
-                            Standard
-                          </Badge>
-                        )}
-                      </TableCell>
-                    )}
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {(() => {
-                        const p = invoicePaymentPill(invoice);
-                        const cls =
-                          p.variant === 'paid'
-                            ? 'bg-sky-50 text-sky-900 border-sky-200'
-                            : p.variant === 'overdue'
-                              ? 'bg-red-50 text-red-900 border-red-200'
-                              : 'bg-slate-50 text-slate-700 border-slate-200';
-                        return (
-                          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 font-medium ${cls}`} title={p.title}>
-                            {p.label}
-                          </Badge>
-                        );
-                      })()}
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {(() => {
-                        const category = (invoice.ifrs_category || '').trim();
-                        if (category) {
-                          const rawConf = Number(invoice.ifrs_confidence ?? 0);
-                        // Normalize: backend sometimes stores 0-1 (e.g. 0.95) instead of 0-100
-                        const conf = rawConf > 0 && rawConf <= 1 ? Math.round(rawConf * 100) : Math.round(rawConf);
-                          const fromSource = String(invoice.ifrs_explanation ?? '').startsWith('Source category');
-                          const business = String(invoice.expense_category ?? '').trim();
-                          const showConf = !fromSource && conf > 0;
-                          return (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                              <span style={{ fontSize: '12px', fontWeight: '600', color: '#1a56db' }}>
-                                {category}
-                              </span>
-                              {business && business !== category ? (
-                                <span style={{ fontSize: '11px', color: '#6b7280' }}>Business: {business}</span>
-                              ) : null}
-                              {fromSource ? (
-                                <span style={{ fontSize: '10px', color: '#0e9f6e', fontWeight: 600 }}>Source data</span>
-                              ) : null}
-                              {showConf ? (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                  <div
-                                    style={{
-                                      width: '50px',
-                                      height: '4px',
-                                      background: '#e5e7eb',
-                                      borderRadius: '2px',
-                                      overflow: 'hidden',
-                                    }}
-                                  >
-                                    <div
-                                      style={{
-                                        width: `${Math.min(100, Math.max(0, conf))}%`,
-                                        height: '100%',
-                                        background: '#1a56db',
-                                        borderRadius: '2px',
-                                      }}
-                                    />
-                                  </div>
-                                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>{conf}%</span>
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        }
-                        return (
-                          <div>
-                            <span style={{ color: '#f97316', fontWeight: '600', fontSize: '12px' }}>
-                              ⚠ Not Classified
-                            </span>
-                            <br />
-                            <span style={{ color: '#4b5563', fontSize: '12px', fontWeight: 500 }}>Fix required</span>
-                          </div>
-                        );
-                      })()}
-                    </TableCell>
-                    <TableCell
-                      className="hidden lg:table-cell cursor-pointer align-middle"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      <ConfidenceBadge score={getEffectiveExtractionScore(invoice)} size="sm" />
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {(() => {
-                        const ms = resolveDisplayMatchStatus(invoice);
-                        if (ms === 'three_way_matched') {
-                          return (
-                            <span style={{ color: '#0e9f6e', fontWeight: '700', fontSize: '12px' }}>
-                              ✅ 3-Way Matched
-                            </span>
-                          );
-                        }
-                        if (ms === 'matched') {
-                          return (
-                            <span style={{ color: '#1d4ed8', fontWeight: '700', fontSize: '12px' }}>
-                              ✅ PO Matched
-                            </span>
-                          );
-                        }
-                        if (ms === 'partial') {
-                          return (
-                            <div>
-                              <span style={{ color: '#d97706', fontWeight: '700', fontSize: '12px' }}>
-                                ⚠️ Partial
-                              </span>
-                              <br />
-                              <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                                {formatCurrency(
-                                  Number(invoice.match_difference ?? 0),
-                                  normalizeCurrencyCode(invoice.currency, market)
-                                )}{' '}
-                                diff
-                              </span>
-                            </div>
-                          );
-                        }
-                        if (ms === 'mismatch') {
-                          return (
-                            <span style={{ color: '#e02424', fontWeight: '700', fontSize: '12px' }}>
-                              ❌ Mismatch
-                            </span>
-                          );
-                        }
-                        return <span style={{ color: '#9ca3af', fontSize: '12px' }}>— No PO</span>;
-                      })()}
-                    </TableCell>
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {(() => {
-                        // DB column is gl_account_code (there is no invoices.gl_code in prod).
-                        const code = String(
-                          invoice.gl_account_code ??
-                            (invoice as { gl_code?: string | null }).gl_code ??
-                            '',
-                        ).trim();
-                        const storedName = String(
-                          invoice.gl_account_name ??
-                            (invoice as { gl_name?: string | null }).gl_name ??
-                            '',
-                        ).trim();
-                        if (code) {
-                          const name = glAccountDisplayName(code, storedName);
-                          return (
-                            <div>
-                              <span
-                                style={{
-                                  fontFamily: 'monospace',
-                                  fontWeight: '700',
-                                  color: '#1a56db',
-                                  fontSize: '13px',
-                                }}
-                              >
-                                {code}
-                              </span>
-                              <br />
-                              <span style={{ fontSize: '11px', color: '#6b7280' }}>{name}</span>
-                            </div>
-                          );
-                        }
-                        const mapped = displayGlFromCoaMap(invoice, coaMappings);
-                        if (!mapped) {
-                          return <span style={{ color: '#9ca3af' }}>—</span>;
-                        }
-                        return (
-                          <div>
-                            <span
-                              style={{
-                                fontFamily: 'monospace',
-                                fontWeight: '700',
-                                color: '#1a56db',
-                                fontSize: '13px',
-                              }}
-                            >
-                              {mapped.code}
-                            </span>
-                            <br />
-                            <span style={{ fontSize: '11px', color: '#6b7280' }}>{mapped.name}</span>
-                          </div>
-                        );
-                      })()}
-                    </TableCell>
-                    {showPropertyColumn && (
-                    <TableCell
-                      className="cursor-pointer text-sm text-slate-700 max-w-[120px]"
-                      onClick={() => setSelectedInvoice(invoice)}
-                      title={
-                        effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice)) || undefined
-                      }
-                    >
-                      {(() => {
-                        const full = effectivePropertyRef(invoice.property_ref, invoiceGlCode(invoice));
-                        if (!full) return null;
-                        const short = full.length > 15 ? `${full.slice(0, 15)}…` : full;
-                        return <span>{short}</span>;
-                      })()}
-                    </TableCell>
-                    )}
-                    {showCostCenterColumn && (
-                    <TableCell
-                      className="cursor-pointer text-sm text-slate-700"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {(invoice.cost_center || '').trim() || null}
-                    </TableCell>
-                    )}
-                    <TableCell
-                      className="cursor-pointer"
-                      onClick={() => setSelectedInvoice(invoice)}
-                    >
-                      {!invoiceHasRiskSignal(invoice) ? (
-                        <span className="text-sm text-gray-400">—</span>
-                      ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '5px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            padding: '3px 10px',
-                            borderRadius: '6px',
-                            width: 'fit-content',
-                            background:
-                              (invoice.risk_level ?? invoice.risk_score) === 'High' || invoice.risk_score === 'high'
-                                ? '#fee2e2'
-                                : (invoice.risk_level ?? invoice.risk_score) === 'Medium' || invoice.risk_score === 'medium'
-                                ? '#fef3c7'
-                                : '#f0fdf4',
-                            color:
-                              (invoice.risk_level ?? invoice.risk_score) === 'High' || invoice.risk_score === 'high'
-                                ? '#991b1b'
-                                : (invoice.risk_level ?? invoice.risk_score) === 'Medium' || invoice.risk_score === 'medium'
-                                ? '#92400e'
-                                : '#166534',
-                            border:
-                              (invoice.risk_level ?? invoice.risk_score) === 'High' || invoice.risk_score === 'high'
-                                ? '1px solid #fca5a5'
-                                : (invoice.risk_level ?? invoice.risk_score) === 'Medium' || invoice.risk_score === 'medium'
-                                ? '1px solid #fde68a'
-                                : '1px solid #bbf7d0',
-                          }}
-                        >
-                          {(invoice.risk_level ?? invoice.risk_score) === 'High' || invoice.risk_score === 'high'
-                            ? '🔴'
-                            : (invoice.risk_level ?? invoice.risk_score) === 'Medium' || invoice.risk_score === 'medium'
-                            ? '🟡'
-                            : '🟢'}
-                          {invoice.risk_level ??
-                            (invoice.risk_score === 'high'
-                              ? 'High'
-                              : invoice.risk_score === 'medium'
-                              ? 'Medium'
-                              : invoice.risk_score === 'low'
-                              ? 'Low'
-                              : 'Low')}
-                        </span>
-                        {((invoice as { risk_flag_count?: number }).risk_flag_count ?? 0) > 0 ||
-                        (typeof invoice.risk_score === 'number' && invoice.risk_score > 0) ||
-                        deriveInvoiceRiskDisplayScore(invoice) != null ? (
-                          <span
-                            style={{
-                              fontSize: '12px',
-                              color: '#374151',
-                              fontWeight: 600,
-                              maxWidth: '220px',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                            title={deriveInvoiceRiskReason(invoice) ?? undefined}
-                          >
-                            Score:{' '}
-                            {typeof invoice.risk_score === 'number' && invoice.risk_score > 0
-                              ? invoice.risk_score
-                              : (deriveInvoiceRiskDisplayScore(invoice) ?? '—')}
-                            {deriveInvoiceRiskReason(invoice) ? (
-                              <span style={{ color: '#6b7280', fontWeight: 500 }}>
-                                {' '}
-                                — {deriveInvoiceRiskReason(invoice)}
-                              </span>
-                            ) : null}
-                          </span>
-                        ) : null}
-                      </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {isUAE && invoice.status === 'Approved' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mr-1 text-[10px] h-7 px-2"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPintAeInvoice(invoice);
-                          }}
-                        >
-                          📋 Validate PINT AE
-                        </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        title="Download Invoice PDF"
-                        className="mr-1 h-7 px-2 text-[11px]"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          let lineItems: InvoiceLineItem[] = [];
-                          try {
-                            const { data } = await supabase
-                              .from('invoice_line_items')
-                              .select('*')
-                              .eq('invoice_id', invoice.id)
-                              .order('created_at');
-                            lineItems = (data ?? []) as InvoiceLineItem[];
-                          } catch { /* ignore — fallback to single row */ }
-                          generateInvoicePdf(invoice, '', lineItems);
-                        }}
-                      >
-                        🧾 PDF
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedInvoice(invoice);
-                        }}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          {filteredInvoices.length === 0 && (
-            <div className="py-12 text-center text-gray-600 space-y-3">
-              <p className="font-medium text-gray-800">No invoices match the current filters.</p>
-              {invoices.length > 0 && (
-                <>
-                  <p className="text-sm max-w-md mx-auto">
-                    You have {invoices.length} invoice{invoices.length === 1 ? '' : 's'} loaded. Try setting IFRS filter to{' '}
-                    <strong>All IFRS</strong> or <strong>Not Classified</strong>, clear the date range, and set Status to{' '}
-                    <strong>All Statuses</strong> if the table looks empty.
-                  </p>
-                  <Button type="button" variant="secondary" size="sm" onClick={clearInvoiceListFilters}>
-                    Clear all list filters
-                  </Button>
-                </>
-              )}
-              {invoices.length === 0 && <p className="text-sm">No invoices in the workspace yet.</p>}
-            </div>
-          )}
-
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="mt-6 flex items-center justify-between">
-              <p className="text-sm text-gray-600">
-                Showing {startIndex + 1} to{' '}
-                {Math.min(startIndex + itemsPerPage, filteredInvoices.length)} of{' '}
-                {filteredInvoices.length} invoices
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Invoice Detail Modal */}
       {selectedInvoice && (
-        <InvoiceDetailModal
-          invoice={selectedInvoice}
-          open={!!selectedInvoice}
-          onClose={() => setSelectedInvoice(null)}
-          onUpdate={() => void fetchInvoices({ quiet: true })}
-          onNavigateInvoice={async (id) => {
-            const inv = await fetchInvoiceById(id);
-            if (inv) setSelectedInvoice(inv);
-          }}
-        />
+        <aside
+          aria-label={`Invoice ${selectedInvoice.invoice_number}`}
+          className={
+            drawerExpanded
+              ? 'contents'
+              : 'idm-drawer-host fixed inset-0 z-50 flex flex-col overflow-hidden bg-white md:left-auto md:w-[min(560px,92vw)] md:border-l md:border-[#E2E8F0] md:shadow-[-12px_0_32px_rgba(11,29,51,0.12)] min-[1360px]:sticky min-[1360px]:inset-auto min-[1360px]:top-6 min-[1360px]:z-10 min-[1360px]:h-[calc(100vh-84px)] min-[1360px]:w-[clamp(400px,29vw,560px)] min-[1360px]:shrink-0 min-[1360px]:rounded-xl min-[1360px]:border min-[1360px]:shadow-[0_8px_24px_rgba(11,29,51,0.08)]'
+          }
+        >
+          <InvoiceDetailModal
+            invoice={selectedInvoice}
+            open={!!selectedInvoice}
+            variant={drawerExpanded ? 'dialog' : 'drawer'}
+            tab={drawerTab}
+            onTabChange={setDrawerTab}
+            onToggleExpand={() => setDrawerExpanded((v) => !v)}
+            onClose={closeInvoice}
+            onUpdate={() => void fetchInvoices({ quiet: true })}
+            onNavigateInvoice={async (id) => {
+              const inv = await fetchInvoiceById(id);
+              if (inv) openInvoice(inv);
+            }}
+          />
+        </aside>
       )}
 
       <PintAeValidateModal

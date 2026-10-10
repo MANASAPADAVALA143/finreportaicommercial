@@ -122,6 +122,40 @@ async def upload_invoice_file(
     return {"path": path}
 
 
+class AttachBody(BaseModel):
+    invoice_id: str
+    path: str
+    file_type: str | None = None
+
+
+@router.post("/attach")
+def attach_invoice_file(
+    body: AttachBody,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Link an already-stored file to an invoice that was captured without one (e.g. Excel import)."""
+    invoice_id = body.invoice_id.strip()
+    path = body.path.strip().lstrip("/")
+    if not _UUID_RE.match(invoice_id):
+        raise HTTPException(status_code=422, detail="Invalid invoice_id")
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=422, detail="Invalid path")
+
+    sb = get_supabase()
+    rows = sb.table("invoices").select("id, company_id").eq("id", invoice_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    company_id = str(rows[0].get("company_id") or "")
+    _require_company_access(db, ctx, company_id)
+    if path.split("/", 1)[0] != company_id:
+        raise HTTPException(status_code=403, detail="File belongs to a different company")
+
+    file_type = (body.file_type or "").strip()[:100] or None
+    sb.table("invoices").update({"file_url": path, "file_type": file_type}).eq("id", invoice_id).execute()
+    return {"path": path}
+
+
 class SignedUrlBody(BaseModel):
     path: str
 

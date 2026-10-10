@@ -14,6 +14,7 @@
  * Provides:
  *  - uploadInvoiceFile: upload a file, return its storage path
  *  - storeInvoiceFile: best-effort upload that never throws (returns path or null)
+ *  - attachDocumentToInvoice: upload and link a document to an invoice that has none
  *  - resolveInvoiceFileUrl: turn a stored reference into a viewable URL
  *  - deleteInvoiceFile: remove from storage when invoice is deleted
  */
@@ -107,6 +108,40 @@ export async function storeInvoiceFile(
     console.warn('[storage] invoice file not stored:', e instanceof Error ? e.message : e);
     return null;
   }
+}
+
+/**
+ * Upload a document and link it to an existing invoice that has none (e.g. Excel imports).
+ * Throws when either the upload or the link fails so the caller can surface it.
+ */
+export async function attachDocumentToInvoice(
+  invoice: { id: string; company_id?: string | null },
+  file: File,
+): Promise<string> {
+  if (!invoice.company_id) throw new Error('Invoice has no company — cannot store its document.');
+  const { path } = await uploadInvoiceFile(file, invoice.company_id, 'uploads');
+  const fileType = file.type || null;
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .update({ file_url: path, file_type: fileType, updated_at: new Date().toISOString() })
+    .eq('id', invoice.id)
+    .select('id');
+  if (!error && data && data.length > 0) return path;
+
+  // RLS silently matches zero rows for users without a Supabase session.
+  if (!isBackendConfigured()) throw new Error(error?.message || 'Invoice could not be updated.');
+  const res = await fetch(joinApiUrl('/api/ap/invoice-files/attach'), {
+    method: 'POST',
+    headers: workspaceHeaders(),
+    credentials: 'include',
+    body: JSON.stringify({ invoice_id: invoice.id, path, file_type: fileType }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Linking the document failed (${res.status}): ${detail}`);
+  }
+  return path;
 }
 
 /**

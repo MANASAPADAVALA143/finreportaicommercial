@@ -41,3 +41,18 @@ code {
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
   background: #64748b;
 }
+
+/* Invoice detail rendered as a side drawer (~520px): viewport breakpoints don't apply to
+   the panel width, so multi-column card grids are collapsed to a single column. */
+.idm-drawer [class*="md:grid-cols-"],
+.idm-drawer [class*="lg:grid-cols-"],
+.idm-drawer [class*="xl:grid-cols-"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.idm-drawer [class*="col-span-"] {
+  grid-column: auto;
+}
+.idm-drawer [class*="xl:sticky"],
+.idm-drawer [class*="lg:sticky"] {
+  position: static;
+}

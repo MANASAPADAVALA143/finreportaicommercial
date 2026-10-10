@@ -1,14 +1,14 @@
 import type React from 'react';
 import { useEffect, useState } from 'react';
-import { FileText, Loader2, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
+import { FileText, Loader2, Maximize2, Paperclip, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { resolveInvoiceFileUrl } from '@/lib/ap-invoice/invoiceStorageService';
 import { COLORS, type Tone, TONE_HEX } from '@/pages/ap-invoices/dashboard/ui';
 
 export const INVOICE_STATUS_TONE: Record<string, Tone> = {
   Processing: 'amber',
-  Approved: 'teal',
-  Paid: 'primary',
+  Approved: 'primary',
+  Paid: 'teal',
   'On Hold': 'gold',
   Queried: 'purple',
   Rejected: 'red',
@@ -34,18 +34,26 @@ export const MATCH_TONE: Record<string, Tone> = {
   no_po: 'slate',
 };
 
-export function riskTone(score: number, level: string | null | undefined): Tone {
+/** `null` score and no level means the invoice was never scored — shown neutral, never as Low. */
+export function riskTone(score: number | null, level: string | null | undefined): Tone {
   const l = String(level ?? '').toLowerCase();
-  if (score >= 60 || l === 'high' || l === 'critical') return 'red';
-  if (score >= 30 || l === 'medium') return 'amber';
+  if ((score ?? -1) >= 60 || l === 'high' || l === 'critical') return 'red';
+  if ((score ?? -1) >= 30 || l === 'medium') return 'amber';
+  if (score == null && !l) return 'slate';
   return 'teal';
 }
 
 export function riskLabel(inv: Pick<Invoice, 'risk_level' | 'risk_score'>): string {
   if (inv.risk_level) return inv.risk_level;
-  if (inv.risk_score === 'high') return 'High';
-  if (inv.risk_score === 'medium') return 'Medium';
-  return 'Low';
+  const raw = inv.risk_score as unknown;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw >= 60 ? 'High' : raw >= 30 ? 'Medium' : 'Low';
+  }
+  const s = String(raw ?? '').toLowerCase();
+  if (s === 'critical' || s === 'high') return 'High';
+  if (s === 'medium') return 'Medium';
+  if (s === 'low') return 'Low';
+  return 'Not scored';
 }
 
 /** Viewable URL for a stored file reference; intake placeholders (e.g. "email-…") resolve to null. */
@@ -196,6 +204,9 @@ export function DocumentPreview({
   fileRef,
   zoom,
   onZoom,
+  onAttach,
+  attaching = false,
+  compact = false,
 }: {
   url: string | null;
   loading?: boolean;
@@ -203,6 +214,10 @@ export function DocumentPreview({
   fileRef: string | null;
   zoom: number;
   onZoom: (next: number) => void;
+  /** Shown in the empty state so a document can be added to invoices imported without one. */
+  onAttach?: () => void;
+  attaching?: boolean;
+  compact?: boolean;
 }) {
   const isImage =
     !!url && (/^image\//i.test(fileType ?? '') || /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(url));
@@ -242,7 +257,7 @@ export function DocumentPreview({
           </a>
         ) : null}
       </div>
-      <div className="min-h-[420px] flex-1 overflow-auto bg-slate-100 p-3">
+      <div className={`${compact ? 'min-h-[220px]' : 'min-h-[420px]'} flex-1 overflow-auto bg-slate-100 p-3`}>
         {url ? (
           isImage ? (
             <img
@@ -256,24 +271,35 @@ export function DocumentPreview({
               <iframe
                 src={url}
                 title="Invoice document"
-                className="h-[620px] w-full rounded-md border-0 bg-white shadow"
+                className={`${compact ? 'h-[480px]' : 'h-[620px]'} w-full rounded-md border-0 bg-white shadow`}
               />
             </div>
           )
         ) : loading ? (
-          <div className="flex h-full min-h-[400px] flex-col items-center justify-center text-center">
+          <div className={`flex h-full ${compact ? 'min-h-[200px]' : 'min-h-[400px]'} flex-col items-center justify-center text-center`}>
             <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
             <p className="mt-3 text-sm text-slate-500">Loading document…</p>
           </div>
         ) : (
-          <div className="flex h-full min-h-[400px] flex-col items-center justify-center text-center">
-            <FileText className="h-12 w-12 text-slate-300" />
+          <div className={`flex h-full ${compact ? 'min-h-[200px]' : 'min-h-[400px]'} flex-col items-center justify-center text-center`}>
+            <FileText className={`${compact ? 'h-9 w-9' : 'h-12 w-12'} text-slate-300`} />
             <p className="mt-3 text-sm font-medium text-slate-600">No document attached</p>
             <p className="mt-1 max-w-[260px] text-xs text-slate-500">
               {fileRef
                 ? 'The original file was not stored when this invoice was captured.'
                 : 'No original file was uploaded with this invoice.'}
             </p>
+            {onAttach && (
+              <button
+                type="button"
+                onClick={onAttach}
+                disabled={attaching}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-[#1765F5] bg-white px-3 py-1.5 text-xs font-semibold text-[#1765F5] hover:bg-[#EEF4FF] disabled:opacity-50"
+              >
+                {attaching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                {attaching ? 'Attaching…' : 'Attach document'}
+              </button>
+            )}
           </div>
         )}
       </div>
