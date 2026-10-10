@@ -11,19 +11,21 @@ import { useDisplayCurrency } from '../../hooks/useDisplayCurrency';
 import { useCompany } from '../../context/CompanyContext';
 import { useIndustryConfig } from '../../context/IndustryConfigContext';
 import { useMarket } from '../../contexts/MarketContext';
-import { useApDashboardData } from './dashboard/useApDashboardData';
+import { DASHBOARD_INVOICE_LIMIT, useApDashboardData } from './dashboard/useApDashboardData';
 import {
   RANGE_PRESETS,
   computeKpis,
   filterByRange,
+  isPendingApproval,
   localDay,
   monthKeysForRange,
   monthLabel,
   resolveRange,
+  type PipelineStageKey,
   type RangePreset,
 } from './dashboard/metrics';
-import { DASHBOARD_TABS, type DashboardCtx, type TabId } from './dashboard/types';
-import { ErrorBanner, EmptyState, type Tone, TONE_HEX } from './dashboard/ui';
+import { DASHBOARD_TABS, type DashboardCtx, type StageFilterState, type TabId } from './dashboard/types';
+import { ErrorBanner, EmptyState, Note, type Tone, TONE_HEX } from './dashboard/ui';
 import { OverviewTab } from './dashboard/tabs/OverviewTab';
 import { ProcessingTab } from './dashboard/tabs/ProcessingTab';
 import { ApprovalsTab } from './dashboard/tabs/ApprovalsTab';
@@ -39,6 +41,7 @@ const PRESET_IDS = new Set<string>(RANGE_PRESETS.map((p) => p.id));
 
 function KpiCard({
   label,
+  scope,
   value,
   sub,
   extra,
@@ -47,6 +50,7 @@ function KpiCard({
   onClick,
 }: {
   label: string;
+  scope: string;
   value: React.ReactNode;
   sub: React.ReactNode;
   extra?: React.ReactNode;
@@ -57,7 +61,12 @@ function KpiCard({
   const body = (
     <>
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[12px] font-medium text-slate-500">{label}</p>
+        <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-[12px] font-medium text-slate-500">
+          {label}
+          <span className="rounded border border-slate-200 bg-slate-50 px-1 py-px text-[9.5px] font-medium uppercase tracking-wide text-slate-400">
+            {scope}
+          </span>
+        </p>
         <span
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
           style={{ background: `${TONE_HEX[tone]}14`, color: TONE_HEX[tone] }}
@@ -139,7 +148,14 @@ export function Dashboard() {
     [setSearchParams],
   );
 
-  const goTab = useCallback((id: TabId) => updateParams({ tab: id === 'overview' ? null : id }), [updateParams]);
+  const goTab = useCallback(
+    (id: TabId) => updateParams({ tab: id === 'overview' ? null : id, ...(id === 'invoices' ? {} : { stage: null, state: null }) }),
+    [updateParams],
+  );
+  const showStage = useCallback(
+    (stage: PipelineStageKey, state: StageFilterState) => updateParams({ tab: 'invoices', stage, state }),
+    [updateParams],
+  );
 
   const reload = data.reload;
   const ctx: DashboardCtx = useMemo(
@@ -160,9 +176,10 @@ export function Dashboard() {
       isUAE,
       openInvoice: setSelectedInvoice,
       goTab,
+      showStage,
       reload,
     }),
-    [data.invoices, period, range, monthKeys, kpis, today, baseCurrency, fmt, fmtCompact, dateFormat, costCenterLabel, data.companyId, workspaceId, isUAE, goTab, reload],
+    [data.invoices, period, range, monthKeys, kpis, today, baseCurrency, fmt, fmtCompact, dateFormat, costCenterLabel, data.companyId, workspaceId, isUAE, goTab, showStage, reload],
   );
 
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -182,6 +199,9 @@ export function Dashboard() {
 
   const companyName = activeCompany?.company_name || activeCompany?.trade_name || null;
   const thisMonth = monthLabel(kpis.monthKey);
+  const periodPending = useMemo(() => period.filter(isPendingApproval).length, [period]);
+  // A failed first load or missing organization must not render as zero totals.
+  const kpiUnavailable = !data.companyId || (!!data.error && !data.loadedAt);
 
   const renderTab = () => {
     switch (tab) {
@@ -274,33 +294,72 @@ export function Dashboard() {
         </div>
       </header>
 
-      {data.error && <ErrorBanner message={data.error} onRetry={() => void data.reload()} />}
+      {data.error && (
+        <ErrorBanner
+          message={
+            data.loadedAt
+              ? `${data.error} Showing figures last loaded at ${data.loadedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`
+              : data.error
+          }
+          onRetry={() => void data.reload()}
+        />
+      )}
+      {data.truncated && (
+        <Note tone="amber">
+          Showing the latest {DASHBOARD_INVOICE_LIMIT.toLocaleString()} invoices. Older invoices are not included in these
+          totals — narrow the date range or use the Invoice List for full history.
+        </Note>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-busy={data.loading}>
         {data.loading ? (
           [0, 1, 2, 3].map((i) => <div key={i} className="h-[104px] animate-pulse rounded-xl border border-[#E3E8EF] bg-white" />)
+        ) : kpiUnavailable ? (
+          [
+            { label: 'Total Invoices', scope: 'All time', icon: FileText, tone: 'primary' as Tone },
+            { label: 'Pending Approvals', scope: 'Live', icon: Clock, tone: 'amber' as Tone },
+            { label: "This Month's Total", scope: thisMonth, icon: Landmark, tone: 'gold' as Tone },
+            { label: 'Total Tax This Month', scope: thisMonth, icon: Receipt, tone: 'purple' as Tone },
+          ].map((k) => (
+            <KpiCard
+              key={k.label}
+              label={k.label}
+              scope={k.scope}
+              value={<span className="text-slate-300">—</span>}
+              sub={data.companyId ? 'Unavailable — invoices could not be loaded' : 'Select an organization'}
+              icon={k.icon}
+              tone={k.tone}
+            />
+          ))
         ) : (
           <>
             <KpiCard
               label="Total Invoices"
+              scope="All time"
               value={kpis.totalInvoices.toLocaleString()}
-              sub={range.preset === 'all' ? 'All time' : `All time · ${period.length} in ${range.label.toLowerCase()}`}
+              sub={range.preset === 'all' ? 'Every invoice for this organization' : `${period.length} dated in ${range.label.toLowerCase()}`}
               icon={FileText}
               tone="primary"
               onClick={() => goTab('invoices')}
             />
             <KpiCard
               label="Pending Approvals"
+              scope="Live"
               value={kpis.pendingApprovals.toLocaleString()}
-              sub="Awaiting review"
+              sub={
+                range.preset === 'all'
+                  ? 'Awaiting review now'
+                  : `Awaiting review now · ${periodPending} dated in ${range.label.toLowerCase()}`
+              }
               icon={Clock}
               tone="amber"
               onClick={() => goTab('approvals')}
             />
             <KpiCard
               label="This Month's Total"
+              scope={thisMonth}
               value={fmt(kpis.monthTotal)}
-              sub={`${thisMonth} · ${kpis.monthInvoiceCount} invoice${kpis.monthInvoiceCount === 1 ? '' : 's'} by invoice date`}
+              sub={`${kpis.monthInvoiceCount} invoice${kpis.monthInvoiceCount === 1 ? '' : 's'} dated this month`}
               extra={
                 kpis.otherCurrencies.length > 0 && (
                   <p className="mt-0.5 truncate text-[11px] text-[#B45309]">
@@ -314,8 +373,9 @@ export function Dashboard() {
             />
             <KpiCard
               label="Total Tax This Month"
+              scope={thisMonth}
               value={fmt(kpis.monthTax)}
-              sub={`${isUAE ? 'VAT' : 'Tax'} on ${baseCurrency} invoices dated ${thisMonth}`}
+              sub={`${isUAE ? 'VAT' : 'Tax'} on ${baseCurrency} invoices dated this month`}
               icon={Receipt}
               tone="purple"
               onClick={() => goTab('compliance')}
@@ -370,6 +430,16 @@ export function Dashboard() {
               <div key={i} className="h-48 animate-pulse rounded-xl border border-[#E3E8EF] bg-white" />
             ))}
           </div>
+        ) : data.error && !data.loadedAt ? (
+          <EmptyState
+            action={
+              <button type="button" onClick={() => void data.reload()} className="text-[12px] font-medium text-[#246BFD] hover:underline">
+                Try again
+              </button>
+            }
+          >
+            Dashboard data is unavailable because invoices could not be loaded.
+          </EmptyState>
         ) : !data.companyId ? (
           <EmptyState>Select an organization in the top bar to see its AP dashboard.</EmptyState>
         ) : (

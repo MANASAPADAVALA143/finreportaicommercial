@@ -400,22 +400,153 @@ export const isGlCoded = (inv: Invoice) => Boolean(glCodeOf(inv));
 export const isIfrsClassified = (inv: Invoice) => Boolean(inv.ifrs_category?.trim());
 export const isPaid = (inv: Invoice) => normalizedOpenPaymentStatus(inv) === 'paid';
 
-export function pipelineStages(invoices: Invoice[]) {
-  const total = invoices.length;
-  const stage = (key: string, label: string, test: (inv: Invoice) => boolean, route: string) => {
-    const count = invoices.filter(test).length;
-    return { key, label, count, pending: total - count, pct: total ? Math.round((count / total) * 100) : 0, route };
-  };
-  return [
-    stage('uploaded', 'Uploaded', () => true, '/ap-invoices/list'),
-    stage('extracted', 'AI Extracted', (i) => !invoiceNeedsExtractionReview(i), '/ap-invoices/list?tab=needs-review'),
-    stage('classified', 'IFRS Classified', isIfrsClassified, '/ap-invoices/list?filter=unclassified'),
-    stage('matched', '3-Way Matched', isFullyMatched, '/ap-invoices/list?filter=match_issues'),
-    stage('risk', 'Risk Scored', (i) => i.risk_score != null || Boolean(i.risk_level), '/ap-invoices/list'),
-    stage('approved', 'Approved', (i) => i.status === 'Approved' || i.status === 'Paid', '/ap-invoices/approvals'),
-    stage('gl', 'GL Coded', isGlCoded, '/ap-invoices/gl-accounts'),
-    stage('paid', 'Paid', isPaid, '/ap-invoices/payment-log'),
-  ];
+/** A saved risk assessment: a numeric/tiered risk_score or a risk_level. A missing score is not "low risk". */
+export const hasRiskScore = (inv: Invoice) =>
+  (inv.risk_score != null && String(inv.risk_score).trim() !== '') || Boolean(String(inv.risk_level ?? '').trim());
+
+const NON_AI_SOURCES = new Set(['excel', 'excel_vba', 'manual']);
+
+/**
+ * Pipeline stages are independent checks, not a strict sequence (an invoice can be GL-coded
+ * before it is approved), so each stage's rate is done ÷ invoices the stage applies to.
+ *  - done: completed successfully
+ *  - pending: not started / waiting
+ *  - issue: ran but needs attention (low confidence, match exception, rejected/on hold, flags without a saved score)
+ *  - na: the stage does not apply (e.g. Excel imports are not AI-extracted; unapproved invoices are not due for payment)
+ */
+export type StageState = 'done' | 'pending' | 'issue' | 'na';
+
+export const PIPELINE_STAGES = [
+  {
+    key: 'uploaded',
+    label: 'Uploaded',
+    definition: 'Invoice record exists for this organization.',
+    pendingLabel: '',
+    issueLabel: '',
+    naLabel: '',
+  },
+  {
+    key: 'extracted',
+    label: 'AI Extracted',
+    definition:
+      'Extraction confidence of 70% or more. Excel and manual entries are not AI-extracted, but are still flagged when key fields are incomplete.',
+    pendingLabel: '',
+    issueLabel: 'need manual review',
+    naLabel: 'Excel / manual, complete',
+  },
+  {
+    key: 'classified',
+    label: 'IFRS Classified',
+    definition: 'An IFRS category is assigned.',
+    pendingLabel: 'not classified',
+    issueLabel: '',
+    naLabel: '',
+  },
+  {
+    key: 'matched',
+    label: '3-Way Matched',
+    definition: 'Invoice, PO and GRN agree (match status matched).',
+    pendingLabel: 'match not run',
+    issueLabel: 'partial / mismatch / no PO',
+    naLabel: '',
+  },
+  {
+    key: 'risk',
+    label: 'Risk Scored',
+    definition: 'A risk score or level is saved on the invoice. Missing scores are not treated as low risk.',
+    pendingLabel: 'not scored',
+    issueLabel: 'flags saved, score missing',
+    naLabel: '',
+  },
+  {
+    key: 'approved',
+    label: 'Approved',
+    definition: 'Status is Approved or Paid.',
+    pendingLabel: 'awaiting approval',
+    issueLabel: 'rejected / on hold / queried',
+    naLabel: '',
+  },
+  {
+    key: 'gl',
+    label: 'GL Coded',
+    definition: 'A GL account code is assigned.',
+    pendingLabel: 'no GL code',
+    issueLabel: '',
+    naLabel: '',
+  },
+  {
+    key: 'paid',
+    label: 'Paid',
+    definition: 'Payment recorded. Only approved invoices are expected to be paid.',
+    pendingLabel: 'approved, unpaid',
+    issueLabel: '',
+    naLabel: 'not yet approved',
+  },
+] as const;
+
+export type PipelineStageKey = (typeof PIPELINE_STAGES)[number]['key'];
+export const PIPELINE_STAGE_KEYS = new Set<string>(PIPELINE_STAGES.map((s) => s.key));
+
+export function pipelineState(inv: Invoice, key: PipelineStageKey): StageState {
+  switch (key) {
+    case 'uploaded':
+      return 'done';
+    case 'extracted':
+      if (invoiceNeedsExtractionReview(inv)) return 'issue';
+      return NON_AI_SOURCES.has(String(inv.source || '').toLowerCase()) ? 'na' : 'done';
+    case 'classified':
+      return isIfrsClassified(inv) ? 'done' : 'pending';
+    case 'matched': {
+      const s = String(inv.match_status || '').toLowerCase();
+      if (s === 'three_way_matched' || s === 'matched') return 'done';
+      if (s === 'partial' || s === 'mismatch' || s === 'no_po') return 'issue';
+      return 'pending';
+    }
+    case 'risk':
+      if (hasRiskScore(inv)) return 'done';
+      return parseRiskFlags(inv).length ? 'issue' : 'pending';
+    case 'approved':
+      if (inv.status === 'Approved' || inv.status === 'Paid') return 'done';
+      if (inv.status === 'Processing') return 'pending';
+      return 'issue';
+    case 'gl':
+      return isGlCoded(inv) ? 'done' : 'pending';
+    case 'paid':
+      if (isPaid(inv)) return 'done';
+      return inv.status === 'Approved' ? 'pending' : 'na';
+  }
+}
+
+export type PipelineStage = (typeof PIPELINE_STAGES)[number] & {
+  done: number;
+  pending: number;
+  issue: number;
+  na: number;
+  /** done + pending + issue */
+  applicable: number;
+  /** done ÷ applicable, or null when the stage applies to no invoice */
+  rate: number | null;
+};
+
+export function pipelineStages(invoices: Invoice[]): PipelineStage[] {
+  return PIPELINE_STAGES.map((def) => {
+    const c = { done: 0, pending: 0, issue: 0, na: 0 };
+    for (const inv of invoices) c[pipelineState(inv, def.key)] += 1;
+    const applicable = c.done + c.pending + c.issue;
+    return { ...def, ...c, applicable, rate: applicable ? c.done / applicable : null };
+  });
+}
+
+/** Stage holding the most invoices back (pending + needing attention); ties go to the lower completion rate. */
+export function pipelineBottleneck(stages: PipelineStage[]): PipelineStage | null {
+  const open = stages.filter((s) => s.key !== 'uploaded' && s.pending + s.issue > 0);
+  if (!open.length) return null;
+  return open.reduce((a, b) => {
+    const wa = a.pending + a.issue;
+    const wb = b.pending + b.issue;
+    if (wb !== wa) return wb > wa ? b : a;
+    return (b.rate ?? 1) < (a.rate ?? 1) ? b : a;
+  });
 }
 
 // ── Extraction quality ───────────────────────────────────────────────────────
@@ -546,8 +677,10 @@ export function invoiceSeverity(inv: Invoice): Severity | null {
     if (sev && sev in SEVERITY_RANK && (!worst || SEVERITY_RANK[sev] > SEVERITY_RANK[worst])) worst = sev;
   }
   if (!worst) {
-    const lvl = inv.risk_level;
-    worst = lvl && lvl in SEVERITY_RANK ? (lvl as Severity) : null;
+    // risk_level is saved capitalised ("High"); legacy rows keep a tier in risk_score ("high").
+    const lvl = String(inv.risk_level ?? '').trim().toLowerCase();
+    const tier = typeof inv.risk_score === 'string' ? inv.risk_score.trim().toLowerCase() : '';
+    worst = lvl in SEVERITY_RANK ? (lvl as Severity) : tier in SEVERITY_RANK ? (tier as Severity) : null;
   }
   return worst;
 }
@@ -813,6 +946,37 @@ export function consistencyChecks(params: {
     label: 'IFRS classified + needs review = invoices in period',
     ok: ifrs.classified + ifrs.needsReview === period.length,
     detail: `${ifrs.classified} + ${ifrs.needsReview} vs ${period.length}`,
+  });
+
+  const stages = pipelineStages(period);
+  const unbalanced = stages.filter((s) => s.applicable + s.na !== period.length);
+  checks.push({
+    id: 'pipeline_totals',
+    label: 'Every pipeline stage accounts for every invoice in the period',
+    ok: unbalanced.length === 0,
+    detail: unbalanced.length
+      ? `${unbalanced.map((s) => s.label).join(', ')} do not add up`
+      : `done + pending + attention + not applicable = ${period.length}`,
+  });
+
+  const extracted = stages.find((s) => s.key === 'extracted')!;
+  const reviewCount = period.filter(invoiceNeedsExtractionReview).length;
+  checks.push({
+    id: 'extraction_review',
+    label: 'AI Extracted stage and manual-review count agree',
+    ok: extracted.issue === reviewCount,
+    detail: `${extracted.issue} vs ${reviewCount}`,
+  });
+
+  const risk = stages.find((s) => s.key === 'risk')!;
+  checks.push({
+    id: 'risk_saved',
+    label: 'Every invoice in the period has a saved risk score',
+    ok: risk.pending + risk.issue === 0,
+    detail:
+      risk.pending + risk.issue === 0
+        ? `${risk.done} scored`
+        : `${risk.pending + risk.issue} of ${period.length} without a saved score`,
   });
 
   const undated = all.filter((i) => !i.invoice_date).length;

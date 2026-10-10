@@ -1,5 +1,8 @@
 import type { Invoice } from '@/lib/ap-invoice/supabase';
-import type { KpiSummary, ResolvedRange } from './metrics';
+import type { KpiSummary, PipelineStageKey, ResolvedRange, StageState } from './metrics';
+
+/** "open" = pending + needs attention. */
+export type StageFilterState = StageState | 'open';
 
 export const DASHBOARD_TABS = [
   { id: 'overview', label: 'Overview' },
@@ -34,5 +37,7 @@ export type DashboardCtx = {
   isUAE: boolean;
   openInvoice: (inv: Invoice) => void;
   goTab: (tab: TabId) => void;
+  /** Open Recent Invoices filtered to one pipeline stage state (period scope). */
+  showStage: (stage: PipelineStageKey, state: StageFilterState) => void;
   reload: () => void;
 };

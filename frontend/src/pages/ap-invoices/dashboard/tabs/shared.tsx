@@ -1,6 +1,6 @@
 import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { normalizedOpenPaymentStatus } from '@/lib/ap-invoice/paymentStatus';
-import { invoiceSeverity } from '../metrics';
+import { hasRiskScore, invoiceSeverity } from '../metrics';
 import { Pill, STATUS_LABEL, type Tone } from '../ui';
 import { SEVERITY_TONE } from '../widgets';
 
@@ -46,7 +46,13 @@ export function ApprovalPill({ invoice }: { invoice: Invoice }) {
 
 export function RiskPill({ invoice }: { invoice: Invoice }) {
   const sev = invoiceSeverity(invoice);
-  if (!sev) return <span className="text-[11px] text-slate-400">—</span>;
+  if (!sev) {
+    return (
+      <span className="text-[11px] text-slate-400">
+        {hasRiskScore(invoice) ? `Score ${invoice.risk_score}` : 'Not scored'}
+      </span>
+    );
+  }
   return (
     <Pill tone={SEVERITY_TONE[sev]}>
       <span className="capitalize">{sev}</span>

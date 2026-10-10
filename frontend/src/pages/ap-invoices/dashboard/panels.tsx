@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { format } from 'date-fns';
+import { format, formatDistanceToNow } from 'date-fns';
 import { CheckCircle2, ChevronDown, RefreshCw, Sparkles, XCircle } from 'lucide-react';
 import { supabase, type AuditLog, type Invoice } from '@/lib/ap-invoice/supabase';
 import { generateAPInsights, type APSummary, type InsightCard } from '@/services/apInsights.service';
@@ -8,7 +8,9 @@ import {
   complianceChecks,
   computeAging,
   consistencyChecks,
+  pipelineBottleneck,
   pipelineStages,
+  pipelineState,
   type ExceptionReason,
 } from './metrics';
 import type { DashboardCtx, TabId } from './types';
@@ -16,16 +18,75 @@ import { COLORS, EmptyState, Panel, Pill, type Tone } from './ui';
 
 // ── Processing pipeline ──────────────────────────────────────────────────────
 
+type ScanState =
+  | { kind: 'idle' }
+  | { kind: 'running'; done: number; total: number }
+  | { kind: 'finished'; saved: number; total: number; failed: number; unreadable: number; lastError: string | null };
+
+function RiskScanNote({ ctx, invoices }: { ctx: DashboardCtx; invoices: Invoice[] }) {
+  const unscored = useMemo(() => invoices.filter((i) => pipelineState(i, 'risk') !== 'done'), [invoices]);
+  const [scan, setScan] = useState<ScanState>({ kind: 'idle' });
+
+  const run = async () => {
+    const ids = unscored.map((i) => i.id);
+    setScan({ kind: 'running', done: 0, total: ids.length });
+    try {
+      const { scanInvoicesAnomaliesBatch } = await import('@/lib/ap-invoice/anomalyService');
+      const r = await scanInvoicesAnomaliesBatch(ids, 'dashboard-risk-scan', (done, total) =>
+        setScan({ kind: 'running', done, total }),
+      );
+      setScan({ kind: 'finished', saved: r.scanned, total: ids.length, failed: r.failed, unreadable: r.unreadable, lastError: r.lastError });
+    } catch (e) {
+      console.error('[AP Dashboard] risk scan failed:', e);
+      setScan({ kind: 'finished', saved: 0, total: ids.length, failed: ids.length, unreadable: 0, lastError: e instanceof Error ? e.message : String(e) });
+    }
+    ctx.reload();
+  };
+
+  if (!unscored.length && scan.kind !== 'finished') return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#FDE68A] bg-[#FFFBEB] px-2.5 py-1.5 text-[11px] text-[#92400E]">
+      <span className="min-w-0">
+        {scan.kind === 'finished' ? (
+          scan.saved === scan.total ? (
+            <>Risk scores saved for all {scan.total} invoices.</>
+          ) : (
+            <>
+              Risk scores saved for {scan.saved} of {scan.total} invoices.
+              {scan.unreadable > 0 && ` ${scan.unreadable} could not be read with your current session.`}
+              {scan.failed > 0 && ` ${scan.failed} could not be saved${scan.lastError ? ` (${scan.lastError})` : ''}.`}
+            </>
+          )
+        ) : (
+          <>
+            <span className="font-medium">{unscored.length}</span> invoice{unscored.length === 1 ? ' has' : 's have'} no saved risk score.
+            They are shown as not scored, not as low risk.
+          </>
+        )}
+      </span>
+      {unscored.length > 0 && (
+        <button
+          type="button"
+          onClick={() => void run()}
+          disabled={scan.kind === 'running'}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#FCD34D] bg-white px-2 py-0.5 font-medium text-[#92400E] hover:bg-[#FEF3C7] disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B]/40"
+        >
+          <RefreshCw className={`h-3 w-3 ${scan.kind === 'running' ? 'animate-spin' : ''}`} aria-hidden />
+          {scan.kind === 'running' ? `Scanning ${scan.done}/${scan.total}…` : scan.kind === 'finished' ? 'Retry risk scan' : 'Run risk scan'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PipelinePanel({ ctx, invoices, className = '' }: { ctx: DashboardCtx; invoices: Invoice[]; className?: string }) {
   const stages = useMemo(() => pipelineStages(invoices), [invoices]);
-  const bottleneck = useMemo(() => {
-    const later = stages.slice(1, -1).filter((s) => s.pending > 0);
-    return later.length ? later.reduce((a, b) => (b.pct < a.pct ? b : a)) : null;
-  }, [stages]);
+  const bottleneck = useMemo(() => pipelineBottleneck(stages), [stages]);
   return (
     <Panel
       title="Processing Pipeline"
-      subtitle={`Invoices that have completed each step · ${ctx.range.label}`}
+      subtitle={`Invoices that completed each step · ${ctx.range.label} · select a step to see its invoices`}
       scope="period"
       className={className}
     >
@@ -35,19 +96,23 @@ export function PipelinePanel({ ctx, invoices, className = '' }: { ctx: Dashboar
         <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
           {stages.map((s, i) => {
             const isBottleneck = bottleneck?.key === s.key;
-            const color = s.pct === 100 ? COLORS.teal : isBottleneck ? COLORS.amber : COLORS.primary;
+            const open = s.pending + s.issue;
+            const color = s.rate === 1 ? COLORS.teal : isBottleneck ? COLORS.amber : COLORS.primary;
+            const pctLabel = s.rate == null ? 'n/a' : `${Math.round(s.rate * 100)}%`;
             return (
               <li key={s.key}>
-                <Link
-                  to={s.route}
-                  className={`block rounded-lg border px-2.5 py-2 transition-colors hover:border-[#246BFD]/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40 ${
+                <button
+                  type="button"
+                  onClick={() => ctx.showStage(s.key, open > 0 ? 'open' : 'done')}
+                  title={s.definition}
+                  className={`block h-full w-full rounded-lg border px-2.5 py-2 text-left transition-colors hover:border-[#246BFD]/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40 ${
                     isBottleneck ? 'border-[#FCD34D] bg-[#FFFBEB]/60' : 'border-[#E3E8EF] bg-white'
                   }`}
-                  aria-label={`${s.label}: ${s.count} of ${invoices.length} invoices${isBottleneck ? ', bottleneck' : ''}`}
+                  aria-label={`${s.label}: ${s.done} of ${s.applicable} applicable invoices done, ${s.pending} pending, ${s.issue} need attention${s.na ? `, ${s.na} not applicable` : ''}${isBottleneck ? ', bottleneck' : ''}`}
                 >
                   <div className="flex items-center gap-1.5 text-[10.5px] font-medium text-slate-500">
                     <span
-                      className="flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-semibold text-white"
+                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
                       style={{ background: color }}
                       aria-hidden
                     >
@@ -55,14 +120,22 @@ export function PipelinePanel({ ctx, invoices, className = '' }: { ctx: Dashboar
                     </span>
                     <span className="truncate">{s.label}</span>
                   </div>
-                  <p className="mt-1 text-base font-semibold tabular-nums text-slate-900">{s.count}</p>
-                  <div className="mt-1 h-1 rounded-full bg-slate-100" aria-hidden>
-                    <div className="h-1 rounded-full" style={{ width: `${s.pct}%`, background: color }} />
-                  </div>
-                  <p className="mt-1 text-[10.5px] text-slate-500">
-                    {s.pct}%{s.pending > 0 && i > 0 ? ` · ${s.pending} pending` : ''}
+                  <p className="mt-1 text-base font-semibold tabular-nums text-slate-900">
+                    {s.done}
+                    {s.key !== 'uploaded' && <span className="text-[11px] font-normal text-slate-400"> / {s.applicable}</span>}
                   </p>
-                </Link>
+                  <div className="mt-1 h-1 rounded-full bg-slate-100" aria-hidden>
+                    <div className="h-1 rounded-full" style={{ width: `${Math.round((s.rate ?? 0) * 100)}%`, background: color }} />
+                  </div>
+                  <p className="mt-1 text-[10.5px] tabular-nums text-slate-500">{pctLabel}</p>
+                  {(s.pending > 0 || s.issue > 0 || s.na > 0) && (
+                    <ul className="mt-0.5 space-y-px text-[10px] leading-tight">
+                      {s.pending > 0 && <li className="text-slate-500">{s.pending} {s.pendingLabel}</li>}
+                      {s.issue > 0 && <li className="text-[#B45309]">{s.issue} {s.issueLabel}</li>}
+                      {s.na > 0 && <li className="text-slate-400">{s.na} {s.naLabel}</li>}
+                    </ul>
+                  )}
+                </button>
               </li>
             );
           })}
@@ -70,8 +143,23 @@ export function PipelinePanel({ ctx, invoices, className = '' }: { ctx: Dashboar
       )}
       {bottleneck && (
         <p className="mt-2 text-[11px] text-[#92400E]">
-          Bottleneck: <span className="font-medium">{bottleneck.label}</span> — {bottleneck.pending} invoice
-          {bottleneck.pending === 1 ? '' : 's'} not yet through this step.
+          Bottleneck: <span className="font-medium">{bottleneck.label}</span> — {bottleneck.pending + bottleneck.issue} of{' '}
+          {bottleneck.applicable} invoice{bottleneck.applicable === 1 ? '' : 's'} not through this step
+          {bottleneck.issue > 0 ? ` (${bottleneck.issue} ${bottleneck.issueLabel})` : ''}.{' '}
+          <button
+            type="button"
+            onClick={() => ctx.showStage(bottleneck.key, 'open')}
+            className="font-medium text-[#246BFD] hover:underline focus:outline-none focus-visible:underline"
+          >
+            View invoices
+          </button>
+        </p>
+      )}
+      {invoices.length > 0 && <RiskScanNote ctx={ctx} invoices={invoices} />}
+      {invoices.length > 0 && (
+        <p className="mt-2 text-[10.5px] text-slate-400">
+          Steps are checked independently — an invoice can be GL-coded before it is approved — so each rate is done ÷ invoices the step
+          applies to.
         </p>
       )}
     </Panel>
@@ -89,58 +177,117 @@ function agentBadge(action: string): { tone: Tone; label: string } {
   return { tone: 'slate', label: 'Activity' };
 }
 
+const ACTIVITY_INVOICE_SAMPLE = 100;
+const LIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+type ActivityState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; logs: AuditLog[] }
+  | { kind: 'restricted' }
+  | { kind: 'error' };
+
 export function ActivityPanel({ ctx, className = '' }: { ctx: DashboardCtx; className?: string }) {
-  const [logs, setLogs] = useState<AuditLog[] | null>(null);
-  const [error, setError] = useState(false);
+  const [state, setState] = useState<ActivityState>({ kind: 'loading' });
+  const [attempt, setAttempt] = useState(0);
   const byId = useMemo(() => new Map(ctx.all.map((i) => [i.id, i])), [ctx.all]);
+  const sampleIds = useMemo(
+    () =>
+      [...ctx.all]
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+        .slice(0, ACTIVITY_INVOICE_SAMPLE)
+        .map((i) => i.id),
+    [ctx.all],
+  );
 
   useEffect(() => {
+    if (!sampleIds.length || !ctx.companyId) {
+      setState({ kind: 'ready', logs: [] });
+      return;
+    }
     let alive = true;
-    setError(false);
-    void supabase
-      .from('audit_logs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data, error: err }) => {
-        if (!alive) return;
-        if (err) {
-          setError(true);
-          setLogs([]);
-          return;
-        }
-        setLogs(((data || []) as AuditLog[]).filter((l) => byId.has(l.invoice_id)).slice(0, 6));
-      });
+    setState({ kind: 'loading' });
+    void (async () => {
+      const [logsRes, visibleRes] = await Promise.all([
+        supabase
+          .from('audit_logs')
+          .select('*')
+          .in('invoice_id', sampleIds)
+          .order('created_at', { ascending: false })
+          .limit(6),
+        // Row-level security returns an empty list (not an error) when this session cannot read the
+        // organization's records, so check visibility before reporting "no activity".
+        supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('company_id', ctx.companyId!),
+      ]);
+      if (!alive) return;
+      if (logsRes.error) {
+        console.error('[AP Dashboard] audit_logs query failed:', logsRes.error);
+        setState({ kind: 'error' });
+        return;
+      }
+      const logs = (logsRes.data || []) as AuditLog[];
+      if (!logs.length && !visibleRes.error && (visibleRes.count ?? 0) === 0) {
+        setState({ kind: 'restricted' });
+        return;
+      }
+      setState({ kind: 'ready', logs });
+    })();
     return () => {
       alive = false;
     };
-  }, [byId]);
+  }, [sampleIds, ctx.companyId, attempt]);
+
+  const logs = state.kind === 'ready' ? state.logs : [];
+  const lastAt = logs[0]?.created_at ? new Date(logs[0].created_at) : null;
+  const live = !!lastAt && Date.now() - lastAt.getTime() < LIVE_WINDOW_MS;
 
   return (
     <Panel
       title={
         <span className="flex items-center gap-2">
           <span className="relative flex h-2 w-2" aria-hidden>
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#00A884] opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-[#00A884]" />
+            {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#00A884] opacity-60" />}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${live ? 'bg-[#00A884]' : 'bg-slate-300'}`} />
           </span>
           Multi-Agent AI — Live Activity
         </span>
+      }
+      subtitle={
+        state.kind === 'ready'
+          ? lastAt
+            ? `Last event ${formatDistanceToNow(lastAt, { addSuffix: true })}`
+            : 'No events recorded yet'
+          : undefined
       }
       scope="current"
       className={className}
       action={<Link to="/ap-invoices/audit-log" className="text-[12px] font-medium text-[#246BFD] hover:underline">Audit log</Link>}
     >
-      {logs === null ? (
+      {state.kind === 'loading' ? (
         <div className="space-y-2" aria-busy>
           {[0, 1, 2].map((i) => (
             <div key={i} className="h-8 animate-pulse rounded bg-slate-100" />
           ))}
         </div>
-      ) : error ? (
-        <EmptyState>Activity feed is unavailable right now.</EmptyState>
+      ) : state.kind === 'error' ? (
+        <EmptyState
+          action={
+            <button type="button" onClick={() => setAttempt((n) => n + 1)} className="text-[12px] font-medium text-[#246BFD] hover:underline">
+              Try again
+            </button>
+          }
+        >
+          The activity log could not be loaded.
+        </EmptyState>
+      ) : state.kind === 'restricted' ? (
+        <EmptyState>
+          Activity can’t be shown: this session doesn’t have direct read access to the organization’s records. Sign out and back
+          in, or open the audit log.
+        </EmptyState>
       ) : logs.length === 0 ? (
-        <EmptyState>No recent agent activity for this organization.</EmptyState>
+        <EmptyState>
+          No AI or workflow events have been recorded for this organization’s latest invoices. Events appear here when invoices
+          are classified, risk-scored, matched or approved.
+        </EmptyState>
       ) : (
         <ul className="space-y-1.5">
           {logs.map((log) => {

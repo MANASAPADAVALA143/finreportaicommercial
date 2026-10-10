@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, Eye, Search } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, Eye, Search, X } from 'lucide-react';
 import type { Invoice } from '@/lib/ap-invoice/supabase';
 import { formatCurrency } from '@/utils/currency';
 import { displayDate } from '@/utils/dateUtils';
-import type { DashboardCtx } from '../types';
-import { STATUS_ORDER, amountOf, invoiceDay, invoiceSeverity } from '../metrics';
+import type { DashboardCtx, StageFilterState } from '../types';
+import {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_KEYS,
+  STATUS_ORDER,
+  amountOf,
+  invoiceDay,
+  invoiceSeverity,
+  pipelineState,
+  type PipelineStageKey,
+} from '../metrics';
 import { EmptyState, Panel, PanelLink, STATUS_LABEL } from '../ui';
 import { ApprovalPill, RiskPill, StatusPill, approvalStatusOf } from './shared';
 
@@ -62,7 +72,39 @@ function exportCsv(rows: Invoice[], filename: string) {
   URL.revokeObjectURL(url);
 }
 
+const STAGE_STATE_LABEL: Record<StageFilterState, string> = {
+  open: 'Not done (pending + attention)',
+  pending: 'Pending',
+  issue: 'Needs attention',
+  done: 'Done',
+  na: 'Not applicable',
+};
+const STAGE_STATES = new Set<string>(Object.keys(STAGE_STATE_LABEL));
+
+function matchesStage(inv: Invoice, stage: PipelineStageKey, state: StageFilterState): boolean {
+  const s = pipelineState(inv, stage);
+  return state === 'open' ? s === 'pending' || s === 'issue' : s === state;
+}
+
 export function RecentInvoicesTab({ ctx }: { ctx: DashboardCtx }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const stageParam = searchParams.get('stage') ?? '';
+  const stage = PIPELINE_STAGE_KEYS.has(stageParam) ? (stageParam as PipelineStageKey) : null;
+  const stateParam = searchParams.get('state') ?? '';
+  const stageState: StageFilterState = STAGE_STATES.has(stateParam) ? (stateParam as StageFilterState) : 'open';
+  const setStageFilter = (next: { stage?: string | null; state?: string | null }) =>
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(next)) {
+          if (v) p.set(k, v);
+          else p.delete(k);
+        }
+        return p;
+      },
+      { replace: true },
+    );
+
   const [scope, setScope] = useState<'period' | 'all'>('period');
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
@@ -71,11 +113,17 @@ export function RecentInvoicesTab({ ctx }: { ctx: DashboardCtx }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'date', dir: 'desc' });
   const [page, setPage] = useState(0);
 
+  // Pipeline counts are for the selected period, so a stage drill-down starts there too.
+  useEffect(() => {
+    if (stage) setScope('period');
+  }, [stage, stageState]);
+
   const source = scope === 'period' ? ctx.period : ctx.all;
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = source.filter((i) => {
+      if (stage && !matchesStage(i, stage, stageState)) return false;
       if (status !== 'all' && i.status !== status) return false;
       if (approval !== 'all' && approvalStatusOf(i) !== approval) return false;
       if (risk !== 'all' && (invoiceSeverity(i) ?? 'none') !== risk) return false;
@@ -90,9 +138,10 @@ export function RecentInvoicesTab({ ctx }: { ctx: DashboardCtx }) {
       const bv = sortValue(b, sort.key);
       return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
     });
-  }, [source, query, status, approval, risk, sort]);
+  }, [source, stage, stageState, query, status, approval, risk, sort]);
 
-  useEffect(() => setPage(0), [query, status, approval, risk, scope, sort]);
+  useEffect(() => setPage(0), [stage, stageState, query, status, approval, risk, scope, sort]);
+  const stageDef = stage ? PIPELINE_STAGES.find((s) => s.key === stage) : null;
 
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
@@ -145,6 +194,33 @@ export function RecentInvoicesTab({ ctx }: { ctx: DashboardCtx }) {
             className="h-8 w-full rounded-md border border-[#E3E8EF] bg-white pl-7 pr-2 text-[12px] focus:border-[#246BFD] focus:outline-none focus:ring-2 focus:ring-[#246BFD]/20"
           />
         </label>
+        <select
+          aria-label="Pipeline step"
+          value={stage ?? ''}
+          onChange={(e) => setStageFilter({ stage: e.target.value || null, state: e.target.value ? stageState : null })}
+          className={selectCls}
+        >
+          <option value="">All pipeline steps</option>
+          {PIPELINE_STAGES.filter((s) => s.key !== 'uploaded').map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        {stage && (
+          <select
+            aria-label="Pipeline step state"
+            value={stageState}
+            onChange={(e) => setStageFilter({ state: e.target.value })}
+            className={selectCls}
+          >
+            {(Object.keys(STAGE_STATE_LABEL) as StageFilterState[]).map((s) => (
+              <option key={s} value={s}>
+                {STAGE_STATE_LABEL[s]}
+              </option>
+            ))}
+          </select>
+        )}
         <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)} className={selectCls}>
           <option value="all">All statuses</option>
           {statuses.map((s) => (
@@ -181,6 +257,21 @@ export function RecentInvoicesTab({ ctx }: { ctx: DashboardCtx }) {
           <Download className="h-3.5 w-3.5" aria-hidden /> Export CSV
         </button>
       </div>
+
+      {stageDef && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#246BFD]/20 bg-[#246BFD]/[0.04] px-2.5 py-1.5 text-[11.5px] text-slate-700">
+          <span>
+            <span className="font-medium">{stageDef.label}</span> · {STAGE_STATE_LABEL[stageState].toLowerCase()} — {stageDef.definition}
+          </span>
+          <button
+            type="button"
+            onClick={() => setStageFilter({ stage: null, state: null })}
+            className="inline-flex items-center gap-1 rounded font-medium text-[#246BFD] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#246BFD]/40"
+          >
+            <X className="h-3 w-3" aria-hidden /> Clear step filter
+          </button>
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <EmptyState>{source.length === 0 ? 'No invoices yet. Upload your first invoice to get started.' : 'No invoices match these filters.'}</EmptyState>

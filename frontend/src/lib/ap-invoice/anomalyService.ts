@@ -224,6 +224,32 @@ export async function persistAnomalies(
   result: AnomalyEngineResult,
   actor: string | null,
 ): Promise<InvoiceAnomaly[]> {
+  const overall = result.flags.length
+    ? Number(result.overall_risk_score) || Math.max(...result.flags.map((f) => f.risk_score))
+    : Number(result.overall_risk_score) || 0;
+
+  // Save the invoice's score first so a failed anomaly-row insert cannot leave it unscored.
+  // RLS-blocked updates return no error and no rows, so check the row count explicitly.
+  const { data: updated, error: updateErr } = await supabase
+    .from('invoices')
+    .update({
+      risk_score: overall,
+      risk_level: riskLevelFromScore(overall),
+      risk_flags: result.flags.map((f) => ({
+        type: f.flag_code,
+        severity: f.severity,
+        message: f.flag_reason,
+        explanation: JSON.stringify(f.flag_details ?? {}),
+      })),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', invoiceId)
+    .select('id');
+  if (updateErr) throw new Error(`Risk score not saved: ${updateErr.message}`);
+  if (!updated?.length) {
+    throw new Error('Risk score not saved: the invoice update was blocked (no matching row or no write permission)');
+  }
+
   // Replace prior open flags from this pipeline so re-scans don't duplicate or go stale
   await supabase
     .from('invoice_anomalies')
@@ -231,19 +257,7 @@ export async function persistAnomalies(
     .eq('invoice_id', invoiceId)
     .eq('status', 'open');
 
-  if (!result.flags.length) {
-    // Still write a computed low score so risk_score is not a stale default
-    await supabase
-      .from('invoices')
-      .update({
-        risk_score: Number(result.overall_risk_score) || 0,
-        risk_level: riskLevelFromScore(Number(result.overall_risk_score) || 0),
-        risk_flags: [],
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', invoiceId);
-    return [];
-  }
+  if (!result.flags.length) return [];
 
   const rows = result.flags.map((f) => ({
     invoice_id: invoiceId,
@@ -270,22 +284,6 @@ export async function persistAnomalies(
       new_values: { flag_code: f.flag_code, severity: f.severity, reason: f.flag_reason },
     });
   }
-
-  const overall = Number(result.overall_risk_score) || Math.max(...result.flags.map((f) => f.risk_score));
-  await supabase
-    .from('invoices')
-    .update({
-      risk_score: overall,
-      risk_level: riskLevelFromScore(overall),
-      risk_flags: result.flags.map((f) => ({
-        type: f.flag_code,
-        severity: f.severity,
-        message: f.flag_reason,
-        explanation: JSON.stringify(f.flag_details ?? {}),
-      })),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', invoiceId);
 
   return (data ?? []) as InvoiceAnomaly[];
 }
@@ -614,13 +612,19 @@ export async function scanInvoicesAnomaliesBatch(
   invoiceIds: string[],
   actor: string | null = 'system-anomaly-scan',
   onProgress?: (done: number, total: number, detail: string) => void,
-): Promise<{ scanned: number; flagged: number }> {
+): Promise<{ scanned: number; flagged: number; failed: number; unreadable: number; lastError: string | null }> {
   let scanned = 0;
   let flagged = 0;
+  let failed = 0;
+  let unreadable = 0;
+  let lastError: string | null = null;
   for (let i = 0; i < invoiceIds.length; i++) {
     const id = invoiceIds[i];
     const { data: inv, error } = await supabase.from('invoices').select('*').eq('id', id).maybeSingle();
-    if (error || !inv) continue;
+    if (error || !inv) {
+      unreadable++;
+      continue;
+    }
     onProgress?.(i + 1, invoiceIds.length, `Scanning ${inv.invoice_number}…`);
     try {
       const r = await scanInvoiceAnomalies(
@@ -648,10 +652,12 @@ export async function scanInvoicesAnomaliesBatch(
       scanned++;
       if (r.flags.length) flagged++;
     } catch (e) {
+      failed++;
+      lastError = e instanceof Error ? e.message : String(e);
       console.warn('[anomaly] scan failed', inv.invoice_number, e);
     }
   }
-  return { scanned, flagged };
+  return { scanned, flagged, failed, unreadable, lastError };
 }
 
 /** Async hook — call after invoice save without blocking upload. */
