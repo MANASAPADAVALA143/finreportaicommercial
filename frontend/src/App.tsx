@@ -369,6 +369,11 @@ const CommandCenter = safeLazy(() => import('./pages/CommandCenter'));
 const AgentStatus = safeLazy(() => import('./pages/AgentStatus'));
 const AuditIntelligencePage = safeLazy(() => import('./pages/audit/AuditIntelligencePage'));
 const AuditCommandCenterPage = safeLazy(() => import('./pages/audit/AuditCommandCenterPage'));
+const InternalAuditLayout = safeLazy(() => import('./pages/internal-audit/InternalAuditLayout'));
+const AuditCommitteeDashboard = safeLazy(() => import('./pages/internal-audit/AuditCommitteeDashboard'));
+const AuditUniversePage = safeLazy(() => import('./pages/internal-audit/AuditUniversePage'));
+const AuditEngagementsPage = safeLazy(() => import('./pages/internal-audit/AuditEngagementsPage'));
+const AuditFindingsPage = safeLazy(() => import('./pages/internal-audit/AuditFindingsPage'));
 // CA Firm Tools
 const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
 const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
@@ -811,6 +816,13 @@ function App() {
                 <Route path="/tb-variance"             element={<TBVariancePage />} />
                 <Route path="/audit"                   element={<AuditIntelligencePage />} />
                 <Route path="/audit/command-center"    element={<AuditCommandCenterPage />} />
+                <Route path="/internal-audit" element={<InternalAuditLayout />}>
+                  <Route index element={<AuditCommitteeDashboard />} />
+                  <Route path="dashboard" element={<AuditCommitteeDashboard />} />
+                  <Route path="universe" element={<AuditUniversePage />} />
+                  <Route path="engagements" element={<AuditEngagementsPage />} />
+                  <Route path="findings" element={<AuditFindingsPage />} />
+                </Route>
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />
                 <Route path="/ifrs/agentic"            element={<AgenticGenerator />} />

@@ -6,6 +6,7 @@ import {
   Landmark, Lock, MessageSquare, Percent, Plug, Receipt, ShoppingCart,
   Shield, Sliders, Table, TrendingUp, Users, ArrowRight, Presentation,
   Banknote, ShieldCheck, ShieldX, Upload, Layers, ChevronLeft, ChevronRight,
+  AlertTriangle, Briefcase, Globe,
 } from 'lucide-react';
 import { useSuite } from '../context/SuiteContext';
 import { useCompany } from '../context/CompanyContext';
@@ -30,12 +31,14 @@ const UAE_SUITE_DASHBOARD_PATH = '/uae-suite';
 // ── Icon registry (lucide icons keyed by our string names) ───────────────────
 const ICONS: Record<string, React.ElementType> = {
   'activity':        Activity,
+  'alert-triangle':  AlertTriangle,
   'arrow-right':     ArrowRight,
   'banknote':        Banknote,
   'bar-chart-2':     BarChart2,
   'book':            BookOpen,
   'bot':             Bot,
   'brain':           Brain,
+  'briefcase':       Briefcase,
   'building':        Building,
   'building-2':      Building2,
   'calculator':      Calculator,
@@ -44,6 +47,7 @@ const ICONS: Record<string, React.ElementType> = {
   'coins':           Coins,
   'file-text':       FileText,
   'git-merge':       GitMerge,
+  'globe':           Globe,
   'landmark':        Landmark,
   'layers':          Layers,
   'layout-dashboard':LayoutDashboard,

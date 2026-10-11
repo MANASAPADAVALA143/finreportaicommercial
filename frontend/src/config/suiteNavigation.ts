@@ -28,6 +28,17 @@ export const IFRS_SUITE_NAV: NavSection = {
   ],
 };
 
+// ── Internal Audit (UAE + India suites) ──────────────────────────────────────
+export const INTERNAL_AUDIT_NAV: NavSection = {
+  section: 'Internal Audit',
+  items: [
+    { label: 'Committee Dashboard',   path: '/internal-audit/dashboard',   icon: 'layout-dashboard' },
+    { label: 'Audit Universe & Plan', path: '/internal-audit/universe',    icon: 'globe' },
+    { label: 'Engagements',           path: '/internal-audit/engagements', icon: 'briefcase' },
+    { label: 'Findings & CAPA',       path: '/internal-audit/findings',    icon: 'alert-triangle' },
+  ],
+};
+
 // ── UAE Finance Suite (uae_client role) ───────────────────────────────────────
 export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
   {
@@ -110,6 +121,7 @@ export const INDIA_NAV: NavEntry[] = [
       { label: 'Tally Connector',       path: '/erp/tally',             icon: 'plug',     badge: 'ERP' },
     ],
   },
+  INTERNAL_AUDIT_NAV,
 ];
 
 // ── UAE Suite ─────────────────────────────────────────────────────────────────
@@ -209,6 +221,7 @@ export const UAE_NAV: NavEntry[] = [
       { label: 'Board Pack',         path: '/reports/board-pack',  icon: 'presentation',   badge: 'AI' },
     ],
   },
+  INTERNAL_AUDIT_NAV,
 ];
 
 // ── FP&A Suite ────────────────────────────────────────────────────────────────

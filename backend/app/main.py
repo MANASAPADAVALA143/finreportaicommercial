@@ -43,6 +43,7 @@ from app.routers import ap_settings as ap_settings_router
 from app.routers import ap_email_privacy as ap_email_privacy_router
 from app.routers import ap_ses_intake as ap_ses_intake_router
 from app.routers import ap_whatsapp_intake as ap_whatsapp_intake_router
+from app.routers import internal_audit as internal_audit_router
 from app.api.routes import gulftax_audit_routes
 from app.api.routes.ar_collections_routes import router as ar_collections_router
 from app.api.routes import (
@@ -278,6 +279,7 @@ def _run_critical_migrations() -> None:
             import app.models.client_data  # noqa: F401
             import app.models.ap_payment_run  # noqa: F401
             import app.models.industry_config  # noqa: F401
+            import app.models.internal_audit  # noqa: F401
             import app.modules.gulftax.ported.models  # noqa: F401 - gulftax_invoices etc.
         except Exception as _ie:
             logger.warning("Some model imports failed during critical migrations: %s", _ie)
@@ -531,6 +533,7 @@ app.include_router(ap_settings_router.router)
 app.include_router(ap_email_privacy_router.router)
 app.include_router(ap_ses_intake_router.router)
 app.include_router(ap_whatsapp_intake_router.router)
+app.include_router(internal_audit_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(o2c_routes.router)
 app.include_router(crm_routes.router)

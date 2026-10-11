@@ -1,0 +1,365 @@
+"""Internal Audit API — audit universe, engagements, findings and committee dashboard.
+
+Every route runs inside the caller's verified workspace and requires access to the
+requested company: read for any member, write to create/edit, manage to delete.
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.company_access import AccessLevel, require_company_access
+from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
+from app.models.internal_audit import AuditEngagement, AuditFinding, AuditUniverse
+
+router = APIRouter(prefix="/api/internal-audit", tags=["internal-audit"])
+
+Risk = Literal["Low", "Medium", "High", "Critical"]
+ControlRating = Literal["Strong", "Adequate", "Weak", "None"]
+Frequency = Literal["Annual", "Bi-annual", "Quarterly", "Ad-hoc"]
+EngagementStatus = Literal["Planning", "Fieldwork", "Reporting", "Closed"]
+FindingStatus = Literal["Open", "In Progress", "Overdue", "Implemented", "Verified"]
+OPEN_STATUSES = ("Open", "In Progress", "Overdue")
+CLOSED_STATUSES = ("Implemented", "Verified")
+
+
+class Scope:
+    def __init__(self, workspace_id: str, company_id: str):
+        self.workspace_id = workspace_id
+        self.company_id = company_id
+
+    def filter(self, model: Any) -> tuple[Any, Any]:
+        return model.workspace_id == self.workspace_id, model.company_id == self.company_id
+
+
+def _scope(level: AccessLevel):
+    def dep(
+        company_id: str = Query(...),
+        ctx: WorkspaceContext = Depends(validate_workspace),
+        db: Session = Depends(get_db),
+    ) -> Scope:
+        return Scope(ctx.workspace_id, require_company_access(db, ctx, company_id, level))
+
+    return dep
+
+
+_read = _scope("read")
+_write = _scope("write")
+_manage = _scope("manage")
+
+
+def _row(obj: Any) -> dict[str, Any]:
+    out = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    for k, v in out.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+    return out
+
+
+def _clean(body: BaseModel, *, partial: bool) -> dict[str, Any]:
+    """Blank strings become NULL so date comparisons and filters stay meaningful."""
+    data = body.model_dump(exclude_unset=partial)
+    return {k: (None if isinstance(v, str) and not v.strip() else v) for k, v in data.items()}
+
+
+def _get_or_404(db: Session, model: Any, obj_id: int, scope: Scope) -> Any:
+    obj = db.query(model).filter(model.id == obj_id, *scope.filter(model)).first()
+    if obj is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return obj
+
+
+def _next_ref(db: Session, model: Any, column: Any, prefix: str, scope: Scope) -> str:
+    year = date.today().year
+    stem = f"{prefix}-{year}-"
+    taken = {
+        r[0] for r in db.query(column).filter(*scope.filter(model), column.like(f"{stem}%")).all() if r[0]
+    }
+    n = len(taken) + 1
+    while f"{stem}{n:03d}" in taken:
+        n += 1
+    return f"{stem}{n:03d}"
+
+
+# ── Audit universe ───────────────────────────────────────────────────────────
+
+
+class UniverseIn(BaseModel):
+    unit_name: str = Field(min_length=1, max_length=200)
+    department: str | None = Field(default=None, max_length=100)
+    process_owner: str | None = Field(default=None, max_length=100)
+    inherent_risk: Risk | None = "Medium"
+    control_effectiveness: ControlRating | None = "Adequate"
+    residual_risk: Risk | None = "Medium"
+    audit_frequency: Frequency | None = "Annual"
+    last_audited: str | None = Field(default=None, max_length=20)
+    next_planned: str | None = Field(default=None, max_length=20)
+    notes: str | None = None
+
+
+@router.get("/universe")
+def list_universe(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    rows = db.query(AuditUniverse).filter(*scope.filter(AuditUniverse)).order_by(AuditUniverse.id).all()
+    return [_row(r) for r in rows]
+
+
+@router.post("/universe", status_code=201)
+def create_universe(body: UniverseIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    obj = AuditUniverse(**_clean(body, partial=False), workspace_id=scope.workspace_id, company_id=scope.company_id)
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.put("/universe/{uid}")
+def update_universe(uid: int, body: UniverseIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditUniverse, uid, scope)
+    for k, v in _clean(body, partial=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.delete("/universe/{uid}", status_code=204)
+def delete_universe(uid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    db.delete(_get_or_404(db, AuditUniverse, uid, scope))
+    db.commit()
+    return Response(status_code=204)
+
+
+# ── Engagements ──────────────────────────────────────────────────────────────
+
+
+class EngagementIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    audit_unit: str | None = Field(default=None, max_length=200)
+    scope: str | None = None
+    objectives: str | None = None
+    lead_auditor: str | None = Field(default=None, max_length=100)
+    team_members: list[str] | None = None
+    status: EngagementStatus = "Planning"
+    planned_start: str | None = Field(default=None, max_length=20)
+    planned_end: str | None = Field(default=None, max_length=20)
+    actual_start: str | None = Field(default=None, max_length=20)
+    actual_end: str | None = Field(default=None, max_length=20)
+    budget_hours: float | None = Field(default=None, ge=0)
+    actual_hours: float | None = Field(default=None, ge=0)
+    risk_rating: Risk | None = None
+
+
+def _recount_findings(db: Session, engagement_ids: set[int | None], scope: Scope) -> None:
+    for eid in engagement_ids - {None}:
+        eng = db.query(AuditEngagement).filter(AuditEngagement.id == eid, *scope.filter(AuditEngagement)).first()
+        if eng is not None:
+            eng.findings_count = (
+                db.query(func.count(AuditFinding.id))
+                .filter(AuditFinding.engagement_id == eid, *scope.filter(AuditFinding))
+                .scalar()
+                or 0
+            )
+
+
+@router.get("/engagements")
+def list_engagements(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    rows = (
+        db.query(AuditEngagement)
+        .filter(*scope.filter(AuditEngagement))
+        .order_by(AuditEngagement.id.desc())
+        .all()
+    )
+    return [_row(r) for r in rows]
+
+
+@router.post("/engagements", status_code=201)
+def create_engagement(body: EngagementIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    ref = _next_ref(db, AuditEngagement, AuditEngagement.engagement_ref, "IA", scope)
+    obj = AuditEngagement(
+        **_clean(body, partial=False),
+        engagement_ref=ref,
+        findings_count=0,
+        workspace_id=scope.workspace_id,
+        company_id=scope.company_id,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.put("/engagements/{eid}")
+def update_engagement(eid: int, body: EngagementIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditEngagement, eid, scope)
+    for k, v in _clean(body, partial=True).items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.delete("/engagements/{eid}", status_code=204)
+def delete_engagement(eid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditEngagement, eid, scope)
+    db.query(AuditFinding).filter(AuditFinding.engagement_id == eid, *scope.filter(AuditFinding)).update(
+        {AuditFinding.engagement_id: None}, synchronize_session=False
+    )
+    db.delete(obj)
+    db.commit()
+    return Response(status_code=204)
+
+
+# ── Findings & corrective actions ────────────────────────────────────────────
+
+
+class FindingIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    engagement_id: int | None = None
+    description: str | None = None
+    risk_rating: Risk = "Medium"
+    root_cause: str | None = Field(default=None, max_length=100)
+    control_gap: str | None = None
+    recommendation: str | None = None
+    management_response: str | None = None
+    action_owner: str | None = Field(default=None, max_length=100)
+    action_due_date: str | None = Field(default=None, max_length=20)
+    status: FindingStatus = "Open"
+    is_repeat: bool = False
+    repeat_from_year: str | None = Field(default=None, max_length=10)
+    evidence_ref: str | None = Field(default=None, max_length=200)
+
+
+def _check_engagement(db: Session, engagement_id: int | None, scope: Scope) -> None:
+    if engagement_id is None:
+        return
+    exists = (
+        db.query(AuditEngagement.id)
+        .filter(AuditEngagement.id == engagement_id, *scope.filter(AuditEngagement))
+        .first()
+    )
+    if exists is None:
+        raise HTTPException(status_code=422, detail="Engagement not found for this company")
+
+
+@router.get("/findings")
+def list_findings(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    rows = db.query(AuditFinding).filter(*scope.filter(AuditFinding)).order_by(AuditFinding.id.desc()).all()
+    return [_row(r) for r in rows]
+
+
+@router.post("/findings", status_code=201)
+def create_finding(body: FindingIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    _check_engagement(db, body.engagement_id, scope)
+    ref = _next_ref(db, AuditFinding, AuditFinding.finding_ref, "F", scope)
+    obj = AuditFinding(
+        **_clean(body, partial=False),
+        finding_ref=ref,
+        workspace_id=scope.workspace_id,
+        company_id=scope.company_id,
+    )
+    db.add(obj)
+    db.flush()
+    _recount_findings(db, {obj.engagement_id}, scope)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.put("/findings/{fid}")
+def update_finding(fid: int, body: FindingIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditFinding, fid, scope)
+    data = _clean(body, partial=True)
+    if "engagement_id" in data:
+        _check_engagement(db, data["engagement_id"], scope)
+    previous = obj.engagement_id
+    for k, v in data.items():
+        setattr(obj, k, v)
+    db.flush()
+    _recount_findings(db, {previous, obj.engagement_id}, scope)
+    db.commit()
+    db.refresh(obj)
+    return _row(obj)
+
+
+@router.delete("/findings/{fid}", status_code=204)
+def delete_finding(fid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditFinding, fid, scope)
+    engagement_id = obj.engagement_id
+    db.delete(obj)
+    db.flush()
+    _recount_findings(db, {engagement_id}, scope)
+    db.commit()
+    return Response(status_code=204)
+
+
+# ── Audit committee dashboard ────────────────────────────────────────────────
+
+
+@router.get("/dashboard")
+def dashboard(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    today = date.today().isoformat()
+    in_scope_findings = scope.filter(AuditFinding)
+
+    eng_rows = (
+        db.query(AuditEngagement.status, func.count(AuditEngagement.id))
+        .filter(*scope.filter(AuditEngagement))
+        .group_by(AuditEngagement.status)
+        .all()
+    )
+    risk_rows = (
+        db.query(AuditFinding.risk_rating, func.count(AuditFinding.id))
+        .filter(*in_scope_findings)
+        .group_by(AuditFinding.risk_rating)
+        .all()
+    )
+    open_findings = (
+        db.query(func.count(AuditFinding.id))
+        .filter(*in_scope_findings, AuditFinding.status.in_(OPEN_STATUSES))
+        .scalar()
+        or 0
+    )
+    overdue = (
+        db.query(func.count(AuditFinding.id))
+        .filter(
+            *in_scope_findings,
+            AuditFinding.action_due_date.isnot(None),
+            AuditFinding.action_due_date < today,
+            AuditFinding.status.notin_(CLOSED_STATUSES),
+        )
+        .scalar()
+        or 0
+    )
+    repeat = (
+        db.query(func.count(AuditFinding.id))
+        .filter(*in_scope_findings, AuditFinding.is_repeat.is_(True))
+        .scalar()
+        or 0
+    )
+    universe_rows = (
+        db.query(AuditUniverse.residual_risk, func.count(AuditUniverse.id))
+        .filter(*scope.filter(AuditUniverse))
+        .group_by(AuditUniverse.residual_risk)
+        .all()
+    )
+    recent = (
+        db.query(AuditFinding)
+        .filter(*in_scope_findings, AuditFinding.status.in_(OPEN_STATUSES))
+        .order_by(AuditFinding.id.desc())
+        .limit(10)
+        .all()
+    )
+    return {
+        "engagements_by_status": {s: n for s, n in eng_rows},
+        "findings_by_risk": {r: n for r, n in risk_rows},
+        "open_findings": open_findings,
+        "overdue_actions": overdue,
+        "repeat_findings": repeat,
+        "universe_by_risk": {(r or "Unrated"): n for r, n in universe_rows},
+        "recent_open_findings": [_row(f) for f in recent],
+    }
