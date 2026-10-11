@@ -374,6 +374,8 @@ const AuditCommitteeDashboard = safeLazy(() => import('./pages/internal-audit/Au
 const AuditUniversePage = safeLazy(() => import('./pages/internal-audit/AuditUniversePage'));
 const AuditEngagementsPage = safeLazy(() => import('./pages/internal-audit/AuditEngagementsPage'));
 const AuditFindingsPage = safeLazy(() => import('./pages/internal-audit/AuditFindingsPage'));
+const AuditBaselinePage = safeLazy(() => import('./pages/internal-audit/BaselinePage'));
+const JEReviewPage = safeLazy(() => import('./pages/internal-audit/JEReviewPage'));
 // CA Firm Tools
 const BankStatementProcessor = safeLazy(() => import('./pages/ca-firm/BankStatementProcessor'));
 const TBToFinancials = safeLazy(() => import('./pages/ca-firm/TBToFinancials'));
@@ -822,6 +824,8 @@ function App() {
                   <Route path="universe" element={<AuditUniversePage />} />
                   <Route path="engagements" element={<AuditEngagementsPage />} />
                   <Route path="findings" element={<AuditFindingsPage />} />
+                  <Route path="baseline" element={<AuditBaselinePage />} />
+                  <Route path="je-review" element={<JEReviewPage />} />
                 </Route>
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />

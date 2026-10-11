@@ -53,7 +53,7 @@ def _rule_based_narrative(entry: dict[str, Any], scores: dict[str, Any]) -> str:
 
     return (
         f"This {risk}-risk journal entry (composite score {score:.0f}/100) "
-        f"for account {acct} with an amount of ₹{amount:,.2f} posted by {user} "
+        f"for account {acct} with an amount of {amount:,.2f} posted by {user} "
         f"was flagged due to: {reason}. "
         "Recommend auditor review and corroborating documentation."
     )
@@ -75,14 +75,18 @@ def _build_prompt(entry: dict[str, Any], scores: dict[str, Any]) -> str:
     beh   = layer_scores.get("behavioral", 0)
 
     reason_block = "\n".join(f"  • {r}" for r in top_reasons[:5]) if top_reasons else "  • (no specific reasons)"
+    account = entry.get('account', 'N/A')
+    if entry.get('account_name'):
+        account = f"{account} – {entry['account_name']}"
+    baseline = entry.get('baseline_context') or 'No historical baseline loaded for this account.'
 
-    prompt = f"""You are a senior forensic accountant writing a concise audit observation.
+    prompt = f"""You are an internal audit AI writing a concise audit observation.
 
 Journal Entry Details
 ─────────────────────
 • Journal ID   : {entry.get('journal_id', 'N/A')}
-• Account      : {entry.get('account', 'N/A')}
-• Amount       : ₹{entry.get('amount', 0):,.2f}
+• Account      : {account}
+• Amount       : {entry.get('amount', 0):,.2f}
 • Posted by    : {entry.get('user_id', 'N/A')}
 • Source       : {entry.get('source', 'N/A')}
 • Posting date : {entry.get('posting_date', 'N/A')}
@@ -98,13 +102,14 @@ Detection Results
 Primary risk indicators:
 {reason_block}
 
+Historical baseline comparison:
+  {baseline}
+
 Instructions
 ────────────
-Write a single audit observation paragraph (3-5 sentences, ≤150 words) that:
-1. States what was found and why it is anomalous
-2. References the specific risk indicators above
-3. Describes the potential financial-reporting or fraud risk
-4. Recommends the most important next audit step
+Write exactly 2 sentences (≤60 words total):
+1. The first explains the risk this anomaly represents, drawing on the baseline comparison and risk indicators.
+2. The second states what the auditor should investigate or obtain as evidence.
 
 Use professional audit language. Do NOT repeat the raw numbers already visible
 in the UI. Do NOT add headers, bullets, or markdown — plain prose only."""

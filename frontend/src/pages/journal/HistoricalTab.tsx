@@ -1,9 +1,16 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import BaselineManager from '../../components/BaselineManager';
 import BenfordChart from '../../components/BenfordChart';
+import { useCompany } from '../../context/CompanyContext';
+import { workspaceHeaders } from '@/services/workspaceService';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
+const DEMO_COMPANY = 'gnanova_demo';
+
+function authed(init: RequestInit = {}): RequestInit {
+  return { ...init, headers: workspaceHeaders(null), credentials: 'include' };
+}
 
 type HistoryStatus = {
   company_id: string;
@@ -89,6 +96,8 @@ type HistoricalResult = {
     layer_detail?: LayerDetail;
     /** LLM-generated audit narrative (CRITICAL/HIGH entries only) */
     audit_narrative?: string | null;
+    /** Comparison with the account's historical baseline (flagged entries only) */
+    baseline_explanation?: { text: string; z_score: number | null; above_threshold: boolean | null } | null;
     /** legacy — may be absent in new engine results */
     models?: {
       zscore:     { baseline_source: string; zscore: number };
@@ -290,7 +299,11 @@ function LayerBar({ label, score, color }: { label: string; score: number; color
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function HistoricalTab() {
-  const [companyId, setCompanyId] = useState('gnanova_demo');
+  const { activeCompanyId } = useCompany();
+  const [companyId, setCompanyId] = useState(activeCompanyId || DEMO_COMPANY);
+  useEffect(() => {
+    if (activeCompanyId) setCompanyId((c) => (c === DEMO_COMPANY ? activeCompanyId : c));
+  }, [activeCompanyId]);
   const [status, setStatus] = useState<HistoryStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [monthFile, setMonthFile] = useState<File | null>(null);
@@ -309,8 +322,11 @@ export default function HistoricalTab() {
     if (!API_BASE || !companyId) return;
     setLoadingStatus(true);
     try {
-      const r = await fetch(`${API_BASE}/api/v2/history/baseline-status?company_id=${encodeURIComponent(companyId)}`);
+      const r = await fetch(`${API_BASE}/api/v2/history/baseline-status?company_id=${encodeURIComponent(companyId)}`, authed());
+      if (!r.ok) throw new Error(await r.text());
       setStatus(await r.json());
+    } catch (e: any) {
+      setUploadError(e?.message || 'Could not load baseline status');
     } finally {
       setLoadingStatus(false);
     }
@@ -327,11 +343,10 @@ export default function HistoricalTab() {
         setUploadError('No valid rows found. File must have columns: journal_id (or id), account, posting_date (or date), amount.');
         return;
       }
-      const r = await fetch(`${API_BASE}/api/v2/history/upload`, {
+      const r = await fetch(`${API_BASE}/api/v2/history/upload`, authed({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_id: companyId, upload_month: month, entries }),
-      });
+      }));
       if (!r.ok) throw new Error(await r.text());
       await loadStatus();
       setUploadError(null);
@@ -346,7 +361,7 @@ export default function HistoricalTab() {
   const resetBaseline = async () => {
     if (!API_BASE) return;
     try {
-      const r = await fetch(`${API_BASE}/api/v2/history/reset?company_id=${encodeURIComponent(companyId)}`, { method: 'DELETE' });
+      const r = await fetch(`${API_BASE}/api/v2/history/reset?company_id=${encodeURIComponent(companyId)}`, authed({ method: 'DELETE' }));
       if (!r.ok) throw new Error(await r.text());
       await loadStatus();
       setResult(null);
@@ -377,11 +392,10 @@ export default function HistoricalTab() {
         );
         return;
       }
-      const r = await fetch(`${API_BASE}/api/v2/analyze-historical`, {
+      const r = await fetch(`${API_BASE}/api/v2/analyze-historical`, authed({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_id: companyId, entries, analysis_months: analysisMonths }),
-      });
+      }));
       if (!r.ok) {
         const errText = await r.text();
         let detail = errText;
@@ -650,6 +664,12 @@ export default function HistoricalTab() {
                                 </div>
 
                                 {/* ── AI Audit Narrative (CRITICAL/HIGH only) ── */}
+                                {e.baseline_explanation && (
+                                  <div className="rounded-lg border border-blue-800 bg-blue-950/40 p-3">
+                                    <p className="mb-1 font-semibold text-blue-300">📈 Compared with history</p>
+                                    <p className="text-slate-200">{e.baseline_explanation.text}</p>
+                                  </div>
+                                )}
                                 <NarrativeCard
                                   narrative={e.audit_narrative}
                                   riskLevel={e.composite.risk_level}
@@ -772,6 +792,12 @@ export default function HistoricalTab() {
                             ) : (
                               /* Fallback — no plain summary */
                               <div className="space-y-2 text-slate-300">
+                                {e.baseline_explanation && (
+                                  <div className="rounded-lg border border-blue-800 bg-blue-950/40 p-3">
+                                    <p className="mb-1 font-semibold text-blue-300">📈 Compared with history</p>
+                                    <p className="text-slate-200">{e.baseline_explanation.text}</p>
+                                  </div>
+                                )}
                                 <NarrativeCard
                                   narrative={e.audit_narrative}
                                   riskLevel={e.composite.risk_level}

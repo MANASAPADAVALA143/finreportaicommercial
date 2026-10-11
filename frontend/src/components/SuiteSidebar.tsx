@@ -6,7 +6,7 @@ import {
   Landmark, Lock, MessageSquare, Percent, Plug, Receipt, ShoppingCart,
   Shield, Sliders, Table, TrendingUp, Users, ArrowRight, Presentation,
   Banknote, ShieldCheck, ShieldX, Upload, Layers, ChevronLeft, ChevronRight,
-  AlertTriangle, Briefcase, Globe,
+  AlertTriangle, Briefcase, Globe, History, FileSearch,
 } from 'lucide-react';
 import { useSuite } from '../context/SuiteContext';
 import { useCompany } from '../context/CompanyContext';
@@ -45,9 +45,11 @@ const ICONS: Record<string, React.ElementType> = {
   'calendar':        Calendar,
   'clock':           Clock,
   'coins':           Coins,
+  'file-search':     FileSearch,
   'file-text':       FileText,
   'git-merge':       GitMerge,
   'globe':           Globe,
+  'history':         History,
   'landmark':        Landmark,
   'layers':          Layers,
   'layout-dashboard':LayoutDashboard,

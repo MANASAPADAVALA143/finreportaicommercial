@@ -138,6 +138,20 @@ def require_invoice_access(
     return owners
 
 
+def require_workspace_level(db: Session, ctx: WorkspaceContext, level: AccessLevel = "read") -> None:
+    """Raise 403 unless the caller's role in the active workspace permits `level`."""
+    if is_super_admin(ctx):
+        return
+    role = _workspace_role(db, ctx, ctx.workspace_id)
+    if role is None:
+        raise HTTPException(status_code=403, detail="No access to this workspace")
+    if role not in _ALLOWED_ROLES[level] and not _is_cfo(ctx):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Your workspace role ({role}) cannot {_LEVEL_LABEL[level]} this workspace's data",
+        )
+
+
 def resolve_workspace(db: Session, ctx: WorkspaceContext, requested: str | None) -> str:
     """Use the requested workspace only if the caller belongs to it; default to the active one."""
     ws = (requested or "").strip()

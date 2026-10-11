@@ -44,6 +44,7 @@ from app.routers import ap_email_privacy as ap_email_privacy_router
 from app.routers import ap_ses_intake as ap_ses_intake_router
 from app.routers import ap_whatsapp_intake as ap_whatsapp_intake_router
 from app.routers import internal_audit as internal_audit_router
+from app.routers import internal_audit_je as internal_audit_je_router
 from app.api.routes import gulftax_audit_routes
 from app.api.routes.ar_collections_routes import router as ar_collections_router
 from app.api.routes import (
@@ -534,6 +535,7 @@ app.include_router(ap_email_privacy_router.router)
 app.include_router(ap_ses_intake_router.router)
 app.include_router(ap_whatsapp_intake_router.router)
 app.include_router(internal_audit_router.router)
+app.include_router(internal_audit_je_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(o2c_routes.router)
 app.include_router(crm_routes.router)

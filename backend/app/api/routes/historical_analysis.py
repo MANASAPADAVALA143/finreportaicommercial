@@ -8,11 +8,18 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.history_models import JENarrative, JournalHistory
+from app.core.history_scope import history_key
+from app.middleware.workspace import WorkspaceContext, validate_workspace
+from app.models.history_models import AccountBaseline, JEAnomalyReview, JENarrative, JournalHistory
+from app.services.baseline_explainer import (
+    REVIEW_SCORE_THRESHOLD,
+    explain_against_baseline,
+    severity_for_score,
+)
 from app.services.feedback_learner import FeedbackLearner
 from app.services.je_anomaly_engine import JEAnomalyEngine
 from app.services.je_data_adapter import JEDataAdapter, JEDataValidator
@@ -73,8 +80,9 @@ class EntryIn(BaseModel):
     journal_id:   str
     posting_date: str
     account:      str
+    account_name: str | None = None
     amount:       float
-    user_id:      str
+    user_id:      str        = ""
     source:       str        = "ERP"
     description:  str | None = None
     entity:       str | None = None
@@ -85,6 +93,7 @@ class HistoricalAnalysisIn(BaseModel):
     company_id:      str
     entries:         list[EntryIn]
     analysis_months: int = 6
+    currency:        str | None = Field(default=None, max_length=5)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -291,13 +300,128 @@ def _save_narratives(
         db.rollback()
 
 
+def _needs_explanation(entry: dict[str, Any]) -> bool:
+    comp = entry.get("composite", {})
+    return (
+        comp.get("risk_level") in _NARRATIVE_RISK_LEVELS
+        or float(comp.get("composite_score", 0) or 0) > REVIEW_SCORE_THRESHOLD
+    )
+
+
+def _attach_baseline_explanations(
+    company_id: str,
+    entries_out: list[dict[str, Any]],
+    account_names: dict[str, str],
+    currency: str | None,
+    db: Session,
+) -> None:
+    targets = [e for e in entries_out if _needs_explanation(e)]
+    for e in entries_out:
+        e["baseline_explanation"] = None
+    if not targets:
+        return
+    accounts = sorted({str(e["account"]) for e in targets})
+    baselines = {
+        b.account: b
+        for b in db.query(AccountBaseline)
+        .filter(AccountBaseline.company_id == company_id, AccountBaseline.account.in_(accounts))
+        .all()
+    }
+    for e in targets:
+        acct = str(e["account"])
+        e["account_name"] = account_names.get(acct)
+        e["baseline_explanation"] = explain_against_baseline(
+            account=acct,
+            account_name=account_names.get(acct),
+            amount=float(e.get("amount", 0) or 0),
+            posting_date=e.get("posting_date"),
+            baseline=baselines.get(acct),
+            currency=currency,
+        )
+
+
+def _sync_review_queue(
+    company_id: str,
+    workspace_id: str,
+    entries_out: list[dict[str, Any]],
+    db: Session,
+) -> int:
+    """Upsert entries scoring above the review threshold; auditor status and comments are kept."""
+    flagged = {}
+    for e in entries_out:
+        score = float(e.get("composite", {}).get("composite_score", 0) or 0)
+        if severity_for_score(score):
+            flagged[str(e["journal_id"])] = (e, score)
+    if not flagged:
+        return 0
+
+    existing: dict[str, JEAnomalyReview] = {}
+    ids = sorted(flagged)
+    for i in range(0, len(ids), 500):
+        for row in (
+            db.query(JEAnomalyReview)
+            .filter(JEAnomalyReview.company_id == company_id, JEAnomalyReview.journal_id.in_(ids[i:i + 500]))
+            .all()
+        ):
+            existing[row.journal_id] = row
+
+    now = datetime.utcnow()
+    for jid, (e, score) in flagged.items():
+        explanation = (e.get("baseline_explanation") or {}).get("text")
+        fields = {
+            "account": str(e.get("account", ""))[:100],
+            "account_name": (e.get("account_name") or None),
+            "amount": float(e.get("amount", 0) or 0),
+            "posting_date": str(e.get("posting_date") or "")[:30] or None,
+            "user_id": str(e.get("user_id") or "")[:100] or None,
+            "description": e.get("description") or None,
+            "risk_score": score,
+            "severity": severity_for_score(score),
+            "explanation": explanation,
+            "top_reasons": e.get("composite", {}).get("top_reasons", []),
+            "updated_at": now,
+        }
+        if e.get("audit_narrative"):
+            fields["ai_observation"] = e["audit_narrative"]
+        row = existing.get(jid)
+        if row:
+            for k, v in fields.items():
+                setattr(row, k, v)
+        else:
+            db.add(JEAnomalyReview(
+                company_id=company_id,
+                workspace_id=workspace_id,
+                journal_id=jid[:100],
+                status="Open",
+                created_at=now,
+                **fields,
+            ))
+    try:
+        db.commit()
+    except Exception as exc:
+        log.warning("[REVIEW] Failed to sync JE review queue: %s", exc)
+        db.rollback()
+        return 0
+    return len(flagged)
+
+
+def _can_write(db: Session, ctx: WorkspaceContext, company_id: str) -> bool:
+    try:
+        history_key(db, ctx, company_id, "write")
+        return True
+    except HTTPException:
+        return False
+
+
 # ── Main endpoint (async for narrative await) ─────────────────────────────────
 
 @router.post("/analyze-historical")
-async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(get_db)):
-    company_id = body.company_id.strip()
-    if not company_id:
-        raise HTTPException(status_code=400, detail="company_id is required.")
+async def analyze_historical(
+    body: HistoricalAnalysisIn,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    company_id = history_key(db, ctx, body.company_id, "read")
 
     log.info(
         "[HISTORICAL] analyze_historical: company_id=%r entries=%d",
@@ -391,11 +515,20 @@ async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(g
         # Initialise narrative slot (filled below)
         entry["audit_narrative"] = None
 
+    # ── Baseline comparison for flagged entries ───────────────────────────────
+    account_names: dict[str, str] = {
+        str(r.account): r.account_name for r in hist_rows if r.account_name
+    }
+    account_names.update({
+        str(e.account): e.account_name.strip()[:200]
+        for e in body.entries if e.account_name and e.account_name.strip()
+    })
+    _attach_baseline_explanations(
+        company_id, entries_out, account_names, (body.currency or "").strip() or None, db,
+    )
+
     # ── LLM Narrative generation for CRITICAL + HIGH entries ──────────────────
-    flagged_entries = [
-        e for e in entries_out
-        if e.get("composite", {}).get("risk_level") in _NARRATIVE_RISK_LEVELS
-    ]
+    flagged_entries = [e for e in entries_out if _needs_explanation(e)]
     # Sort by composite_score descending so top-20 are the most suspicious
     flagged_entries.sort(
         key=lambda e: e.get("composite", {}).get("composite_score", 0),
@@ -436,6 +569,8 @@ async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(g
                         "posting_date": e.get("posting_date", ""),
                         "description":  e.get("description", ""),
                         "entity":       e.get("entity", ""),
+                        "account_name": e.get("account_name") or "",
+                        "baseline_context": (e.get("baseline_explanation") or {}).get("text", ""),
                     },
                     "scores": {
                         "risk_level":      e["composite"].get("risk_level"),
@@ -467,6 +602,12 @@ async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(g
             jid = entry["journal_id"]
             if jid in narrative_lookup:
                 entry["audit_narrative"] = narrative_lookup[jid]
+
+    review_queued = (
+        _sync_review_queue(company_id, ctx.workspace_id, entries_out, db)
+        if _can_write(db, ctx, body.company_id)
+        else 0
+    )
 
     # ── Drift analysis (population level) ─────────────────────────────────────
     # BEFORE: used hist_part["entry_count"].mean() → divided by a per-group mean
@@ -556,8 +697,9 @@ async def analyze_historical(body: HistoricalAnalysisIn, db: Session = Depends(g
     flagged_count = batch_stats["critical"] + batch_stats["high"] + batch_stats["medium"]
 
     payload = _np_safe({
-        "company_id":       company_id,
+        "company_id":       body.company_id.strip(),
         "analysis_months":  int(body.analysis_months),
+        "review_queued":    review_queued,
         "baseline_quality": baseline_quality,
         "training_source":  (
             f"history ({n_hist} rows) + batch ({n_batch} rows)"
@@ -603,15 +745,18 @@ class NarrativeIn(BaseModel):
 
 
 @router.post("/narrative/{journal_id}")
-async def get_narrative(journal_id: str, body: NarrativeIn, db: Session = Depends(get_db)):
+async def get_narrative(
+    journal_id: str,
+    body: NarrativeIn,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     """
     Generate (or return cached) an LLM audit narrative for a single entry.
 
     Useful for on-demand regeneration from the frontend detail panel.
     """
-    company_id = body.company_id.strip()
-    if not company_id:
-        raise HTTPException(status_code=400, detail="company_id is required.")
+    company_id = history_key(db, ctx, body.company_id, "read")
 
     # Check cache first
     cached = _load_cached_narratives(company_id, [journal_id], db)
@@ -655,13 +800,15 @@ async def get_narrative(journal_id: str, body: NarrativeIn, db: Session = Depend
 # ── Auditor feedback endpoint ─────────────────────────────────────────────────
 
 @router.post("/feedback")
-def submit_auditor_feedback(body: FeedbackIn, db: Session = Depends(get_db)):
+def submit_auditor_feedback(
+    body: FeedbackIn,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     """
     Accept auditor accept/reject decisions and retune per-client layer weights.
     """
-    company_id = body.company_id.strip()
-    if not company_id:
-        raise HTTPException(status_code=400, detail="company_id is required.")
+    company_id = history_key(db, ctx, body.company_id, "write")
     if not body.feedback:
         raise HTTPException(status_code=400, detail="feedback list is empty.")
 
@@ -680,7 +827,7 @@ def submit_auditor_feedback(body: FeedbackIn, db: Session = Depends(get_db)):
     )
 
     return {
-        "company_id":      company_id,
+        "company_id":      body.company_id.strip(),
         "processed":       update_result["processed"],
         "skipped":         update_result["skipped"],
         "new_weights":     update_result["new_weights"],
@@ -690,9 +837,13 @@ def submit_auditor_feedback(body: FeedbackIn, db: Session = Depends(get_db)):
 
 
 @router.get("/feedback/weights/{company_id}")
-def get_client_weights(company_id: str, db: Session = Depends(get_db)):
+def get_client_weights(
+    company_id: str,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     """Return the current ensemble layer weights for a client."""
-    weights = _feedback.load_weights(company_id.strip(), db)
+    weights = _feedback.load_weights(history_key(db, ctx, company_id, "read"), db)
     return {
         "company_id": company_id,
         "layer_weights": weights,

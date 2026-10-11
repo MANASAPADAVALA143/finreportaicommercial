@@ -75,9 +75,9 @@ export type AuditDashboard = {
   recent_open_findings: Finding[];
 };
 
-async function request<T>(path: string, companyId: string, init: RequestInit = {}): Promise<T> {
+async function send(path: string, companyId: string, init: RequestInit = {}): Promise<Response> {
   const sep = path.includes('?') ? '&' : '?';
-  const res = await fetch(joinApiUrl(`/api/internal-audit${path}${sep}company_id=${encodeURIComponent(companyId)}`), {
+  const res = await fetch(joinApiUrl(`${path}${sep}company_id=${encodeURIComponent(companyId)}`), {
     ...init,
     headers: workspaceHeaders(null),
     credentials: 'include',
@@ -93,7 +93,19 @@ async function request<T>(path: string, companyId: string, init: RequestInit = {
           : '';
     throw new Error(message || `Request failed (${res.status})`);
   }
+  return res;
+}
+
+async function request<T>(path: string, companyId: string, init: RequestInit = {}, root = '/api/internal-audit'): Promise<T> {
+  const res = await send(`${root}${path}`, companyId, init);
   return (res.status === 204 ? undefined : await res.json()) as T;
+}
+
+function queryString(params: Record<string, string | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : '';
 }
 
 function crud<T extends { id: number }>(resource: string) {
@@ -116,3 +128,142 @@ export const getAuditDashboard = (companyId: string) => request<AuditDashboard>(
 export function isOverdue(f: Pick<Finding, 'action_due_date' | 'status'>, today = new Date().toISOString().slice(0, 10)) {
   return !!f.action_due_date && f.action_due_date < today && !CLOSED_FINDING_STATUSES.includes(f.status);
 }
+
+// ── Historical baseline (JE history) ─────────────────────────────────────────
+
+export type GLLine = {
+  journal_id: string;
+  posting_date: string;
+  account: string;
+  account_name?: string;
+  amount: number;
+  user_id?: string;
+  source?: string;
+  description?: string;
+  entity?: string;
+};
+
+export type AccountBaselineRow = {
+  account: string;
+  account_name: string | null;
+  months: number;
+  entry_count: number;
+  avg_monthly_total: number;
+  std_monthly_total: number;
+  min_monthly_total: number;
+  max_monthly_total: number;
+  alert_threshold: number;
+  avg_entry_amount: number | null;
+  std_entry_amount: number | null;
+  monthly: { month: string; total: number; count: number }[];
+};
+
+export type AccountBaseline = {
+  accounts_count: number;
+  months_count: number;
+  months: string[];
+  z_threshold: number;
+  quality: 'strong' | 'building' | 'weak' | 'none';
+  warnings: string[];
+  accounts: AccountBaselineRow[];
+};
+
+export type HistoryUploadResult = {
+  saved: number;
+  skipped_duplicates: number;
+  months_in_baseline?: number;
+  accounts_covered?: number;
+};
+
+const V2 = '/api/v2';
+
+export const historyApi = {
+  baseline: (companyId: string) => request<AccountBaseline>('/history/account-baseline', companyId, {}, V2),
+  upload: (companyId: string, entries: GLLine[], rebuild: boolean) =>
+    request<HistoryUploadResult>('/history/upload', companyId, {
+      method: 'POST',
+      body: JSON.stringify({
+        company_id: companyId,
+        upload_month: entries[0]?.posting_date.slice(0, 7) || new Date().toISOString().slice(0, 7),
+        entries,
+        rebuild,
+      }),
+    }, V2),
+  reset: (companyId: string) => request<{ deleted_entries: number }>('/history/reset', companyId, { method: 'DELETE' }, V2),
+  analyze: (companyId: string, entries: GLLine[]) =>
+    request<{ review_queued: number; batch_stats?: Record<string, number> }>('/analyze-historical', companyId, {
+      method: 'POST',
+      body: JSON.stringify({ company_id: companyId, entries }),
+    }, V2),
+};
+
+// ── JE review queue ──────────────────────────────────────────────────────────
+
+export type ReviewSeverity = 'Critical' | 'High' | 'Medium';
+export type ReviewStatus = 'Open' | 'Under Review' | 'Cleared';
+export const REVIEW_SEVERITIES: ReviewSeverity[] = ['Critical', 'High', 'Medium'];
+export const REVIEW_STATUSES: ReviewStatus[] = ['Open', 'Under Review', 'Cleared'];
+
+export type JEReview = {
+  id: number;
+  journal_id: string;
+  account: string;
+  account_name: string | null;
+  amount: number;
+  posting_date: string | null;
+  user_id: string | null;
+  description: string | null;
+  risk_score: number;
+  severity: ReviewSeverity;
+  explanation: string | null;
+  ai_observation: string | null;
+  top_reasons: string[] | null;
+  status: ReviewStatus;
+  auditor_comment: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  finding_id: number | null;
+};
+
+export type ReviewFilters = {
+  severity?: ReviewSeverity | '';
+  status?: ReviewStatus | '';
+  period_start?: string;
+  period_end?: string;
+};
+
+export type ReviewSummary = {
+  total: number;
+  by_severity: Record<ReviewSeverity, number>;
+  by_status: Record<ReviewStatus, number>;
+};
+
+function filterParams(f: ReviewFilters): Record<string, string | undefined> {
+  return { severity: f.severity || undefined, status: f.status || undefined, period_start: f.period_start, period_end: f.period_end };
+}
+
+export const jeReviewsApi = {
+  list: (companyId: string, filters: ReviewFilters = {}) =>
+    request<{ items: JEReview[]; summary: ReviewSummary }>(`/je-reviews${queryString(filterParams(filters))}`, companyId),
+  update: (companyId: string, id: number, body: { status?: ReviewStatus; auditor_comment?: string }) =>
+    request<JEReview>(`/je-reviews/${id}`, companyId, { method: 'PATCH', body: JSON.stringify(body) }),
+  raiseFinding: (companyId: string, id: number, engagementId: number | null) =>
+    request<{ finding: Finding; review: JEReview }>(`/je-reviews/${id}/raise-finding`, companyId, {
+      method: 'POST',
+      body: JSON.stringify({ engagement_id: engagementId }),
+    }),
+  async download(companyId: string, format: 'pdf' | 'xlsx', filters: ReviewFilters, companyName?: string) {
+    const res = await send(
+      `/api/internal-audit/je-reviews/export${queryString({ ...filterParams(filters), format, company_name: companyName })}`,
+      companyId,
+    );
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `je-review-${new Date().toISOString().slice(0, 10)}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};

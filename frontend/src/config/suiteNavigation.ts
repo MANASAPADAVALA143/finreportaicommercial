@@ -36,6 +36,8 @@ export const INTERNAL_AUDIT_NAV: NavSection = {
     { label: 'Audit Universe & Plan', path: '/internal-audit/universe',    icon: 'globe' },
     { label: 'Engagements',           path: '/internal-audit/engagements', icon: 'briefcase' },
     { label: 'Findings & CAPA',       path: '/internal-audit/findings',    icon: 'alert-triangle' },
+    { label: 'Historical Baseline',   path: '/internal-audit/baseline',    icon: 'history' },
+    { label: 'JE Review',             path: '/internal-audit/je-review',   icon: 'file-search' },
   ],
 };
 

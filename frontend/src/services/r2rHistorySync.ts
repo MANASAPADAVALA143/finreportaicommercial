@@ -1,7 +1,8 @@
 /**
  * Sync posted journal lines into R2R Historical Intelligence baseline.
- * POST /api/v2/history/upload — company-specific, deduplicates by journal_id.
+ * POST /api/v2/history/upload — company-specific, deduplicates by journal line.
  */
+import { workspaceHeaders } from '@/services/workspaceService';
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
 
@@ -25,7 +26,8 @@ export async function syncJournalLinesToR2R(params: {
 
   const res = await fetch(`${API}/api/v2/history/upload`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(null, { 'Content-Type': 'application/json' }),
+    credentials: 'include',
     body: JSON.stringify({
       company_id: params.companyId,
       upload_month: params.uploadMonth,

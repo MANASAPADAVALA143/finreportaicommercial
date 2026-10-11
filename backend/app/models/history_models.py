@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Date, DateTime, Float, Integer, String, Text, JSON
+from sqlalchemy import Column, Date, DateTime, Float, Integer, String, Text, JSON, UniqueConstraint
 
 from app.core.database import Base
 
@@ -19,12 +19,67 @@ class JournalHistory(Base):
     posting_hour = Column(Integer, nullable=True)
     posting_dow = Column(Integer, nullable=True)
     account = Column(String(100), index=True)
+    account_name = Column(String(200), nullable=True)
     amount = Column(Float)
     user_id = Column(String(100))
     source = Column(String(50))
     description = Column(Text, nullable=True)
     entity = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AccountMonthlyStat(Base):
+    """Per-account, per-month posting statistics rebuilt from je_history."""
+
+    __tablename__ = "je_account_monthly_stats"
+    __table_args__ = (
+        UniqueConstraint("company_id", "account", "month", name="uq_je_monthly_stat"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(String(100), index=True, nullable=False)
+    account = Column(String(100), nullable=False)
+    account_name = Column(String(200), nullable=True)
+    month = Column(String(7), nullable=False)
+    total_amount = Column(Float)
+    avg_amount = Column(Float)
+    std_dev = Column(Float)
+    min_amount = Column(Float)
+    max_amount = Column(Float)
+    entry_count = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class JEAnomalyReview(Base):
+    """Auditor review queue for journal entries the anomaly engine scored above 60."""
+
+    __tablename__ = "je_anomaly_reviews"
+    __table_args__ = (
+        UniqueConstraint("company_id", "journal_id", name="uq_je_anomaly_review"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(String(50), index=True, nullable=False)
+    company_id = Column(String(100), index=True, nullable=False)
+    journal_id = Column(String(100), nullable=False)
+    account = Column(String(100))
+    account_name = Column(String(200), nullable=True)
+    amount = Column(Float)
+    posting_date = Column(String(30), nullable=True)
+    user_id = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    risk_score = Column(Float, nullable=False)
+    severity = Column(String(20), nullable=False)
+    explanation = Column(Text, nullable=True)
+    ai_observation = Column(Text, nullable=True)
+    top_reasons = Column(JSON, nullable=True)
+    status = Column(String(20), nullable=False, default="Open")
+    auditor_comment = Column(Text, nullable=True)
+    reviewed_by = Column(String(255), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    finding_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
 
 
 class AccountBaseline(Base):
