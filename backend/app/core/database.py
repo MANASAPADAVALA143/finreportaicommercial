@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -32,6 +34,20 @@ def return_uuid_as_str(engine) -> None:
         ext.register_type(uuid_arr_str, dbapi_conn)
 
 
+def pool_kwargs(url: str) -> dict:
+    """Keep Postgres pools small: Supabase's session-mode pooler allows 15 clients in total,
+    shared by every process (including the old and new instance during a deploy)."""
+    if not url.startswith("postgresql"):
+        return {}
+    return {
+        "pool_size": int(os.getenv("DB_POOL_SIZE", "4")),
+        "max_overflow": int(os.getenv("DB_MAX_OVERFLOW", "3")),
+        "pool_timeout": int(os.getenv("DB_POOL_TIMEOUT", "30")),
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+
+
 def get_engine_connect_args() -> dict:
     """Driver options per URL (avoids long hangs when Postgres is down)."""
     if "sqlite" in settings.DATABASE_URL:
@@ -42,10 +58,13 @@ def get_engine_connect_args() -> dict:
 
 
 # Create SQLAlchemy engine (SQLite needs check_same_thread=False for FastAPI)
+DATABASE_URL = pin_psycopg2(settings.DATABASE_URL)
+
 engine = create_engine(
-    pin_psycopg2(settings.DATABASE_URL),
+    DATABASE_URL,
     echo=settings.DEBUG,
     connect_args=get_engine_connect_args(),
+    **pool_kwargs(DATABASE_URL),
     # Batched INSERT..RETURNING renders typed casts (p0::VARCHAR) even on psycopg2,
     # which fail against uuid columns that models declare as String.
     use_insertmanyvalues=False,
