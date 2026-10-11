@@ -4,8 +4,15 @@
  */
 
 import { backendOrigin } from "../utils/backendOrigin";
+import { workspaceHeaders } from "./workspaceService";
 
 const getBase = () => backendOrigin();
+
+const authed = (init: RequestInit = {}): RequestInit => ({
+  ...init,
+  headers: workspaceHeaders(null),
+  credentials: "include",
+});
 
 export interface R2RClient {
   id: string;
@@ -16,7 +23,7 @@ export interface R2RClient {
 export async function listClients(): Promise<R2RClient[]> {
   const b = getBase();
   if (!b) return [];
-  const res = await fetch(`${b}/api/r2r/clients`);
+  const res = await fetch(`${b}/api/r2r/clients`, authed());
   if (!res.ok) throw new Error("Failed to list clients");
   return res.json();
 }
@@ -24,11 +31,10 @@ export async function listClients(): Promise<R2RClient[]> {
 export async function createClient(name: string): Promise<R2RClient> {
   const b = getBase();
   if (!b) throw new Error("Set VITE_API_URL to your deployed API (e.g. in Vercel Environment Variables).");
-  const res = await fetch(`${b}/api/r2r/clients`, {
+  const res = await fetch(`${b}/api/r2r/clients`, authed({
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name.trim() }),
-  });
+  }));
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || "Failed to create client");
@@ -43,11 +49,10 @@ export async function saveUpload(
 ): Promise<{ upload_id: string; row_count: number }> {
   const b = getBase();
   if (!b) throw new Error("Set VITE_API_URL to your deployed API.");
-  const res = await fetch(`${b}/api/r2r/upload`, {
+  const res = await fetch(`${b}/api/r2r/upload`, authed({
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, entries, filename }),
-  });
+  }));
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || "Failed to save upload");
@@ -60,7 +65,7 @@ export async function getClientHistory(
 ): Promise<{ client_id: string; entries: Record<string, unknown>[]; total: number }> {
   const b = getBase();
   if (!b) throw new Error("Set VITE_API_URL to your deployed API.");
-  const res = await fetch(`${b}/api/r2r/history?client_id=${encodeURIComponent(clientId)}`);
+  const res = await fetch(`${b}/api/r2r/history?client_id=${encodeURIComponent(clientId)}`, authed());
   if (!res.ok) throw new Error("Failed to load client history");
   return res.json();
 }

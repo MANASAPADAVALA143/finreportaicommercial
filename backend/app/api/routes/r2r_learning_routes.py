@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.middleware.workspace import validate_workspace
 from app.services.r2r_learning_engine import R2RLearningEngine
 
-router = APIRouter(prefix="/api/r2r", tags=["r2r-learning"])
+router = APIRouter(prefix="/api/r2r", tags=["r2r-learning"], dependencies=[Depends(validate_workspace)])
 _engine = R2RLearningEngine()
 
 

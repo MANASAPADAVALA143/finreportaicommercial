@@ -1,4 +1,12 @@
 import { backendOrigin } from "../utils/backendOrigin";
+import { workspaceHeaders } from "./workspaceService";
+
+const authed = (init: RequestInit = {}, json = true): RequestInit => {
+  const headers = workspaceHeaders(null);
+  // Multipart bodies need the browser to set Content-Type with its boundary.
+  if (!json) delete headers["Content-Type"];
+  return { ...init, headers, credentials: "include" };
+};
 
 const r2rApiRoot = () => {
   const o = backendOrigin();
@@ -30,15 +38,14 @@ export async function postR2RFeedback(payload: {
   comment?: string;
   reviewed_by?: string;
 }): Promise<{ saved: boolean; learning_triggered?: boolean; adjustments?: string[]; feedback_id?: number }> {
-  const res = await fetch(`${r2rApiRoot()}/feedback`, {
+  const res = await fetch(`${r2rApiRoot()}/feedback`, authed({
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...payload,
       comment: payload.comment ?? "",
       reviewed_by: payload.reviewed_by ?? "analyst",
     }),
-  });
+  }));
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `Feedback failed (${res.status})`);
@@ -47,7 +54,7 @@ export async function postR2RFeedback(payload: {
 }
 
 export async function getLearningProgress(clientId: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`${BASE()}/learning-progress/${encodeURIComponent(clientId)}`);
+  const res = await fetch(`${BASE()}/learning-progress/${encodeURIComponent(clientId)}`, authed());
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `Learning progress failed (${res.status})`);
@@ -73,10 +80,10 @@ export async function uploadHistory(
   const form = new FormData();
   form.append("client_id", clientId);
   form.append("file", file);
-  const res = await fetch(`${r2rApiRoot()}/upload-history`, {
+  const res = await fetch(`${r2rApiRoot()}/upload-history`, authed({
     method: "POST",
     body: form,
-  });
+  }, false));
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `History upload failed (${res.status})`);
@@ -89,7 +96,7 @@ export async function getFeedbackHistory(
   status?: R2RFeedback | ""
 ): Promise<{ count: number; items: unknown[] }> {
   const q = status ? `?status=${encodeURIComponent(status)}` : "";
-  const res = await fetch(`${r2rApiRoot()}/feedback-history/${encodeURIComponent(clientId)}${q}`);
+  const res = await fetch(`${r2rApiRoot()}/feedback-history/${encodeURIComponent(clientId)}${q}`, authed());
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || `History failed (${res.status})`);

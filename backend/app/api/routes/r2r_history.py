@@ -2,10 +2,11 @@
 R2R stateful API — clients and journal history (MindBridge-style).
 Uses SQLite only; no changes to existing DB or modules.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Any, Optional
 
+from app.middleware.workspace import validate_workspace
 from app.r2r.db import (
     init_db,
     create_client,
@@ -15,7 +16,7 @@ from app.r2r.db import (
     get_client_uploads,
 )
 
-router = APIRouter(prefix="/api/r2r", tags=["r2r-history"])
+router = APIRouter(prefix="/api/r2r", tags=["r2r-history"], dependencies=[Depends(validate_workspace)])
 
 
 class CreateClientRequest(BaseModel):
