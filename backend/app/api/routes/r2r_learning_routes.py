@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.middleware.workspace import validate_workspace
+from app.core.r2r_scope import owned_client_id
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services.r2r_learning_engine import R2RLearningEngine
 
 router = APIRouter(prefix="/api/r2r", tags=["r2r-learning"], dependencies=[Depends(validate_workspace)])
@@ -49,12 +50,17 @@ class FeedbackBody(BaseModel):
 
 
 @router.post("/feedback")
-def post_r2r_feedback(body: FeedbackBody, db: Session = Depends(get_db)) -> dict[str, Any]:
+def post_r2r_feedback(
+    body: FeedbackBody,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    client_id = owned_client_id(db, ctx, body.client_id, "write")
     ed = body.entry_data.model_dump()
     ed["entry_id"] = body.entry_id or ed.get("entry_id") or ""
     try:
         result = _engine.record_feedback(
-            body.client_id.strip(),
+            client_id,
             ed,
             body.feedback,
             body.comment,
@@ -73,8 +79,10 @@ async def post_build_baseline(
     industry: Optional[str] = Form(None),
     fiscal_year_end: Optional[str] = Form(None),
     file: UploadFile = File(...),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    client_id = owned_client_id(db, ctx, client_id, "write")
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -89,7 +97,7 @@ async def post_build_baseline(
         raise HTTPException(status_code=400, detail="No rows in file")
 
     profile = _engine.build_baseline(
-        client_id.strip(),
+        client_id,
         (client_name or client_id).strip(),
         df,
         db,
@@ -113,6 +121,7 @@ async def post_build_baseline(
 async def upload_history(
     client_id: str = Form(...),
     file: UploadFile = File(...),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> dict:
     """
@@ -128,6 +137,7 @@ async def upload_history(
     """
     from app.services.baseline_builder import build_and_store_baseline
 
+    client_id = owned_client_id(db, ctx, client_id, "write")
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -145,7 +155,7 @@ async def upload_history(
         raise HTTPException(status_code=400, detail="No rows in file")
 
     try:
-        result = build_and_store_baseline(client_id.strip(), df, db)
+        result = build_and_store_baseline(client_id, df, db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -162,16 +172,22 @@ async def upload_history(
 
 
 @router.get("/learning-progress/{client_id}")
-def get_learning_progress(client_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _engine.get_learning_progress(client_id.strip(), db)
+def get_learning_progress(
+    client_id: str,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return _engine.get_learning_progress(owned_client_id(db, ctx, client_id, "read"), db)
 
 
 @router.get("/feedback-history/{client_id}")
 def get_feedback_history(
     client_id: str,
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
     status: Optional[str] = Query(None, description="approved | rejected | needs_review"),
     limit: int = Query(200, ge=1, le=500),
 ) -> dict[str, Any]:
-    items = _engine.list_feedback_history(client_id.strip(), db, status=status, limit=limit)
-    return {"client_id": client_id.strip(), "count": len(items), "items": items}
+    client_id = owned_client_id(db, ctx, client_id, "read")
+    items = _engine.list_feedback_history(client_id, db, status=status, limit=limit)
+    return {"client_id": client_id, "count": len(items), "items": items}

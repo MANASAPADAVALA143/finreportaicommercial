@@ -8,6 +8,16 @@ from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from app.core.database import Base
 
 
+class R2RClient(Base):
+    """R2R client registry; the owning workspace is the only one that can see or use the client."""
+    __tablename__ = "r2r_clients"
+
+    id           = Column(String(64), primary_key=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    name         = Column(String(255), nullable=False)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+
+
 class R2RHistoricalEntry(Base):
     """Per-company historical JE baseline — synced from accounting on every Post."""
     __tablename__ = "r2r_historical_data"
