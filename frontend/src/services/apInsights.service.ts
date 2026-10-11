@@ -1,3 +1,5 @@
+import { workspaceHeaders } from '@/services/workspaceService';
+
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
 
 export interface InsightCard {
@@ -26,26 +28,26 @@ export interface APInsightsResponse {
   generated_at?: string;
 }
 
-function hdrs(): Record<string, string> {
-  const wsId =
-    localStorage.getItem('gnanova_workspace_id') ??
-    localStorage.getItem('active_workspace_id') ??
-    localStorage.getItem('tenantId') ??
-    '';
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
-}
+const EMPTY_SUMMARY: APSummary = {
+  total_billed: 0,
+  total_paid: 0,
+  open_balance: 0,
+  overdue_amount: 0,
+  dpo: 0,
+  payment_rate_pct: 0,
+};
 
 export async function generateAPInsights(
   workspaceId: string,
   companyId: string | null,
 ): Promise<APInsightsResponse> {
+  if (!companyId) {
+    return { insights: [], summary: EMPTY_SUMMARY, empty: true, message: 'Select a company to see insights.' };
+  }
   const res = await fetch(`${API_BASE}/api/ap/generate-insights`, {
     method: 'POST',
-    headers: hdrs(),
+    headers: workspaceHeaders(null),
+    credentials: 'include',
     body: JSON.stringify({
       workspace_id: workspaceId,
       company_id: companyId,

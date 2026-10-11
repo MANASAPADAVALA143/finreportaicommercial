@@ -19,7 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes import ap_invoice_files, ap_invoices_rds, ap_vendor_whatsapp, uae_accounting
+from app.api.routes import ap_insights, ap_invoice_files, ap_invoices_rds, ap_vendor_whatsapp, uae_accounting
 from app.routers import ap_ses_intake
 from app.core import company_access
 from app.core.database import get_db
@@ -166,6 +166,7 @@ def env(monkeypatch):
         return {"processed": 0}
 
     monkeypatch.setattr(ap_ses_intake, "process_pending_emails", _process)
+    monkeypatch.setattr(ap_insights, "generate_ap_insights", e.recorder("insights"))
 
     for name in (
         "bulk_upsert_invoices", "list_invoices_for_company", "delete_all_invoices_for_company",
@@ -185,7 +186,7 @@ def _app(override_auth: Env | None, db: Any = None) -> FastAPI:
     app = FastAPI()
     for r in (
         ap_invoices_rds.router, ap_invoice_files.router, uae_accounting.router,
-        ap_vendor_whatsapp.router, ap_ses_intake.router,
+        ap_vendor_whatsapp.router, ap_ses_intake.router, ap_insights.router,
     ):
         app.include_router(r)
     app.dependency_overrides[get_db] = lambda: db if db is not None else SimpleNamespace()
@@ -670,3 +671,31 @@ def test_ses_logs_other_company_forbidden(client, env):
 def test_ses_logs_require_company(client, env):
     assert client.get("/api/ap/ses-intake/logs").status_code == 422
     assert env.calls == []
+
+
+# ── AP insights ──────────────────────────────────────────────────────────────
+
+
+def test_insights_require_login(env):
+    res = TestClient(_app(None)).post("/api/ap/generate-insights", json={"company_id": CO_A})
+    assert res.status_code == 401 and env.calls == []
+
+
+def test_insights_for_own_company(client, env):
+    assert client.post("/api/ap/generate-insights", json={"company_id": CO_A}).status_code == 200
+    assert env.calls == [("insights", {"workspace_id": WS_A, "company_id": CO_A})]
+
+
+def test_insights_other_company_forbidden(client, env):
+    res = client.post("/api/ap/generate-insights", json={"company_id": CO_B})
+    assert res.status_code == 403 and env.calls == []
+
+
+def test_insights_require_company(client, env):
+    assert client.post("/api/ap/generate-insights", json={}).status_code == 422
+    assert env.calls == []
+
+
+def test_insights_cannot_name_foreign_workspace(client, env):
+    res = client.post("/api/ap/generate-insights", json={"company_id": CO_A, "workspace_id": WS_B})
+    assert res.status_code == 403 and env.calls == []

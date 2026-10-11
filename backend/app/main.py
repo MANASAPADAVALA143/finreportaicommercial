@@ -352,7 +352,12 @@ def _run_critical_migrations() -> None:
             try:
                 with _engine.begin() as conn:
                     if conn.execute(_text("SELECT to_regclass('public.invoices')")).scalar():
-                        conn.exec_driver_sql(_ap_sql.read_text(encoding="utf-8"))
+                        # no_parameters: the SQL contains literal % (ILIKE, format()) that
+                        # the driver would otherwise treat as bind placeholders.
+                        conn.exec_driver_sql(
+                            _ap_sql.read_text(encoding="utf-8"),
+                            execution_options={"no_parameters": True},
+                        )
             except Exception as _e:
                 logger.warning("AP migration %s skipped: %s", _ap_file, _e)
 
