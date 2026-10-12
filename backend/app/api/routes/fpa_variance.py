@@ -2,9 +2,10 @@
 FP&A Variance Analysis API — Budget vs Actual intelligence.
 Endpoints: upload, calculate, template, ai-narrative, download-report.
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from typing import List, Optional, Any, Dict
 import pandas as pd
 import io
@@ -16,6 +17,9 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.chart import BarChart, Reference
 from openpyxl.utils import get_column_letter
 
+from app.core.company_access import require_workspace_level
+from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services import llm_service
 from app.services.tb_variance_commentary import (
     build_tb_variance_system_prompt,
@@ -415,8 +419,13 @@ class CalculateRequest(BaseModel):
 
 
 @router.post("/calculate", response_model=CalculateResponse)
-async def calculate_variance(body: CalculateRequest):
+async def calculate_variance(
+    body: CalculateRequest,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+):
     """Compute variance ₹, %, status, materiality, department totals."""
+    require_workspace_level(db, ctx, "read")
     if not body.line_items:
         raise HTTPException(status_code=400, detail="line_items required")
     normalized = []
@@ -433,9 +442,10 @@ async def calculate_variance(body: CalculateRequest):
         from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
         from app.core.database import SessionLocal
 
+        _key = f"fpa_variance:{ctx.workspace_id}"
         _db = SessionLocal()
         try:
-            _history = await read_agent_memory("fpa_variance", _db)
+            _history = await read_agent_memory(_key, _db)
             _insight = await generate_insight(
                 "fpa_variance",
                 {
@@ -449,8 +459,8 @@ async def calculate_variance(body: CalculateRequest):
             _insight["deep_link"] = "/fpa/variance"
             _insight["module_label"] = "FP&A Variance"
             _input = body.model_dump() if hasattr(body, "model_dump") else (body.dict() if hasattr(body, "dict") else {})
-            await store_agent_run("fpa_variance", _input, result, _insight, _db)
-            await update_agent_memory("fpa_variance", result, _db)
+            await store_agent_run(_key, _input, result, _insight, _db, tenant_id=ctx.workspace_id)
+            await update_agent_memory(_key, result, _db)
         finally:
             _db.close()
     except Exception as _e:

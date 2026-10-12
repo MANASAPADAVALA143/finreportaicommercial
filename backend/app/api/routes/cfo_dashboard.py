@@ -1,11 +1,15 @@
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import random
 import os
 import pandas as pd
 import json
+from app.core.company_access import require_workspace_level
+from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services.cfo_metrics_calculator import CFOMetricsCalculator
 from app.services.accounting_integrations import AccountingIntegrationFactory
 from app.services.trial_balance_parser import TrialBalanceParser
@@ -465,7 +469,9 @@ async def get_ai_insights():
 @router.post("/forecast")
 async def generate_forecast(
     period: str = Query("quarter", enum=["month", "quarter", "year"]),
-    type: str = Query("cash_flow", enum=["cash_flow", "revenue", "expenses"])
+    type: str = Query("cash_flow", enum=["cash_flow", "revenue", "expenses"]),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ):
     """
     Generate financial forecast using AI/ML models
@@ -476,6 +482,7 @@ async def generate_forecast(
     - Amazon Nova for insights
     """
     
+    require_workspace_level(db, ctx, "read")
     # Generate mock forecast data
     base_value = 328000 if type == "revenue" else 234000
     forecast_periods = {
@@ -515,9 +522,10 @@ async def generate_forecast(
         from app.core.database import SessionLocal
 
         _forecast_data = result if isinstance(result, dict) else (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+        _key = f"fpa_forecast:{ctx.workspace_id}"
         _db = SessionLocal()
         try:
-            _history = await read_agent_memory("fpa_forecast", _db)
+            _history = await read_agent_memory(_key, _db)
             _insight = await generate_insight(
                 "fpa_forecast",
                 {
@@ -531,13 +539,14 @@ async def generate_forecast(
             _insight["deep_link"] = "/fpa/forecast"
             _insight["module_label"] = "CFO Forecast"
             await store_agent_run(
-                "fpa_forecast",
+                _key,
                 {"period": period, "type": type},
                 _forecast_data,
                 _insight,
                 _db,
+                tenant_id=ctx.workspace_id,
             )
-            await update_agent_memory("fpa_forecast", _forecast_data, _db)
+            await update_agent_memory(_key, _forecast_data, _db)
         finally:
             _db.close()
     except Exception as _e:
