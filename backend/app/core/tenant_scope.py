@@ -17,6 +17,53 @@ from app.core.history_scope import history_key
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 
 
+def workspace_member(
+    request: Request,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> WorkspaceContext:
+    """Router-level guard for routes keyed by the X-Workspace-ID / X-Tenant-ID header.
+
+    `validate_workspace` falls back to another of the caller's workspaces when the header names
+    an unknown one, so routes must read the tenant via `request_workspace`, never the raw header.
+    GET/HEAD need read access, everything else write access.
+    """
+    require_workspace_level(db, ctx, "read" if request.method in ("GET", "HEAD") else "write")
+    request.state.workspace_ctx = ctx
+    return ctx
+
+
+def workspace_manager(
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> WorkspaceContext:
+    """Route guard for approvals and control changes: owner or finance manager only."""
+    require_workspace_level(db, ctx, "manage")
+    return ctx
+
+
+def _request_ctx(request: Request) -> WorkspaceContext:
+    ctx = getattr(request.state, "workspace_ctx", None)
+    if ctx is None:
+        raise RuntimeError("needs the workspace_member router dependency")
+    return ctx
+
+
+def request_workspace(request: Request, requested: Optional[str] = None) -> str:
+    """Workspace validated by `workspace_member`; a body/query `workspace_id` must match it."""
+    ws = _request_ctx(request).workspace_id
+    asked = (requested or "").strip()
+    if asked and asked != ws:
+        raise HTTPException(status_code=403, detail="workspace_id does not match the active workspace")
+    return ws
+
+
+def request_user_email(request: Request) -> Optional[str]:
+    """Signed-in user's email, for audit trails (never a client-supplied header)."""
+    user = _request_ctx(request).user
+    return getattr(user, "email", None) if user else None
+
+
 def active_workspace(db: Session, ctx: WorkspaceContext, requested: Optional[str], level: AccessLevel) -> str:
     """A workspace id sent in a body or query string must be the active (header) workspace."""
     ws = (requested or "").strip()

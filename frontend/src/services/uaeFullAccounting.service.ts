@@ -4,7 +4,7 @@
  */
 
 import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+import { getActiveWorkspaceId, getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 function resolveBase(): string {
   const origin = backendOrigin();
@@ -217,19 +217,12 @@ export interface JournalImportResult {
 }
 
 export async function importJournalsCSV(file: File): Promise<JournalImportResult> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
   const cid = localStorage.getItem('active_company_id');
-  const token = getStoredAccessToken();
   const form = new FormData();
   form.append('file', file);
   let url = `${BASE}/journals/import`;
   if (cid) url += `?company_id=${encodeURIComponent(cid)}`;
-  const uploadHeaders: Record<string, string> = {};
-  if (wsId) {
-    uploadHeaders['X-Workspace-ID'] = wsId;
-    uploadHeaders['X-Tenant-ID'] = wsId;
-  }
-  if (token) uploadHeaders.Authorization = `Bearer ${token}`;
+  const { 'Content-Type': _ct, ...uploadHeaders } = hdrs();
   const res = await fetch(url, {
     method: 'POST',
     headers: uploadHeaders,
@@ -297,8 +290,7 @@ export async function approveAndPostSalesInvoice(invoiceId: string): Promise<{
     body: JSON.stringify({
       invoice_id: invoiceId,
       company_id: localStorage.getItem('active_company_id'),
-      workspace_id:
-        localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId'),
+      workspace_id: getActiveWorkspaceId(),
     }),
   });
   if (!res.ok) {

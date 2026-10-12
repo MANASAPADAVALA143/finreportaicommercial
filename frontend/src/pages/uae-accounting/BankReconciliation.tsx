@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { Landmark, Upload, Zap, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { BankAccount, BankStatement } from '../../services/uaeFullAccounting.service';
-import { getStoredAccessToken } from '../../utils/workspaceHeaders';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import { joinApiUrl } from '../../utils/backendOrigin';
 
 const BANKS = ['ENBD', 'FAB', 'ADCB', 'RAKBank', 'DIB'];
@@ -56,15 +56,11 @@ export default function BankReconciliation() {
     const fd = new FormData();
     fd.append('file', file);
     const base = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
-    const tenantId = localStorage.getItem('tenantId');
-    const token = getStoredAccessToken();
     const params = new URLSearchParams({
       bank_name: bankName, statement_date: stmtDate,
       opening_balance: opening || '0', closing_balance: closing || '0',
     });
-    const uploadHeaders: Record<string, string> = {};
-    if (tenantId) uploadHeaders['X-Tenant-ID'] = tenantId;
-    if (token) uploadHeaders.Authorization = `Bearer ${token}`;
+    const { 'Content-Type': _ct, ...uploadHeaders } = workspaceHeaders(getStoredAccessToken());
     try {
       const res = await fetch(
         `${base}/api/uae/full/bank-accounts/${selectedAcct}/import-statement?${params}`,
@@ -87,7 +83,7 @@ export default function BankReconciliation() {
     try {
       const res = await fetch(joinApiUrl('/api/uae/accounting/recon-to-je'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body: JSON.stringify({ amount: parseFloat(reconJEAmount) || 0, description: reconJEDesc || 'Unmatched bank item' }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
 from app.exceptions.period_control import PeriodControlError
 from app.models.company_setup import UaeCompanyProfile
 from app.models.uae_accounting_full import (
@@ -56,16 +57,11 @@ from app.services.recurring_invoice_service import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/uae/ar", tags=["UAE AR"])
+router = APIRouter(prefix="/api/uae/ar", tags=["UAE AR"], dependencies=[Depends(workspace_member)])
 
 
 def _ws(request: Request, query_ws: str | None = None) -> str:
-    return (
-        query_ws
-        or request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request, query_ws)
 
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
@@ -499,11 +495,7 @@ def ar_classify_invoice(body: ARClassifyRequest) -> dict[str, Any]:
 def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
     """Approve draft/pending AR invoice → JE (1200/4100/2200) + GulfTax output + VAT Classifier."""
     ws = _ws(request, body.workspace_id)
-    poster = (
-        request.headers.get("x-user-email")
-        or request.headers.get("X-User-Email")
-        or "system"
-    )
+    poster = request_user_email(request) or "system"
     result = post_sales_invoice_to_gl_and_tax(
         body.invoice_id,
         tenant_id=ws,

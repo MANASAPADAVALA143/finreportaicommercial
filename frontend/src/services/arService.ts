@@ -1,7 +1,7 @@
 /** UAE AR — /api/uae/ar endpoints */
 
 import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+import { getActiveWorkspaceId, getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/uae/ar`;
 
@@ -11,10 +11,10 @@ function hdrs(extra: Record<string, string> = {}): Record<string, string> {
 
 function companyParams(extra: Record<string, string> = {}): Record<string, string> {
   const cid = localStorage.getItem('active_company_id');
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
+  const wsId = getActiveWorkspaceId();
   return {
     ...(cid ? { company_id: cid } : {}),
-    workspace_id: wsId,
+    ...(wsId ? { workspace_id: wsId } : {}),
     ...extra,
   };
 }

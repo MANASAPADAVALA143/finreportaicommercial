@@ -19,13 +19,14 @@ from datetime import date, datetime
 from typing import Any, Optional, Dict, List
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.uae_accounting_full import (
     UAEAccount, UAEJournalEntry, UAEJournalLine,
@@ -51,13 +52,17 @@ from app.services.uae_bank_recon_service import (
 )
 from app.services.ar_aging_service import compute_ar_aging
 
-router = APIRouter(prefix="/api/uae/full", tags=["UAE Full Accounting"])
+router = APIRouter(
+    prefix="/api/uae/full", tags=["UAE Full Accounting"], dependencies=[Depends(workspace_member)]
+)
 
 # ===========================================================================
 # UAE FX revaluation (functional currency: AED)
 # ===========================================================================
 
-fx_router = APIRouter(prefix="/api/uae/fx", tags=["UAE FX Revaluation"])
+fx_router = APIRouter(
+    prefix="/api/uae/fx", tags=["UAE FX Revaluation"], dependencies=[Depends(workspace_member)]
+)
 
 
 class FXRevalueRequest(BaseModel):
@@ -131,7 +136,7 @@ def run_fx_revaluation(
     Automated month-end FX revaluation.
     Revalues non-AED account balances and posts JE with source=FX_REVALUATION.
     """
-    tenant_id = (body.workspace_id or "").strip() or _tenant(request.headers)
+    tenant_id = request_workspace(request, body.workspace_id)
     company_id = body.company_id
     try:
         reval_date = date.fromisoformat(body.revaluation_date[:10])
@@ -317,7 +322,7 @@ def run_fx_revaluation(
         action="fx_revaluation_posted",
         entity_type="journal_entry",
         entity_id=je.id,
-        user_email=request.headers.get("x-user-email"),
+        user_email=request_user_email(request),
         details={
             "period": body.period,
             "revaluation_date": body.revaluation_date,
@@ -339,19 +344,8 @@ def run_fx_revaluation(
     }
 
 
-def _tenant(request_headers) -> str:
-    return (
-        request_headers.get("x-workspace-id")
-        or request_headers.get("x-tenant-id")
-        or "demo"
-    )
-
-
-def _tenant_dep(
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-ID"),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
-) -> str:
-    return (x_workspace_id or x_tenant_id or "demo").strip()
+def _tenant(request: Request) -> str:
+    return request_workspace(request)
 
 
 def _apply_company(q, model, company_id: Optional[str]):
@@ -377,7 +371,7 @@ def seed_chart_of_accounts(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     count = seed_uae_chart_of_accounts(tenant_id, db, company_id=company_id)
     return {"seeded": count, "message": f"Seeded {count} accounts"}
 
@@ -389,7 +383,7 @@ def uae_setup_context(
     db: Session = Depends(get_db),
 ):
     """Company profile, accounting periods, and setup flags for /uae-full UI."""
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     cid = company_id
     profile = None
     if cid:
@@ -453,7 +447,7 @@ def list_chart_of_accounts(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEAccount).filter_by(tenant_id=tenant_id, is_active=True)
     q = _apply_company(q, UAEAccount, company_id)
     accounts = q.order_by(UAEAccount.code).all()
@@ -492,7 +486,7 @@ class AccountCreate(BaseModel):
 
 @router.post("/coa")
 def create_account(body: AccountCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     existing = db.query(UAEAccount).filter_by(tenant_id=tenant_id, account_code=body.account_code).first()
     if existing:
         raise HTTPException(status_code=409, detail="Account code already exists")
@@ -510,7 +504,7 @@ def create_account(body: AccountCreate, request: Request, db: Session = Depends(
 
 @router.get("/coa/balances")
 def account_balances(period: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     balances = get_account_balances(tenant_id, period, db)
     return {"period": period, "balances": balances}
 
@@ -564,7 +558,7 @@ def list_journals(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEJournalEntry).filter_by(tenant_id=tenant_id)
     q = _apply_company(q, UAEJournalEntry, company_id)
     if period: q = q.filter(UAEJournalEntry.period == period)
@@ -593,7 +587,7 @@ def list_journals(
 
 @router.post("/journals")
 def create_je(body: JECreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     entry_date = date.fromisoformat(body.entry_date)
     coa_names = coa_name_map(tenant_id, db, body.company_id)
     raw_lines = [
@@ -621,7 +615,7 @@ def create_je(body: JECreate, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="; ".join(check["errors"]))
     initial_status = "pending_approval" if check["requires_approval"] else "draft"
     auto_post = body.auto_post and initial_status != "pending_approval"
-    user_email = request.headers.get("x-user-email")
+    user_email = request_user_email(request)
     try:
         je = create_journal_entry(
             tenant_id=tenant_id, entry_date=entry_date,
@@ -696,7 +690,7 @@ async def import_journals(
     db: Session = Depends(get_db),
 ):
     """Import journal entries from CSV. Accepts paired or multiline column formats."""
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only .csv files are supported")
 
@@ -725,7 +719,7 @@ async def import_journals(
 
 @router.post("/journals/{je_id}/post")
 def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
@@ -756,7 +750,7 @@ def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     log_audit(
         db, workspace_id=tenant_id, company_id=je.company_id,
         action="je_posted", entity_type="journal_entry", entity_id=je.id,
-        user_email=request.headers.get("x-user-email"),
+        user_email=request_user_email(request),
         details={"entry_number": je.entry_number},
     )
 
@@ -799,16 +793,16 @@ def post_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     return {"id": je.id, "status": je.status, "r2r_synced": r2r_synced}
 
 
-@router.post("/journals/{je_id}/approve")
+@router.post("/journals/{je_id}/approve", dependencies=[Depends(workspace_manager)])
 def approve_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     """Approve a high-value JE in pending_approval and post it."""
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
     if je.status != "pending_approval":
         raise HTTPException(status_code=400, detail="Journal is not pending approval")
-    approver = request.headers.get("x-user-email") or "approver"
+    approver = request_user_email(request) or "approver"
     try:
         post_journal_entry(je, db)
     except PeriodControlError as exc:
@@ -831,7 +825,7 @@ def approve_je(je_id: str, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/journals/{je_id}/reverse")
 def reverse_je(je_id: str, reversal_date: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     try:
         new_je = reverse_journal_entry(
             je_id=je_id, tenant_id=tenant_id,
@@ -848,7 +842,7 @@ DELETABLE_JE_STATUSES = frozenset({"draft", "pending_approval", "rejected"})
 @router.delete("/journals/{je_id}")
 def delete_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     """Delete an unposted journal entry (draft / pending approval / rejected)."""
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
@@ -862,7 +856,7 @@ def delete_je(je_id: str, request: Request, db: Session = Depends(get_db)):
     log_audit(
         db, workspace_id=tenant_id, company_id=je.company_id,
         action="je_deleted", entity_type="journal_entry", entity_id=je_id,
-        user_email=request.headers.get("x-user-email"),
+        user_email=request_user_email(request),
         details={"reference": ref, "description": je.description},
     )
     db.commit()
@@ -871,7 +865,7 @@ def delete_je(je_id: str, request: Request, db: Session = Depends(get_db)):
 
 @router.get("/journals/{je_id}")
 def get_je(je_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
     if not je:
         raise HTTPException(status_code=404, detail="Journal entry not found")
@@ -891,7 +885,7 @@ def full_trial_balance(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     return get_trial_balance(tenant_id, period, db, company_id=company_id)
 
 
@@ -911,7 +905,7 @@ class CustomerCreate(BaseModel):
 
 @router.get("/customers")
 def list_customers(request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     customers = db.query(UAECustomer).filter_by(tenant_id=tenant_id, is_active=True).all()
     return {
         "customers": [
@@ -926,7 +920,7 @@ def list_customers(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/customers")
 def create_customer(body: CustomerCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     c = UAECustomer(
         id=str(uuid.uuid4()), tenant_id=tenant_id,
         name=body.name, trn=body.trn, email=body.email,
@@ -962,7 +956,7 @@ def list_invoices(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id)
     q = _apply_company(q, UAESalesInvoice, company_id)
     if status:      q = q.filter(UAESalesInvoice.status == status)
@@ -982,7 +976,7 @@ def list_invoices(
 
 @router.post("/invoices")
 def create_invoice(body: InvoiceCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     inv_count = db.query(UAESalesInvoice).filter_by(tenant_id=tenant_id).count()
     invoice_number = body.invoice_number or f"INV-{inv_count + 1:04d}"
     subtotal   = sum(l.quantity * l.unit_price for l in body.lines)
@@ -1014,12 +1008,12 @@ def create_invoice(body: InvoiceCreate, request: Request, db: Session = Depends(
 def post_invoice(inv_id: str, request: Request, db: Session = Depends(get_db)):
     from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     inv = db.query(UAESalesInvoice).filter_by(id=inv_id, tenant_id=tenant_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    poster = request.headers.get("x-user-email") or request.headers.get("X-User-Email") or "system"
+    poster = request_user_email(request) or "system"
     result = post_sales_invoice_to_gl_and_tax(
         inv_id,
         tenant_id=tenant_id,
@@ -1050,7 +1044,7 @@ def ar_aging(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     as_of_date = date.fromisoformat(as_of) if as_of else date.today()
     report = compute_ar_aging(db, tenant_id, company_id, as_of_date)
 
@@ -1094,7 +1088,7 @@ def list_bank_accounts(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEBankAccount).filter_by(tenant_id=tenant_id, is_active=True)
     q = _apply_company(q, UAEBankAccount, company_id)
     accounts = q.all()
@@ -1112,7 +1106,7 @@ def list_bank_accounts(
 
 @router.post("/bank-accounts")
 def create_bank_account(body: BankAccountCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     ba = UAEBankAccount(
         id=str(uuid.uuid4()), tenant_id=tenant_id,
         bank_name=body.bank_name, account_number=body.account_number,
@@ -1130,7 +1124,9 @@ async def import_statement(
     request: Request = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
+    if not db.query(UAEBankAccount).filter_by(id=account_id, tenant_id=tenant_id).first():
+        raise HTTPException(status_code=404, detail="Bank account not found")
     _file_bytes = await file.read()
     try:
         from app.core.aws_config import upload_to_s3
@@ -1150,7 +1146,7 @@ async def import_statement(
 
 @router.post("/bank-statements/{statement_id}/reconcile")
 def reconcile_statement(statement_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     try:
         return run_reconciliation(tenant_id, statement_id, db)
     except ValueError as exc:
@@ -1159,7 +1155,7 @@ def reconcile_statement(statement_id: str, request: Request, db: Session = Depen
 
 @router.get("/bank-statements/{statement_id}/summary")
 def recon_summary(statement_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     try:
         return get_reconciliation_summary(tenant_id, statement_id, db)
     except ValueError as exc:
@@ -1170,7 +1166,7 @@ def recon_summary(statement_id: str, request: Request, db: Session = Depends(get
 def list_statements(
     request: Request, bank_account_id: Optional[str] = None, db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEBankStatement).filter_by(tenant_id=tenant_id)
     if bank_account_id:
         q = q.filter_by(bank_account_id=bank_account_id)
@@ -1212,7 +1208,7 @@ def list_assets(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id)
     if company_id and hasattr(UAEFixedAsset, "company_id"):
         q = q.filter(or_(UAEFixedAsset.company_id == company_id, UAEFixedAsset.company_id.is_(None)))
@@ -1242,7 +1238,7 @@ def create_asset(
     db: Session = Depends(get_db),
     company_id: Optional[str] = None,
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     asset_count = db.query(UAEFixedAsset).filter_by(tenant_id=tenant_id).count()
     asset = UAEFixedAsset(
         id=str(uuid.uuid4()), tenant_id=tenant_id, company_id=company_id,
@@ -1264,13 +1260,13 @@ def create_asset(
 
 @router.post("/fixed-assets/run-depreciation")
 def run_depreciation(period: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     return run_monthly_depreciation(tenant_id, period, db)
 
 
 @router.get("/fixed-assets/{asset_id}/schedule")
 def depreciation_schedule(asset_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     asset = db.query(UAEFixedAsset).filter_by(id=asset_id, tenant_id=tenant_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
@@ -1294,7 +1290,7 @@ class AccrualCreate(BaseModel):
 
 @router.get("/accruals")
 def list_accruals(request: Request, period: Optional[str] = None, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     q = db.query(UAEAccrual).filter_by(tenant_id=tenant_id)
     if period:
         q = q.filter_by(period=period)
@@ -1316,7 +1312,7 @@ def list_accruals(request: Request, period: Optional[str] = None, db: Session = 
 
 @router.post("/accruals")
 def create_accrual(body: AccrualCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     accrual = UAEAccrual(
         id=str(uuid.uuid4()), tenant_id=tenant_id,
         period=body.period, description=body.description,
@@ -1332,7 +1328,7 @@ def create_accrual(body: AccrualCreate, request: Request, db: Session = Depends(
 
 @router.post("/accruals/suggest")
 def suggest(period: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     suggestions = suggest_accruals(tenant_id, period, db)
     saved = persist_accrual_suggestions(tenant_id, period, suggestions, db)
     return {"period": period, "suggestions": suggestions, "count": len(suggestions), "saved": saved}
@@ -1340,7 +1336,7 @@ def suggest(period: str, request: Request, db: Session = Depends(get_db)):
 
 @router.post("/accruals/{accrual_id}/post")
 def post_accrual_route(accrual_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     try:
         return post_accrual(accrual_id, tenant_id, db)
     except ValueError as exc:
@@ -1380,7 +1376,7 @@ def _run_checklist(run: UAEPeriodClose) -> dict[str, bool]:
 
 @router.get("/period-close")
 def list_close_runs(request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     runs = (
         db.query(UAEPeriodClose)
         .filter_by(tenant_id=tenant_id)
@@ -1400,7 +1396,7 @@ def list_close_runs(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/period-close/start")
 def start_close(period: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     existing = db.query(UAEPeriodClose).filter_by(tenant_id=tenant_id, period=period).first()
     if existing:
         return {"id": existing.id, "period": period, "status": existing.status,
@@ -1432,7 +1428,7 @@ _ITEM_TO_FIELD = {
 
 @router.patch("/period-close/{run_id}/check")
 def update_checklist(run_id: str, item: str, done: bool, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     run = db.query(UAEPeriodClose).filter_by(id=run_id, tenant_id=tenant_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Close run not found")
@@ -1449,7 +1445,7 @@ def update_checklist(run_id: str, item: str, done: bool, request: Request, db: S
 
 @router.post("/period-close/{run_id}/lock")
 def lock_period(run_id: str, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     run = db.query(UAEPeriodClose).filter_by(id=run_id, tenant_id=tenant_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Close run not found")
@@ -1474,7 +1470,7 @@ def generate_management_accounts(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     tb        = get_trial_balance(tenant_id, period, db, company_id=company_id)
     totals    = tb.get("totals", {})
     revenue   = abs(totals.get("revenue",   0))
@@ -1537,7 +1533,7 @@ def _generate_ai_narrative(period, revenue, expenses, net_profit, gross_margin):
 
 @router.get("/vendors")
 def list_vendors(request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     from app.models.uae_ap import UAEVendor
     vendors = db.query(UAEVendor).filter_by(tenant_id=tenant_id, is_active=True).order_by(UAEVendor.name).all()
     return {
@@ -1551,7 +1547,7 @@ def list_vendors(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/purchase-invoices")
 def list_purchase_invoices(request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     from app.models.uae_ap import UAEPurchaseInvoice
     invoices = (
         db.query(UAEPurchaseInvoice)
@@ -1594,7 +1590,7 @@ class PurchaseInvoiceCreate(BaseModel):
 
 @router.post("/purchase-invoices")
 def create_purchase_invoice(body: PurchaseInvoiceCreate, request: Request, db: Session = Depends(get_db)):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     from app.models.uae_ap import UAEPurchaseInvoice, UAEPurchaseInvoiceLine
     from app.services.ap_company_resolver import resolve_ap_company_id
 
@@ -1643,7 +1639,7 @@ def dashboard_kpis(
     company_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant_id = _tenant(request.headers)
+    tenant_id = _tenant(request)
     coa_q = db.query(UAEAccount).filter_by(tenant_id=tenant_id, is_active=True)
     coa_q = _apply_company(coa_q, UAEAccount, company_id)
     coa_count = coa_q.count()

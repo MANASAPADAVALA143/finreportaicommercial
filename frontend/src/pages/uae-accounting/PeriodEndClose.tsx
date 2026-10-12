@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, Circle, Lock, Play, RefreshCw } from 'lucide-react';
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { PeriodClose } from '../../services/uaeFullAccounting.service';
+import { getActiveWorkspaceId } from '../../utils/workspaceHeaders';
 
 const THIS_PERIOD = new Date().toISOString().slice(0, 7);
 
@@ -172,10 +173,7 @@ export default function PeriodEndClose() {
       if (Object.keys(exchange_rates).length === 0) {
         throw new Error('Enter current and original exchange rates (AED per 1 unit) for each currency');
       }
-      const wsId =
-        localStorage.getItem('gnanova_workspace_id') ??
-        localStorage.getItem('tenantId') ??
-        '';
+      const wsId = getActiveWorkspaceId() ?? '';
       const result = await svc.runFxRevaluation({
         workspace_id: wsId,
         company_id: localStorage.getItem('active_company_id') ?? undefined,
