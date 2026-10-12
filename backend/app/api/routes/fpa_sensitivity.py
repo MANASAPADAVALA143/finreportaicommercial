@@ -11,11 +11,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.services.fpa_commentary import fpa_commentary
 from app.services.fpa_result_store import store_fpa_result
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["FP&A Sensitivity"])
+router = APIRouter(tags=["FP&A Sensitivity"], dependencies=[Depends(workspace_reader)])
 
 
 VarName = Literal["revenue", "cogs_pct", "opex_pct", "tax_rate"]
@@ -46,7 +48,7 @@ def _net_profit(rev: float, cogs_pct: float, opex_pct: float, tax: float) -> flo
 
 
 @router.post("/sensitivity")
-def sensitivity(body: SensitivityRequest, db: Session = Depends(get_db)):
+def sensitivity(body: SensitivityRequest, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(workspace_reader)):
     try:
         n = int(body.steps)
         v1_grid = np.linspace(body.v1_low_pct, body.v1_high_pct, n).tolist()
@@ -169,7 +171,7 @@ def sensitivity(body: SensitivityRequest, db: Session = Depends(get_db)):
             metrics,
         )
         out = {**metrics, "commentary": commentary}
-        store_fpa_result(db, "sensitivity", out, user_id=body.user_id)
+        store_fpa_result(db, "sensitivity", out, user_id=str(ctx.user.id))
         return out
     except Exception as e:
         logger.exception("sensitivity failed")

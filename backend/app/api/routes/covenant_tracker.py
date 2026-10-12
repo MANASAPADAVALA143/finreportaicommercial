@@ -2,10 +2,11 @@ from fastapi import APIRouter, Request, Depends
 import anthropic
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_reader
 from app.services import cfo_uae_data_service as uae_cfo
 from sqlalchemy.orm import Session
 
-router = APIRouter(prefix="/api/covenants", tags=["covenants"])
+router = APIRouter(prefix="/api/covenants", tags=["covenants"], dependencies=[Depends(workspace_reader)])
 
 
 @router.get("/summary")
@@ -14,7 +15,7 @@ async def get_covenants(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
+    ws = request_workspace(request)
     if not ws or ws == "demo":
         return uae_cfo.empty_covenants()
     if uae_cfo.has_uae_transactions(db, ws, company_id):
@@ -28,7 +29,7 @@ async def covenant_insight(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
+    ws = request_workspace(request)
     data = (
         uae_cfo.build_covenants(db, ws, company_id)
         if ws and ws != "demo" and uae_cfo.has_uae_transactions(db, ws, company_id)

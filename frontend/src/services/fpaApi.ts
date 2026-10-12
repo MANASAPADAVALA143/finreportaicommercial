@@ -3,6 +3,7 @@
  */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 function fpaApiBase(): string {
   let base = backendOrigin();
@@ -26,13 +27,9 @@ export async function postFpaJson<T>(path: string, body: unknown): Promise<T> {
   const p = path.startsWith('/') ? path : `/${path}`;
   const url = `${base}${p}`;
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('access_token') : null;
-  if (token) headers.Authorization = `Bearer ${token}`;
-
   const res = await fetch(url, {
     method: 'POST',
-    headers,
+    headers: workspaceHeaders(getStoredAccessToken()),
     body: JSON.stringify(body),
   });
 

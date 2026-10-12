@@ -8,22 +8,39 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import get_db
-from app.middleware.auth import get_current_user
-from app.models.users import User
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
 from app.models.financial_model import FinancialModel
 from app.services import model_builder_engine as eng
 from app.services.model_builder_excel import build_model_excel_bytes
 from app.services.model_builder_pdf import build_model_pdf_bytes
 
-# Example auth protection added below; replicate for other endpoints in this router as needed.
-router = APIRouter(prefix="/api/model", tags=["model-builder"])
+router = APIRouter(
+    prefix="/api/model",
+    tags=["model-builder"],
+    dependencies=[Depends(workspace_member)],
+)
+
+
+def _model_workspace(row: FinancialModel) -> str | None:
+    # model_json is replaced on build, so the owner is kept on the "started" audit entry.
+    for entry in row.audit_trail or []:
+        if isinstance(entry, dict) and entry.get("action") == "started":
+            return (entry.get("detail") or {}).get("workspace_id")
+    return None
+
+
+def _owned_model(db: Session, request: Request, model_id: str) -> FinancialModel:
+    row = db.get(FinancialModel, model_id)
+    if not row or _model_workspace(row) != request_workspace(request):
+        raise HTTPException(status_code=404, detail="model_id not found")
+    return row
 
 
 def _audit(row: FinancialModel, action: str, detail: dict | None = None) -> None:
@@ -62,8 +79,8 @@ def _filter_statement(model: dict[str, Any], statement: str | None) -> dict[str,
 
 @router.post("/start")
 async def start_model(
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
     entity_id: str = Form(...),
     company_name: str = Form(...),
     currency: str = Form("USD"),
@@ -109,7 +126,7 @@ async def start_model(
         audit_trail=[],
         total_seconds=None,
     )
-    _audit(row, "started", {"model_id": model_id})
+    _audit(row, "started", {"model_id": model_id, "workspace_id": request_workspace(request)})
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -117,10 +134,8 @@ async def start_model(
 
 
 @router.post("/build/{model_id}")
-def build_model(model_id: str, db: Session = Depends(get_db)):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
+def build_model(model_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_model(db, request, model_id)
     inputs = (row.model_json or {}).get("_inputs") or {}
     parsed_pl = inputs.get("parsed_pl")
     parsed_bs = inputs.get("parsed_bs")
@@ -171,10 +186,8 @@ def build_model(model_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/status/{model_id}")
-def model_status(model_id: str, db: Session = Depends(get_db)):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
+def model_status(model_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_model(db, request, model_id)
     partial: dict[str, Any] = {}
     if row.status == "complete":
         partial["checks_summary"] = (row.checks_json or {}).get("summary")
@@ -191,13 +204,12 @@ def model_status(model_id: str, db: Session = Depends(get_db)):
 @router.get("/output/{model_id}")
 def model_output(
     model_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     scenario: str = Query("base"),
     statement: str = Query("all"),
 ):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
+    row = _owned_model(db, request, model_id)
     scen = scenario.lower().strip()
     full = row.scenarios_json or {}
     if row.status != "complete" or not full:
@@ -207,11 +219,12 @@ def model_output(
 
 
 @router.get("/history")
-def model_history(db: Session = Depends(get_db), entity_id: Optional[str] = None):
+def model_history(request: Request, db: Session = Depends(get_db), entity_id: Optional[str] = None):
+    ws = request_workspace(request)
     q = db.query(FinancialModel).order_by(FinancialModel.created_at.desc())
     if entity_id:
         q = q.filter(FinancialModel.entity_id == entity_id.strip())
-    rows = q.limit(100).all()
+    rows = [r for r in q.limit(1000).all() if _model_workspace(r) == ws][:100]
     return {
         "items": [
             {
@@ -233,11 +246,9 @@ class ApproveBody(BaseModel):
 
 
 @router.post("/approve/{model_id}")
-def approve_model(model_id: str, body: ApproveBody, db: Session = Depends(get_db)):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
-    row.approved_by = (body.approver or "").strip() or "unknown"
+def approve_model(model_id: str, body: ApproveBody, request: Request, db: Session = Depends(get_db)):
+    row = _owned_model(db, request, model_id)
+    row.approved_by = request_user_email(request) or (body.approver or "").strip() or "unknown"
     row.approved_at = datetime.utcnow()
     _audit(row, "approved", {"approver": row.approved_by})
     db.add(row)
@@ -246,10 +257,8 @@ def approve_model(model_id: str, body: ApproveBody, db: Session = Depends(get_db
 
 
 @router.get("/report/{model_id}/pdf")
-def model_pdf(model_id: str, db: Session = Depends(get_db)):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
+def model_pdf(model_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_model(db, request, model_id)
     if row.status != "complete":
         raise HTTPException(status_code=400, detail="Model not complete")
     full = row.scenarios_json or {}
@@ -273,10 +282,8 @@ def model_pdf(model_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/export/{model_id}/excel")
-def model_excel(model_id: str, db: Session = Depends(get_db)):
-    row = db.get(FinancialModel, model_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="model_id not found")
+def model_excel(model_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_model(db, request, model_id)
     if row.status != "complete":
         raise HTTPException(status_code=400, detail="Model not complete")
     full = row.scenarios_json or {}

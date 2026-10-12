@@ -2,6 +2,13 @@ import { useCallback, useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Lock, Table2 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
 import { downloadApiFile } from '../utils/apiAuth';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
+function wsHeaders(): Record<string, string> {
+  const h = workspaceHeaders(getStoredAccessToken());
+  delete h['Content-Type'];
+  return h;
+}
 
 type StmtTab = 'pl' | 'bs' | 'cfs';
 
@@ -96,7 +103,7 @@ export default function ModelBuilder() {
   const loadHistory = useCallback(async () => {
     if (!base) return;
     const q = entityId ? `?entity_id=${encodeURIComponent(entityId)}` : '';
-    const r = await fetch(`${base}/api/model/history${q}`);
+    const r = await fetch(`${base}/api/model/history${q}`, { headers: wsHeaders() });
     if (!r.ok) return;
     const j = await r.json();
     setHistory(j.items || []);
@@ -123,12 +130,12 @@ export default function ModelBuilder() {
       fd.append('assumptions_json', assumptionsJson);
       fd.append('historical_pl_file', plFile);
       fd.append('historical_bs_file', bsFile);
-      const r = await fetch(`${base}/api/model/start`, { method: 'POST', body: fd });
+      const r = await fetch(`${base}/api/model/start`, { method: 'POST', body: fd, headers: wsHeaders() });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       setModelId(j.model_id);
       setStatus('started');
-      const r2 = await fetch(`${base}/api/model/build/${j.model_id}`, { method: 'POST' });
+      const r2 = await fetch(`${base}/api/model/build/${j.model_id}`, { method: 'POST', headers: wsHeaders() });
       if (!r2.ok) throw new Error(await r2.text());
       const out = await r2.json();
       setStatus(out.status || 'complete');
@@ -145,8 +152,8 @@ export default function ModelBuilder() {
         setScenarios({ base: scen.base, upside: scen.upside, downside: scen.downside });
       } else {
         const [upRes, downRes] = await Promise.all([
-          fetch(`${base}/api/model/output/${j.model_id}?scenario=upside&statement=all`),
-          fetch(`${base}/api/model/output/${j.model_id}?scenario=downside&statement=all`),
+          fetch(`${base}/api/model/output/${j.model_id}?scenario=upside&statement=all`, { headers: wsHeaders() }),
+          fetch(`${base}/api/model/output/${j.model_id}?scenario=downside&statement=all`, { headers: wsHeaders() }),
         ]);
         const su = upRes.ok ? await upRes.json() : null;
         const sd = downRes.ok ? await downRes.json() : null;
@@ -204,14 +211,14 @@ export default function ModelBuilder() {
 
   const downloadPdf = () => {
     if (!base || !modelId) return;
-    downloadApiFile(`${base}/api/model/report/${modelId}/pdf`, `model_${modelId}.pdf`).catch((e) =>
+    downloadApiFile(`${base}/api/model/report/${modelId}/pdf`, `model_${modelId}.pdf`, wsHeaders()).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
 
   const downloadExcel = () => {
     if (!base || !modelId) return;
-    downloadApiFile(`${base}/api/model/export/${modelId}/excel`, `model_${modelId}.xlsx`).catch((e) =>
+    downloadApiFile(`${base}/api/model/export/${modelId}/excel`, `model_${modelId}.xlsx`, wsHeaders()).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };
@@ -220,7 +227,7 @@ export default function ModelBuilder() {
     if (!base || !modelId || !approver.trim()) return;
     await fetch(`${base}/api/model/approve/${modelId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workspaceHeaders(getStoredAccessToken()),
       body: JSON.stringify({ approver: approver.trim() }),
     });
   };

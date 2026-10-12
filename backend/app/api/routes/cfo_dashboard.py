@@ -7,14 +7,27 @@ import random
 import os
 import pandas as pd
 import json
+import tempfile
+from pathlib import Path
 from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import platform_admin, workspace_reader
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services.cfo_metrics_calculator import CFOMetricsCalculator
 from app.services.accounting_integrations import AccountingIntegrationFactory
 from app.services.trial_balance_parser import TrialBalanceParser
 
-router = APIRouter(prefix="/api/cfo", tags=["cfo-dashboard"])
+router = APIRouter(prefix="/api/cfo", tags=["cfo-dashboard"], dependencies=[Depends(workspace_reader)])
+
+
+def _private_copy(content: bytes, filename: str | None) -> str:
+    """Write an upload to a private temp file (never a path derived from the client's filename)."""
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in (".csv", ".xlsx", ".xls"):
+        suffix = ".csv"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(content)
+        return tmp.name
 
 # Path to financial data files
 JOURNAL_ENTRIES_PATH = "sample_journal_entries.csv"
@@ -629,12 +642,8 @@ async def upload_trial_balance(file: UploadFile = File(...)):
     """
     
     try:
-        # Save uploaded file temporarily
-        temp_path = f"temp_{file.filename}"
-        
-        with open(temp_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        content = await file.read()
+        temp_path = _private_copy(content, file.filename)
         try:
             from app.core.aws_config import upload_to_s3
             upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
@@ -644,17 +653,7 @@ async def upload_trial_balance(file: UploadFile = File(...)):
         # Calculate metrics from uploaded trial balance
         parser = TrialBalanceParser(temp_path)
         metrics = parser.calculate_dashboard_metrics()
-        
-        # Save as the main trial balance file
-        if temp_path.endswith('.csv'):
-            import shutil
-            shutil.copy(temp_path, TRIAL_BALANCE_PATH)
-        else:
-            # Convert Excel to CSV
-            df = pd.read_excel(temp_path)
-            df.to_csv(TRIAL_BALANCE_PATH, index=False)
-        
-        # Clean up temp file
+
         os.remove(temp_path)
         
         return {
@@ -681,12 +680,8 @@ async def upload_journal_entries(file: UploadFile = File(...)):
     """
     
     try:
-        # Save uploaded file temporarily
-        temp_path = f"temp_{file.filename}"
-        
-        with open(temp_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        content = await file.read()
+        temp_path = _private_copy(content, file.filename)
         try:
             from app.core.aws_config import upload_to_s3
             upload_to_s3(content, file.filename, folder="trial-balance", country="UAE")
@@ -742,11 +737,8 @@ async def upload_financial_summary(file: UploadFile = File(...)):
             }
         
         elif file.filename.endswith(('.csv', '.xlsx', '.xls')):
-            # Save and parse CSV/Excel
-            temp_path = f"temp_{file.filename}"
-            with open(temp_path, "wb") as f:
-                f.write(content)
-            
+            temp_path = _private_copy(content, file.filename)
+
             # Read with pandas
             if file.filename.endswith('.csv'):
                 df = pd.read_csv(temp_path)
@@ -755,7 +747,7 @@ async def upload_financial_summary(file: UploadFile = File(...)):
             
             # Convert to dashboard format
             # Expected columns: metric, value, date
-            dashboard_data = self._convert_summary_to_dashboard(df)
+            dashboard_data = _convert_summary_to_dashboard(df)
             
             os.remove(temp_path)
             
@@ -775,7 +767,8 @@ async def upload_financial_summary(file: UploadFile = File(...)):
 async def connect_accounting_software(
     platform: str = Query(..., enum=["quickbooks", "xero"]),
     access_token: str = Query(...),
-    company_id: Optional[str] = Query(None)
+    company_id: Optional[str] = Query(None),
+    _admin: WorkspaceContext = Depends(platform_admin),
 ):
     """
     Connect to accounting software (QuickBooks, Xero, etc.)

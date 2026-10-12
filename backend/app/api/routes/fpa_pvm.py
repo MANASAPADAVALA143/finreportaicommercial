@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.services.fpa_commentary import fpa_commentary
 from app.services.fpa_result_store import store_fpa_result
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["FP&A PVM"])
+router = APIRouter(tags=["FP&A PVM"], dependencies=[Depends(workspace_reader)])
 
 
 class PVMLine(BaseModel):
@@ -64,7 +66,7 @@ def _calc_block(lines: List[PVMLine]) -> tuple[float, float, float, list[dict[st
 
 
 @router.post("/pvm-analysis")
-def run_pvm_analysis(body: PVMAnalysisRequest, db: Session = Depends(get_db)):
+def run_pvm_analysis(body: PVMAnalysisRequest, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(workspace_reader)):
     try:
         if body.demo:
             body = PVMAnalysisRequest(
@@ -110,7 +112,7 @@ def run_pvm_analysis(body: PVMAnalysisRequest, db: Session = Depends(get_db)):
             metrics,
         )
         out = {**metrics, "commentary": commentary}
-        store_fpa_result(db, "pvm", out, user_id=body.user_id)
+        store_fpa_result(db, "pvm", out, user_id=str(ctx.user.id))
         return out
     except HTTPException:
         raise

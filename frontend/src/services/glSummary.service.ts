@@ -1,6 +1,7 @@
 /** UAE GL summary for FP&A — GET /api/integration/gl-summary */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 export interface GLSummary {
   has_data: boolean;
@@ -26,23 +27,18 @@ export interface GLSummary {
 }
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+  return workspaceHeaders(getStoredAccessToken());
 }
 
+/** `_workspaceId` is ignored: the backend scopes to the workspace in the request headers. */
 export async function fetchGLSummary(
   companyId: string,
-  workspaceId: string,
+  _workspaceId: string | null,
   periodStart: string,
   periodEnd: string,
 ): Promise<GLSummary> {
   const params = new URLSearchParams({
     company_id: companyId,
-    workspace_id: workspaceId,
     period_start: periodStart,
     period_end: periodEnd,
   });

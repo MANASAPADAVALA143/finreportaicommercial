@@ -13,11 +13,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.services.fpa_commentary import fpa_commentary
 from app.services.fpa_result_store import store_fpa_result
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/reports", tags=["Reports Board Pack"])
+router = APIRouter(prefix="/api/reports", tags=["Reports Board Pack"], dependencies=[Depends(workspace_reader)])
 
 
 class BoardPackRequest(BaseModel):
@@ -96,7 +98,7 @@ def _pdf_bytes(body: BoardPackRequest, executive_summary: str) -> bytes:
 
 
 @router.post("/board-pack")
-def board_pack(body: BoardPackRequest, db: Session = Depends(get_db)):
+def board_pack(body: BoardPackRequest, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(workspace_reader)):
     try:
         exec_summary = fpa_commentary(
             "Draft a tight board-pack executive summary (max 180 words) from the following placeholders and toggles.",
@@ -110,7 +112,7 @@ def board_pack(body: BoardPackRequest, db: Session = Depends(get_db)):
             "html_preview": html_preview,
             "pdf_base64": pdf_b64,
         }
-        store_fpa_result(db, "board_pack", {**out, "pdf_base64": "[omitted]"}, user_id=body.user_id)
+        store_fpa_result(db, "board_pack", {**out, "pdf_base64": "[omitted]"}, user_id=str(ctx.user.id))
         return out
     except Exception as e:
         logger.exception("board-pack failed")

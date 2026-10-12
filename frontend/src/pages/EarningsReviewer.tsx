@@ -12,6 +12,13 @@ import {
 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
 import { downloadApiFile } from '../utils/apiAuth';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+
+function wsHeaders(): Record<string, string> {
+  const h = workspaceHeaders(getStoredAccessToken());
+  delete h['Content-Type'];
+  return h;
+}
 
 type TabKey = 'prior' | 'budget' | 'consensus';
 
@@ -76,7 +83,7 @@ export default function EarningsReviewer() {
 
   const fetchStatus = useCallback(async () => {
     if (!base || !reviewId) return;
-    const r = await fetch(`${base}/api/earnings/status/${reviewId}`);
+    const r = await fetch(`${base}/api/earnings/status/${reviewId}`, { headers: wsHeaders() });
     if (!r.ok) return;
     const j = (await r.json()) as StatusRes;
     setStatus(j);
@@ -113,7 +120,7 @@ export default function EarningsReviewer() {
       fd.append('prior_period_file', priFile);
       if (budFile) fd.append('budget_file', budFile);
       if (anaFile) fd.append('analyst_file', anaFile);
-      const r = await fetch(`${base}/api/earnings/start`, { method: 'POST', body: fd });
+      const r = await fetch(`${base}/api/earnings/start`, { method: 'POST', body: fd, headers: wsHeaders() });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       setReviewId(j.review_id as string);
@@ -133,7 +140,7 @@ export default function EarningsReviewer() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`${base}/api/earnings/run/${reviewId}`, { method: 'POST' });
+      const r = await fetch(`${base}/api/earnings/run/${reviewId}`, { method: 'POST', headers: wsHeaders() });
       if (!r.ok) throw new Error(await r.text());
       await fetchStatus();
     } catch (e) {
@@ -151,7 +158,7 @@ export default function EarningsReviewer() {
     if (!base || !reviewId) return;
     const r = await fetch(`${base}/api/earnings/approve/${reviewId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workspaceHeaders(getStoredAccessToken()),
       body: JSON.stringify({ approver: approver || 'CFO' }),
     });
     if (r.ok) void fetchStatus();
@@ -159,7 +166,9 @@ export default function EarningsReviewer() {
 
   const loadHistory = async () => {
     if (!base) return;
-    const r = await fetch(`${base}/api/earnings/history?entity_id=${encodeURIComponent(entityId)}`);
+    const r = await fetch(`${base}/api/earnings/history?entity_id=${encodeURIComponent(entityId)}`, {
+      headers: wsHeaders(),
+    });
     if (r.ok) {
       const j = await r.json();
       setHistory(j.reviews || []);
@@ -486,7 +495,7 @@ export default function EarningsReviewer() {
                   type="button"
                   onClick={() =>
                     reviewId &&
-                    downloadApiFile(`${base}/api/earnings/report/${reviewId}/pdf`, `earnings_${reviewId}.pdf`).catch((e) =>
+                    downloadApiFile(`${base}/api/earnings/report/${reviewId}/pdf`, `earnings_${reviewId}.pdf`, wsHeaders()).catch((e) =>
                       setError(e instanceof Error ? e.message : String(e)),
                     )
                   }

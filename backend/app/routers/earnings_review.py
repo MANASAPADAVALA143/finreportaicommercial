@@ -6,28 +6,39 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import get_db
-from app.middleware.auth import get_current_user
-from app.models.users import User
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
 from app.models.earnings_review import EarningsReview
 from app.services.earnings_review_engine import parse_analyst_consensus, run_earnings_review
 from app.services.earnings_review_pdf import build_earnings_pdf_bytes
 from app.services.line_item_parser import LineItemParser
 
-# Example auth protection added below; replicate for other endpoints in this router as needed.
-router = APIRouter(prefix="/api/earnings", tags=["earnings-reviewer"])
+router = APIRouter(
+    prefix="/api/earnings",
+    tags=["earnings-reviewer"],
+    dependencies=[Depends(workspace_member)],
+)
+
+_WS_KEY = "workspace_id"
+
+
+def _owned_review(db: Session, request: Request, review_id: str) -> EarningsReview:
+    row = db.get(EarningsReview, review_id)
+    if not row or (row.snapshot_json or {}).get(_WS_KEY) != request_workspace(request):
+        raise HTTPException(status_code=404, detail="review_id not found")
+    return row
 
 
 @router.post("/start")
 async def start_review(
+    request: Request,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
     entity_id: str = Form(...),
     period: str = Form(...),
     period_type: str = Form("quarterly"),
@@ -83,6 +94,7 @@ async def start_review(
 
     review_id = str(uuid.uuid4())
     snap = {
+        _WS_KEY: request_workspace(request),
         "entity_id": entity_id.strip(),
         "period": period.strip(),
         "period_type": (period_type or "quarterly").strip().lower(),
@@ -122,10 +134,8 @@ async def start_review(
 
 
 @router.post("/run/{review_id}")
-def run_review(review_id: str, db: Session = Depends(get_db)):
-    row = db.get(EarningsReview, review_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="review_id not found")
+def run_review(review_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_review(db, request, review_id)
 
     snap = dict(row.snapshot_json or {})
     row.status = "running"
@@ -174,10 +184,8 @@ def run_review(review_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/status/{review_id}")
-def get_status(review_id: str, db: Session = Depends(get_db)):
-    row = db.get(EarningsReview, review_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="review_id not found")
+def get_status(review_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_review(db, request, review_id)
     return {
         "review_id": row.review_id,
         "entity_id": row.entity_id,
@@ -199,13 +207,19 @@ def get_status(review_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/history")
-def history(entity_id: Optional[str] = None, period_type: Optional[str] = None, db: Session = Depends(get_db)):
+def history(
+    request: Request,
+    entity_id: Optional[str] = None,
+    period_type: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    ws = request_workspace(request)
     q = db.query(EarningsReview).order_by(EarningsReview.created_at.desc())
     if entity_id:
         q = q.filter(EarningsReview.entity_id == entity_id.strip())
     if period_type:
         q = q.filter(EarningsReview.period_type == period_type.strip().lower())
-    rows = q.limit(100).all()
+    rows = [r for r in q.limit(1000).all() if (r.snapshot_json or {}).get(_WS_KEY) == ws][:100]
     return {
         "reviews": [
             {
@@ -229,13 +243,12 @@ class ApproveBody(BaseModel):
 
 
 @router.post("/approve/{review_id}")
-def approve(review_id: str, body: ApproveBody, db: Session = Depends(get_db)):
-    row = db.get(EarningsReview, review_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="review_id not found")
-    if not body.approver.strip():
+def approve(review_id: str, body: ApproveBody, request: Request, db: Session = Depends(get_db)):
+    row = _owned_review(db, request, review_id)
+    approver = request_user_email(request) or body.approver.strip()
+    if not approver:
         raise HTTPException(status_code=400, detail="approver required")
-    row.approved_by = body.approver.strip()
+    row.approved_by = approver
     row.approved_at = datetime.utcnow()
     db.add(row)
     db.commit()
@@ -243,10 +256,8 @@ def approve(review_id: str, body: ApproveBody, db: Session = Depends(get_db)):
 
 
 @router.get("/report/{review_id}/pdf")
-def report_pdf(review_id: str, db: Session = Depends(get_db)):
-    row = db.get(EarningsReview, review_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="review_id not found")
+def report_pdf(review_id: str, request: Request, db: Session = Depends(get_db)):
+    row = _owned_review(db, request, review_id)
     v = row.variances_json or {}
     if row.status != "complete" or not v.get("current"):
         raise HTTPException(status_code=400, detail="Run analysis first (status must be complete).")

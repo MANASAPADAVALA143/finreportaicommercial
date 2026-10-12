@@ -19,6 +19,7 @@ from openpyxl.utils import get_column_letter
 
 from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services import llm_service
 from app.services.tb_variance_commentary import (
@@ -26,7 +27,7 @@ from app.services.tb_variance_commentary import (
     build_variance_commentary_prompt,
 )
 
-router = APIRouter(prefix="/api/fpa/variance", tags=["FP&A Variance"])
+router = APIRouter(prefix="/api/fpa/variance", tags=["FP&A Variance"], dependencies=[Depends(workspace_reader)])
 
 
 # ---------- Request/Response models ----------

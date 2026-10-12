@@ -10,11 +10,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.services.fpa_commentary import fpa_commentary
 from app.services.fpa_result_store import store_fpa_result
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["FP&A Headcount"])
+router = APIRouter(tags=["FP&A Headcount"], dependencies=[Depends(workspace_reader)])
 
 
 class DeptRow(BaseModel):
@@ -40,7 +42,7 @@ class HeadcountRequest(BaseModel):
 
 
 @router.post("/headcount")
-def headcount_plan(body: HeadcountRequest, db: Session = Depends(get_db)):
+def headcount_plan(body: HeadcountRequest, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(workspace_reader)):
     try:
         if not body.departments:
             body.departments = [
@@ -93,7 +95,7 @@ def headcount_plan(body: HeadcountRequest, db: Session = Depends(get_db)):
             metrics,
         )
         out = {**metrics, "commentary": commentary}
-        store_fpa_result(db, "headcount", out, user_id=body.user_id)
+        store_fpa_result(db, "headcount", out, user_id=str(ctx.user.id))
         return out
     except Exception as e:
         logger.exception("headcount failed")
