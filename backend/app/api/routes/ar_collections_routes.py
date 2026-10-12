@@ -12,21 +12,30 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/ar/collections", tags=["AR Collections Intelligence"])
+router = APIRouter(
+    prefix="/api/ar/collections",
+    tags=["AR Collections Intelligence"],
+    dependencies=[Depends(workspace_member)],
+)
 
 
 # ─── HELPERS ───────────────────────────────────────────────
 
 def _tid(request: Request) -> str:
-    """Extract tenant_id from request headers or query param."""
-    return (
-        request.headers.get("x-tenant-id")
-        or request.query_params.get("tenant_id")
-        or ""
-    )
+    return request_workspace(request, request.query_params.get("tenant_id"))
+
+
+def _require_invoice(db: Session, tenant_id: str, invoice_id: str) -> None:
+    found = db.execute(
+        text("SELECT 1 FROM uae_sales_invoices WHERE id = :id AND tenant_id = :tenant_id"),
+        {"id": invoice_id, "tenant_id": tenant_id},
+    ).first()
+    if not found:
+        raise HTTPException(404, "Invoice not found")
 
 def _cid(request: Request) -> str:
     """Extract company_id from request headers or query param."""
@@ -64,7 +73,7 @@ class DisputeCreate(BaseModel):
 
 class DisputeResolve(BaseModel):
     resolution_notes: str
-    actioned_by: str
+    actioned_by: Optional[str] = None
 
 class QueueCreate(BaseModel):
     invoice_id: str
@@ -80,7 +89,7 @@ class QueueCreate(BaseModel):
 
 class QueueAction(BaseModel):
     action: str  # approved / held / rejected
-    actioned_by: str
+    actioned_by: Optional[str] = None  # ignored: the signed-in user is recorded
     edited_content: Optional[str] = None
 
 class ReplyEventCreate(BaseModel):
@@ -117,7 +126,7 @@ def list_promises(
                i.outstanding,
                i.last_dunning_level
         FROM ar_promises p
-        LEFT JOIN uae_sales_invoices i ON i.id = p.invoice_id
+        LEFT JOIN uae_sales_invoices i ON i.id = p.invoice_id AND i.tenant_id = p.tenant_id
         WHERE p.tenant_id = :tenant_id
     """
     params: dict = {"tenant_id": tenant_id}
@@ -145,6 +154,7 @@ def create_promise(
     tenant_id = _tid(request)
     company_id = _cid(request)
 
+    _require_invoice(db, tenant_id, body.invoice_id)
     promise_id = str(uuid.uuid4())
 
     db.execute(text("""
@@ -176,8 +186,8 @@ def create_promise(
         SET has_open_promise = TRUE,
             dunning_paused = TRUE,
             dunning_pause_until = :promised_date
-        WHERE id = :invoice_id
-    """), {"promised_date": body.promised_date, "invoice_id": body.invoice_id})
+        WHERE id = :invoice_id AND tenant_id = :tenant_id
+    """), {"promised_date": body.promised_date, "invoice_id": body.invoice_id, "tenant_id": tenant_id})
 
     db.commit()
 
@@ -228,16 +238,16 @@ def update_promise(
             SET dunning_paused = FALSE,
                 dunning_pause_until = NULL,
                 has_open_promise = FALSE
-            WHERE id = :invoice_id
-        """), {"invoice_id": row[0]})
+            WHERE id = :invoice_id AND tenant_id = :tenant_id
+        """), {"invoice_id": row[0], "tenant_id": tenant_id})
 
     # If KEPT → clear promise flag
     if body.status == "KEPT":
         db.execute(text("""
             UPDATE uae_sales_invoices
             SET has_open_promise = FALSE
-            WHERE id = :invoice_id
-        """), {"invoice_id": row[0]})
+            WHERE id = :invoice_id AND tenant_id = :tenant_id
+        """), {"invoice_id": row[0], "tenant_id": tenant_id})
 
     db.commit()
     return {"ok": True, "message": f"Promise marked {body.status}"}
@@ -260,7 +270,7 @@ def list_disputes(
                i.outstanding,
                i.total_amount
         FROM ar_disputes d
-        LEFT JOIN uae_sales_invoices i ON i.id = d.invoice_id
+        LEFT JOIN uae_sales_invoices i ON i.id = d.invoice_id AND i.tenant_id = d.tenant_id
         WHERE d.tenant_id = :tenant_id
     """
     params: dict = {"tenant_id": tenant_id}
@@ -288,6 +298,7 @@ def open_dispute(
     tenant_id = _tid(request)
     company_id = _cid(request)
 
+    _require_invoice(db, tenant_id, body.invoice_id)
     dispute_id = str(uuid.uuid4())
     sla_deadline = date.today() + timedelta(days=body.sla_days)
 
@@ -321,8 +332,8 @@ def open_dispute(
             has_open_dispute = TRUE,
             last_reply_intent = 'DISPUTE',
             last_reply_date = CURRENT_DATE
-        WHERE id = :invoice_id
-    """), {"sla_deadline": sla_deadline, "invoice_id": body.invoice_id})
+        WHERE id = :invoice_id AND tenant_id = :tenant_id
+    """), {"sla_deadline": sla_deadline, "invoice_id": body.invoice_id, "tenant_id": tenant_id})
 
     db.commit()
 
@@ -364,8 +375,8 @@ def resolve_dispute(
         SET dunning_paused = FALSE,
             dunning_pause_until = NULL,
             has_open_dispute = FALSE
-        WHERE id = :invoice_id
-    """), {"invoice_id": row[0]})
+        WHERE id = :invoice_id AND tenant_id = :tenant_id
+    """), {"invoice_id": row[0], "tenant_id": tenant_id})
 
     db.commit()
     return {"ok": True, "message": "Dispute resolved. Dunning resumed."}
@@ -390,7 +401,7 @@ def list_queue(
                i.total_amount,
                i.last_dunning_level
         FROM ar_human_queue q
-        LEFT JOIN uae_sales_invoices i ON i.id = q.invoice_id
+        LEFT JOIN uae_sales_invoices i ON i.id = q.invoice_id AND i.tenant_id = q.tenant_id
         WHERE q.tenant_id = :tenant_id AND q.status = :status
     """
     params: dict = {"tenant_id": tenant_id, "status": status}
@@ -433,6 +444,7 @@ def add_to_queue(
     tenant_id = _tid(request)
     company_id = _cid(request)
 
+    _require_invoice(db, tenant_id, body.invoice_id)
     item_id = str(uuid.uuid4())
 
     db.execute(text("""
@@ -465,8 +477,8 @@ def add_to_queue(
     db.execute(text("""
         UPDATE uae_sales_invoices
         SET in_human_queue = TRUE
-        WHERE id = :invoice_id
-    """), {"invoice_id": body.invoice_id})
+        WHERE id = :invoice_id AND tenant_id = :tenant_id
+    """), {"invoice_id": body.invoice_id, "tenant_id": tenant_id})
 
     db.commit()
     return {"ok": True, "item_id": item_id}
@@ -495,7 +507,7 @@ def action_queue_item(
         RETURNING invoice_id
     """), {
         "action": body.action,
-        "actioned_by": body.actioned_by,
+        "actioned_by": request_user_email(request) or "system",
         "edited_content": body.edited_content,
         "id": item_id,
         "tenant_id": tenant_id,
@@ -507,15 +519,15 @@ def action_queue_item(
     # Check if any more pending items for this invoice
     remaining = db.execute(text("""
         SELECT COUNT(*) FROM ar_human_queue
-        WHERE invoice_id = :invoice_id AND status = 'pending'
-    """), {"invoice_id": row[0]}).scalar()
+        WHERE invoice_id = :invoice_id AND tenant_id = :tenant_id AND status = 'pending'
+    """), {"invoice_id": row[0], "tenant_id": tenant_id}).scalar()
 
     if remaining == 0:
         db.execute(text("""
             UPDATE uae_sales_invoices
             SET in_human_queue = FALSE
-            WHERE id = :invoice_id
-        """), {"invoice_id": row[0]})
+            WHERE id = :invoice_id AND tenant_id = :tenant_id
+        """), {"invoice_id": row[0], "tenant_id": tenant_id})
 
     db.commit()
     return {
@@ -535,6 +547,8 @@ def log_reply_event(
     tenant_id = _tid(request)
     company_id = _cid(request)
 
+    if body.invoice_id:
+        _require_invoice(db, tenant_id, body.invoice_id)
     event_id = str(uuid.uuid4())
 
     db.execute(text("""
@@ -570,8 +584,8 @@ def log_reply_event(
             UPDATE uae_sales_invoices
             SET last_reply_intent = :intent,
                 last_reply_date = CURRENT_DATE
-            WHERE id = :invoice_id
-        """), {"intent": body.classified_intent, "invoice_id": body.invoice_id})
+            WHERE id = :invoice_id AND tenant_id = :tenant_id
+        """), {"intent": body.classified_intent, "invoice_id": body.invoice_id, "tenant_id": tenant_id})
 
     db.commit()
     return {"ok": True, "event_id": event_id}
@@ -819,7 +833,7 @@ def update_customer_tag(
         WHERE tenant_id = :tenant_id {company_filter}
           AND customer_id IN (
             SELECT id FROM uae_customers
-            WHERE name ILIKE :customer_name
+            WHERE tenant_id = :tenant_id AND name ILIKE :customer_name
             LIMIT 1
           )
           AND status NOT IN ('paid','cancelled')

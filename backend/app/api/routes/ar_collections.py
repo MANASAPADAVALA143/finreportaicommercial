@@ -3,10 +3,11 @@ import anthropic
 import json
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_reader
 from app.services import cfo_uae_data_service as uae_cfo
 from sqlalchemy.orm import Session
 
-router = APIRouter(prefix="/api/ar-collections", tags=["ar-collections"])
+router = APIRouter(prefix="/api/ar-collections", tags=["ar-collections"], dependencies=[Depends(workspace_reader)])
 
 
 @router.get("/summary")
@@ -15,9 +16,7 @@ async def get_ar_summary(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
-    if not ws or ws == "demo":
-        return uae_cfo.empty_ar_summary()
+    ws = request_workspace(request)
     if uae_cfo.has_uae_transactions(db, ws, company_id):
         return uae_cfo.build_ar_summary(db, ws, company_id)
     return uae_cfo.empty_ar_summary()
@@ -29,10 +28,10 @@ async def ar_insight(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
+    ws = request_workspace(request)
     ar_data = (
         uae_cfo.build_ar_summary(db, ws, company_id)
-        if ws and ws != "demo" and uae_cfo.has_uae_transactions(db, ws, company_id)
+        if uae_cfo.has_uae_transactions(db, ws, company_id)
         else uae_cfo.empty_ar_summary()
     )
     if not ar_data.get("total_ar"):

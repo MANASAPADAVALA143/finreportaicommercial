@@ -10,24 +10,29 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.models.crm import CRMActivity, CRMContact, CRMDeal, CRMQuote
 from app.models.uae_accounting_full import UAESalesInvoice
 from app.services.credit_risk_service import calculate_credit_score, credit_risk_summary
 
-router = APIRouter(prefix="/api/crm", tags=["CRM"])
+router = APIRouter(prefix="/api/crm", tags=["CRM"], dependencies=[Depends(workspace_member)])
 
 CRM_STAGES = ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"]
 OPEN_STAGES = ["New", "Qualified", "Proposal", "Negotiation"]
 
 
 def _ws(request: Request, workspace_id: Optional[str] = None) -> str:
-    return (
-        workspace_id
-        or request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request, workspace_id)
+
+
+def _require_refs(db: Session, ws: str, deal_id: Optional[str], contact_id: Optional[str]) -> None:
+    if deal_id and not db.query(CRMDeal.id).filter(CRMDeal.id == deal_id, CRMDeal.workspace_id == ws).first():
+        raise HTTPException(status_code=404, detail="Deal not found")
+    if contact_id and not db.query(CRMContact.id).filter(CRMContact.id == contact_id, CRMContact.workspace_id == ws).first():
+        raise HTTPException(status_code=404, detail="Contact not found")
 
 
 def _company_id(request: Request, query_company: Optional[str] = None, body_company: Optional[str] = None) -> Optional[str]:
@@ -100,10 +105,14 @@ def _quote_dict(q: CRMQuote) -> dict[str, Any]:
     }
 
 
-def _contacts_map(db: Session, contact_ids: set[str]) -> dict[str, CRMContact]:
+def _contacts_map(db: Session, ws: str, contact_ids: set[str]) -> dict[str, CRMContact]:
     if not contact_ids:
         return {}
-    rows = db.query(CRMContact).filter(CRMContact.id.in_(list(contact_ids))).all()
+    rows = (
+        db.query(CRMContact)
+        .filter(CRMContact.id.in_(list(contact_ids)), CRMContact.workspace_id == ws)
+        .all()
+    )
     return {r.id: r for r in rows}
 
 
@@ -221,7 +230,7 @@ def crm_dashboard(
     revenue_crm = 0.0
     for d in won_this_month:
         if d.ar_invoice_id:
-            inv = db.query(UAESalesInvoice).filter_by(id=d.ar_invoice_id).first()
+            inv = db.query(UAESalesInvoice).filter_by(id=d.ar_invoice_id, tenant_id=ws).first()
             if inv:
                 revenue_crm += float(inv.total_amount or 0)
     overdue_activities = aq.filter(
@@ -255,7 +264,7 @@ def crm_pipeline(
         q = q.filter(CRMDeal.company_id == cid)
     deals = q.all()
     contact_ids = {d.contact_id for d in deals if d.contact_id}
-    cmap = _contacts_map(db, contact_ids)
+    cmap = _contacts_map(db, ws, contact_ids)
     stages: dict[str, dict[str, Any]] = {}
     pipeline_value = 0.0
     for stage in CRM_STAGES:
@@ -342,7 +351,7 @@ def list_deals(
     if stage:
         q = q.filter(CRMDeal.stage == stage)
     deals = q.order_by(CRMDeal.updated_at.desc()).all()
-    cmap = _contacts_map(db, {d.contact_id for d in deals if d.contact_id})
+    cmap = _contacts_map(db, ws, {d.contact_id for d in deals if d.contact_id})
     return {"deals": [_deal_dict(d, cmap.get(d.contact_id)) for d in deals]}
 
 
@@ -377,7 +386,7 @@ def create_deal(body: DealCreateIn, request: Request, db: Session = Depends(get_
     db.add(deal)
     db.commit()
     db.refresh(deal)
-    contact = db.query(CRMContact).filter_by(id=deal.contact_id).first() if deal.contact_id else None
+    contact = db.query(CRMContact).filter_by(id=deal.contact_id, workspace_id=ws).first() if deal.contact_id else None
     return _deal_dict(deal, contact)
 
 
@@ -404,7 +413,7 @@ def update_deal(deal_id: str, body: DealPatchIn, request: Request, db: Session =
     deal.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(deal)
-    contact = db.query(CRMContact).filter_by(id=deal.contact_id).first() if deal.contact_id else None
+    contact = db.query(CRMContact).filter_by(id=deal.contact_id, workspace_id=ws).first() if deal.contact_id else None
     return _deal_dict(deal, contact)
 
 
@@ -432,6 +441,7 @@ def create_activity(body: ActivityCreateIn, request: Request, db: Session = Depe
     ws = _ws(request, body.workspace_id)
     if not body.subject.strip():
         raise HTTPException(status_code=400, detail="subject is required")
+    _require_refs(db, ws, body.deal_id, body.contact_id)
     due = date.fromisoformat(body.due_date) if body.due_date else None
     activity = CRMActivity(
         id=str(uuid.uuid4()),
@@ -443,7 +453,7 @@ def create_activity(body: ActivityCreateIn, request: Request, db: Session = Depe
         notes=body.notes,
         due_date=due,
         completed=False,
-        created_by=body.created_by,
+        created_by=request_user_email(request) or body.created_by,
     )
     db.add(activity)
     db.commit()
@@ -473,6 +483,7 @@ def create_quote(body: QuoteCreateIn, request: Request, db: Session = Depends(ge
     cid = _company_id(request, body_company=body.company_id)
     if not body.line_items:
         raise HTTPException(status_code=400, detail="line_items required")
+    _require_refs(db, ws, body.deal_id, body.contact_id)
     subtotal, vat_amount, total = _quote_totals(body.line_items)
     valid_until = date.fromisoformat(body.valid_until) if body.valid_until else None
     quote = CRMQuote(
@@ -499,14 +510,16 @@ def create_quote(body: QuoteCreateIn, request: Request, db: Session = Depends(ge
 def convert_quote_to_invoice(
     quote_id: str,
     request: Request,
+    body: Optional[WorkspaceBody] = None,
     workspace_id: Optional[str] = None,
     company_id: Optional[str] = None,
+    ctx: WorkspaceContext = Depends(workspace_member),
     db: Session = Depends(get_db),
 ):
     from app.api.routes.uae_ar_routes import CreateInvoiceIn, LineItemIn, create_invoice
 
-    ws = _ws(request, workspace_id)
-    cid = _company_id(request, company_id)
+    ws = _ws(request, (body.workspace_id if body else None) or workspace_id)
+    cid = _company_id(request, company_id, body.company_id if body else None)
     quote = (
         db.query(CRMQuote)
         .filter(CRMQuote.id == quote_id, CRMQuote.workspace_id == ws)
@@ -518,10 +531,11 @@ def convert_quote_to_invoice(
         raise HTTPException(status_code=400, detail="Quote already converted")
     if not cid:
         raise HTTPException(status_code=400, detail="company_id required")
+    cid = require_company_access(db, ctx, cid, "write")
 
     contact = None
     if quote.contact_id:
-        contact = db.query(CRMContact).filter_by(id=quote.contact_id).first()
+        contact = db.query(CRMContact).filter_by(id=quote.contact_id, workspace_id=ws).first()
     customer_name = (contact.company_name or contact.name) if contact else "Customer"
 
     today = date.today()
@@ -555,11 +569,7 @@ def convert_quote_to_invoice(
     # Do not override GulfTax HARD_BLOCK drafts — those stay draft for manual Approve & Post.
     from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
 
-    poster = (
-        request.headers.get("x-user-email")
-        or request.headers.get("X-User-Email")
-        or "system"
-    )
+    poster = request_user_email(request) or "system"
     post_result: dict = {}
     if result.get("posted") or result.get("gulftax_decision") != "HARD_BLOCK":
         post_result = post_sales_invoice_to_gl_and_tax(
@@ -582,7 +592,7 @@ def convert_quote_to_invoice(
     db.add(quote)
 
     if quote.deal_id:
-        deal = db.query(CRMDeal).filter_by(id=quote.deal_id).first()
+        deal = db.query(CRMDeal).filter_by(id=quote.deal_id, workspace_id=ws).first()
         if deal:
             deal.ar_invoice_id = invoice_id
             deal.stage = "Won"

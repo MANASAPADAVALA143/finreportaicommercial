@@ -33,6 +33,17 @@ def workspace_member(
     return ctx
 
 
+def workspace_reader(
+    request: Request,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> WorkspaceContext:
+    """Like `workspace_member`, but read access suffices for any method (POSTs that only analyse data)."""
+    require_workspace_level(db, ctx, "read")
+    request.state.workspace_ctx = ctx
+    return ctx
+
+
 def workspace_writer(
     ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),

@@ -1,22 +1,17 @@
 /** CRM API — /api/crm */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/crm`;
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+  return workspaceHeaders(getStoredAccessToken());
 }
 
 function params(extra: Record<string, string> = {}): string {
   const cid = localStorage.getItem('active_company_id');
-  const wsId = localStorage.getItem('gnanova_workspace_id');
-  const p = new URLSearchParams({ workspace_id: wsId, ...(cid ? { company_id: cid } : {}), ...extra });
+  const p = new URLSearchParams({ ...(cid ? { company_id: cid } : {}), ...extra });
   return p.toString();
 }
 
@@ -28,12 +23,11 @@ async function get<T>(path: string, extra: Record<string, string> = {}): Promise
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const wsId = localStorage.getItem('gnanova_workspace_id');
   const cid = localStorage.getItem('active_company_id');
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: hdrs(),
-    body: JSON.stringify({ workspace_id: wsId, company_id: cid, ...body as object }),
+    body: JSON.stringify({ company_id: cid, ...body as object }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

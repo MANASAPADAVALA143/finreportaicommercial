@@ -9,22 +9,18 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.models.crm import CRMDeal
 from app.models.uae_accounting_full import UAESalesInvoice
 from app.services.credit_risk_service import credit_risk_summary
 from app.services.dso_service import build_dso_metrics
 from app.services.payment_prediction_service import predict_payments
 
-router = APIRouter(prefix="/api/o2c", tags=["O2C"])
+router = APIRouter(prefix="/api/o2c", tags=["O2C"], dependencies=[Depends(workspace_member)])
 
 
 def _ws(request: Request, query_ws: str | None = None) -> str:
-    return (
-        query_ws
-        or request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request, query_ws)
 
 
 @router.get("/summary")
@@ -71,7 +67,7 @@ def o2c_summary(
     won_revenue = 0.0
     for d in won_this_month:
         if d.ar_invoice_id:
-            inv = db.query(UAESalesInvoice).filter_by(id=d.ar_invoice_id).first()
+            inv = db.query(UAESalesInvoice).filter_by(id=d.ar_invoice_id, tenant_id=ws).first()
             if inv:
                 won_revenue += float(inv.total_amount or 0)
 

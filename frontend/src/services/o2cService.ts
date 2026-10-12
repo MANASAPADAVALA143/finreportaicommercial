@@ -1,16 +1,12 @@
 /** O2C summary — GET /api/o2c/summary */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/o2c`;
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+  return workspaceHeaders(getStoredAccessToken());
 }
 
 export interface O2CSummary {
@@ -59,8 +55,7 @@ export interface O2CSummary {
 }
 
 export async function fetchO2CSummary(companyId: string): Promise<O2CSummary> {
-  const wsId = localStorage.getItem('gnanova_workspace_id');
-  const q = new URLSearchParams({ company_id: companyId, workspace_id: wsId }).toString();
+  const q = new URLSearchParams({ company_id: companyId }).toString();
   const res = await fetch(`${BASE}/summary?${q}`, { headers: hdrs() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
