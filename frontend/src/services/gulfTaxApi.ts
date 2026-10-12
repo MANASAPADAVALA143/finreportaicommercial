@@ -78,9 +78,11 @@ export async function classifyTransaction(params: {
 export async function classifyBulk(file: File, entityType = 'mainland') {
   const form = new FormData();
   form.append('file', file);
+  const h = headers();
+  delete h['Content-Type'];
   const res = await fetch(
     `${API}/api/gulftax/classify-bulk?entity_type=${entityType}&transaction_type=purchase`,
-    { method: 'POST', body: form },
+    { method: 'POST', headers: h, body: form },
   );
   if (!res.ok) throw new Error(`Bulk classify failed ${res.status}`);
   return res.json();

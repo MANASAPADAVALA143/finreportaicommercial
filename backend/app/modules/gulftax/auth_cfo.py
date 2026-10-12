@@ -7,13 +7,14 @@ company is only usable if it belongs to that workspace or is a company the calle
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.company_access import UUID_RE, AccessLevel, require_company_access, require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 
 WEBHOOK_MARKER = "/n8n/inbound/"
@@ -141,6 +142,35 @@ def gulftax_guard(
     }
     for raw in raws - {None, ""}:
         resolve_company(db, main_db, ctx, raw, level)
+
+
+def company_check(
+    request: Request,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    main_db: Session = Depends(get_db),
+    db: Session = Depends(_ported_db),
+) -> Callable[[Optional[str]], Optional[str]]:
+    """Dependency returning `check(raw)` for company ids outside path/query/header (body fields,
+    aliases): the stripped id if the caller may use it, None if empty, else 403."""
+    level = _level(request)
+
+    def check(raw: Optional[str]) -> Optional[str]:
+        cid = (raw or "").strip()
+        if not cid:
+            return None
+        resolve_company(db, main_db, ctx, cid, level)
+        return cid
+
+    return check
+
+
+def tenant_and_company(
+    request: Request, check: Callable[[Optional[str]], Optional[str]], body_company: Optional[str] = None
+) -> tuple[str, str]:
+    """Active workspace, and the body company or X-Company-ID (both checked), else the workspace."""
+    tenant_id = request_workspace(request)
+    cid = check(body_company) or check(request.headers.get("X-Company-ID"))
+    return tenant_id, cid or tenant_id
 
 
 def include_guarded(app: FastAPI, router: APIRouter, **kwargs) -> None:

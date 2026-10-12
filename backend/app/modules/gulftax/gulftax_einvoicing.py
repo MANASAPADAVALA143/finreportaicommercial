@@ -1,22 +1,30 @@
 """GulfTax E-Invoicing — unified Peppol PINT AE API."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import secrets
 from datetime import date, datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace
 from app.models.client_data import EinvoicingSubmission
 from app.models.company_setup import UaeCompanyProfile
+from app.modules.gulftax.auth_cfo import company_check, gulftax_guard
 from app.services import einvoicing_service_unified as svc
 
-router = APIRouter(prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"])
+router = APIRouter(
+    prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"], dependencies=[Depends(gulftax_guard)]
+)
+inbound_router = APIRouter(prefix="/api/gulftax/einvoicing", tags=["GulfTax E-Invoicing"])
 
 IntegrationStatus = Literal["not_started", "planning", "testing", "live"]
 AspSubmissionStatus = Literal["pending", "accepted", "rejected", "error"]
@@ -110,10 +118,6 @@ class AspInboundRequest(BaseModel):
     status: AspSubmissionStatus
     rejection_reason: str = ""
     asp_reference: str = ""
-
-
-def _tenant(workspace_id: Optional[str]) -> str:
-    return (workspace_id or "default").strip() or "default"
 
 
 async def _trigger_asp_webhook(payload: dict[str, Any]) -> None:
@@ -469,15 +473,15 @@ def _ported_db():
 
 @router.get("/readiness/company")
 def company_readiness_assessment(
+    request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
     ported_db: Session = Depends(_ported_db),
 ):
     """Readiness from persisted GulfTax company settings (same path as UAE Suite dashboard)."""
-    tenant = (x_workspace_id or workspace_id or "demo").strip() or "demo"
+    tenant = request_workspace(request, workspace_id)
     cid = (company_id or x_company_id or "").strip() or None
     result = compute_company_readiness(db, ported_db, tenant, cid)
     return {"workspace_id": tenant, "company_id": cid, **result}
@@ -486,14 +490,14 @@ def company_readiness_assessment(
 @router.get("/{invoice_id}/download-xml")
 def download_stored_einvoice_xml(
     invoice_id: str,
+    request: Request,
     workspace_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     """Download stored PINT AE XML for an AR invoice (outbound only)."""
     from app.services.einvoicing_constants import RECORD_TYPE_INTERNAL_VENDOR
 
-    tenant = _tenant(x_workspace_id or workspace_id)
+    tenant = request_workspace(request, workspace_id)
     row = (
         db.query(EinvoicingSubmission)
         .filter(
@@ -503,13 +507,6 @@ def download_stored_einvoice_xml(
         .order_by(EinvoicingSubmission.created_at.desc())
         .first()
     )
-    if not row or not (row.xml_payload or "").strip():
-        row = (
-            db.query(EinvoicingSubmission)
-            .filter(EinvoicingSubmission.invoice_id == invoice_id)
-            .order_by(EinvoicingSubmission.created_at.desc())
-            .first()
-        )
     if not row or not (row.xml_payload or "").strip():
         raise HTTPException(404, "No e-invoice XML found for this invoice")
     if (getattr(row, "record_type", None) or "") == RECORD_TYPE_INTERNAL_VENDOR:
@@ -583,13 +580,15 @@ def generate_xml_download(body: GenerateXmlRequest):
 @router.post("/asp/submit")
 async def submit_to_asp(
     body: AspSubmitRequest,
+    request: Request,
+    check: Callable[[Optional[str]], Optional[str]] = Depends(company_check),
     db: Session = Depends(get_db),
     ported_db: Session = Depends(_ported_db),
 ):
     if body.net_amount <= 0:
         raise HTTPException(400, "net_amount must be positive")
-    tenant = _tenant(body.workspace_id)
-    company_id = body.company_id or tenant
+    tenant = request_workspace(request, body.workspace_id)
+    company_id = check(body.company_id) or tenant
     company_trn: str | None = None
     prof = db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id == company_id).first()
     if prof and prof.trn:
@@ -634,12 +633,13 @@ async def submit_to_asp(
 
 @router.get("/asp/submissions")
 def list_asp_submissions(
+    request: Request,
     workspace_id: Optional[str] = None,
     company_id: Optional[str] = None,
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
-    tenant = _tenant(workspace_id)
+    tenant = request_workspace(request, workspace_id)
     items = svc.list_submissions(db, tenant, company_id=company_id, limit=limit)
     return {"items": items}
 
@@ -647,10 +647,11 @@ def list_asp_submissions(
 @router.post("/asp/{submission_id}/redrive")
 async def redrive_asp_submission(
     submission_id: str,
+    request: Request,
     workspace_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    tenant = _tenant(workspace_id)
+    tenant = request_workspace(request, workspace_id)
     row = db.query(EinvoicingSubmission).filter_by(id=submission_id).first()
     if not row or row.tenant_id != tenant:
         raise HTTPException(404, "Submission not found")
@@ -666,9 +667,32 @@ async def redrive_asp_submission(
     return {"submission_id": submission_id, "status": "pending"}
 
 
-@router.post("/asp/inbound")
-def asp_inbound_status(body: AspInboundRequest, db: Session = Depends(get_db)):
-    """n8n callback to update ASP submission status."""
+def _valid_n8n_signature(secret: str, body: bytes, received: str) -> bool:
+    """HMAC-SHA256 hex over the raw body, or the plain shared secret (same as the n8n inbound hooks)."""
+    received = (received or "").strip()
+    if not received:
+        return False
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, received.lower()) or secrets.compare_digest(received, secret)
+
+
+@inbound_router.post("/asp/inbound")
+async def asp_inbound_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_n8n_signature: Optional[str] = Header(default=None, alias="X-N8N-Signature"),
+):
+    """n8n callback to update ASP submission status (signed with N8N_WEBHOOK_SECRET)."""
+    secret = os.getenv("N8N_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(500, "N8N_WEBHOOK_SECRET is not configured")
+    raw = await request.body()
+    if not _valid_n8n_signature(secret, raw, x_n8n_signature or ""):
+        raise HTTPException(401, "Invalid signature")
+    try:
+        body = AspInboundRequest.model_validate_json(raw)
+    except ValidationError as exc:
+        raise HTTPException(422, exc.errors()) from exc
     status = body.status
     if status == "rejected" and not body.rejection_reason:
         body.rejection_reason = "Rejected by ASP"

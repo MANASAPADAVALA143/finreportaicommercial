@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant import get_company_id, get_tenant_id
+from app.modules.gulftax.auth_cfo import company_check, gulftax_guard, tenant_and_company
 
-router = APIRouter(prefix="/api/gulftax/esr", tags=["GulfTax ESR"])
+router = APIRouter(prefix="/api/gulftax/esr", tags=["GulfTax ESR"], dependencies=[Depends(gulftax_guard)])
 
 RELEVANT_ACTIVITIES = [
     "Banking",
@@ -294,13 +294,13 @@ def esr_status() -> ESRStatusResponse:
 @router.post("/calculate")
 def esr_calculate(
     body: ESRCalculateRequest,
-    tenant_id: str = Depends(get_tenant_id),
-    company_id: str = Depends(get_company_id),
+    request: Request,
+    check: Callable[[Optional[str]], Optional[str]] = Depends(company_check),
     db: Session = Depends(get_db),
 ) -> dict:
     """Run ESR substance tests and persist to esr_filings."""
     result = compute_esr_result(body)
-    cid = (body.company_id or company_id or "").strip() or company_id
+    tenant_id, cid = tenant_and_company(request, check, body.company_id)
     _persist_esr(
         db,
         tenant_id=tenant_id,

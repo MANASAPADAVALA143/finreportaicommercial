@@ -9,23 +9,31 @@ import os
 import tempfile
 import uuid
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant import get_company_id, get_tenant_id
-from app.modules.gulftax.auth_cfo import get_current_company_id
+from app.core.tenant_scope import request_workspace
+from app.modules.gulftax.auth_cfo import (
+    company_check,
+    get_current_company_id,
+    gulftax_guard,
+    tenant_and_company,
+)
 from app.modules.gulftax.classifier import classify_batch, classify_transaction
 from app.modules.gulftax.ported_mount import get_ported_db
 
-router = APIRouter(prefix="/api/gulftax", tags=["GulfTax VAT"])
+router = APIRouter(prefix="/api/gulftax", tags=["GulfTax VAT"], dependencies=[Depends(gulftax_guard)])
+public_router = APIRouter(prefix="/api/gulftax", tags=["GulfTax VAT"])
 
-# In-memory store for bulk Excel exports (job_id -> path)
-_BULK_EXCEL_PATHS: Dict[str, str] = {}
+CompanyCheck = Callable[[Optional[str]], Optional[str]]
+
+# In-memory store for bulk Excel exports (job_id -> (workspace_id, path))
+_BULK_EXCEL_PATHS: Dict[str, tuple[str, str]] = {}
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
@@ -54,7 +62,7 @@ class ClassificationResult(BaseModel):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-@router.get("/health")
+@public_router.get("/health")
 def gulftax_health():
     """GulfTax AI health check — confirms it's embedded (no port 8000 needed)."""
     return {
@@ -99,6 +107,7 @@ def classify(req: ClassifyRequest):
 
 @router.post("/classify-bulk")
 def classify_bulk(
+    request: Request,
     file: UploadFile = File(...),
     entity_type: str = Query("mainland"),
     transaction_type: str = Query("purchase"),
@@ -190,7 +199,7 @@ def classify_bulk(
         job_id = str(uuid.uuid4())
         tmp_path = os.path.join(tempfile.gettempdir(), f"gulftax_bulk_{job_id}.xlsx")
         pd.DataFrame(excel_rows).to_excel(tmp_path, index=False, sheet_name="VAT Classifications")
-        _BULK_EXCEL_PATHS[job_id] = tmp_path
+        _BULK_EXCEL_PATHS[job_id] = (request_workspace(request), tmp_path)
 
         needs_review = sum(1 for c in classifications if c["flag_for_review"])
         merged = [{**item, **clf} for item, clf in zip(items, classifications)]
@@ -220,10 +229,10 @@ def classify_bulk(
 
 
 @router.get("/classify-bulk/{job_id}/excel")
-def download_bulk_excel(job_id: str):
+def download_bulk_excel(job_id: str, request: Request):
     from fastapi.responses import FileResponse
-    path = _BULK_EXCEL_PATHS.get(job_id)
-    if not path or not os.path.isfile(path):
+    owner, path = _BULK_EXCEL_PATHS.get(job_id, (None, None))
+    if owner != request_workspace(request) or not path or not os.path.isfile(path):
         raise HTTPException(404, "Excel export not found or expired")
     return FileResponse(
         path,
@@ -234,7 +243,7 @@ def download_bulk_excel(job_id: str):
 
 # ── Proxy endpoint for gulftax-status (sidebar health check) ─────────────────
 # This replaces the old external call to localhost:8000
-@router.get("/status")
+@public_router.get("/status")
 def gulftax_status():
     """Used by the sidebar GulfTaxWidget — replaces localhost:8000 call."""
     return {"online": True, "status_code": 200, "url": "built-in", "source": "embedded"}
@@ -242,36 +251,36 @@ def gulftax_status():
 
 @router.get("/vat-return/boxes")
 def vat_return_boxes(
-    workspace_id: str = Query(..., description="FinReportAI workspace ID"),
+    request: Request,
     period: str = Query(..., description="VAT period e.g. 2025-Q1"),
+    workspace_id: Optional[str] = Query(None, description="FinReportAI workspace ID"),
 ):
     """Aggregate Box 9/10/11 from approved AP invoices (vat_return_entries)."""
     from app.services.gulftax_supabase import fetch_vat_return_boxes
-    return fetch_vat_return_boxes(workspace_id, period)
+    return fetch_vat_return_boxes(request_workspace(request, workspace_id), period)
 
 
 @router.get("/vat-return/all-boxes")
 def vat_return_all_boxes(
+    request: Request,
     company_id: str = Query(..., description="Company ID (tenant on invoices)"),
     period: str = Query(...),
     workspace_id: Optional[str] = Query(None, description="FinReportAI workspace ID"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ):
     """FTA VAT return — boxes 1–12 (sales + purchases)."""
     from app.modules.gulftax.vat_return_service import fetch_all_vat_return_boxes
 
-    ws = (workspace_id or x_workspace_id or "").strip() or company_id
     return fetch_all_vat_return_boxes(
         db,
-        workspace_id=ws,
+        workspace_id=request_workspace(request, workspace_id),
         company_id=company_id,
         period=period,
     )
 
 
 class VatPaymentRequest(BaseModel):
-    workspace_id: str
+    workspace_id: Optional[str] = None
     company_id: Optional[str] = None
     payment_date: str
     amount_aed: float = Field(..., gt=0)
@@ -283,20 +292,27 @@ class VatPaymentRequest(BaseModel):
 
 
 @router.post("/vat-return/record-payment")
-def record_vat_payment(body: VatPaymentRequest, db: Session = Depends(get_db)):
+def record_vat_payment(
+    body: VatPaymentRequest,
+    request: Request,
+    check: CompanyCheck = Depends(company_check),
+    db: Session = Depends(get_db),
+):
     """Post VAT payment JE when Box 12 is payable."""
     from datetime import date as date_cls
     from app.services.uae_journal_service import create_journal_entry
 
+    tenant = request_workspace(request, body.workspace_id)
+    company_id = check(body.company_id)
     pay_date = date_cls.fromisoformat(body.payment_date[:10])
     amt = round(body.amount_aed, 2)
     je = create_journal_entry(
-        tenant_id=body.workspace_id,
+        tenant_id=tenant,
         entry_date=pay_date,
         description=f"VAT payment to FTA {body.reference}".strip(),
         reference=body.reference or "VAT-FTA",
         source="VAT_PAYMENT",
-        company_id=body.company_id,
+        company_id=company_id,
         db=db,
         auto_post=True,
         lines=[
@@ -334,20 +350,35 @@ class SyncPeriodBody(BaseModel):
 
 
 @router.post("/sync-invoice")
-def sync_invoice_to_gulftax(body: SyncInvoiceBody):
+def sync_invoice_to_gulftax(
+    body: SyncInvoiceBody, request: Request, check: CompanyCheck = Depends(company_check)
+):
     """Push one approved AP invoice into gulftax_transactions."""
-    from app.services.gulftax_sync_service import log_sync_failure, sync_approved_invoice_to_gulftax
-
-    cid = body.company_id
-    result = sync_approved_invoice_to_gulftax(
-        body.invoice_id, cid, workspace_id=body.workspace_id
+    from app.services.gulftax_sync_service import (
+        _fetch_invoice,
+        log_sync_failure,
+        sync_approved_invoice_to_gulftax,
     )
+
+    ws = request_workspace(request, body.workspace_id)
+    cid = check(body.company_id)
+    if not cid:
+        raise HTTPException(400, detail="company_id required")
+    invoice = _fetch_invoice(body.invoice_id)
+    if not invoice:
+        raise HTTPException(404, detail="Invoice not found")
+    invoice_company = str(invoice.get("company_id") or "").strip()
+    if not invoice_company:
+        raise HTTPException(400, detail="invoice_missing_company_id")
+    if invoice_company != cid:
+        check(invoice_company)
+    result = sync_approved_invoice_to_gulftax(body.invoice_id, cid, workspace_id=ws)
     if not result.get("ok") and not result.get("skipped"):
         log_sync_failure(
             invoice_id=body.invoice_id,
             company_id=cid,
             error=result.get("error", "sync failed"),
-            workspace_id=body.workspace_id,
+            workspace_id=ws,
         )
         raise HTTPException(400, detail=result.get("error", "sync failed"))
     return result
@@ -355,17 +386,20 @@ def sync_invoice_to_gulftax(body: SyncInvoiceBody):
 
 @router.get("/transactions")
 def get_gulftax_transactions(
+    request: Request,
     tenant_id: Optional[str] = Query(None, description="Alias for company_id"),
     company_id: Optional[str] = Query(None),
     tax_period: str = Query(...),
     workspace_id: Optional[str] = Query(None),
+    check: CompanyCheck = Depends(company_check),
 ):
     from app.services.gulftax_sync_service import list_transactions
 
-    cid = company_id or tenant_id
+    ws = request_workspace(request, workspace_id)
+    cid = check(company_id or tenant_id)
     if not cid:
         raise HTTPException(400, detail="company_id or tenant_id required")
-    items = list_transactions(cid, tax_period, workspace_id=workspace_id)
+    items = list_transactions(cid, tax_period, workspace_id=ws)
     return {"items": items, "count": len(items), "tax_period": tax_period, "company_id": cid}
 
 
@@ -374,27 +408,33 @@ def vat_return_summary(
     tenant_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
     tax_period: str = Query(...),
+    check: CompanyCheck = Depends(company_check),
 ):
     from app.services.gulftax_sync_service import aggregate_vat_return_summary
 
-    cid = company_id or tenant_id
+    cid = check(company_id or tenant_id)
     if not cid:
         raise HTTPException(400, detail="company_id or tenant_id required")
     return aggregate_vat_return_summary(cid, tax_period)
 
 
 @router.post("/sync-period")
-def sync_gulftax_period(body: SyncPeriodBody, db: Session = Depends(get_db)):
+def sync_gulftax_period(
+    body: SyncPeriodBody,
+    request: Request,
+    check: CompanyCheck = Depends(company_check),
+    db: Session = Depends(get_db),
+):
     from app.services.gulftax_sync_service import sync_period
 
-    cid = body.company_id or body.tenant_id
+    cid = check(body.company_id or body.tenant_id)
     if not cid:
         raise HTTPException(400, detail="company_id or tenant_id required")
     return sync_period(
         cid,
         body.tax_period,
         db=db,
-        workspace_id=body.tenant_id,
+        workspace_id=request_workspace(request),
     )
 
 
@@ -414,6 +454,7 @@ class VatReconOverrideBody(BaseModel):
 
 @router.get("/vat-periods")
 def list_vat_periods(
+    request: Request,
     company_id: Optional[str] = Query(None),
     workspace_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
@@ -421,17 +462,17 @@ def list_vat_periods(
     """Distinct tax periods from RDS gulftax_transactions."""
     from app.services.vat_recon_service import get_vat_periods
 
-    cid = company_id or workspace_id
-    if not cid:
-        raise HTTPException(400, detail="company_id or workspace_id required")
-    tenant = workspace_id or cid
+    tenant = request_workspace(request, workspace_id)
+    cid = (company_id or "").strip() or tenant
     return {"periods": get_vat_periods(db, tenant_id=tenant, company_id=cid)}
 
 
 @router.post("/recon/run")
 def run_gulftax_recon(
     body: VatReconRunBody,
+    request: Request,
     company_id: str = Depends(get_current_company_id),
+    check: CompanyCheck = Depends(company_check),
     db: Session = Depends(get_db),
     ported_db: Session = Depends(get_ported_db),
 ):
@@ -439,8 +480,8 @@ def run_gulftax_recon(
     from app.modules.gulftax.vat_return_service import parse_period
     from app.services.vat_recon_service import run_vat_recon
 
-    cid = body.company_id or company_id
-    tenant = body.workspace_id or cid
+    cid = check(body.company_id) or company_id
+    tenant = request_workspace(request, body.workspace_id)
     period_start, period_end = parse_period(body.period)
     try:
         return run_vat_recon(
@@ -484,12 +525,13 @@ def gulftax_recon_history(
 def gulftax_recon_override(
     body: VatReconOverrideBody,
     company_id: str = Depends(get_current_company_id),
+    check: CompanyCheck = Depends(company_check),
     ported_db: Session = Depends(get_ported_db),
 ):
     """Log override reason when filing despite recon mismatches."""
     from app.services.vat_recon_service import set_recon_override
 
-    cid = body.company_id or company_id
+    cid = check(body.company_id) or company_id
     try:
         return set_recon_override(
             ported_db,
@@ -711,8 +753,8 @@ def gulftax_esr_status():
 @router.post("/esr/calculate")
 def gulftax_esr_calculate(
     body: dict[str, Any],
-    tenant_id: str = Depends(get_tenant_id),
-    company_id: str = Depends(get_company_id),
+    request: Request,
+    check: CompanyCheck = Depends(company_check),
     db: Session = Depends(get_db),
 ):
     from app.modules.gulftax.esr_filing import ESRCalculateRequest, esr_calculate
@@ -721,7 +763,7 @@ def gulftax_esr_calculate(
         req = ESRCalculateRequest(**body)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    return esr_calculate(req, tenant_id=tenant_id, company_id=company_id, db=db)
+    return esr_calculate(req, request, check, db)
 
 
 # ── Designated Zones log ──────────────────────────────────────────────────────
@@ -744,8 +786,8 @@ class DesignatedZoneLogIn(BaseModel):
 @router.post("/designated-zones/log", status_code=201)
 def gulftax_designated_zones_log(
     body: DesignatedZoneLogIn,
-    tenant_id: str = Depends(get_tenant_id),
-    company_id: str = Depends(get_company_id),
+    request: Request,
+    check: CompanyCheck = Depends(company_check),
     db: Session = Depends(get_db),
 ):
     """Log a designated-zone VAT evaluation to designated_zone_transactions."""
@@ -771,7 +813,7 @@ def gulftax_designated_zones_log(
         supplier_zone_name=zone,
         customer_zone_name=cust_zone,
     )
-    cid = (body.company_id or company_id or "").strip() or company_id
+    tenant_id, cid = tenant_and_company(request, check, body.company_id)
     return save_dz(payload, tenant_id=tenant_id, company_id=cid, db=db)
 
 
@@ -798,8 +840,8 @@ class BadDebtClaimIn(BaseModel):
 @router.post("/bad-debt/claim", status_code=201)
 def gulftax_bad_debt_claim(
     body: BadDebtClaimIn,
-    tenant_id: str = Depends(get_tenant_id),
-    company_id: str = Depends(get_company_id),
+    request: Request,
+    check: CompanyCheck = Depends(company_check),
     db: Session = Depends(get_db),
 ):
     """Save a bad debt claim — rejects duplicate invoice_number + company_id."""
@@ -812,7 +854,7 @@ def gulftax_bad_debt_claim(
     from app.models.client_data import BadDebtReliefClaim
 
     assert_write_allowed()
-    cid = (body.company_id or company_id or "").strip() or company_id
+    tenant_id, cid = tenant_and_company(request, check, body.company_id)
     inv = (body.invoice_number or "").strip()
     if not inv:
         raise HTTPException(400, "invoice_number is required")
