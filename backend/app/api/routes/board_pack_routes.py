@@ -3,23 +3,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import header_tenant as tenant_id_header
 from app.models.ifrs_statement import BoardPack, BoardPackStatus
 from app.services.board_pack_data import build_board_pack_data
 from app.services.board_pack_generator import BoardPackGenerator, count_pdf_pages
 
 router = APIRouter(tags=["board-pack"])
-
-
-def tenant_id_header(x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")) -> str:
-    return (x_tenant_id or "default").strip() or "default"
 
 
 def _board_pack_dir() -> Path:

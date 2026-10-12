@@ -3,7 +3,7 @@ IFRS Statement Generator API Routes
 Converts Trial Balance to IFRS-compliant financial statements
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends, Header
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict, Optional, Any
 import pandas as pd
@@ -13,6 +13,7 @@ from datetime import datetime
 
 from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import header_tenant
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ifrs_statement import MappingTemplate
 from app.services.ifrs_mapper import IFRSMapper
@@ -262,14 +263,13 @@ async def save_mapping_template(
 @router.get("/mapping-templates")
 async def get_mapping_templates(
     industry: Optional[str] = Query(None),
-    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
+    tid: str = Depends(header_tenant),
     db: Session = Depends(get_db),
 ):
     """
     Built-in industry templates + tenant saved templates (Week 1 DB).
     """
     templates = ifrs_mapper.get_industry_templates(industry)
-    tid = (x_tenant_id or "default").strip() or "default"
     saved = (
         db.query(MappingTemplate)
         .filter(MappingTemplate.tenant_id == tid)

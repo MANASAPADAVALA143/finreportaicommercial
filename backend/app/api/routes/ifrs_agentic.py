@@ -12,7 +12,6 @@ from fastapi import (
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     UploadFile,
     WebSocket,
@@ -28,16 +27,13 @@ from app.agents.nexus_orchestrator import (
 )
 from app.agents.packager_agent import load_export_bytes
 from app.core.database import SessionLocal, get_db
+from app.core.tenant_scope import header_tenant as tenant_id_header
 from app.models.ifrs_agentic import AgentHumanReview, AgentRun, AgentRunLog, AgentRunStatus, AgentValidation, HumanReviewStatus
 from app.models.ifrs_statement import TrialBalance
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ifrs/agentic", tags=["ifrs-agentic"])
-
-
-def tenant_id_header(x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")) -> str:
-    return (x_tenant_id or "default").strip() or "default"
 
 
 class StartBody(BaseModel):
@@ -76,6 +72,12 @@ def post_start(
     )
     if not tb:
         raise HTTPException(status_code=404, detail="Trial balance not found")
+    if body.prior_trial_balance_id is not None and not (
+        db.query(TrialBalance.id)
+        .filter(TrialBalance.id == body.prior_trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    ):
+        raise HTTPException(status_code=404, detail="Prior trial balance not found")
 
     run = create_run_record(
         db,

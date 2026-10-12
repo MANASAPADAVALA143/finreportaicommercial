@@ -13,6 +13,7 @@ class GLReconciliation(Base):
     __tablename__ = "gl_reconciliations"
 
     recon_id = Column(String(40), primary_key=True)
+    workspace_id = Column(String(128), nullable=True, index=True)
     entity_id = Column(String(128), nullable=False, index=True)
     period = Column(String(32), nullable=False, index=True)
     account_code = Column(String(64), nullable=False, index=True)

@@ -6,6 +6,8 @@ import axios from 'axios';
 import { ifrsService } from '../../services/ifrs.service';
 import { postCfoAgentRun } from '../../services/cfoAgents';
 import { useClient } from '../../context/ClientContext';
+import { useSyncIfrsTenant } from '../../hooks/useSyncIfrsTenant';
+import { getActiveWorkspaceId, workspaceHeaders } from '../../utils/workspaceHeaders';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || 'http://localhost:8000';
 const AGENTIC = `${API_BASE.replace(/\/$/, '')}/api/ifrs/agentic`;
@@ -35,17 +37,21 @@ type OutputPayload = {
   exports: { xlsx_url: string; docx_url: string; pdf_url: string };
 };
 
-function wsUrlFor(runId: string) {
+function wsUrlFor(runId: string, tenantId: string) {
   const base = API_BASE.replace(/^http/, 'ws').replace(/\/$/, '');
-  return `${base}/api/ifrs/agentic/${runId}/stream?tenant_id=${encodeURIComponent(TENANT)}`;
+  return `${base}/api/ifrs/agentic/${runId}/stream?tenant_id=${encodeURIComponent(tenantId)}`;
 }
 
 export default function AgenticGenerator() {
   const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || TENANT;
+  useSyncIfrsTenant();
+  const tenantId = activeClient?.companyId?.trim() || getActiveWorkspaceId() || TENANT;
 
-  /** Returns headers carrying the active tenant identifier */
-  const hdr = useCallback(() => ({ 'X-Tenant-Id': tenantId }), [tenantId]);
+  /** Auth + workspace headers; axios sets Content-Type per request (JSON or multipart). */
+  const hdr = useCallback(() => {
+    const { 'Content-Type': _ct, ...h } = workspaceHeaders(null);
+    return { ...h, 'X-Tenant-ID': tenantId };
+  }, [tenantId]);
 
   const [file, setFile] = useState<File | null>(null);
   const [tbId, setTbId] = useState<number | null>(null);
@@ -91,7 +97,7 @@ export default function AgenticGenerator() {
       wsRef.current = null;
       return;
     }
-    const ws = new WebSocket(wsUrlFor(runId));
+    const ws = new WebSocket(wsUrlFor(runId, tenantId));
     wsRef.current = ws;
     ws.onmessage = (ev) => {
       try {
@@ -262,11 +268,26 @@ export default function AgenticGenerator() {
     return '⏳';
   }
 
-  const dl = (kind: 'xlsx' | 'docx' | 'pdf') => {
+  const dl = async (kind: 'xlsx' | 'docx' | 'pdf') => {
     if (!runId || !output?.exports) return;
     const path = output.exports[`${kind}_url` as keyof typeof output.exports] as string;
-    const url = `${API_BASE.replace(/\/$/, '')}${path}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    try {
+      const res = await axios.get<Blob>(`${API_BASE.replace(/\/$/, '')}${path}`, {
+        headers: hdr(),
+        responseType: 'blob',
+      });
+      const name = /filename="([^"]+)"/.exec(String(res.headers['content-disposition'] || ''))?.[1];
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name || `ifrs_${runId}.${kind}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Download failed');
+    }
   };
 
   return (

@@ -27,6 +27,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.history_scope import history_key
+from app.core.tenant_scope import header_tenant as tenant_id_header
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ifrs_statement import (
     BoardPack,
     BoardPackStatus,
@@ -81,11 +84,7 @@ from app.services.tb_column_mapper import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["ifrs-week1"])
-
-
-def tenant_id_header(x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")) -> str:
-    return (x_tenant_id or "default").strip() or "default"
+router = APIRouter(tags=["ifrs-week1"], dependencies=[Depends(validate_workspace)])
 
 
 @router.get("/line-item-master")
@@ -995,12 +994,17 @@ class GenerateStatementsBody(BaseModel):
     prior_trial_balance_id: int | None = None
 
 
+def _module_company_id(db: Session, ctx: WorkspaceContext, tenant_id: str, company_id: Optional[str], level: str) -> str:
+    """IFRS 16/15/9 data is read by company id, so a caller-supplied one must pass the same access check."""
+    return history_key(db, ctx, company_id, level) if company_id else tenant_id
+
+
 @router.get("/trial-balance/{trial_balance_id}/ifrs-module-preview")
 def ifrs_module_preview(
     trial_balance_id: int,
     tenant_id: str = Depends(tenant_id_header),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
     tb = (
@@ -1014,8 +1018,8 @@ def ifrs_module_preview(
         return preview_ifrs_module_adjustments(
             db,
             trial_balance_id,
-            company_id=x_company_id or tenant_id,
-            workspace_id=x_workspace_id or tenant_id,
+            company_id=_module_company_id(db, ctx, tenant_id, x_company_id, "read"),
+            workspace_id=ctx.workspace_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1027,7 +1031,7 @@ def generate_statements(
     body: Optional[GenerateStatementsBody] = Body(default=None),
     tenant_id: str = Depends(tenant_id_header),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
     from app.services.statement_generator import ensure_prior_tb_column
@@ -1042,6 +1046,12 @@ def generate_statements(
         raise HTTPException(status_code=404, detail="Trial balance not found")
 
     opts = body or GenerateStatementsBody()
+    if opts.prior_trial_balance_id is not None and not (
+        db.query(TrialBalance.id)
+        .filter(TrialBalance.id == opts.prior_trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    ):
+        raise HTTPException(status_code=404, detail="Prior trial balance not found")
     try:
         result = generate_all_statements(
             trial_balance_id,
@@ -1049,8 +1059,8 @@ def generate_statements(
             apply_ifrs16=opts.apply_ifrs16,
             apply_ifrs15=opts.apply_ifrs15,
             apply_ifrs9=opts.apply_ifrs9,
-            company_id=opts.company_id or x_company_id or tenant_id,
-            workspace_id=x_workspace_id or tenant_id,
+            company_id=_module_company_id(db, ctx, tenant_id, opts.company_id or x_company_id, "write"),
+            workspace_id=ctx.workspace_id,
             prior_trial_balance_id=opts.prior_trial_balance_id,
         )
     except ValueError as e:

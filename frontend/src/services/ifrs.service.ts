@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getIfrsTenantId } from "./ifrsTenant";
+import { workspaceHeaders } from "../utils/workspaceHeaders";
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
 const BASE_URL = `${API_BASE.replace(/\/$/, "")}/api/ifrs`;
@@ -7,12 +8,12 @@ const BOARD_PACK_BASE = `${API_BASE.replace(/\/$/, "")}/api/board-pack`;
 
 const headers = (tenantId?: string) => {
   const tid = (tenantId && tenantId.trim()) || getIfrsTenantId();
-  const h: Record<string, string> = { "X-Tenant-ID": tid };
+  // axios picks the Content-Type itself (JSON or multipart boundary); a forced JSON one breaks FormData uploads.
+  const { "Content-Type": _ct, ...h } = workspaceHeaders(null);
+  if (tid !== "default") h["X-Tenant-ID"] = tid;
   try {
     const cid = localStorage.getItem("active_company_id");
     if (cid) h["X-Company-Id"] = cid;
-    const ws = localStorage.getItem("gnanova_workspace_id");
-    if (ws) h["X-Workspace-Id"] = ws;
   } catch {
     /* ignore */
   }

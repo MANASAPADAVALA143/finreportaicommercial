@@ -9,6 +9,16 @@ import {
   FileDown,
 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
+import { workspaceHeaders } from '../utils/workspaceHeaders';
+
+function glFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...workspaceHeaders(null),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
+  if (init.body instanceof FormData) delete headers['Content-Type'];
+  return fetch(url, { ...init, headers, credentials: 'include' });
+}
 
 type MatchTab = 'exact' | 'near' | 'suggested';
 type UnTab = 'gl' | 'bank';
@@ -92,7 +102,7 @@ export default function GLReconciler() {
 
   const loadMatches = useCallback(async () => {
     if (!base || !reconId) return;
-    const r = await fetch(
+    const r = await glFetch(
       `${base}/api/recon/gl/matches/${reconId}?page=${matchPage}&size=50&confidence=${confParam}`
     );
     if (!r.ok) return;
@@ -105,7 +115,7 @@ export default function GLReconciler() {
     if (!base || !reconId) return;
     const src = unTab;
     const cat = unCategory ? `&category=${encodeURIComponent(unCategory)}` : '';
-    const r = await fetch(`${base}/api/recon/gl/unmatched/${reconId}?source=${src}${cat}`);
+    const r = await glFetch(`${base}/api/recon/gl/unmatched/${reconId}?source=${src}${cat}`);
     if (!r.ok) return;
     const j = await r.json();
     if (unTab === 'gl') setUnmatchedGl(j.items || []);
@@ -114,13 +124,13 @@ export default function GLReconciler() {
 
   const fetchFullStatus = useCallback(async () => {
     if (!base || !reconId) return;
-    const r = await fetch(`${base}/api/recon/gl/status/${reconId}`);
+    const r = await glFetch(`${base}/api/recon/gl/status/${reconId}`);
     if (!r.ok) return;
     const j = await r.json();
     setStatus(j.status || '');
     setSummary((j.summary as Summary) || null);
     if (j.status === 'complete') {
-      const rj = await fetch(`${base}/api/recon/gl/suggested-jes/${reconId}`);
+      const rj = await glFetch(`${base}/api/recon/gl/suggested-jes/${reconId}`);
       if (rj.ok) {
         const jj = await rj.json();
         setJes(jj.items || []);
@@ -165,7 +175,7 @@ export default function GLReconciler() {
       fd.append('gl_file', glFile);
       fd.append('bank_file', bankFile);
       if (subFile) fd.append('subledger_file', subFile);
-      const r = await fetch(`${base}/api/recon/gl/start`, { method: 'POST', body: fd });
+      const r = await glFetch(`${base}/api/recon/gl/start`, { method: 'POST', body: fd });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       setReconId(j.recon_id);
@@ -182,7 +192,7 @@ export default function GLReconciler() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`${base}/api/recon/gl/run/${reconId}`, { method: 'POST' });
+      const r = await glFetch(`${base}/api/recon/gl/run/${reconId}`, { method: 'POST' });
       if (!r.ok) throw new Error(await r.text());
       await fetchFullStatus();
       await loadMatches();
@@ -196,7 +206,7 @@ export default function GLReconciler() {
 
   const markCleared = async (source: 'gl' | 'bank', rowId: string) => {
     if (!base || !reconId) return;
-    await fetch(`${base}/api/recon/gl/clear/${reconId}`, {
+    await glFetch(`${base}/api/recon/gl/clear/${reconId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source, row_id: rowId }),
@@ -207,12 +217,12 @@ export default function GLReconciler() {
 
   const jeAct = async (jeId: string, action: 'accept' | 'reject') => {
     if (!base || !reconId) return;
-    await fetch(`${base}/api/recon/gl/je-action/${reconId}`, {
+    await glFetch(`${base}/api/recon/gl/je-action/${reconId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ je_id: jeId, action }),
     });
-    const rj = await fetch(`${base}/api/recon/gl/suggested-jes/${reconId}`);
+    const rj = await glFetch(`${base}/api/recon/gl/suggested-jes/${reconId}`);
     if (rj.ok) {
       const jj = await rj.json();
       setJes(jj.items || []);
@@ -221,7 +231,7 @@ export default function GLReconciler() {
 
   const approve = async () => {
     if (!base || !reconId) return;
-    await fetch(`${base}/api/recon/gl/approve/${reconId}`, {
+    await glFetch(`${base}/api/recon/gl/approve/${reconId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approver: approver || 'Controller' }),
@@ -229,9 +239,27 @@ export default function GLReconciler() {
     void fetchFullStatus();
   };
 
+  const downloadPdf = async () => {
+    if (!base || !reconId) return;
+    const r = await glFetch(`${base}/api/recon/gl/report/${reconId}/pdf`);
+    if (!r.ok) {
+      setError(await r.text());
+      return;
+    }
+    const name = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '')?.[1];
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name || `GL_Recon_${reconId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const loadHistory = async () => {
     if (!base) return;
-    const r = await fetch(`${base}/api/recon/gl/history?entity_id=${encodeURIComponent(entityId)}`);
+    const r = await glFetch(`${base}/api/recon/gl/history?entity_id=${encodeURIComponent(entityId)}`);
     if (r.ok) {
       const j = await r.json();
       setHistory(j.recons || []);
@@ -632,7 +660,7 @@ export default function GLReconciler() {
             <section className="flex flex-wrap gap-3 items-center">
               <button
                 type="button"
-                onClick={() => reconId && window.open(`${base}/api/recon/gl/report/${reconId}/pdf`, '_blank')}
+                onClick={() => void downloadPdf()}
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm"
               >
                 <Download className="h-4 w-4" />

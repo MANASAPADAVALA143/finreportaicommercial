@@ -13,15 +13,26 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
-from app.middleware.auth import get_current_user
-from app.models.users import User
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.gl_reconciliation import GLReconciliation
 from app.services import gl_recon_engine as eng
 from app.services.gl_recon_pdf import build_gl_recon_pdf_bytes
 
-# Example auth protection added below; replicate for other endpoints in this router as needed.
-router = APIRouter(prefix="/api/recon/gl", tags=["gl-reconciliation"])
+router = APIRouter(prefix="/api/recon/gl", tags=["gl-reconciliation"], dependencies=[Depends(validate_workspace)])
+
+
+def _owned(db: Session, ctx: WorkspaceContext, recon_id: str, level: str) -> GLReconciliation:
+    require_workspace_level(db, ctx, level)
+    row = (
+        db.query(GLReconciliation)
+        .filter(GLReconciliation.recon_id == recon_id, GLReconciliation.workspace_id == ctx.workspace_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="recon_id not found")
+    return row
 
 
 def _audit(row: GLReconciliation, action: str, detail: dict | None = None) -> None:
@@ -34,7 +45,7 @@ def _audit(row: GLReconciliation, action: str, detail: dict | None = None) -> No
 @router.post("/start")
 async def start_recon(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     entity_id: str = Form(...),
     period: str = Form(...),
     account_code: str = Form(...),
@@ -45,6 +56,7 @@ async def start_recon(
     bank_file: UploadFile = File(...),
     subledger_file: Optional[UploadFile] = File(None),
 ):
+    require_workspace_level(db, ctx, "write")
     if not gl_file.filename or not bank_file.filename:
         raise HTTPException(status_code=400, detail="gl_file and bank_file are required")
     try:
@@ -100,6 +112,7 @@ async def start_recon(
 
     row = GLReconciliation(
         recon_id=recon_id,
+        workspace_id=ctx.workspace_id,
         entity_id=entity_id.strip(),
         period=period.strip(),
         account_code=account_code.strip(),
@@ -123,10 +136,8 @@ async def start_recon(
 
 
 @router.post("/run/{recon_id}")
-def run_recon(recon_id: str, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def run_recon(recon_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "write")
     snap = dict(row.snapshot_json or {})
     row.status = "matching"
     db.add(row)
@@ -175,10 +186,8 @@ def run_recon(recon_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/status/{recon_id}")
-def get_status(recon_id: str, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def get_status(recon_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "read")
     return {
         "recon_id": row.recon_id,
         "entity_id": row.entity_id,
@@ -219,10 +228,9 @@ def get_matches(
     size: int = Query(50, ge=1, le=200),
     confidence: Optional[str] = None,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+    row = _owned(db, ctx, recon_id, "read")
     m = _filter_matches(list(row.matches_json or []), confidence)
     start = (page - 1) * size
     chunk = m[start : start + size]
@@ -235,10 +243,9 @@ def get_unmatched(
     source: Optional[str] = Query(None, description="gl or bank"),
     category: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+    row = _owned(db, ctx, recon_id, "read")
     items: list = []
     if source in (None, "gl"):
         items.extend(list(row.unmatched_gl or []))
@@ -250,10 +257,8 @@ def get_unmatched(
 
 
 @router.get("/suggested-jes/{recon_id}")
-def get_suggested_jes(recon_id: str, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def get_suggested_jes(recon_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "read")
     return {"items": list(row.suggested_jes or [])}
 
 
@@ -262,10 +267,8 @@ class ApproveBody(BaseModel):
 
 
 @router.post("/approve/{recon_id}")
-def approve(recon_id: str, body: ApproveBody, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def approve(recon_id: str, body: ApproveBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "write")
     if not body.approver.strip():
         raise HTTPException(status_code=400, detail="approver required")
     row.approved_by = body.approver.strip()
@@ -282,10 +285,8 @@ class ClearBody(BaseModel):
 
 
 @router.post("/clear/{recon_id}")
-def mark_cleared(recon_id: str, body: ClearBody, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def mark_cleared(recon_id: str, body: ClearBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "write")
     summary = dict(row.summary_json or {})
     clears = list(summary.get("manual_clears", []))
     clears.append({"source": body.source, "row_id": body.row_id, "at": datetime.utcnow().isoformat() + "Z"})
@@ -310,10 +311,8 @@ class JEActionBody(BaseModel):
 
 
 @router.post("/je-action/{recon_id}")
-def je_action(recon_id: str, body: JEActionBody, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def je_action(recon_id: str, body: JEActionBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "write")
     jes = list(row.suggested_jes or [])
     found = False
     for je in jes:
@@ -332,8 +331,18 @@ def je_action(recon_id: str, body: JEActionBody, db: Session = Depends(get_db)):
 
 
 @router.get("/history")
-def history(entity_id: Optional[str] = None, account_code: Optional[str] = None, db: Session = Depends(get_db)):
-    q = db.query(GLReconciliation).order_by(GLReconciliation.created_at.desc())
+def history(
+    entity_id: Optional[str] = None,
+    account_code: Optional[str] = None,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    require_workspace_level(db, ctx, "read")
+    q = (
+        db.query(GLReconciliation)
+        .filter(GLReconciliation.workspace_id == ctx.workspace_id)
+        .order_by(GLReconciliation.created_at.desc())
+    )
     if entity_id:
         q = q.filter(GLReconciliation.entity_id == entity_id.strip())
     if account_code:
@@ -355,10 +364,8 @@ def history(entity_id: Optional[str] = None, account_code: Optional[str] = None,
 
 
 @router.get("/report/{recon_id}/pdf")
-def report_pdf(recon_id: str, db: Session = Depends(get_db)):
-    row = db.get(GLReconciliation, recon_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="recon_id not found")
+def report_pdf(recon_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    row = _owned(db, ctx, recon_id, "read")
     if row.status != "complete":
         raise HTTPException(status_code=400, detail="Complete reconciliation first")
     summary = row.summary_json or {}
