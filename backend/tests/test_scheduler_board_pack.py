@@ -54,7 +54,7 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(scheduler, "generate_board_pack_content", content)
     monkeypatch.setattr(scheduler, "generate_pdf", pdf)
-    monkeypatch.setattr(scheduler, "send_email_alert", no_email)
+    monkeypatch.setattr("app.notifications.send_email_alert", no_email)
     return recorded
 
 

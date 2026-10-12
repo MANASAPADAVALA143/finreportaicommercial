@@ -12,7 +12,6 @@ from app.agents.memory import read_agent_memory, store_agent_run, update_agent_m
 from app.board_pack_generator import generate_pdf
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.notifications import send_email_alert, send_whatsapp_alert
 
 scheduler = AsyncIOScheduler()
 _ses_scheduler_started = False
@@ -86,53 +85,68 @@ def _has_agentic_runs_schema(db) -> bool:
         return False
 
 
-async def run_variance_agent(db):
-    """Autonomous variance analysis using latest FP&A result."""
+_WORKSPACE_COLUMNS = ("workspace_id", "tenant_id")
+
+
+def _latest_row_per_workspace(db, table: str) -> dict[str, dict[str, Any]]:
+    """Newest row for each workspace. Tables without a workspace column yield nothing."""
     try:
-        if not _table_exists(db, "fpa_results"):
-            print("Variance agent skipped: fpa_results table not found")
-            return None
-        latest = db.execute(text("SELECT * FROM fpa_results ORDER BY created_at DESC LIMIT 1")).first()
-        if not latest:
-            return None
+        cols = {c.get("name") for c in inspect(db.bind).get_columns(table)}
+    except Exception:
+        return {}
+    ws_col = next((c for c in _WORKSPACE_COLUMNS if c in cols), None)
+    if ws_col is None or "created_at" not in cols:
+        print(f"{table}: no workspace column; scheduled agent skipped")
+        return {}
+    rows = db.execute(
+        text(f"SELECT * FROM {table} WHERE {ws_col} IS NOT NULL AND {ws_col} <> '' ORDER BY created_at DESC")
+    ).fetchall()
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        data = _row_to_dict(row)
+        latest.setdefault(str(data[ws_col]), data)
+    return latest
 
-        current_data = _row_to_dict(latest)
-        history = await read_agent_memory("fpa_variance", db)
-        insight = await generate_insight("fpa_variance", current_data, history)
 
-        await update_agent_memory("fpa_variance", current_data, db)
-        await store_agent_run("fpa_variance", current_data, current_data, insight, db)
+async def _run_daily_agent(db, agent: str, table: str) -> list[dict[str, Any]]:
+    """Run `agent` once per workspace on that workspace's newest `table` row, with per-workspace memory."""
+    if not _table_exists(db, table):
+        print(f"{agent} agent skipped: {table} table not found")
+        return []
+    insights: list[dict[str, Any]] = []
+    for workspace_id, current_data in _latest_row_per_workspace(db, table).items():
+        key = f"{agent}:{workspace_id}"
+        try:
+            history = await read_agent_memory(key, db)
+            insight = await generate_insight(agent, current_data, history)
+            await update_agent_memory(key, current_data, db)
+            await store_agent_run(key, current_data, current_data, insight, db, tenant_id=workspace_id)
+            insights.append(insight)
+        except Exception as exc:
+            print(f"{agent} agent error for workspace {workspace_id}: {exc}")
+    return insights
 
-        if insight.get("urgency") == "red":
-            message = f"FinReportAI ALERT\n{insight.get('what_happened', '')}\nAction: {insight.get('what_to_do', '')}"
-            await send_whatsapp_alert(message)
-            await send_email_alert("Urgent Financial Alert", insight)
-        return insight
+
+async def run_variance_agent(db) -> list[dict[str, Any]]:
+    """Autonomous variance analysis on each workspace's latest FP&A result.
+
+    Red insights surface in that workspace's brief; the global WhatsApp/email
+    alert channel is not used because it reaches a single recipient for all tenants.
+    """
+    try:
+        return await _run_daily_agent(db, "fpa_variance", "fpa_results")
     except Exception as exc:
         print(f"Variance agent error: {exc}")
-        return None
+        return []
 
 
-async def run_forecast_agent(db):
-    """Weekly forecast update using latest forecast output."""
+async def run_forecast_agent(db) -> list[dict[str, Any]]:
+    """Forecast update on each workspace's latest forecast output."""
     try:
-        if not _table_exists(db, "forecast_results"):
-            print("Forecast agent skipped: forecast_results table not found")
-            return None
-        forecast = db.execute(text("SELECT * FROM forecast_results ORDER BY created_at DESC LIMIT 1")).first()
-        if not forecast:
-            return None
-
-        current_data = _row_to_dict(forecast)
-        history = await read_agent_memory("fpa_forecast", db)
-        insight = await generate_insight("fpa_forecast", current_data, history)
-
-        await update_agent_memory("fpa_forecast", current_data, db)
-        await store_agent_run("fpa_forecast", current_data, current_data, insight, db)
-        return insight
+        return await _run_daily_agent(db, "fpa_forecast", "forecast_results")
     except Exception as exc:
         print(f"Forecast agent error: {exc}")
-        return None
+        return []
 
 
 async def run_recurring_invoices_job():
@@ -160,9 +174,7 @@ async def run_daily_watchdog():
     db = SessionLocal()
     try:
         print(f"[{datetime.now()}] Daily watchdog started")
-        variance = await run_variance_agent(db)
-        forecast = await run_forecast_agent(db)
-        alerts = [result for result in [variance, forecast] if result]
+        alerts = await run_variance_agent(db) + await run_forecast_agent(db)
         red_alerts = [a for a in alerts if a.get("urgency") == "red"]
         if red_alerts:
             print(f"RED ALERTS: {len(red_alerts)}")
