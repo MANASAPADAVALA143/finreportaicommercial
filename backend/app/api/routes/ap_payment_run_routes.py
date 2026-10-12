@@ -12,25 +12,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.services import ap_payment_run_service as svc
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/ap-invoices/payment-run", tags=["AP Payment Runs"])
-
-
-def _ws(
-    request: Request,
-    workspace_id: str | None = None,
-    x_workspace_id: str | None = None,
-) -> str:
-    return (
-        (workspace_id or "").strip()
-        or (x_workspace_id or "").strip()
-        or request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or ""
-    )
+router = APIRouter(
+    prefix="/api/ap-invoices/payment-run",
+    tags=["AP Payment Runs"],
+    dependencies=[Depends(workspace_member)],
+)
 
 
 def _company(
@@ -47,29 +39,11 @@ def _company(
 
 
 def _actor(request: Request) -> str:
-    return (
-        request.headers.get("x-user-email")
-        or request.headers.get("X-User-Email")
-        or request.headers.get("x-user-id")
-        or "system"
-    )
-
-
-def _is_cfo_like(request: Request) -> bool:
-    role = (
-        request.headers.get("x-user-role")
-        or request.headers.get("x-product-role")
-        or ""
-    ).lower()
-    return any(
-        tok in role
-        for tok in ("cfo", "admin", "owner", "finance_manager", "full_access")
-    )
-
+    return request_user_email(request) or "system"
 
 class CreateRunIn(BaseModel):
     invoice_ids: list[str] = Field(..., min_length=1)
-    workspace_id: str
+    workspace_id: Optional[str] = None
     company_id: str
     payment_date: Optional[str] = None
     bank_account: Optional[str] = None
@@ -88,14 +62,13 @@ def list_payment_runs(
     status: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id)
-    if not ws or not cid:
-        raise HTTPException(status_code=400, detail="workspace_id and company_id required")
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id required")
 
     df = date.fromisoformat(date_from) if date_from else None
     dt = date.fromisoformat(date_to) if date_to else None
@@ -126,14 +99,13 @@ def list_eligible(
     amount_max: Optional[float] = Query(None),
     category: Optional[str] = Query(None),
     property_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id)
-    if not ws or not cid:
-        raise HTTPException(status_code=400, detail="workspace_id and company_id required")
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id required")
 
     d_from, d_to = svc.default_due_window()
     if due_from:
@@ -170,14 +142,13 @@ def payment_run_monthly_stats(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id)
-    if not ws or not cid:
-        raise HTTPException(status_code=400, detail="workspace_id and company_id required")
+    if not cid:
+        raise HTTPException(status_code=400, detail="company_id required")
     return svc.monthly_dashboard_stats(db, workspace_id=ws, company_id=cid)
 
 
@@ -191,7 +162,7 @@ def create_payment_run(
         pay_d = date.fromisoformat(body.payment_date[:10]) if body.payment_date else None
         run = svc.create_payment_run(
             db,
-            workspace_id=body.workspace_id.strip(),
+            workspace_id=request_workspace(request, body.workspace_id),
             company_id=body.company_id.strip(),
             invoice_ids=body.invoice_ids,
             created_by=_actor(request),
@@ -211,14 +182,11 @@ def get_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
-    if not ws:
-        raise HTTPException(status_code=400, detail="workspace_id required")
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
         raise HTTPException(status_code=404, detail="Payment run not found")
@@ -234,11 +202,10 @@ def submit_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -256,14 +223,11 @@ def approve_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
+    _manager: WorkspaceContext = Depends(workspace_manager),
 ) -> dict[str, Any]:
-    role = (request.headers.get("x-user-role") or request.headers.get("x-product-role") or "").strip()
-    if role and not _is_cfo_like(request):
-        raise HTTPException(status_code=403, detail="CFO approval required")
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -282,14 +246,11 @@ def reject_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
+    _manager: WorkspaceContext = Depends(workspace_manager),
 ) -> dict[str, Any]:
-    role = (request.headers.get("x-user-role") or request.headers.get("x-product-role") or "").strip()
-    if role and not _is_cfo_like(request):
-        raise HTTPException(status_code=403, detail="CFO approval required")
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -307,11 +268,10 @@ def cancel_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -329,11 +289,10 @@ def execute_payment_run(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -356,11 +315,10 @@ def download_bank_file(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> Response:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:
@@ -382,11 +340,10 @@ def download_remittance(
     request: Request,
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> Response:
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     cid = _company(request, company_id, x_company_id) or None
     run = svc.get_run(db, run_id=run_id, workspace_id=ws, company_id=cid)
     if not run:

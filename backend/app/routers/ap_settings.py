@@ -8,13 +8,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
+from app.core.database import get_db
+from app.core.tenant_scope import platform_admin, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.services.ap_settings_service import get_app_settings, get_company_settings
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/ap", tags=["ap-settings"])
+router = APIRouter(prefix="/api/ap", tags=["ap-settings"], dependencies=[Depends(workspace_member)])
 
 _BACKEND = Path(__file__).resolve().parents[2]
 _BOOTSTRAP_SCRIPT = _BACKEND / "scripts" / "bootstrap_ap_supabase.py"
@@ -28,8 +33,16 @@ def read_app_settings() -> dict[str, str]:
 
 
 @router.get("/company-settings")
-def read_company_settings(company_id: str | None = Query(default=None)) -> dict[str, Any]:
-    return get_company_settings(company_id)
+def read_company_settings(
+    request: Request,
+    company_id: str | None = Query(default=None),
+    ctx: WorkspaceContext = Depends(workspace_member),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    raw = company_id or request.headers.get("x-company-id")
+    if not (raw or "").strip():
+        return {}
+    return get_company_settings(require_company_access(db, ctx, raw, "read"))
 
 
 @router.get("/properties")
@@ -68,7 +81,7 @@ def list_demo_properties() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Failed to load properties: {exc}") from exc
 
 
-@router.post("/bootstrap-supabase-tables")
+@router.post("/bootstrap-supabase-tables", dependencies=[Depends(platform_admin)])
 def bootstrap_supabase_tables() -> dict[str, str]:
     """
     Apply 017_ap_missing_core_tables.sql when SUPABASE_DB_URL is set in backend/.env.
@@ -101,7 +114,7 @@ def bootstrap_supabase_tables() -> dict[str, str]:
     return {"message": "Applied 017_ap_missing_core_tables.sql", "output": (proc.stdout or "").strip()}
 
 
-@router.post("/bootstrap-training-tables")
+@router.post("/bootstrap-training-tables", dependencies=[Depends(platform_admin)])
 def bootstrap_training_tables() -> dict[str, str]:
     """Apply 022_ap_training_tables.sql when SUPABASE_DB_URL is set."""
     db_url = (os.getenv("SUPABASE_DB_URL") or "").strip()

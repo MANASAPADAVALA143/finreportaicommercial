@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_member
+from app.middleware.workspace import WorkspaceContext
 
 router = APIRouter(prefix="/api/ap/purchase-orders", tags=["AP Purchase Orders"])
 
@@ -21,15 +24,14 @@ class BulkUpsertPosIn(BaseModel):
 @router.post("/bulk")
 def bulk_upsert_purchase_orders(
     body: BulkUpsertPosIn,
+    ctx: WorkspaceContext = Depends(workspace_member),
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
 ) -> dict[str, Any]:
-    """Excel / bulk import path — Supabase service role so browser RLS cannot block."""
-    _ = db, x_tenant_id, x_workspace_id
+    """Excel / bulk import path — Supabase service role, so the company check here is the only guard."""
     from app.services.ap_bulk_invoice_service import bulk_upsert_purchase_orders as _bulk
 
-    return _bulk(company_id=body.company_id.strip(), rows=body.purchase_orders)
+    cid = require_company_access(db, ctx, body.company_id, "write")
+    return _bulk(company_id=cid, rows=body.purchase_orders)
 
 
 class EnsureWorkspacePosIn(BaseModel):
@@ -39,12 +41,11 @@ class EnsureWorkspacePosIn(BaseModel):
 @router.post("/ensure-workspace-matches")
 def ensure_workspace_matches(
     body: EnsureWorkspacePosIn,
+    ctx: WorkspaceContext = Depends(workspace_member),
     db: Session = Depends(get_db),
-    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
-    x_workspace_id: str | None = Header(default=None, alias="X-Workspace-Id"),
 ) -> dict[str, Any]:
     """Copy missing POs from sibling workspace companies and relink GRNs + fill property_ref."""
-    _ = db, x_tenant_id, x_workspace_id
     from app.services.ap_bulk_invoice_service import ensure_workspace_pos_and_relink_grns
 
-    return ensure_workspace_pos_and_relink_grns(company_id=body.company_id.strip())
+    cid = require_company_access(db, ctx, body.company_id, "write")
+    return ensure_workspace_pos_and_relink_grns(company_id=cid)

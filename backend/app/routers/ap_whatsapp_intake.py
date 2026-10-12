@@ -1,13 +1,16 @@
 """Meta WhatsApp Business API inbound invoice webhook."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 
 from app.services.ap_ses_intake_service import (
@@ -30,6 +33,14 @@ def _token() -> str:
 
 def _phone_number_id() -> str:
     return (os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()
+
+
+def _valid_meta_signature(body: bytes, received: str | None) -> bool:
+    secret = (os.getenv("WHATSAPP_APP_SECRET") or "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="WHATSAPP_APP_SECRET not configured")
+    expected = "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, (received or "").strip().lower())
 
 
 def _verify_token() -> str:
@@ -106,10 +117,16 @@ async def verify_whatsapp_webhook(
 
 
 @router.post("/webhook")
-async def receive_whatsapp_webhook(request: Request) -> dict[str, Any]:
-    """Always HTTP 200 so Meta does not retry aggressively."""
+async def receive_whatsapp_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+) -> dict[str, Any]:
+    """Signed by Meta with the app secret; otherwise always HTTP 200 so Meta does not retry aggressively."""
+    raw = await request.body()
+    if not _valid_meta_signature(raw, x_hub_signature_256):
+        raise HTTPException(status_code=401, detail="Invalid signature")
     try:
-        body = await request.json()
+        body = json.loads(raw)
     except Exception:
         return {"ok": True}
 

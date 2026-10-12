@@ -5,6 +5,7 @@
  * match Payment Calendar overdue totals from live invoice due_dates.
  */
 import { getMyCompany } from './companyService';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import {
   getAgingInvoices as getAgingInvoicesLocal,
   getAgingSummary as getAgingSummaryLocal,
@@ -61,7 +62,9 @@ async function fetchApAgingFromApi(): Promise<ApAgingResponse | null> {
     const company = await getMyCompany();
     const companyId = company?.id ?? null;
     const qs = companyId ? `?company_id=${encodeURIComponent(companyId)}` : '';
-    const res = await fetch(`${API_BASE}/api/ap/aging${qs}`);
+    const res = await fetch(`${API_BASE}/api/ap/aging${qs}`, {
+      headers: workspaceHeaders(getStoredAccessToken()),
+    });
     if (!res.ok) return null;
     return (await res.json()) as ApAgingResponse;
   } catch (e) {

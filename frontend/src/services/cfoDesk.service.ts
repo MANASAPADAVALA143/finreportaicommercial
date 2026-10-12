@@ -1,17 +1,9 @@
 /** CFO Operating Desk API — workspace-aware fetches */
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  const cid = localStorage.getItem('active_company_id');
-  const h: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
-  const token = localStorage.getItem('accessToken') ?? localStorage.getItem('access_token');
-  if (token) h.Authorization = `Bearer ${token}`;
-  return h;
+  return workspaceHeaders(getStoredAccessToken());
 }
 
 function companyQs(extra: Record<string, string> = {}): string {

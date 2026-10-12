@@ -31,14 +31,18 @@ PUBLIC_PREFIXES = (
     "/api/auth/reset-password",
     "/api/v1/auth",
     "/api/voice",
-    "/api/gulftax/einvoicing/asp-webhook",
+    # n8n server-to-server calls, verified by X-N8N-Signature in the route
+    "/api/gulftax/einvoicing/asp/inbound",
+    "/api/vat/n8n/inbound",
+    "/api/ct/n8n/inbound",
+    "/api/automations/n8n/inbound",
+    "/api/ap/n8n",
     "/api/ap/integrations/zoho/callback",
     "/api/ap/integrations/qbo/callback",
     "/api/connections/zoho/callback",
     "/api/uae/zoho/callback",
     "/api/uae/qbo/callback",
     "/api/ap/whatsapp-intake/webhook",
-    "/api/ap/app-settings",
     # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
     "/api/agent/extract-image",
 )

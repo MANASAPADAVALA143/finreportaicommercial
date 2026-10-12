@@ -22,7 +22,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.AP_API_BASE}}/api/ap/cfo-daily-summary",
+        "url": "={{$env.AP_API_BASE}}/api/ap/n8n/cfo-daily-summary",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
@@ -31,6 +31,10 @@
             {
               "name": "Content-Type",
               "value": "application/json"
+            },
+            {
+              "name": "X-N8N-Signature",
+              "value": "={{$env.N8N_WEBHOOK_SECRET}}"
             }
           ]
         },

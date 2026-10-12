@@ -19,43 +19,6 @@ def _sb():
     return get_supabase()
 
 
-def assert_company_member_access(
-    company_id: str,
-    *,
-    user_id: str | None,
-    user_email: str | None,
-    is_super_admin: bool = False,
-) -> None:
-    if is_super_admin:
-        return
-    sb = _sb()
-    if user_id:
-        res = (
-            sb.table("company_members")
-            .select("id")
-            .eq("company_id", company_id)
-            .eq("user_id", user_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return
-    if user_email:
-        res = (
-            sb.table("company_members")
-            .select("id")
-            .eq("company_id", company_id)
-            .eq("email", user_email)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
-        )
-        if res.data:
-            return
-    raise PermissionError("Not authorized for this company")
-
-
 def get_active_consent(company_id: str) -> dict[str, Any] | None:
     sb = _sb()
     res = (

@@ -2,6 +2,7 @@
 
 import { backendOrigin } from '../../utils/backendOrigin';
 import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
+import { getStoredWorkspaceId } from '../../services/workspaceService';
 
 const BASE = `${backendOrigin()}/api/ap-invoices/payment-run`;
 
@@ -10,25 +11,13 @@ function companyId(): string {
 }
 
 function workspaceId(): string {
-  return (
-    localStorage.getItem('gnanova_workspace_id') ||
-    localStorage.getItem('active_workspace_id') ||
-    localStorage.getItem('tenantId') ||
-    ''
-  );
+  return getStoredWorkspaceId() || '';
 }
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
   const h = workspaceHeaders(getStoredAccessToken(), extra);
   const cid = companyId();
   if (cid) h['X-Company-Id'] = cid;
-  const role =
-    localStorage.getItem('product_role') ||
-    localStorage.getItem('user_role') ||
-    '';
-  if (role) h['X-Product-Role'] = role;
-  const email = localStorage.getItem('user_email') || localStorage.getItem('ap_user_email') || '';
-  if (email) h['X-User-Email'] = email;
   return h;
 }
 

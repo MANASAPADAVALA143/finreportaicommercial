@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.company_access import AccessLevel, require_workspace_level
+from app.core.company_access import AccessLevel, is_super_admin, require_workspace_level
 from app.core.database import get_db
 from app.core.history_scope import history_key
 from app.middleware.workspace import WorkspaceContext, validate_workspace
@@ -48,6 +48,13 @@ def workspace_manager(
 ) -> WorkspaceContext:
     """Route guard for approvals, control changes and bulk deletes: owner or finance manager only."""
     require_workspace_level(db, ctx, "manage")
+    return ctx
+
+
+def platform_admin(ctx: WorkspaceContext = Depends(validate_workspace)) -> WorkspaceContext:
+    """Route guard for deployment-wide settings shared by every workspace: super admins only."""
+    if not is_super_admin(ctx):
+        raise HTTPException(status_code=403, detail="Only platform admins can change shared settings")
     return ctx
 
 

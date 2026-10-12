@@ -11,14 +11,57 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import RedirectResponse
+import re
+from datetime import timedelta
 
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from jose import JWTError, jwt
+
+from app.core.config import settings
+from app.core.tenant_scope import platform_admin, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.services.ap_settings_service import get_app_setting, upsert_app_setting
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/ap/integrations", tags=["AP Integrations"])
+router = APIRouter(prefix="/api/ap/integrations", tags=["AP Integrations"], dependencies=[Depends(workspace_member)])
+# OAuth providers redirect the browser here without our bearer token; the signed `state` is the guard.
+callback_router = APIRouter(prefix="/api/ap/integrations", tags=["AP Integrations"])
+
+_STATE_TTL = timedelta(minutes=15)
+_ZOHO_DOMAINS = re.compile(r"^(com|eu|in|com\.au|jp|ca|com\.cn|sa|uk)$")
+
+
+def _oauth_state(provider: str, ctx: WorkspaceContext) -> str:
+    claims = {
+        "typ": "ap_oauth_state",
+        "provider": provider,
+        "sub": str(getattr(ctx.user, "id", "")),
+        "exp": datetime.now(timezone.utc) + _STATE_TTL,
+    }
+    return jwt.encode(claims, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def _check_state(provider: str, state: str | None) -> None:
+    try:
+        claims = jwt.decode(state or "", settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        claims = {}
+    if claims.get("typ") != "ap_oauth_state" or claims.get("provider") != provider:
+        raise HTTPException(400, detail="Invalid or expired OAuth state; start the connection again")
+
+
+def _zoho_domain(value: str) -> str:
+    domain = value.lstrip(".")
+    if not _ZOHO_DOMAINS.match(domain):
+        raise HTTPException(400, detail="Unknown Zoho data centre")
+    return domain
+
+
+def _error_redirect(provider: str, exc: Exception) -> RedirectResponse:
+    query = urlencode({"error": provider, "detail": str(exc)[:300]})
+    return RedirectResponse(f"{FRONTEND_URL}/ap-invoices/integrations?{query}")
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 ZOHO_REDIRECT = os.getenv(
@@ -79,7 +122,7 @@ def _record_sync(provider: str, ok: bool, message: str, count: int = 0) -> None:
 # ── Zoho OAuth ─────────────────────────────────────────────────────────────────
 
 @router.get("/zoho/auth-url")
-def zoho_auth_url() -> dict[str, str]:
+def zoho_auth_url(ctx: WorkspaceContext = Depends(platform_admin)) -> dict[str, str]:
     client_id, _, domain = _zoho_creds()
     accounts = f"https://accounts.zoho.{domain}"
     params = urlencode(
@@ -90,20 +133,22 @@ def zoho_auth_url() -> dict[str, str]:
             "redirect_uri": ZOHO_REDIRECT,
             "access_type": "offline",
             "prompt": "consent",
-            "state": "ap",
+            "state": _oauth_state("zoho", ctx),
         }
     )
     return {"auth_url": f"{accounts}/oauth/v2/auth?{params}"}
 
 
-@router.get("/zoho/callback")
+@callback_router.get("/zoho/callback")
 def zoho_callback(
     code: str = Query(...),
+    state: str | None = Query(default=None),
     location: str | None = Query(default=None),
 ):
+    _check_state("zoho", state)
     client_id, client_secret, domain = _zoho_creds()
     if location:
-        domain = location.lstrip(".") if location.startswith(".") else location
+        domain = _zoho_domain(location)
     accounts = f"https://accounts.zoho.{domain}"
 
     try:
@@ -134,9 +179,7 @@ def zoho_callback(
             org_id = str(orgs[0].get("organization_id", "")) if orgs else ""
     except Exception as exc:
         log.exception("Zoho AP OAuth failed")
-        return RedirectResponse(
-            f"{FRONTEND_URL}/ap-invoices/integrations?error=zoho&detail={exc}"
-        )
+        return _error_redirect("zoho", exc)
 
     upsert_app_setting("zoho_client_id", client_id)
     upsert_app_setting("zoho_client_secret", client_secret)
@@ -158,7 +201,7 @@ def zoho_callback(
 # ── QuickBooks OAuth ───────────────────────────────────────────────────────────
 
 @router.get("/qbo/auth-url")
-def qbo_auth_url() -> dict[str, str]:
+def qbo_auth_url(ctx: WorkspaceContext = Depends(platform_admin)) -> dict[str, str]:
     client_id, _, _ = _qbo_creds()
     params = urlencode(
         {
@@ -166,17 +209,19 @@ def qbo_auth_url() -> dict[str, str]:
             "scope": QBO_SCOPE,
             "redirect_uri": QBO_REDIRECT,
             "response_type": "code",
-            "state": "ap",
+            "state": _oauth_state("qbo", ctx),
         }
     )
     return {"auth_url": f"https://appcenter.intuit.com/connect/oauth2?{params}"}
 
 
-@router.get("/qbo/callback")
+@callback_router.get("/qbo/callback")
 def qbo_callback(
     code: str = Query(...),
+    state: str | None = Query(default=None),
     realmId: str = Query(default=""),
 ):
+    _check_state("qbo", state)
     client_id, client_secret, environment = _qbo_creds()
     import base64
 
@@ -204,9 +249,7 @@ def qbo_callback(
             refresh_token = tokens.get("refresh_token", "")
     except Exception as exc:
         log.exception("QBO AP OAuth failed")
-        return RedirectResponse(
-            f"{FRONTEND_URL}/ap-invoices/integrations?error=qbo&detail={exc}"
-        )
+        return _error_redirect("qbo", exc)
 
     upsert_app_setting("qb_client_id", client_id)
     upsert_app_setting("qb_client_secret", client_secret)
@@ -270,7 +313,7 @@ def integration_status() -> dict[str, Any]:
     }
 
 
-@router.post("/zoho/sync")
+@router.post("/zoho/sync", dependencies=[Depends(platform_admin)])
 async def sync_zoho() -> dict[str, Any]:
     """Refresh Zoho token and verify API access (bill list probe)."""
     refresh = get_app_setting("zoho_refresh_token")
@@ -318,7 +361,7 @@ async def sync_zoho() -> dict[str, Any]:
     return {"ok": True, "message": msg, "count": int(count)}
 
 
-@router.post("/quickbooks/sync")
+@router.post("/quickbooks/sync", dependencies=[Depends(platform_admin)])
 async def sync_quickbooks() -> dict[str, Any]:
     """Refresh QBO token and verify API access."""
     refresh = get_app_setting("qb_refresh_token")

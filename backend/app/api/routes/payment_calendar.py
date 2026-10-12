@@ -3,10 +3,11 @@ import anthropic
 import json
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.services import cfo_uae_data_service as uae_cfo
 from sqlalchemy.orm import Session
 
-router = APIRouter(prefix="/api/payment-calendar", tags=["payment-calendar"])
+router = APIRouter(prefix="/api/payment-calendar", tags=["payment-calendar"], dependencies=[Depends(workspace_member)])
 
 
 @router.get("/weeks")
@@ -15,9 +16,7 @@ async def get_payment_calendar(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
-    if not ws or ws == "demo":
-        return uae_cfo.empty_payment_calendar()
+    ws = request_workspace(request)
     if uae_cfo.has_uae_transactions(db, ws, company_id):
         return uae_cfo.build_payment_calendar(db, ws, company_id)
     return uae_cfo.empty_payment_calendar()
@@ -29,10 +28,10 @@ async def payment_calendar_insight(
     company_id: str | None = None,
     db: Session = Depends(get_db),
 ):
-    ws = request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or ""
+    ws = request_workspace(request)
     data = (
         uae_cfo.build_payment_calendar(db, ws, company_id)
-        if ws and ws != "demo" and uae_cfo.has_uae_transactions(db, ws, company_id)
+        if uae_cfo.has_uae_transactions(db, ws, company_id)
         else uae_cfo.empty_payment_calendar()
     )
     if not data.get("weeks"):

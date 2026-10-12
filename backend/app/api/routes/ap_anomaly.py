@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.core.tenant_scope import workspace_member
 from app.services.ap_anomaly_engine import detect_batch
 
-router = APIRouter(prefix="/api/ap", tags=["ap-anomaly"])
+router = APIRouter(prefix="/api/ap", tags=["ap-anomaly"], dependencies=[Depends(workspace_member)])
 
 
 class DetectRequest(BaseModel):

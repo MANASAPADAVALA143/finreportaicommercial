@@ -1,10 +1,7 @@
 """GulfTax E-Invoicing — unified Peppol PINT AE API."""
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
-import secrets
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Literal, Optional
 
@@ -15,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.n8n_auth import require_n8n_signature
 from app.core.tenant_scope import request_workspace
 from app.models.client_data import EinvoicingSubmission
 from app.models.company_setup import UaeCompanyProfile
@@ -667,15 +665,6 @@ async def redrive_asp_submission(
     return {"submission_id": submission_id, "status": "pending"}
 
 
-def _valid_n8n_signature(secret: str, body: bytes, received: str) -> bool:
-    """HMAC-SHA256 hex over the raw body, or the plain shared secret (same as the n8n inbound hooks)."""
-    received = (received or "").strip()
-    if not received:
-        return False
-    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, received.lower()) or secrets.compare_digest(received, secret)
-
-
 @inbound_router.post("/asp/inbound")
 async def asp_inbound_status(
     request: Request,
@@ -683,12 +672,8 @@ async def asp_inbound_status(
     x_n8n_signature: Optional[str] = Header(default=None, alias="X-N8N-Signature"),
 ):
     """n8n callback to update ASP submission status (signed with N8N_WEBHOOK_SECRET)."""
-    secret = os.getenv("N8N_WEBHOOK_SECRET")
-    if not secret:
-        raise HTTPException(500, "N8N_WEBHOOK_SECRET is not configured")
     raw = await request.body()
-    if not _valid_n8n_signature(secret, raw, x_n8n_signature or ""):
-        raise HTTPException(401, "Invalid signature")
+    require_n8n_signature(raw, x_n8n_signature)
     try:
         body = AspInboundRequest.model_validate_json(raw)
     except ValidationError as exc:

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.routes import ap_payment_run_routes as pr
+from app.core.tenant_scope import workspace_member
 
-router = APIRouter(prefix="/api/ap/payment-runs", tags=["AP Payment Runs"])
+router = APIRouter(prefix="/api/ap/payment-runs", tags=["AP Payment Runs"], dependencies=[Depends(workspace_member)])
 
 router.add_api_route("", pr.list_payment_runs, methods=["GET"])
 router.add_api_route("/eligible", pr.list_eligible, methods=["GET"])

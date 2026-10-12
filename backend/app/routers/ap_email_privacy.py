@@ -3,25 +3,29 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
+from app.core.database import get_db
+from app.core.tenant_scope import workspace_manager, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.services.ap_email_privacy_service import (
     EMAIL_INVOICE_CONSENT_VERSION,
-    assert_company_member_access,
     get_active_consent,
     purge_email_intake_data,
     record_consent,
     suggest_forwarding_address,
 )
 
-router = APIRouter(prefix="/api/ap/email-intake", tags=["ap-email-privacy"])
+router = APIRouter(prefix="/api/ap/email-intake", tags=["ap-email-privacy"], dependencies=[Depends(workspace_member)])
 
 
 class ConsentRecordBody(BaseModel):
     company_id: str
-    accepted_by_user_id: Optional[str] = None
-    accepted_by_email: Optional[str] = None
+    accepted_by_user_id: Optional[str] = None  # ignored: consent is recorded for the signed-in user
+    accepted_by_email: Optional[str] = None  # ignored: consent is recorded for the signed-in user
     consent_version: str = Field(default=EMAIL_INVOICE_CONSENT_VERSION)
 
 
@@ -39,21 +43,16 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
-def _actor(request: Request) -> tuple[str | None, str | None, bool]:
-    user_id = getattr(request.state, "user_id", None) or None
-    role = getattr(request.state, "user_role", None) or ""
-    return user_id, None, role == "super_admin"
-
-
 @router.get("/consent")
-def read_email_intake_consent(company_id: str, request: Request) -> dict[str, Any]:
+def read_email_intake_consent(
+    company_id: str,
+    ctx: WorkspaceContext = Depends(workspace_member),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """Return active consent for company (if any) and current terms version."""
-    user_id, _, is_super = _actor(request)
+    company_id = require_company_access(db, ctx, company_id, "read")
     try:
-        assert_company_member_access(company_id, user_id=user_id, user_email=None, is_super_admin=is_super)
         active = get_active_consent(company_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Consent lookup failed: {exc}") from exc
     return {
@@ -66,31 +65,29 @@ def read_email_intake_consent(company_id: str, request: Request) -> dict[str, An
 
 
 @router.post("/consent")
-def accept_email_intake_consent(body: ConsentRecordBody, request: Request) -> dict[str, Any]:
+def accept_email_intake_consent(
+    body: ConsentRecordBody,
+    request: Request,
+    ctx: WorkspaceContext = Depends(workspace_member),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """Record explicit consent before activating email forwarding."""
     if body.consent_version != EMAIL_INVOICE_CONSENT_VERSION:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported consent_version. Expected {EMAIL_INVOICE_CONSENT_VERSION}.",
         )
-    user_id, _, is_super = _actor(request)
+    company_id = require_company_access(db, ctx, body.company_id, "write")
+    user = ctx.user
     try:
-        assert_company_member_access(
-            body.company_id,
-            user_id=user_id or body.accepted_by_user_id,
-            user_email=body.accepted_by_email,
-            is_super_admin=is_super,
-        )
         row = record_consent(
-            company_id=body.company_id,
-            accepted_by_user_id=body.accepted_by_user_id or user_id,
-            accepted_by_email=body.accepted_by_email,
+            company_id=company_id,
+            accepted_by_user_id=str(user.id) if user else None,
+            accepted_by_email=getattr(user, "email", None),
             consent_version=body.consent_version,
             ip_address=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"consent": row, "message": "Consent recorded"}
@@ -102,16 +99,17 @@ def suggested_forwarding_address(company_slug: str) -> dict[str, str]:
 
 
 @router.post("/erasure")
-def erase_email_intake_data(body: ErasureBody, request: Request) -> dict[str, Any]:
+def erase_email_intake_data(
+    body: ErasureBody,
+    ctx: WorkspaceContext = Depends(workspace_manager),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """Purge email intake data when client withdraws consent or offboards."""
     if not body.confirm:
         raise HTTPException(status_code=400, detail="Set confirm=true to execute erasure")
-    user_id, _, is_super = _actor(request)
+    company_id = require_company_access(db, ctx, body.company_id, "manage")
     try:
-        assert_company_member_access(body.company_id, user_id=user_id, user_email=None, is_super_admin=is_super)
-        counts = purge_email_intake_data(body.company_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        counts = purge_email_intake_data(company_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return {"company_id": body.company_id, "purged": counts}
+    return {"company_id": company_id, "purged": counts}
