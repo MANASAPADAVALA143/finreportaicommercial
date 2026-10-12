@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_member, workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.models.india_accounting import (
     IndiaAccount, IndiaJournalEntry, IndiaJournalLine,
     IndiaCustomer, IndiaVendor,
@@ -41,28 +43,26 @@ from app.services.india_payroll_service import (
     run_payroll, post_payroll, seed_sample_employees,
 )
 
-router = APIRouter(prefix="/api/india/full", tags=["India Accounting"])
+router = APIRouter(
+    prefix="/api/india/full",
+    tags=["India Accounting"],
+    dependencies=[Depends(workspace_reader)],
+)
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-def _tenant(request_headers) -> str:
-    from fastapi import Request
-    return "demo"
+def tenant_header(ctx: WorkspaceContext = Depends(workspace_member)) -> str:
+    """Rows are keyed by the validated workspace, never the raw X-Tenant-ID header.
+    Routes that touch tenant rows need write access for non-GET methods; stateless calculators only read."""
+    return ctx.workspace_id
 
 
-def get_tenant(db: Session = Depends(get_db)):
-    return db
-
-
-# Helper to get tenant from header
-from fastapi import Header
-
-
-def tenant_header(x_tenant_id: str = Header(default="demo")) -> str:
-    return x_tenant_id
+def _require_owned(db: Session, model, row_id: Optional[str], tenant: str, label: str) -> None:
+    if row_id and not db.query(model).filter_by(id=row_id, tenant_id=tenant).first():
+        raise HTTPException(404, f"{label} not found")
 
 
 class TdsCalcIn(BaseModel):
@@ -496,6 +496,7 @@ def create_sales_invoice(
     tenant: str = Depends(tenant_header),
     db: Session = Depends(get_db),
 ):
+    _require_owned(db, IndiaCustomer, body.customer_id, tenant, "Customer")
     # Auto invoice number
     count = db.query(IndiaSalesInvoice).filter_by(tenant_id=tenant).count()
     inv_no = body.invoice_number or f"INV-{date.fromisoformat(body.invoice_date).year}-{count+1:04d}"
@@ -671,7 +672,7 @@ def _export_row_dicts(db: Session, tenant: str, status: Optional[str] = None) ->
 
     rows = []
     for inv in invoices:
-        vendor = db.get(IndiaVendor, inv.vendor_id)
+        vendor = db.query(IndiaVendor).filter_by(id=inv.vendor_id, tenant_id=tenant).first()
         first_line = (
             db.query(IndiaPurchaseInvoiceLine)
             .filter_by(invoice_id=inv.id)
@@ -742,6 +743,7 @@ def create_purchase_invoice(
     tenant: str = Depends(tenant_header),
     db: Session = Depends(get_db),
 ):
+    _require_owned(db, IndiaVendor, body.vendor_id, tenant, "Vendor")
     subtotal = cgst_amt = sgst_amt = igst_amt = 0.0
     line_objs = []
 
@@ -1042,6 +1044,7 @@ def create_tds(
     tenant: str = Depends(tenant_header),
     db: Session = Depends(get_db),
 ):
+    _require_owned(db, IndiaVendor, body.vendor_id, tenant, "Vendor")
     entry = create_tds_entry(
         db, tenant, period,
         body.deductee_name, body.deductee_pan or "",

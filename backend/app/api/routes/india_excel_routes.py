@@ -23,12 +23,15 @@ import re
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill, numbers
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_member, workspace_reader
+from app.middleware.workspace import WorkspaceContext
 from app.models.india_accounting import (
     IndiaCustomer, IndiaJournalEntry, IndiaJournalLine,
     IndiaPurchaseInvoice, IndiaPurchaseInvoiceLine,
@@ -36,7 +39,12 @@ from app.models.india_accounting import (
 )
 from app.services.india_gst_service import calc_gst
 
-router = APIRouter(tags=["India Excel & Sheets"])
+router = APIRouter(tags=["India Excel & Sheets"], dependencies=[Depends(workspace_reader)])
+
+_VENDOR_JOIN = and_(
+    IndiaPurchaseInvoice.vendor_id == IndiaVendor.id,
+    IndiaVendor.tenant_id == IndiaPurchaseInvoice.tenant_id,
+)
 
 NAVY = "0A1628"
 WHITE = "FFFFFF"
@@ -68,8 +76,10 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
-def tenant_header(x_tenant_id: str = Header(default="demo")) -> str:
-    return x_tenant_id
+def tenant_header(ctx: WorkspaceContext = Depends(workspace_member)) -> str:
+    """Rows are keyed by the validated workspace, never the raw X-Tenant-ID header.
+    Routes that touch tenant rows need write access for non-GET methods; stateless extractors only read."""
+    return ctx.workspace_id
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -327,7 +337,7 @@ def export_purchase_invoices_excel(
 ):
     """Export all India purchase invoices (optionally filtered by period) to Excel."""
     q = db.query(IndiaPurchaseInvoice, IndiaVendor).outerjoin(
-        IndiaVendor, IndiaPurchaseInvoice.vendor_id == IndiaVendor.id
+        IndiaVendor, _VENDOR_JOIN
     ).filter(IndiaPurchaseInvoice.tenant_id == tenant)
 
     if period:
@@ -405,7 +415,7 @@ def export_purchase_invoices_pdf(
 
     q = (
         db.query(IndiaPurchaseInvoice, IndiaVendor)
-        .outerjoin(IndiaVendor, IndiaPurchaseInvoice.vendor_id == IndiaVendor.id)
+        .outerjoin(IndiaVendor, _VENDOR_JOIN)
         .filter(IndiaPurchaseInvoice.tenant_id == tenant)
     )
     if period:
@@ -666,7 +676,7 @@ def export_gstr3b_excel(
 
     purchases = (
         db.query(IndiaPurchaseInvoice, IndiaVendor)
-        .outerjoin(IndiaVendor, IndiaPurchaseInvoice.vendor_id == IndiaVendor.id)
+        .outerjoin(IndiaVendor, _VENDOR_JOIN)
         .filter(
             IndiaPurchaseInvoice.tenant_id == tenant,
             IndiaPurchaseInvoice.status == "posted",

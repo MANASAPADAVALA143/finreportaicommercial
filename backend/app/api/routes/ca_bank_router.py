@@ -22,12 +22,13 @@ import logging
 from typing import Any, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_reader, workspace_writer
 from app.db.models import ClientCOA
 from app.services.bank_statement_parser import (
     parse_excel_csv_statement,
@@ -44,7 +45,13 @@ from app.services.bank_classifier_ml import (
 from app.services.tally_poster import generate_summary, generate_tally_xml
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/bank", tags=["Bank Statement"])
+router = APIRouter(prefix="/api/bank", tags=["Bank Statement"], dependencies=[Depends(workspace_reader)])
+_write = [Depends(workspace_writer)]
+
+
+def _scoped(request: Request, key: str) -> str:
+    """Client COA ids and ML org ids are client-chosen labels, so they are namespaced per workspace."""
+    return f"{request_workspace(request)}:{key.strip()}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -215,8 +222,9 @@ async def parse_bank_statement(
     })
 
 
-@router.post("/client-coa/upload")
+@router.post("/client-coa/upload", dependencies=_write)
 async def upload_client_coa(
+    request:   Request,
     client_id: str                  = Form(...),
     file:      Optional[UploadFile] = File(default=None),
     ledgers:   Optional[str]        = Form(default=None),
@@ -265,10 +273,11 @@ async def upload_client_coa(
     if not entries:
         raise HTTPException(status_code=422, detail="No valid ledger names found.")
 
+    key = _scoped(request, client_id)
     try:
-        db.query(ClientCOA).filter(ClientCOA.client_id == client_id).delete(synchronize_session=False)
+        db.query(ClientCOA).filter(ClientCOA.client_id == key).delete(synchronize_session=False)
         for e in entries:
-            db.add(ClientCOA(client_id=client_id, ledger_name=e["ledger_name"], ledger_group=e["ledger_group"]))
+            db.add(ClientCOA(client_id=key, ledger_name=e["ledger_name"], ledger_group=e["ledger_group"]))
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -279,9 +288,9 @@ async def upload_client_coa(
 
 
 @router.get("/client-coa/{client_id}")
-def get_client_coa(client_id: str, db: Session = Depends(get_db)):
+def get_client_coa(client_id: str, request: Request, db: Session = Depends(get_db)):
     """Return stored ledger names for a client."""
-    rows = db.query(ClientCOA).filter(ClientCOA.client_id == client_id).all()
+    rows = db.query(ClientCOA).filter(ClientCOA.client_id == _scoped(request, client_id)).all()
     return {
         "client_id": client_id,
         "count":     len(rows),
@@ -293,8 +302,8 @@ def get_client_coa(client_id: str, db: Session = Depends(get_db)):
 # ML endpoints
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.post("/train")
-async def train_classifier(req: TrainRequest):
+@router.post("/train", dependencies=_write)
+async def train_classifier(req: TrainRequest, request: Request):
     """
     Train (or re-train) the ML classifier for an org + bank account.
 
@@ -303,7 +312,7 @@ async def train_classifier(req: TrainRequest):
     """
     txns = [t.dict() for t in req.transactions]
     try:
-        meta = train_model(req.org_id, req.account_id, txns)
+        meta = train_model(_scoped(request, req.org_id), req.account_id, txns)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -322,7 +331,7 @@ async def train_classifier(req: TrainRequest):
 
 
 @router.post("/classify")
-async def classify(req: ClassifyRequest):
+async def classify(req: ClassifyRequest, request: Request):
     """
     Classify new bank transactions using the trained ML model.
 
@@ -331,9 +340,12 @@ async def classify(req: ClassifyRequest):
     """
     txns = [t.dict() for t in req.transactions]
     try:
-        results = classify_transactions(req.org_id, req.account_id, txns)
+        results = classify_transactions(_scoped(request, req.org_id), req.account_id, txns)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=404,
+            detail=f"No trained model found for org={req.org_id} account={req.account_id}. Train first.",
+        ) from exc
     except Exception as exc:
         logger.exception("Classification failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Classification failed: {exc}") from exc
@@ -385,8 +397,9 @@ async def export_review(req: ExportReviewRequest):
     )
 
 
-@router.post("/sync-corrections")
+@router.post("/sync-corrections", dependencies=_write)
 async def sync_corrections_endpoint(
+    request:    Request,
     file:       UploadFile   = File(..., description="Corrected CSV from export-review"),
     org_id:     str          = Form(...),
     account_id: str          = Form(...),
@@ -430,7 +443,7 @@ async def sync_corrections_endpoint(
         raise HTTPException(status_code=422, detail="No valid corrections found in CSV.")
 
     try:
-        meta = sync_corrections(org_id, account_id, corrections)
+        meta = sync_corrections(_scoped(request, org_id), account_id, corrections)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -474,7 +487,7 @@ async def post_tally(req: TallyPostRequest):
 
 
 @router.get("/model-status/{org_id}/{account_id}")
-def get_model_status(org_id: str, account_id: str):
+def get_model_status(org_id: str, account_id: str, request: Request):
     """Return health and metadata of the trained model for an org + account."""
-    status = model_status(org_id, account_id)
-    return status
+    status = model_status(_scoped(request, org_id), account_id)
+    return {**status, "org_id": org_id}

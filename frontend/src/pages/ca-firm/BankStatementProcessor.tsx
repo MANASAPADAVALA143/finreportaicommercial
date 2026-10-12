@@ -16,8 +16,15 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 
 const API = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+
+function formHeaders(): Record<string, string> {
+  const h = workspaceHeaders(getStoredAccessToken());
+  delete h['Content-Type'];
+  return h;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -134,7 +141,7 @@ export default function BankStatementProcessor() {
       const fd = new FormData();
       fd.append('client_id', orgId);
       fd.append('file', coaFile);
-      const res = await fetch(`${API}/api/bank/client-coa/upload`, { method: 'POST', body: fd });
+      const res = await fetch(`${API}/api/bank/client-coa/upload`, { method: 'POST', body: fd, headers: formHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'COA upload failed');
       setLedgerOptions(data.ledgers || []);
@@ -176,7 +183,7 @@ export default function BankStatementProcessor() {
 
       const res  = await fetch(`${API}/api/bank/train`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body:    JSON.stringify({ org_id: orgId, account_id: accountId, transactions: txns }),
       });
       const data = await res.json();
@@ -194,7 +201,9 @@ export default function BankStatementProcessor() {
     if (!orgId || !accountId) return;
     setSetupBusy('status');
     try {
-      const res  = await fetch(`${API}/api/bank/model-status/${encodeURIComponent(orgId)}/${encodeURIComponent(accountId)}`);
+      const res  = await fetch(`${API}/api/bank/model-status/${encodeURIComponent(orgId)}/${encodeURIComponent(accountId)}`, {
+        headers: formHeaders(),
+      });
       const data = await res.json();
       setModelMeta(data);
     } catch (_) {/* ignore */}
@@ -217,7 +226,7 @@ export default function BankStatementProcessor() {
       fd.append('file',      bankFile);
       fd.append('bank_type', bankType);
       fd.append('mode',      parseMode);
-      const res  = await fetch(`${API}/api/bank/parse`, { method: 'POST', body: fd });
+      const res  = await fetch(`${API}/api/bank/parse`, { method: 'POST', body: fd, headers: formHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Parse failed');
       rows = data.rows || [];
@@ -234,7 +243,7 @@ export default function BankStatementProcessor() {
     try {
       const res  = await fetch(`${API}/api/bank/classify`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body:    JSON.stringify({ org_id: orgId, account_id: accountId, transactions: rows }),
       });
       const data = await res.json();
@@ -273,7 +282,7 @@ export default function BankStatementProcessor() {
     try {
       const res = await fetch(`${API}/api/bank/export-review`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body:    JSON.stringify({ transactions }),
       });
       if (!res.ok) { toast.error('Export failed'); return; }
@@ -297,7 +306,7 @@ export default function BankStatementProcessor() {
       fd.append('file',       file);
       fd.append('org_id',     orgId);
       fd.append('account_id', accountId);
-      const res  = await fetch(`${API}/api/bank/sync-corrections`, { method: 'POST', body: fd });
+      const res  = await fetch(`${API}/api/bank/sync-corrections`, { method: 'POST', body: fd, headers: formHeaders() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Sync failed');
       toast.success(`Re-trained with ${data.corrections_applied} corrections. Accuracy: ${pct(data.accuracy)}`);
@@ -321,7 +330,7 @@ export default function BankStatementProcessor() {
     try {
       const res = await fetch(`${API}/api/bank/post-tally`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body:    JSON.stringify({ transactions, bank_ledger: bankLedger, company_name: companyName }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed'); }

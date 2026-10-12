@@ -2,20 +2,13 @@
  * India Accounting Service
  * Wraps all /api/india/full/* endpoints.
  */
-import { getStoredAccessToken } from '../utils/authToken';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
 const BASE = `${API_BASE}/api/india/full`;
 
 function hdrs(extra: Record<string, string> = {}): Record<string, string> {
-  const tenantId = localStorage.getItem('tenantId') || 'demo';
-  const accessToken = getStoredAccessToken();
-  return {
-    'Content-Type': 'application/json',
-    'X-Tenant-ID': tenantId,
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    ...extra,
-  };
+  return workspaceHeaders(getStoredAccessToken(), extra);
 }
 
 async function get<T>(path: string, params?: Record<string, string>): Promise<T> {

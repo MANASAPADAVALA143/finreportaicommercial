@@ -3,6 +3,7 @@ import { requireCompanyId } from './companyService';
 import type { Gstr2bEntry, Invoice } from './supabase';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 import { joinApiUrl } from '@/utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '@/utils/workspaceHeaders';
 
 // ── TDS Section (Sec 51 / Chapter XVII-B) ─────────────────────────────────
 //
@@ -46,7 +47,7 @@ export type TdsCalcResult = {
 export async function calculateTds(section: string, taxableAmount: number): Promise<TdsCalcResult> {
   const res = await fetch(joinApiUrl('/api/india/full/tds/calc'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(getStoredAccessToken()),
     body: JSON.stringify({ section, taxable_amount: taxableAmount, deductee_type: 'company' }),
   });
   if (!res.ok) return { ok: false, error: `Calculation failed (${res.status})` };
