@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.auth import get_current_company_id, get_current_user
+
+from app.core.tenant_scope import workspace_manager
 from models import Company, UserCompany
 
 router = APIRouter(prefix="/api/gulftax/auth", tags=["gulftax-auth"])
@@ -249,7 +251,7 @@ async def update_company_profile(
     return _company_profile(company)
 
 
-@router.patch("/company-settings", response_model=CompanyProfileOut)
+@router.patch("/company-settings", response_model=CompanyProfileOut, dependencies=[Depends(workspace_manager)])
 async def update_company_settings(
     body: UpdateCompanySettingsRequest,
     company_id: str = Depends(get_current_company_id),
@@ -275,7 +277,7 @@ async def update_company_settings(
     return _company_profile(company)
 
 
-@router.post("/regenerate-api-key", response_model=CompanyProfileOut)
+@router.post("/regenerate-api-key", response_model=CompanyProfileOut, dependencies=[Depends(workspace_manager)])
 async def regenerate_api_key(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),

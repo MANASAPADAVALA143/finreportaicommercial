@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace
 from app.modules.gulftax.auth_cfo import get_current_company_id
 from app.modules.gulftax.ported_mount import get_ported_db
 from app.services import audit_export_service as audit_svc
@@ -17,16 +18,11 @@ router = APIRouter(prefix="/api/gulftax/audit", tags=["GulfTax Audit Export"])
 
 
 def _tenant(request: Request, workspace_id: Optional[str]) -> str:
-    return (
-        workspace_id
-        or request.headers.get("X-Workspace-ID")
-        or request.headers.get("X-Tenant-ID")
-        or "demo"
-    )
+    return request_workspace(request, workspace_id)
 
 
 def _user_email(request: Request) -> Optional[str]:
-    return request.headers.get("X-User-Email") or request.headers.get("X-User-Id")
+    return request_user_email(request)
 
 
 @router.get("/periods")

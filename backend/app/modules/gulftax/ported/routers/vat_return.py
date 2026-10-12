@@ -1065,23 +1065,11 @@ async def get_all_boxes(
     period: str = Query(..., description="e.g. 2026-Q3"),
     company_id_param: Optional[str] = Query(None, alias="company_id"),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-ID"),
-    authorization: Optional[str] = Header(default=None),
+    resolved_company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
 ):
-    # Accept company_id from query param (frontend) or resolve via JWT header.
-    # JWT path is attempted only when no query param is provided so that the VAT
-    # Return page works even when the Supabase auth service is unreachable.
-    company_id = (company_id_param or x_company_id or "").strip()
-    if not company_id:
-        try:
-            from middleware.auth import get_current_company_id as _get_cid
-            company_id = await _get_cid(
-                x_company_id=x_company_id,
-                authorization=authorization,
-                db=db,
-            )
-        except Exception:
-            raise HTTPException(status_code=400, detail="company_id is required for VAT return")
+    # company_id / X-Company-ID were checked against the caller's workspace by the router guard.
+    company_id = (company_id_param or x_company_id or "").strip() or resolved_company_id
     try:
         period_start, period_end = _parse_period(period)
     except ValueError as e:

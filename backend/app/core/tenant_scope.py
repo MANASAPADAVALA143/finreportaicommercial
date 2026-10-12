@@ -33,11 +33,20 @@ def workspace_member(
     return ctx
 
 
+def workspace_writer(
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> WorkspaceContext:
+    """Route guard for GET routes that change data."""
+    require_workspace_level(db, ctx, "write")
+    return ctx
+
+
 def workspace_manager(
     ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ) -> WorkspaceContext:
-    """Route guard for approvals and control changes: owner or finance manager only."""
+    """Route guard for approvals, control changes and bulk deletes: owner or finance manager only."""
     require_workspace_level(db, ctx, "manage")
     return ctx
 

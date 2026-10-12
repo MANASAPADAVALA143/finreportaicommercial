@@ -6,12 +6,7 @@ import { getStoredAccessToken } from '../utils/authToken';
 const API = import.meta.env.VITE_API_URL || '';
 
 function workspaceId(): string {
-  return (
-    localStorage.getItem('active_workspace_id') ||
-    getStoredWorkspaceId() ||
-    localStorage.getItem('tenantId') ||
-    ''
-  );
+  return getStoredWorkspaceId() || '';
 }
 
 function companyId(): string {

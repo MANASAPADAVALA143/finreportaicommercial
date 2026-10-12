@@ -202,17 +202,19 @@ def register_gulftax_ported_routers(app: FastAPI) -> None:
     from routers.vat_classifier import router as vat_classifier_router
     from routers.vat_return import router as vat_return_router, gulftax_vat_router
 
-    app.include_router(auth_router)
-    app.include_router(dashboard_router)
-    app.include_router(vat_return_router)
-    app.include_router(gulftax_vat_router)
-    app.include_router(vat_classifier_router)
-    app.include_router(automations_router, prefix="/api/automations", tags=["gulftax-automations"])
-    app.include_router(corporate_tax_router, prefix="/api/ct", tags=["gulftax-ct"])
-    app.include_router(corporatetax_spec_router)
-    app.include_router(einvoicing_router)
-    app.include_router(tax_memo_router)
-    app.include_router(invoice_flow_router)
-    app.include_router(fta_reports_router)
-    app.include_router(trn_validator_router)
+    from app.modules.gulftax.auth_cfo import include_guarded
+
+    include_guarded(app, auth_router)
+    include_guarded(app, dashboard_router)
+    include_guarded(app, vat_return_router)
+    include_guarded(app, gulftax_vat_router)
+    include_guarded(app, vat_classifier_router)
+    include_guarded(app, automations_router, prefix="/api/automations", tags=["gulftax-automations"])
+    include_guarded(app, corporate_tax_router, prefix="/api/ct", tags=["gulftax-ct"])
+    include_guarded(app, corporatetax_spec_router)
+    include_guarded(app, einvoicing_router)
+    include_guarded(app, tax_memo_router)
+    include_guarded(app, invoice_flow_router)
+    include_guarded(app, fta_reports_router)
+    include_guarded(app, trn_validator_router)
     logger.info("GulfTax ported routers registered")

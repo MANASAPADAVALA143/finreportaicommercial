@@ -3,10 +3,11 @@ from calendar import monthrange
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
+from app.core.tenant_scope import request_workspace
 from database import get_db
 from middleware.auth import get_current_company_id
 from models import AuditLog, Company, Invoice, ReconciliationResult
@@ -78,11 +79,11 @@ async def active_tax_period(
 
 @router.get("/summary")
 async def dashboard_summary(
+    request: Request,
     period: Optional[str] = Query(None, description="Selected tax period e.g. 2026-Q3"),
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
-    x_workspace_id: Optional[str] = Header(default=None, alias="X-Workspace-Id"),
 ) -> Dict[str, Any]:
     from services.tax_period import resolve_active_period
 
@@ -102,11 +103,7 @@ async def dashboard_summary(
     active_company = (
         (x_company_id or getattr(company, "external_id", None) or company_id or "")
     ).strip()
-    workspace_id = (
-        (x_workspace_id or "").strip()
-        or str(getattr(company, "workspace_id", None) or "").strip()
-        or active_company
-    )
+    workspace_id = request_workspace(request)
 
     estimated_payable_aed = 0.0
     transactions_classified = 0

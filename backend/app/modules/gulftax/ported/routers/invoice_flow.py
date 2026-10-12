@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from middleware.auth import get_current_company_id
+
+from app.core.tenant_scope import workspace_manager, workspace_writer
 from models import Company, Invoice, Transaction
 import logging
 
@@ -1871,7 +1873,7 @@ def supplier_profile(
 
 # ── Demo reset ─────────────────────────────────────────────────────────────────
 
-@router.delete("/demo/reset")
+@router.delete("/demo/reset", dependencies=[Depends(workspace_manager)])
 def demo_reset(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),
@@ -1909,7 +1911,7 @@ def demo_reset(
     }
 
 
-@router.get("/repair-transactions")
+@router.get("/repair-transactions", dependencies=[Depends(workspace_writer)])
 def repair_transactions(
     company_id: str = Query(...),
     db: Session = Depends(get_db),

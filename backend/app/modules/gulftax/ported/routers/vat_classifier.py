@@ -14,6 +14,8 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 from middleware.auth import get_current_company_id
 
+from app.core.tenant_scope import workspace_manager
+
 # pgvector-backed RAG service — import never fails; returns [] on any error
 from services.uae_tax_rag_pg import uae_tax_rag  # type: ignore
 from services.vat_decision_tree import classify_with_decision_tree, coerce_box_number
@@ -43,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Classification: POST /classify-transaction (single JSON) and POST /classify-bulk (multipart file) only.
 
 # Temp Excel files from bulk classify (job_id -> absolute path)
-_BULK_CLASSIFY_EXCEL_PATHS: Dict[str, str] = {}
+_BULK_CLASSIFY_EXCEL_PATHS: Dict[str, tuple[str, str]] = {}
 
 # Initialize Claude client (optional at startup — same pattern as vat_return)
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -782,7 +784,7 @@ def classify_bulk(
         excel_path = os.path.join(tmp_dir, f"gulftax_bulk_classify_{job_id}.xlsx")
         with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
             output_df.to_excel(writer, index=False, sheet_name="Classified Transactions")
-        _BULK_CLASSIFY_EXCEL_PATHS[job_id] = excel_path
+        _BULK_CLASSIFY_EXCEL_PATHS[job_id] = (company_id, excel_path)
 
         classifications_out: List[Dict[str, Any]] = []
         for t, meta, classification in zip(db_transactions, per_row_meta, classifications):
@@ -1059,9 +1061,9 @@ async def add_pdf_invoices_to_transactions(
 
 
 @router.get("/classify-bulk/{job_id}/excel")
-async def download_classify_bulk_excel(job_id: str):
-    path = _BULK_CLASSIFY_EXCEL_PATHS.get(job_id)
-    if not path or not os.path.isfile(path):
+async def download_classify_bulk_excel(job_id: str, company_id: str = Depends(get_current_company_id)):
+    owner, path = _BULK_CLASSIFY_EXCEL_PATHS.get(job_id, (None, None))
+    if owner != company_id or not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="Excel export not found or expired")
     return FileResponse(
         path,
@@ -1614,7 +1616,7 @@ async def bulk_approve_high_confidence(
     }
 
 
-@router.delete("/transactions/all")
+@router.delete("/transactions/all", dependencies=[Depends(workspace_manager)])
 async def delete_all_transactions(
     company_id: str = Depends(get_current_company_id),
     db: Session = Depends(get_db),

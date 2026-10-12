@@ -8,23 +8,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import case
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_company_access
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.models.company_setup import UaeCompanyProfile
 from app.modules.gulftax.ported_mount import get_ported_db
 from app.services.ap_company_resolver import resolve_ap_company_id
 from app.services.uae_suite_service import build_uae_suite_summary
 
-router = APIRouter(prefix="/api/uae-suite", tags=["UAE Finance Suite"])
+router = APIRouter(prefix="/api/uae-suite", tags=["UAE Finance Suite"], dependencies=[Depends(workspace_member)])
 
 _SUITE_ROLES = frozenset({"uae_suite", "uae_full", "full_access"})
 
 
 def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("X-Workspace-ID")
-        or request.headers.get("X-Tenant-ID")
-        or "demo"
-    )
+    return request_workspace(request)
 
 
 def _company_id(request: Request, query_cid: Optional[str] = None) -> Optional[str]:
@@ -45,7 +43,7 @@ def _resolve_company_id(
 ) -> Optional[str]:
     cid = _company_id(request, query_cid)
     if cid:
-        return cid
+        return require_company_access(db, request.state.workspace_ctx, cid, "read")
 
     profile = (
         db.query(UaeCompanyProfile)
