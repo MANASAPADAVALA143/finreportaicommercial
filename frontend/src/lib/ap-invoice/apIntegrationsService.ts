@@ -3,7 +3,7 @@
  */
 import { loadZohoSettings } from './zohoService';
 import { loadQBSettings } from './quickbooksService';
-import { supabase } from './supabase';
+import { getSharedSettings } from './sharedSettingsService';
 import { joinApiUrl } from '../../utils/backendOrigin';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 
@@ -24,18 +24,8 @@ const SYNC_KEYS: Record<IntegrationId, string> = {
   quickbooks: 'ap_qb_last_sync',
 };
 
-async function readSetting(key: string): Promise<string | null> {
-  const { data } = await supabase.from('app_settings').select('setting_value').eq('setting_key', key).maybeSingle();
-  return (data as { setting_value?: string } | null)?.setting_value ?? null;
-}
-
-async function writeSetting(key: string, value: string): Promise<void> {
-  const { data: existing } = await supabase.from('app_settings').select('id').eq('setting_key', key).maybeSingle();
-  if (existing) {
-    await supabase.from('app_settings').update({ setting_value: value, updated_at: new Date().toISOString() }).eq('setting_key', key);
-  } else {
-    await supabase.from('app_settings').insert({ setting_key: key, setting_value: value });
-  }
+async function readSyncSettings(): Promise<Record<string, string>> {
+  return getSharedSettings(Object.values(SYNC_KEYS)).catch(() => ({}));
 }
 
 async function fetchErpConnections(): Promise<
@@ -107,8 +97,8 @@ export async function getQuickBooksOAuthUrl(): Promise<string> {
 
 export async function getIntegrationStatuses(): Promise<IntegrationStatus[]> {
   const [zoho, qb, erp, apApi] = await Promise.all([
-    loadZohoSettings(),
-    loadQBSettings(),
+    loadZohoSettings().catch(() => ({} as Awaited<ReturnType<typeof loadZohoSettings>>)),
+    loadQBSettings().catch(() => ({} as Awaited<ReturnType<typeof loadQBSettings>>)),
     fetchErpConnections(),
     fetchApIntegrationStatus(),
   ]);
@@ -118,8 +108,9 @@ export async function getIntegrationStatuses(): Promise<IntegrationStatus[]> {
   const zohoApi = apApi.find((i) => i.id === 'zoho');
   const qbApi = apApi.find((i) => i.id === 'quickbooks');
 
-  const zohoSyncRaw = await readSetting(SYNC_KEYS.zoho);
-  const qbSyncRaw = await readSetting(SYNC_KEYS.quickbooks);
+  const syncSettings = await readSyncSettings();
+  const zohoSyncRaw = syncSettings[SYNC_KEYS.zoho] ?? null;
+  const qbSyncRaw = syncSettings[SYNC_KEYS.quickbooks] ?? null;
 
   const parseSync = (raw: string | null) => {
     if (!raw) return { at: null as string | null, status: 'never' as const };
@@ -137,8 +128,8 @@ export async function getIntegrationStatuses(): Promise<IntegrationStatus[]> {
   const zSync = parseSync(zohoSyncRaw);
   const qSync = parseSync(qbSyncRaw);
 
-  const zohoConfigured = !!(zoho.refresh_token && zoho.organization_id && zoho.client_id);
-  const qbConfigured = !!(qb.refresh_token && qb.realm_id && qb.client_id);
+  const zohoConfigured = !!(zoho.has_refresh_token && zoho.organization_id && zoho.client_id);
+  const qbConfigured = !!(qb.has_refresh_token && qb.realm_id && qb.client_id);
 
   const mapStatus = (s: string | null | undefined): 'success' | 'error' | 'never' => {
     if (s === 'success' || s === 'failed' || s === 'error') {
@@ -174,7 +165,6 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
   message: string;
   count?: number;
 }> {
-  const now = new Date().toISOString();
   let ok = false;
   let message = '';
   let count = 0;
@@ -195,10 +185,6 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
     count = Number(j.count ?? 0);
   }
 
-  await writeSetting(
-    SYNC_KEYS[id],
-    JSON.stringify({ at: now, status: ok ? 'success' : 'error', message })
-  );
   logAction('integration.sync', id, null, getInvoiceflowWorkEmail(), { ok, message, count });
   return { ok, message, count };
 }
@@ -207,6 +193,5 @@ export async function disconnectIntegration(id: IntegrationId, connectionId: str
   if (connectionId) {
     await fetch(joinApiUrl(`/api/connections/${connectionId}`), { method: 'DELETE' });
   }
-  await writeSetting(SYNC_KEYS[id], JSON.stringify({ at: null, status: 'never' }));
   logAction('integration.disconnect', id, null, getInvoiceflowWorkEmail(), {});
 }

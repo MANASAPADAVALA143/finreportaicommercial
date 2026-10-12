@@ -5,21 +5,26 @@ OAuth tokens are persisted to Supabase app_settings (same keys as AP Settings UI
 """
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
-
-import re
-from datetime import timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.core.company_access import require_invoice_access
 from app.core.config import settings
+from app.core.database import get_db
+from app.core.supabase import get_supabase
 from app.core.tenant_scope import platform_admin, workspace_member
 from app.middleware.workspace import WorkspaceContext
 from app.services.ap_settings_service import get_app_setting, upsert_app_setting
@@ -83,7 +88,7 @@ QBO_SCOPE = "com.intuit.quickbooks.accounting"
 def _zoho_creds() -> tuple[str, str, str]:
     client_id = get_app_setting("zoho_client_id") or os.getenv("ZOHO_CLIENT_ID", "")
     client_secret = get_app_setting("zoho_client_secret") or os.getenv("ZOHO_CLIENT_SECRET", "")
-    domain = get_app_setting("zoho_domain") or "com"
+    domain = _zoho_domain(get_app_setting("zoho_domain") or "com")
     if not client_id or not client_secret:
         raise HTTPException(
             503,
@@ -108,7 +113,7 @@ def _record_sync(provider: str, ok: bool, message: str, count: int = 0) -> None:
     key = "ap_zoho_last_sync" if provider == "zoho" else "ap_qb_last_sync"
     upsert_app_setting(
         key,
-        __import__("json").dumps(
+        json.dumps(
             {
                 "at": datetime.now(timezone.utc).isoformat(),
                 "status": "success" if ok else "error",
@@ -223,8 +228,6 @@ def qbo_callback(
 ):
     _check_state("qbo", state)
     client_id, client_secret, environment = _qbo_creds()
-    import base64
-
     basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     try:
         with httpx.Client(timeout=20.0) as client:
@@ -268,7 +271,7 @@ def qbo_callback(
     return RedirectResponse(f"{FRONTEND_URL}/ap-invoices/integrations?connected=quickbooks")
 
 
-# ── Status & sync ──────────────────────────────────────────────────────────────
+# -- Status, credentials & sync -------------------------------------------------
 
 @router.get("/status")
 def integration_status() -> dict[str, Any]:
@@ -276,8 +279,6 @@ def integration_status() -> dict[str, Any]:
     zoho_org = get_app_setting("zoho_organization_id")
     qb_rt = get_app_setting("qb_refresh_token")
     qb_realm = get_app_setting("qb_realm_id")
-
-    import json
 
     def _parse_sync(key: str) -> dict[str, Any]:
         raw = get_app_setting(key)
@@ -313,45 +314,122 @@ def integration_status() -> dict[str, Any]:
     }
 
 
+@router.get("/credentials", dependencies=[Depends(platform_admin)])
+def integration_credentials() -> dict[str, Any]:
+    """Non-secret connection fields for the Settings form; secrets are reported only as present or not."""
+    return {
+        "zoho": {
+            "client_id": get_app_setting("zoho_client_id") or "",
+            "organization_id": get_app_setting("zoho_organization_id") or "",
+            "domain": get_app_setting("zoho_domain") or "in",
+            "has_client_secret": bool(get_app_setting("zoho_client_secret")),
+            "has_refresh_token": bool(get_app_setting("zoho_refresh_token")),
+        },
+        "quickbooks": {
+            "client_id": get_app_setting("qb_client_id") or "",
+            "realm_id": get_app_setting("qb_realm_id") or "",
+            "environment": get_app_setting("qb_environment") or "production",
+            "has_client_secret": bool(get_app_setting("qb_client_secret")),
+            "has_refresh_token": bool(get_app_setting("qb_refresh_token")),
+        },
+    }
+
+
+def _expiry_ms(tokens: dict[str, Any]) -> str:
+    expires = int(tokens.get("expires_in", 3600))
+    return str(int(datetime.now(timezone.utc).timestamp() * 1000) + expires * 1000)
+
+
+def _cached_token(prefix: str) -> str | None:
+    token = get_app_setting(f"{prefix}_access_token")
+    expiry = get_app_setting(f"{prefix}_access_token_expiry") or ""
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000
+    if token and expiry.isdigit() and now_ms < int(expiry) - 60_000:
+        return token
+    return None
+
+
+async def _zoho_token(client: httpx.AsyncClient) -> tuple[str, str]:
+    """Access token and API base for the shared Zoho org, refreshing (and caching) when needed."""
+    client_id, client_secret, domain = _zoho_creds()
+    api_domain = f"https://www.zohoapis.{domain}"
+    cached = _cached_token("zoho")
+    if cached:
+        return cached, api_domain
+    refresh = get_app_setting("zoho_refresh_token")
+    if not refresh:
+        raise HTTPException(400, detail="Zoho not connected — complete OAuth first")
+    tr = await client.post(
+        f"https://accounts.zoho.{domain}/oauth/v2/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh,
+        },
+    )
+    tokens = tr.json()
+    access = tokens.get("access_token")
+    if not access:
+        raise ValueError(tokens.get("error") or "token refresh failed")
+    upsert_app_setting("zoho_access_token", access)
+    upsert_app_setting("zoho_access_token_expiry", _expiry_ms(tokens))
+    return access, tokens.get("api_domain", api_domain)
+
+
+async def _qbo_token(client: httpx.AsyncClient) -> tuple[str, str, str]:
+    """Access token, API base and realm for the shared QuickBooks company; Intuit rotates refresh tokens."""
+    client_id, client_secret, environment = _qbo_creds()
+    refresh = get_app_setting("qb_refresh_token")
+    realm_id = get_app_setting("qb_realm_id")
+    if not refresh or not realm_id:
+        raise HTTPException(400, detail="QuickBooks not connected — complete OAuth first")
+    base_url = (
+        "https://sandbox-quickbooks.api.intuit.com"
+        if environment == "sandbox"
+        else "https://quickbooks.api.intuit.com"
+    )
+    cached = _cached_token("qb")
+    if cached:
+        return cached, base_url, realm_id
+    basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    tr = await client.post(
+        "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+        data={"grant_type": "refresh_token", "refresh_token": refresh},
+    )
+    tokens = tr.json()
+    access = tokens.get("access_token")
+    if not access:
+        raise ValueError(tokens.get("error_description") or tokens.get("error") or "token refresh failed")
+    upsert_app_setting("qb_access_token", access)
+    upsert_app_setting("qb_access_token_expiry", _expiry_ms(tokens))
+    if tokens.get("refresh_token"):
+        upsert_app_setting("qb_refresh_token", tokens["refresh_token"])
+    return access, base_url, realm_id
+
+
 @router.post("/zoho/sync", dependencies=[Depends(platform_admin)])
 async def sync_zoho() -> dict[str, Any]:
     """Refresh Zoho token and verify API access (bill list probe)."""
-    refresh = get_app_setting("zoho_refresh_token")
     org_id = get_app_setting("zoho_organization_id")
-    if not refresh or not org_id:
+    if not org_id:
         raise HTTPException(400, detail="Zoho not connected — complete OAuth first")
-
-    client_id, client_secret, domain = _zoho_creds()
-    accounts = f"https://accounts.zoho.{domain}"
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            tr = await client.post(
-                f"{accounts}/oauth/v2/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": refresh,
-                },
-            )
-            tokens = tr.json()
-            access = tokens.get("access_token")
-            if not access:
-                raise ValueError(tokens.get("error") or "token refresh failed")
-
-            api_domain = tokens.get("api_domain", f"https://www.zohoapis.{domain}")
+            access, api_domain = await _zoho_token(client)
             bills = await client.get(
                 f"{api_domain}/books/v3/bills",
                 params={"organization_id": org_id, "per_page": 1},
                 headers={"Authorization": f"Zoho-oauthtoken {access}"},
             )
             count = bills.json().get("page_context", {}).get("total", 0)
-            upsert_app_setting("zoho_access_token", access)
-            expires = int(tokens.get("expires_in", 3600))
-            upsert_app_setting(
-                "zoho_access_token_expiry",
-                str(int(datetime.now(timezone.utc).timestamp() * 1000) + expires * 1000),
-            )
+    except HTTPException:
+        raise
     except Exception as exc:
         _record_sync("zoho", False, str(exc))
         raise HTTPException(500, detail=f"Zoho sync failed: {exc}") from exc
@@ -364,58 +442,18 @@ async def sync_zoho() -> dict[str, Any]:
 @router.post("/quickbooks/sync", dependencies=[Depends(platform_admin)])
 async def sync_quickbooks() -> dict[str, Any]:
     """Refresh QBO token and verify API access."""
-    refresh = get_app_setting("qb_refresh_token")
-    realm_id = get_app_setting("qb_realm_id")
-    if not refresh or not realm_id:
-        raise HTTPException(400, detail="QuickBooks not connected — complete OAuth first")
-
-    client_id, client_secret, environment = _qbo_creds()
-    import base64
-
-    basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    base_url = (
-        "https://sandbox-quickbooks.api.intuit.com"
-        if environment == "sandbox"
-        else "https://quickbooks.api.intuit.com"
-    )
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            tr = await client.post(
-                "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
-                headers={
-                    "Authorization": f"Basic {basic}",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                data={"grant_type": "refresh_token", "refresh_token": refresh},
-            )
-            tokens = tr.json()
-            access = tokens.get("access_token")
-            if not access:
-                raise ValueError(tokens)
-
-            query = "select count(*) from Bill"
+            access, base_url, realm_id = await _qbo_token(client)
             bills = await client.get(
                 f"{base_url}/v3/company/{realm_id}/query",
-                params={"query": query, "minorversion": "65"},
-                headers={
-                    "Authorization": f"Bearer {access}",
-                    "Accept": "application/json",
-                },
+                params={"query": "select count(*) from Bill", "minorversion": "65"},
+                headers={"Authorization": f"Bearer {access}", "Accept": "application/json"},
             )
-            data = bills.json()
-            count = 0
-            qr = data.get("QueryResponse", {})
-            if "totalCount" in qr:
-                count = int(qr["totalCount"])
-            elif qr.get("Bill"):
-                count = len(qr["Bill"])
-
-            upsert_app_setting("qb_access_token", access)
-            expires = int(tokens.get("expires_in", 3600))
-            upsert_app_setting(
-                "qb_access_token_expiry",
-                str(int(datetime.now(timezone.utc).timestamp() * 1000) + expires * 1000),
-            )
+            qr = bills.json().get("QueryResponse", {})
+            count = int(qr["totalCount"]) if "totalCount" in qr else len(qr.get("Bill") or [])
+    except HTTPException:
+        raise
     except Exception as exc:
         _record_sync("quickbooks", False, str(exc))
         raise HTTPException(500, detail=f"QuickBooks sync failed: {exc}") from exc
@@ -423,3 +461,134 @@ async def sync_quickbooks() -> dict[str, Any]:
     msg = f"QuickBooks connected — {count} vendor bills found"
     _record_sync("quickbooks", True, msg, count)
     return {"ok": True, "message": msg, "count": count}
+
+
+# -- Push approved invoices as bills ---------------------------------------------
+
+class PushBillIn(BaseModel):
+    invoice_id: str
+
+
+_INVOICE_FIELDS = (
+    "id,company_id,vendor_name,invoice_number,invoice_date,due_date,currency,"
+    "total_amount,tax_amount,tax_rate,gl_code,gl_name"
+)
+
+
+def _load_invoice(db: Session, ctx: WorkspaceContext, invoice_id: str) -> dict[str, Any]:
+    require_invoice_access(db, ctx, [invoice_id], "write")
+    rows = get_supabase().table("invoices").select(_INVOICE_FIELDS).eq("id", invoice_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(404, detail="Invoice not found")
+    return rows[0]
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.post("/zoho/push-bill")
+async def push_bill_to_zoho(
+    body: PushBillIn,
+    ctx: WorkspaceContext = Depends(platform_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a Zoho Books bill for an invoice (the shared org, so platform admins only)."""
+    inv = _load_invoice(db, ctx, body.invoice_id)
+    org_id = get_app_setting("zoho_organization_id")
+    if not org_id:
+        raise HTTPException(400, detail="Zoho not connected — complete OAuth first")
+    total, tax = _num(inv.get("total_amount")), _num(inv.get("tax_amount"))
+    payload = {
+        "vendor_name": inv.get("vendor_name"),
+        "bill_number": inv.get("invoice_number"),
+        "date": inv.get("invoice_date"),
+        "due_date": inv.get("due_date"),
+        "currency_code": inv.get("currency") or "INR",
+        "line_items": [{
+            "description": f"Invoice {inv.get('invoice_number')} — {inv.get('vendor_name')}",
+            "rate": total - tax,
+            "quantity": 1,
+            "tax_percentage": inv.get("tax_rate") or 0,
+        }],
+        "notes": f"Imported from InvoiceFlow. GL: {inv.get('gl_code') or ''} {inv.get('gl_name') or ''}".strip(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            access, api_domain = await _zoho_token(client)
+            res = await client.post(
+                f"{api_domain}/books/v3/bills",
+                params={"organization_id": org_id},
+                headers={"Authorization": f"Zoho-oauthtoken {access}"},
+                json={"JSONString": json.dumps(payload)},
+            )
+            data = res.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+    if data.get("code") != 0:
+        return {"success": False, "message": data.get("message") or f"Zoho error code {data.get('code')}"}
+    bill = data.get("bill") or {}
+    ref = bill.get("bill_number") or bill.get("bill_id")
+    return {
+        "success": True,
+        "message": f"Bill created in Zoho Books ({ref})",
+        "bill_id": bill.get("bill_id"),
+        "bill_number": bill.get("bill_number"),
+    }
+
+
+@router.post("/quickbooks/push-bill")
+async def push_bill_to_quickbooks(
+    body: PushBillIn,
+    ctx: WorkspaceContext = Depends(platform_admin),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a QuickBooks Online bill for an invoice (the shared company, so platform admins only)."""
+    inv = _load_invoice(db, ctx, body.invoice_id)
+    total, tax = _num(inv.get("total_amount")), _num(inv.get("tax_amount"))
+    payload = {
+        "VendorRef": {"name": inv.get("vendor_name")},
+        "TxnDate": inv.get("invoice_date") or datetime.now(timezone.utc).date().isoformat(),
+        "DocNumber": inv.get("invoice_number"),
+        "PrivateNote": f"InvoiceFlow: GL {inv.get('gl_code') or ''} {inv.get('gl_name') or ''}".strip(),
+        "Line": [{
+            "Amount": total - tax,
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "Description": f"Invoice {inv.get('invoice_number')} — {inv.get('vendor_name')}",
+            "AccountBasedExpenseLineDetail": {
+                "AccountRef": {"name": inv.get("gl_name") or "Expenses"},
+                "TaxCodeRef": {"value": "TAX" if tax else "NON"},
+            },
+        }],
+        "TotalAmt": total,
+    }
+    if inv.get("due_date"):
+        payload["DueDate"] = inv["due_date"]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            access, base_url, realm_id = await _qbo_token(client)
+            res = await client.post(
+                f"{base_url}/v3/company/{realm_id}/bill",
+                params={"minorversion": "70"},
+                headers={"Authorization": f"Bearer {access}", "Accept": "application/json"},
+                json=payload,
+            )
+            data = res.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+    if res.status_code >= 300:
+        err = ((data.get("Fault") or {}).get("Error") or [{}])[0]
+        return {"success": False, "message": err.get("Detail") or err.get("Message") or f"HTTP {res.status_code}"}
+    bill_id = (data.get("Bill") or {}).get("Id")
+    return {
+        "success": True,
+        "message": f"Bill created in QuickBooks Online (ID: {bill_id or 'unknown'})",
+        "bill_id": bill_id,
+    }

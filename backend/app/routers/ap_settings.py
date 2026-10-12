@@ -1,6 +1,7 @@
 """AP settings + one-time Supabase bootstrap for missing core tables."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -9,13 +10,22 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.company_access import require_company_access
 from app.core.database import get_db
 from app.core.tenant_scope import platform_admin, workspace_member
 from app.middleware.workspace import WorkspaceContext
-from app.services.ap_settings_service import get_app_settings, get_company_settings
+from app.services.ap_settings_service import (
+    READABLE_KEYS,
+    SECRET_KEYS,
+    WRITABLE_KEYS,
+    get_app_settings,
+    get_app_settings_map,
+    get_company_settings,
+    upsert_app_setting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +41,61 @@ def read_app_settings() -> dict[str, str]:
     """n8n webhook URLs — works even when Supabase app_settings table is missing."""
     return get_app_settings()
 
+
+class SharedSettingsIn(BaseModel):
+    settings: dict[str, str]
+
+
+def _without_password(raw: str) -> str:
+    try:
+        cfg = json.loads(raw or "{}")
+    except ValueError:
+        return ""
+    if isinstance(cfg, dict):
+        cfg.pop("password", None)
+    return json.dumps(cfg)
+
+
+@router.get("/shared-settings")
+def read_shared_settings(keys: str = Query(..., description="Comma-separated setting keys")) -> dict[str, str]:
+    """Deployment-wide AP settings any member may read (secrets and the mailbox password are never returned)."""
+    wanted = [k.strip() for k in keys.split(",") if k.strip() in READABLE_KEYS]
+    values = get_app_settings_map(wanted)
+    if "email_config" in values:
+        values["email_config"] = _without_password(values["email_config"])
+    return values
+
+
+@router.put("/shared-settings", dependencies=[Depends(platform_admin)])
+def write_shared_settings(body: SharedSettingsIn) -> dict[str, list[str]]:
+    """Blank secrets (and a blank mailbox password) keep the stored value, since the UI never sees them."""
+    unknown = sorted(set(body.settings) - WRITABLE_KEYS)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown or read-only settings: {', '.join(unknown)}")
+    saved = []
+    for key, value in body.settings.items():
+        if key in SECRET_KEYS and not value.strip():
+            continue
+        if key == "email_config":
+            value = _keep_mailbox_password(value)
+        upsert_app_setting(key, value)
+        saved.append(key)
+    return {"saved": sorted(saved)}
+
+
+def _keep_mailbox_password(raw: str) -> str:
+    try:
+        cfg = json.loads(raw or "{}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="email_config must be JSON") from exc
+    if isinstance(cfg, dict) and not cfg.get("password"):
+        try:
+            old = json.loads(get_app_settings_map(["email_config"]).get("email_config") or "{}")
+        except ValueError:
+            old = {}
+        if isinstance(old, dict) and old.get("password"):
+            cfg["password"] = old["password"]
+    return json.dumps(cfg)
 
 @router.get("/company-settings")
 def read_company_settings(

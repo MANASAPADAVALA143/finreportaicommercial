@@ -2865,7 +2865,7 @@ export function InvoiceDetailModal({
                             if (!zohoSettings) return;
                             setZohoPushing(true);
                             try {
-                              const result = await pushInvoiceToZoho(invoice, zohoSettings);
+                              const result = await pushInvoiceToZoho(invoice);
                               if (result.success) {
                                 toast({ title: 'Zoho Books', description: result.message });
                                 onUpdate();
@@ -2897,7 +2897,7 @@ export function InvoiceDetailModal({
                             if (!qbSettings) return;
                             setQbPushing(true);
                             try {
-                              const result = await pushInvoiceToQB(invoice, qbSettings);
+                              const result = await pushInvoiceToQB(invoice);
                               if (result.success) {
                                 toast({ title: 'QuickBooks Online', description: result.message });
                                 onUpdate();

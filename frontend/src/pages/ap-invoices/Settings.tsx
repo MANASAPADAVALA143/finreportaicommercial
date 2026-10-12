@@ -34,6 +34,7 @@ import { sendPaymentReminders } from '@/lib/ap-invoice/paymentReminderService';
 import { sendCfoSummary } from '@/lib/ap-invoice/cfoSummaryService';
 import { loadZohoSettings, saveZohoSettings, testZohoConnection, type ZohoSettings } from '@/lib/ap-invoice/zohoService';
 import { loadQBSettings, saveQBSettings, testQBConnection, type QBSettings } from '@/lib/ap-invoice/quickbooksService';
+import { getSharedSettings, saveSharedSettings } from '@/lib/ap-invoice/sharedSettingsService';
 
 const COMPANY_TYPE_OPTIONS = [
   { value: 'private_limited', label: 'Private Limited' },
@@ -381,31 +382,20 @@ export function Settings() {
 
   async function fetchSettings() {
     try {
-      const { data, error } = await supabase
-        .from('app_settings')
-        .select('*')
-        .in('setting_key', ['ifrs_enabled', 'api_endpoint', 'api_endpoint_classify_json', 'email_webhook_url', 'email_polling_frequency', 'email_sender_whitelist', 'tally_url', 'tally_company', 'tally_enabled', 'tally_version']);
-
-      if (error) throw error;
-
-      const settings = data || [];
-      const ifrsSettings = settings.find((s) => s.setting_key === 'ifrs_enabled');
-      const apiSettings = settings.find((s) => s.setting_key === 'api_endpoint');
-      const apiClassifyJsonSettings = settings.find((s) => s.setting_key === 'api_endpoint_classify_json');
-      const emailWebhookSettings = settings.find((s) => s.setting_key === 'email_webhook_url');
-      const emailPollingSettings = settings.find((s) => s.setting_key === 'email_polling_frequency');
-      const emailWhitelistSettings = settings.find((s) => s.setting_key === 'email_sender_whitelist');
-
-      setIfrsEnabled(ifrsSettings?.setting_value === 'true');
-      setApiEndpoint(apiSettings?.setting_value || '');
-      setApiEndpointClassifyJson(apiClassifyJsonSettings?.setting_value || '');
-      setEmailWebhookUrl(emailWebhookSettings?.setting_value || '');
-      setEmailPollingFrequency(emailPollingSettings?.setting_value || 'manual');
-      setEmailSenderWhitelist(emailWhitelistSettings?.setting_value || '');
-      setTallyUrl(settings.find((s) => s.setting_key === 'tally_url')?.setting_value || 'http://localhost:9000');
-      setTallyCompany(settings.find((s) => s.setting_key === 'tally_company')?.setting_value || '');
-      setTallyEnabled(settings.find((s) => s.setting_key === 'tally_enabled')?.setting_value === 'true');
-      setTallyVersion((settings.find((s) => s.setting_key === 'tally_version')?.setting_value as 'standard' | 'edit_log') || 'standard');
+      const settings = await getSharedSettings([
+        'ifrs_enabled', 'api_endpoint', 'api_endpoint_classify_json', 'email_webhook_url',
+        'email_polling_frequency', 'email_sender_whitelist', 'tally_url', 'tally_company', 'tally_enabled', 'tally_version',
+      ]);
+      setIfrsEnabled(settings.ifrs_enabled === 'true');
+      setApiEndpoint(settings.api_endpoint || '');
+      setApiEndpointClassifyJson(settings.api_endpoint_classify_json || '');
+      setEmailWebhookUrl(settings.email_webhook_url || '');
+      setEmailPollingFrequency(settings.email_polling_frequency || 'manual');
+      setEmailSenderWhitelist(settings.email_sender_whitelist || '');
+      setTallyUrl(settings.tally_url || 'http://localhost:9000');
+      setTallyCompany(settings.tally_company || '');
+      setTallyEnabled(settings.tally_enabled === 'true');
+      setTallyVersion((settings.tally_version as 'standard' | 'edit_log') || 'standard');
       getTallySyncStats().then(setTallySyncStats).catch(() => null);
       loadZohoSettings().then((s) => setZoho((prev) => ({ ...prev, ...s }))).catch(() => null);
       loadQBSettings().then((s) => setQb((prev) => ({ ...prev, ...s }))).catch(() => null);
@@ -419,162 +409,24 @@ export function Settings() {
   async function handleSave() {
     setSaving(true);
     try {
-      // Save IFRS setting
-      const { data: existingIfrs, error: ifrsCheckError } = await supabase
-        .from('app_settings')
-        .select('id')
-        .eq('setting_key', 'ifrs_enabled')
-        .maybeSingle();
-
-      if (ifrsCheckError) throw ifrsCheckError;
-
-      if (existingIfrs) {
-        const { error: ifrsUpdateError } = await supabase
-          .from('app_settings')
-          .update({
-            setting_value: ifrsEnabled.toString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('setting_key', 'ifrs_enabled');
-        
-        if (ifrsUpdateError) throw ifrsUpdateError;
-      } else {
-        const { error: ifrsInsertError } = await supabase.from('app_settings').insert({
-          setting_key: 'ifrs_enabled',
-          setting_value: ifrsEnabled.toString(),
-        });
-        
-        if (ifrsInsertError) throw ifrsInsertError;
-      }
-
-      // Save API endpoint setting
-      console.log('💾 Saving API endpoint:', apiEndpoint);
-      
-      const { data: existingApi, error: apiCheckError } = await supabase
-        .from('app_settings')
-        .select('id')
-        .eq('setting_key', 'api_endpoint')
-        .maybeSingle();
-
-      if (apiCheckError) {
-        console.error('❌ Error checking existing API endpoint:', apiCheckError);
-        throw apiCheckError;
-      }
-
-      if (existingApi) {
-        console.log('📝 Updating existing API endpoint record');
-        const { error: apiUpdateError } = await supabase
-          .from('app_settings')
-          .update({
-            setting_value: apiEndpoint,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('setting_key', 'api_endpoint');
-        
-        if (apiUpdateError) {
-          console.error('❌ Error updating API endpoint:', apiUpdateError);
-          throw apiUpdateError;
-        }
-        console.log('✅ API endpoint updated successfully');
-      } else {
-        console.log('➕ Inserting new API endpoint record');
-        const { error: apiInsertError } = await supabase.from('app_settings').insert({
-          setting_key: 'api_endpoint',
-          setting_value: apiEndpoint,
-        });
-        
-        if (apiInsertError) {
-          console.error('❌ Error inserting API endpoint:', apiInsertError);
-          throw apiInsertError;
-        }
-        console.log('✅ API endpoint inserted successfully');
-      }
-
-      // Verify the save worked
-      const { data: verifyData, error: verifyError } = await supabase
-        .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'api_endpoint')
-        .maybeSingle();
-
-      if (verifyError) {
-        console.error('❌ Error verifying saved API endpoint:', verifyError);
-        throw verifyError;
-      }
-
-      if (verifyData?.setting_value === apiEndpoint) {
-        console.log('✅ Verified: API endpoint saved correctly:', verifyData.setting_value);
-        toast({
-          title: 'Success',
-          description: `Settings saved successfully. API endpoint configured: ${apiEndpoint.substring(0, 50)}...`,
-        });
-      } else {
-        console.warn('⚠️ Verification failed. Expected:', apiEndpoint, 'Got:', verifyData?.setting_value);
-        toast({
-          title: 'Warning',
-          description: 'Settings may not have saved correctly. Please check and try again.',
-          variant: 'destructive',
-        });
-      }
-
-      // Save optional classification webhook (JSON) for bulk upload
-      const { data: existingClassify } = await supabase
-        .from('app_settings')
-        .select('id')
-        .eq('setting_key', 'api_endpoint_classify_json')
-        .maybeSingle();
-      if (existingClassify) {
-        await supabase
-          .from('app_settings')
-          .update({
-            setting_value: apiEndpointClassifyJson,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('setting_key', 'api_endpoint_classify_json');
-      } else {
-        await supabase.from('app_settings').insert({
-          setting_key: 'api_endpoint_classify_json',
-          setting_value: apiEndpointClassifyJson,
-        });
-      }
-      
-      // Save Email Integration settings
-      const emailSettings = [
-        { key: 'email_webhook_url', value: emailWebhookUrl },
-        { key: 'email_polling_frequency', value: emailPollingFrequency },
-        { key: 'email_sender_whitelist', value: emailSenderWhitelist },
-      ];
-
-      for (const setting of emailSettings) {
-        const { data: existing } = await supabase
-          .from('app_settings')
-          .select('id')
-          .eq('setting_key', setting.key)
-          .maybeSingle();
-
-        if (existing) {
-          await supabase
-            .from('app_settings')
-            .update({
-              setting_value: setting.value,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('setting_key', setting.key);
-        } else {
-          await supabase.from('app_settings').insert({
-            setting_key: setting.key,
-            setting_value: setting.value,
-          });
-        }
-      }
-
-      // Refresh settings to ensure they're up to date
+      await saveSharedSettings({
+        ifrs_enabled: ifrsEnabled.toString(),
+        api_endpoint: apiEndpoint,
+        api_endpoint_classify_json: apiEndpointClassifyJson,
+        email_webhook_url: emailWebhookUrl,
+        email_polling_frequency: emailPollingFrequency,
+        email_sender_whitelist: emailSenderWhitelist,
+      });
+      toast({
+        title: 'Success',
+        description: `Settings saved successfully. API endpoint configured: ${apiEndpoint.substring(0, 50)}...`,
+      });
       await fetchSettings();
     } catch (error: any) {
-      console.error('❌ Error saving settings:', error);
+      console.error('Error saving settings:', error);
       toast({
         title: 'Error',
-        description: error?.message || 'Failed to save settings. Please check the browser console for details.',
+        description: error?.message || 'Failed to save settings.',
         variant: 'destructive',
       });
     } finally {
@@ -583,23 +435,14 @@ export function Settings() {
   }
 
   async function saveTallySettings() {
-    const tallySettings = [
-      { key: 'tally_url', value: tallyUrl },
-      { key: 'tally_company', value: tallyCompany },
-      { key: 'tally_enabled', value: tallyEnabled.toString() },
-      { key: 'tally_version', value: tallyVersion },
-    ];
-    for (const s of tallySettings) {
-      const { data: existing } = await supabase.from('app_settings').select('id').eq('setting_key', s.key).maybeSingle();
-      if (existing) {
-        await supabase.from('app_settings').update({ setting_value: s.value, updated_at: new Date().toISOString() }).eq('setting_key', s.key);
-      } else {
-        await supabase.from('app_settings').insert({ setting_key: s.key, setting_value: s.value });
-      }
-    }
+    await saveSharedSettings({
+      tally_url: tallyUrl,
+      tally_company: tallyCompany,
+      tally_enabled: tallyEnabled.toString(),
+      tally_version: tallyVersion,
+    });
     await fetchSettings();
   }
-
   async function fetchCOA() {
     try {
       const cid = (await getMyCompany())?.id;
@@ -1549,11 +1392,11 @@ export function Settings() {
               </div>
               <div className="flex gap-2 items-center">
                 <Label className="w-32 shrink-0">Client Secret</Label>
-                <Input type="password" value={zoho.client_secret} onChange={(e) => setZoho((p) => ({ ...p, client_secret: e.target.value }))} placeholder="Client Secret" />
+                <Input type="password" value={zoho.client_secret} onChange={(e) => setZoho((p) => ({ ...p, client_secret: e.target.value }))} placeholder={zoho.has_client_secret ? "Saved — leave blank to keep" : "Client Secret"} />
               </div>
               <div className="flex gap-2 items-center">
                 <Label className="w-32 shrink-0">Refresh Token</Label>
-                <Input type="password" value={zoho.refresh_token} onChange={(e) => setZoho((p) => ({ ...p, refresh_token: e.target.value }))} placeholder="Paste refresh token" />
+                <Input type="password" value={zoho.refresh_token} onChange={(e) => setZoho((p) => ({ ...p, refresh_token: e.target.value }))} placeholder={zoho.has_refresh_token ? "Saved — leave blank to keep" : "Paste refresh token"} />
               </div>
               <div className="flex gap-2 items-center">
                 <Label className="w-32 shrink-0">Organization ID</Label>
@@ -1606,7 +1449,7 @@ export function Settings() {
                   setZohoTesting(true);
                   setZohoTestResult(null);
                   try {
-                    const result = await testZohoConnection(zoho);
+                    const result = await testZohoConnection();
                     setZohoTestResult(result);
                   } catch (e) {
                     setZohoTestResult({ ok: false, message: String(e) });
@@ -1633,8 +1476,8 @@ export function Settings() {
               </div>
             </div>
             <Input value={qb.client_id} onChange={(e) => setQb((p) => ({ ...p, client_id: e.target.value }))} placeholder="QB App Client ID" />
-            <Input type="password" value={qb.client_secret} onChange={(e) => setQb((p) => ({ ...p, client_secret: e.target.value }))} placeholder="QB App Client Secret" />
-            <Input type="password" value={qb.refresh_token} onChange={(e) => setQb((p) => ({ ...p, refresh_token: e.target.value }))} placeholder="Refresh Token (from Intuit OAuth flow)" />
+            <Input type="password" value={qb.client_secret} onChange={(e) => setQb((p) => ({ ...p, client_secret: e.target.value }))} placeholder={qb.has_client_secret ? "Saved — leave blank to keep" : "QB App Client Secret"} />
+            <Input type="password" value={qb.refresh_token} onChange={(e) => setQb((p) => ({ ...p, refresh_token: e.target.value }))} placeholder={qb.has_refresh_token ? "Saved — leave blank to keep" : "Refresh Token (from Intuit OAuth flow)"} />
             <Input value={qb.realm_id} onChange={(e) => setQb((p) => ({ ...p, realm_id: e.target.value }))} placeholder="Realm ID (Company ID)" />
             <select
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
@@ -1675,7 +1518,7 @@ export function Settings() {
                   setQbTesting(true);
                   setQbTestResult(null);
                   try {
-                    const result = await testQBConnection(qb);
+                    const result = await testQBConnection();
                     setQbTestResult(result);
                   } catch (e) {
                     setQbTestResult({ ok: false, message: String(e) });

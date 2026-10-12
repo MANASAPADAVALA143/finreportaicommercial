@@ -55,6 +55,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { joinApiUrl } from '../../utils/backendOrigin';
+import { getSharedSettings, saveSharedSettings } from '../../lib/ap-invoice/sharedSettingsService';
 import { getStoredAccessToken } from '../../utils/authToken';
 
 const SES_INTAKE_ADDRESS = 'invoices@finreportai.com';
@@ -291,32 +292,18 @@ export function EmailInvoices() {
 
   async function loadSettings() {
     try {
-      // Load email webhook URL
-      const { data: webhookData } = await supabase
-        .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'email_webhook_url')
-        .maybeSingle();
-
-      if (webhookData) {
-        setEmailWebhookUrl(webhookData.setting_value);
+      const settings = await getSharedSettings(['email_webhook_url', 'email_config']);
+      if (settings.email_webhook_url) {
+        setEmailWebhookUrl(settings.email_webhook_url);
       }
-
-      // Load email config (if stored)
-      const { data: configData } = await supabase
-        .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'email_config')
-        .maybeSingle();
-
-      if (configData && configData.setting_value) {
+      if (settings.email_config) {
         try {
-          const config = JSON.parse(configData.setting_value);
+          const config = JSON.parse(settings.email_config);
           setEmailConfig({
             imapServer: config.imapServer || '',
             imapPort: config.imapPort || '993',
             email: config.email || '',
-            password: '', // Don't load password for security
+            password: '', // never sent to the browser; blank keeps the stored password
           });
         } catch (e) {
           console.error('Error parsing email config:', e);
@@ -331,33 +318,7 @@ export function EmailInvoices() {
 
   async function saveEmailConfig() {
     try {
-      // Note: In production, passwords should be encrypted
-      const configToSave = {
-        ...emailConfig,
-        password: emailConfig.password || '', // In production, encrypt this
-      };
-
-      const { data: existing } = await supabase
-        .from('app_settings')
-        .select('id')
-        .eq('setting_key', 'email_config')
-        .maybeSingle();
-
-      if (existing) {
-        await supabase
-          .from('app_settings')
-          .update({
-            setting_value: JSON.stringify(configToSave),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('setting_key', 'email_config');
-      } else {
-        await supabase.from('app_settings').insert({
-          setting_key: 'email_config',
-          setting_value: JSON.stringify(configToSave),
-        });
-      }
-
+      await saveSharedSettings({ email_config: JSON.stringify(emailConfig) });
       toast({
         title: 'Email Configuration Saved',
         description: 'Your email settings have been saved.',
@@ -371,7 +332,6 @@ export function EmailInvoices() {
       });
     }
   }
-
   async function testConnection() {
     if (!emailWebhookUrl) {
       toast({

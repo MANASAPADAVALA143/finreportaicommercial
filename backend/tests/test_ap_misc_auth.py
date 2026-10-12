@@ -99,14 +99,15 @@ ROUTES = sorted({
 
 
 def test_every_guarded_route_is_covered():
-    assert len(ROUTES) == 24
+    assert len(ROUTES) == 29
 
 
 @pytest.mark.parametrize("method,path", ROUTES, ids=[f"{m} {p}" for m, p in ROUTES])
 def test_routes_reject_requests_without_login(method, path):
-    res = TestClient(_app(None)).request(method, path, params={"company_id": CO_A, "company_slug": "a"},
-                                         json={"company_id": CO_A, "invoice": {}, "confirm": True,
-                                               "purchase_orders": [{}], "goods_receipts": [{}]})
+    res = TestClient(_app(None)).request(method, path,
+                                         params={"company_id": CO_A, "company_slug": "a", "keys": "api_endpoint"},
+                                         json={"company_id": CO_A, "invoice": {}, "confirm": True, "invoice_id": "i",
+                                               "purchase_orders": [{}], "goods_receipts": [{}], "settings": {}})
     assert res.status_code == 401, res.text
 
 
@@ -241,7 +242,116 @@ def test_admin_issued_state_is_accepted_but_zoho_domain_is_pinned(env, settings_
     assert settings_store == []
 
 
+def test_credentials_are_admin_only_and_never_include_secrets(client, env, settings_store):
+    env.roles[WS_A] = "owner"
+    assert client.get("/api/ap/integrations/credentials").status_code == 403
+    env.user_role = "super_admin"
+    res = client.get("/api/ap/integrations/credentials")
+    assert res.status_code == 200, res.text
+    assert res.json()["zoho"]["has_client_secret"] is True and res.json()["zoho"]["client_id"] == "cid"
+    assert "csecret" not in res.text and "qsecret" not in res.text and '"rt"' not in res.text
+
+
+class _FakeTable:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, col, val):
+        return _FakeTable([r for r in self.rows if str(r.get(col)) == str(val)])
+
+    def in_(self, col, vals):
+        return _FakeTable([r for r in self.rows if str(r.get(col)) in {str(v) for v in vals}])
+
+    def limit(self, _n):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self.rows)
+
+
+class _FakeAsyncClient:
+    calls: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def post(self, url, **kwargs):
+        _FakeAsyncClient.calls.append((url, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: {"code": 0, "bill": {"bill_id": "b1", "bill_number": "BN"}})
+
+
+INV_A = "11111111-0000-4000-8000-00000000000a"
+
+
+def test_bill_push_is_admin_only_and_uses_the_stored_invoice(client, env, settings_store, monkeypatch):
+    invoices = [{"id": INV_A, "company_id": CO_A, "vendor_name": "Acme", "invoice_number": "A-1",
+                 "total_amount": 105, "tax_amount": 5, "currency": "AED"}]
+    monkeypatch.setattr(company_access, "get_supabase", lambda: SimpleNamespace(table=lambda _n: _FakeTable(invoices)))
+    monkeypatch.setattr(ap_integrations, "get_supabase", lambda: SimpleNamespace(table=lambda _n: _FakeTable(invoices)))
+    monkeypatch.setattr(ap_integrations.httpx, "AsyncClient", _FakeAsyncClient)
+
+    async def _token(_client):
+        return "access", "https://www.zohoapis.in"
+
+    monkeypatch.setattr(ap_integrations, "_zoho_token", _token)
+    _FakeAsyncClient.calls = []
+    env.roles[WS_A] = "owner"
+    body = {"invoice_id": INV_A, "vendor_name": "Injected", "total_amount": 1}
+    assert client.post("/api/ap/integrations/zoho/push-bill", json=body).status_code == 403
+    assert _FakeAsyncClient.calls == []
+    env.user_role = "super_admin"
+    res = client.post("/api/ap/integrations/zoho/push-bill", json=body)
+    assert res.status_code == 200, res.text
+    assert res.json()["success"] is True
+    sent = json.loads(_FakeAsyncClient.calls[0][1]["json"]["JSONString"])
+    assert sent["vendor_name"] == "Acme" and sent["line_items"][0]["rate"] == 100.0
+
+
 # ── AP settings ──────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def shared(monkeypatch):
+    store = {"api_endpoint": "https://n8n/x", "zoho_client_secret": "csecret",
+             "email_config": json.dumps({"email": "ap@x.com", "password": "imap-pass"})}
+    monkeypatch.setattr(ap_settings, "get_app_settings_map", lambda keys: {k: store[k] for k in keys if k in store})
+    monkeypatch.setattr(ap_settings, "upsert_app_setting", lambda k, v: store.__setitem__(k, v))
+    return store
+
+
+def test_shared_settings_reads_never_return_secrets(client, shared):
+    res = client.get("/api/ap/shared-settings", params={"keys": "api_endpoint,zoho_client_secret,email_config"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["api_endpoint"] == "https://n8n/x"
+    assert "zoho_client_secret" not in body
+    assert json.loads(body["email_config"]) == {"email": "ap@x.com"}
+
+
+def test_shared_settings_writes_are_admin_only(client, env, shared):
+    env.roles[WS_A] = "owner"
+    res = client.put("/api/ap/shared-settings", json={"settings": {"api_endpoint": "https://attacker/hook"}})
+    assert res.status_code == 403
+    assert shared["api_endpoint"] == "https://n8n/x"
+    env.user_role = "super_admin"
+    assert client.put("/api/ap/shared-settings", json={"settings": {"zoho_access_token": "x"}}).status_code == 400
+    res = client.put("/api/ap/shared-settings", json={"settings": {
+        "api_endpoint": "https://n8n/y", "zoho_client_secret": "",
+        "email_config": json.dumps({"email": "new@x.com", "password": ""}),
+    }})
+    assert res.status_code == 200, res.text
+    assert shared["api_endpoint"] == "https://n8n/y"
+    assert shared["zoho_client_secret"] == "csecret"
+    assert json.loads(shared["email_config"]) == {"email": "new@x.com", "password": "imap-pass"}
+
 
 def test_company_settings_never_falls_back_to_another_company(client, monkeypatch):
     seen = []

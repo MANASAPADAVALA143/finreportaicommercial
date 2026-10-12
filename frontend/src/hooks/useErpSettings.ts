@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/ap-invoice/supabase';
+import { getSharedSettings } from '@/lib/ap-invoice/sharedSettingsService';
 import type { TallySettings } from '@/utils/tallyExport';
 
 export type TallyVersion = 'standard' | 'edit_log';
@@ -24,11 +24,8 @@ export function useErpSettings(): ErpSettings {
   useEffect(() => {
     async function load() {
       try {
-        const { data } = await supabase
-          .from('app_settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['tally_url', 'tally_company', 'tally_enabled', 'tally_version']);
-        const map = new Map((data || []).map((r) => [r.setting_key, r.setting_value]));
+        const data = await getSharedSettings(['tally_url', 'tally_company', 'tally_enabled', 'tally_version']);
+        const map = new Map(Object.entries(data));
         const version = map.get('tally_version') as TallyVersion | undefined;
         setSettings({
           tally_url: map.get('tally_url') || defaults.tally_url,

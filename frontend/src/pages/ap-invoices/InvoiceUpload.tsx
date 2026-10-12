@@ -20,6 +20,7 @@ import { ensureApCompanySynced, ensureApMembershipForUpload, resolveApSupabaseCo
 import { getStoredWorkspaceId } from '../../services/workspaceService';
 import { useAuth } from '../../context/AuthContext';
 import { getStoredAccessToken } from '../../utils/authToken';
+import { workspaceHeaders } from '../../utils/workspaceHeaders';
 import { CostCenterSelect } from '../../components/industry/CostCenterSelect';
 import { logSupabaseInvoiceError, upsertInvoiceRow } from '../../lib/ap-invoice/invoices';
 import { bulkUpsertInvoicesViaApi } from '../../lib/ap-invoice/bulkUpsertService';
@@ -294,38 +295,18 @@ export function InvoiceUpload() {
     const loadApiEndpoint = async () => {
       try {
         const apiBase = (import.meta.env.VITE_API_URL ?? '').trim().replace(/\/$/, '') || 'http://localhost:8001';
-        const res = await fetch(`${apiBase}/api/ap/app-settings`);
+        const res = await fetch(`${apiBase}/api/ap/app-settings`, {
+          headers: workspaceHeaders(getStoredAccessToken()),
+        });
         if (res.ok) {
           const body = (await res.json()) as Record<string, string>;
           applyWebhookSettings(body.api_endpoint ?? '', body.api_endpoint_classify_json ?? '');
           return;
         }
-      } catch {
-        /* backend offline — fall back to Supabase / env */
-      }
-
-      try {
-        const { data, error } = await supabase
-          .from('app_settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['api_endpoint', 'api_endpoint_classify_json']);
-
-        if (error) {
-          const msg = error.message ?? String(error);
-          if (!msg.includes('schema cache') && !msg.includes('does not exist')) {
-            console.warn('Error loading API endpoint:', msg);
-          }
-          applyWebhookSettings('', '');
-          return;
-        }
-
-        const apiRow = data?.find((r) => r.setting_key === 'api_endpoint');
-        const classifyRow = data?.find((r) => r.setting_key === 'api_endpoint_classify_json');
-        applyWebhookSettings(apiRow?.setting_value ?? '', classifyRow?.setting_value ?? '');
       } catch (error) {
         console.warn('Error loading API endpoint from settings:', error);
-        applyWebhookSettings('', '');
       }
+      applyWebhookSettings('', '');
     };
 
     void loadApiEndpoint();
