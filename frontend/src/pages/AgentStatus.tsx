@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
-import { useClient } from '../context/ClientContext';
+import { workspaceHeaders } from '../utils/workspaceHeaders';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || 'http://localhost:8000';
 
@@ -57,10 +57,6 @@ export function AgentStatusGrid({
 }
 
 export default function AgentStatusPage() {
-  const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
-  const hdrs = useMemo(() => ({ 'X-Tenant-ID': tenantId }), [tenantId]);
-
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -68,14 +64,17 @@ export default function AgentStatusPage() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const r = await fetch(`${API_BASE}/api/agents/status`, { headers: hdrs });
+      const r = await fetch(`${API_BASE}/api/agents/status`, {
+        headers: workspaceHeaders(null),
+        credentials: 'include',
+      });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       setAgents(j.agents || []);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [hdrs]);
+  }, []);
 
   useEffect(() => {
     void load();
@@ -87,7 +86,8 @@ export default function AgentStatusPage() {
     try {
       const r = await fetch(`${API_BASE}/api/agents/run/${encodeURIComponent(name)}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hdrs },
+        headers: workspaceHeaders(null),
+        credentials: 'include',
         body: JSON.stringify({ context: {} }),
       });
       if (!r.ok) throw new Error(await r.text());

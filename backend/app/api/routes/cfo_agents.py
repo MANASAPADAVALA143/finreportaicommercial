@@ -1,18 +1,19 @@
-"""CFO Command Center API — agent runs, status, briefings, WebSocket stream."""
+"""CFO Command Center API — agent runs, status, briefings."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.agents.command_center.registry import list_agent_names
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.cfo_command_center import (
     CFOAgentLog,
     CFOAgentOutput,
@@ -27,16 +28,29 @@ from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo
 
 logger = logging.getLogger(__name__)
 
-agents_router = APIRouter(prefix="/api/agents", tags=["cfo-agents"])
-briefing_router = APIRouter(prefix="/api/briefing", tags=["cfo-briefing"])
+agents_router = APIRouter(prefix="/api/agents", tags=["cfo-agents"], dependencies=[Depends(validate_workspace)])
+briefing_router = APIRouter(prefix="/api/briefing", tags=["cfo-briefing"], dependencies=[Depends(validate_workspace)])
 
 
 class AskNexusBody(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
 
 
-def tenant_id_header(x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")) -> str:
-    return (x_tenant_id or "default").strip() or "default"
+def tenant_id_header(
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> str:
+    """Read access; the tenant is always the caller's workspace, never a client-supplied header."""
+    require_workspace_level(db, ctx, "read")
+    return ctx.workspace_id
+
+
+def tenant_id_write(
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> str:
+    require_workspace_level(db, ctx, "write")
+    return ctx.workspace_id
 
 
 class RunAgentBody(BaseModel):
@@ -48,7 +62,7 @@ def post_run_agent(
     agent_name: str,
     body: RunAgentBody,
     background_tasks: BackgroundTasks,
-    tenant_id: str = Depends(tenant_id_header),
+    tenant_id: str = Depends(tenant_id_write),
     db: Session = Depends(get_db),
 ):
     name = agent_name.strip().lower()
@@ -176,7 +190,7 @@ def _infer_row_count(agent: str, data: dict[str, Any]) -> int:
 @agents_router.patch("/alerts/{alert_id}/dismiss")
 def patch_dismiss_alert(
     alert_id: int,
-    tenant_id: str = Depends(tenant_id_header),
+    tenant_id: str = Depends(tenant_id_write),
     db: Session = Depends(get_db),
 ):
     row = (
@@ -226,7 +240,7 @@ def get_briefing_history(
 
 @briefing_router.post("/generate")
 def post_generate_briefing(
-    tenant_id: str = Depends(tenant_id_header),
+    tenant_id: str = Depends(tenant_id_write),
     db: Session = Depends(get_db),
 ):
     row = cfo_briefing_service.build_briefing_for_tenant(db, tenant_id)
@@ -303,57 +317,3 @@ def get_run_detail(
         "audit": audit,
         "output_keys": summary_keys,
     }
-
-
-@agents_router.websocket("/stream")
-async def ws_agents_stream(websocket: WebSocket):
-    await websocket.accept()
-    tenant_id = (websocket.headers.get("x-tenant-id") or websocket.query_params.get("tenant_id") or "default").strip()
-    run_filter = (websocket.query_params.get("run_id") or "").strip()
-    last_log_id = 0
-    try:
-        while True:
-            from app.core.database import SessionLocal
-
-            db = SessionLocal()
-            try:
-                q = db.query(CFOAgentRun).filter(CFOAgentRun.tenant_id == tenant_id)
-                if run_filter:
-                    q = q.filter(CFOAgentRun.run_id == run_filter)
-                runs = q.order_by(desc(CFOAgentRun.created_at)).limit(5).all()
-                for run in runs:
-                    rows = (
-                        db.query(CFOAgentLog)
-                        .filter(CFOAgentLog.cfo_agent_run_id == run.id, CFOAgentLog.id > last_log_id)
-                        .order_by(CFOAgentLog.id)
-                        .all()
-                    )
-                    for r in rows:
-                        last_log_id = max(last_log_id, r.id)
-                        await websocket.send_json(
-                            {
-                                "run_id": run.run_id,
-                                "agent": run.agent_name,
-                                "level": r.level,
-                                "message": r.message,
-                                "ts": r.created_at.isoformat() if r.created_at else None,
-                            }
-                        )
-                    await websocket.send_json(
-                        {
-                            "heartbeat": True,
-                            "run_id": run.run_id,
-                            "status": run.status.value if hasattr(run.status, "value") else str(run.status),
-                        }
-                    )
-            finally:
-                db.close()
-            await asyncio.sleep(0.6)
-    except WebSocketDisconnect:
-        logger.info("cfo agents ws disconnect")
-    except Exception as e:
-        logger.warning("cfo agents ws: %s", e)
-        try:
-            await websocket.send_json({"error": str(e)})
-        except Exception:
-            pass

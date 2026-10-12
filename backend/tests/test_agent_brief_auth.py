@@ -129,6 +129,7 @@ def board_pack(monkeypatch):
 
 
 ROUTES = [
+    ("POST", "/api/agents/run"),
     ("GET", "/api/agents/latest-brief"),
     ("POST", "/api/board-pack/generate"),
     ("GET", f"/api/board-pack/download-file/board_pack_{WS_A}_2026_10.pdf"),
@@ -137,7 +138,8 @@ ROUTES = [
 
 def test_every_route_is_covered():
     assert {r.path for r in agent_brief.router.routes} == {
-        "/api/agents/latest-brief", "/api/board-pack/generate", "/api/board-pack/download-file/{filename}",
+        "/api/agents/run", "/api/agents/latest-brief", "/api/board-pack/generate",
+        "/api/board-pack/download-file/{filename}",
     }
 
 
@@ -193,6 +195,39 @@ def test_download_only_own_board_pack(client, env):
     env.workspace = WS_A
     for bad in (f"board_pack_{WS_A}_missing.pdf", "board_pack_2026_10.pdf", f"board_pack_{WS_A}_x.txt", "..%2F..%2Fetc%2Fpasswd"):
         assert client.get(f"/api/board-pack/download-file/{bad}").status_code == 404, bad
+
+
+@pytest.fixture()
+def queued(monkeypatch):
+    calls: list[str] = []
+
+    def create(_db, tenant_id, agent_name, _context):
+        calls.append(tenant_id)
+        return SimpleNamespace(run_id="new", id=1)
+
+    monkeypatch.setitem(sys.modules, "app.agents.command_center.registry", SimpleNamespace(list_agent_names=lambda: ["recon"]))
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.cfo_orchestrator_service",
+        SimpleNamespace(create_queued_run=create, execute_cfo_agent_task=lambda _id: None),
+    )
+    return calls
+
+
+def test_agent_run_is_tagged_with_callers_workspace(client, env, queued):
+    assert client.post("/api/agents/run", json={"agent_name": "recon"}).status_code == 200
+    env.workspace = WS_B
+    assert client.post("/api/agents/run", json={"agent_name": "recon"}).status_code == 200
+    assert queued == [WS_A, WS_B]
+    assert client.post("/api/agents/run", json={"agent_name": "nope"}).status_code == 400
+
+
+def test_agent_run_needs_write_access(client, env, queued):
+    env.roles[WS_A] = "viewer"
+    assert client.post("/api/agents/run", json={"agent_name": "recon"}).status_code == 403
+    env.roles.pop(WS_A)
+    assert client.post("/api/agents/run", json={"agent_name": "recon"}).status_code == 403
+    assert queued == []
 
 
 def test_viewer_can_read_and_non_member_is_forbidden(client, env, board_pack):

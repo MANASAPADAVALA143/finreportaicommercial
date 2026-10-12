@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.agents.memory as agent_memory
-from app.api.routes import cfo_dashboard, fpa_variance
+from app.api.routes import cfo_dashboard, fpa_variance, ifrs_statements
 from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
@@ -24,12 +24,19 @@ WS_B = "bbbbbbbb-0000-4000-8000-000000000002"
 
 VARIANCE = ("POST", "/api/fpa/variance/calculate", {"line_items": [{"account": "Revenue", "budget": 100, "actual": 120}]})
 FORECAST = ("POST", "/api/cfo/forecast?period=month&type=revenue", None)
+IFRS = (
+    "POST",
+    "/api/ifrs/generate-statements?entity_name=Acme&period_end=2026-09-30",
+    {"trial_balance": [{"account": "Cash", "debit": 1}], "mappings": {"Cash": "cash"}},
+)
+ALL = [VARIANCE, FORECAST, IFRS]
+IDS = ["variance", "forecast", "ifrs"]
 
 
 class Env:
     def __init__(self):
         self.workspace = WS_A
-        self.roles = {WS_A: "viewer", WS_B: "accountant"}
+        self.roles = {WS_A: "accountant", WS_B: "accountant"}
 
     def ctx(self) -> WorkspaceContext:
         role = self.roles.get(self.workspace)
@@ -50,7 +57,9 @@ def env(monkeypatch):
 
 @pytest.fixture()
 def memory(monkeypatch):
-    store: dict[str, list] = {"fpa_variance": [{"data": "legacy"}], "fpa_forecast": [{"data": "legacy"}]}
+    store: dict[str, list] = {
+        name: [{"data": "legacy"}] for name in ("fpa_variance", "fpa_forecast", "ifrs_statements")
+    }
     runs: list[tuple[str, str | None]] = []
     seen: list[list] = []
 
@@ -78,6 +87,7 @@ def _app(env: Env | None) -> FastAPI:
     app = FastAPI()
     app.include_router(fpa_variance.router)
     app.include_router(cfo_dashboard.router)
+    app.include_router(ifrs_statements.router)
     app.dependency_overrides[get_db] = lambda: SimpleNamespace()
     if env is not None:
         app.dependency_overrides[validate_workspace] = env.ctx
@@ -89,12 +99,21 @@ def _call(client: TestClient, route):
     return client.request(method, path, json=body)
 
 
-@pytest.mark.parametrize("route", [VARIANCE, FORECAST], ids=["variance", "forecast"])
+@pytest.fixture(autouse=True)
+def stub_ifrs_mapper(monkeypatch):
+    monkeypatch.setattr(ifrs_statements.ifrs_mapper, "generate_statements", lambda **_kw: {"financialPosition": {}})
+
+
+@pytest.mark.parametrize("route", ALL, ids=IDS)
 def test_requires_login(route):
     assert _call(TestClient(_app(None)), route).status_code == 401
 
 
-@pytest.mark.parametrize("route,agent", [(VARIANCE, "fpa_variance"), (FORECAST, "fpa_forecast")], ids=["variance", "forecast"])
+@pytest.mark.parametrize(
+    "route,agent",
+    [(VARIANCE, "fpa_variance"), (FORECAST, "fpa_forecast"), (IFRS, "ifrs_statements")],
+    ids=IDS,
+)
 def test_runs_are_tagged_and_memory_isolated(route, agent, env, memory):
     client = TestClient(_app(env))
 
@@ -111,8 +130,10 @@ def test_runs_are_tagged_and_memory_isolated(route, agent, env, memory):
     assert memory.store[agent] == [{"data": "legacy"}]
 
 
-@pytest.mark.parametrize("route", [VARIANCE, FORECAST], ids=["variance", "forecast"])
-def test_non_member_is_forbidden(route, env, memory):
+@pytest.mark.parametrize("route", ALL, ids=IDS)
+def test_viewer_and_non_member_are_forbidden(route, env, memory):
+    env.roles[WS_A] = "viewer"
+    assert _call(TestClient(_app(env)), route).status_code == 403
     env.roles.pop(WS_A)
     assert _call(TestClient(_app(env)), route).status_code == 403
     assert memory.runs == []

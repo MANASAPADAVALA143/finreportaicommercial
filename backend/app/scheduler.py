@@ -80,7 +80,7 @@ def _table_exists(db, table_name: str) -> bool:
 def _has_agentic_runs_schema(db) -> bool:
     try:
         cols = {c.get("name") for c in inspect(db.bind).get_columns("agent_runs")}
-        required = {"agent_name", "insight", "urgency", "created_at"}
+        required = {"agent_name", "insight", "urgency", "created_at", "tenant_id"}
         return required.issubset(cols)
     except Exception:
         return False
@@ -173,67 +173,62 @@ async def run_daily_watchdog():
         db.close()
 
 
-async def run_board_pack_agent():
-    """Generate and send monthly board pack."""
+def _runs_by_workspace(db, days: int = 30) -> dict[str, dict[str, Any]]:
+    """Latest insight per agent for each workspace. Runs without a tenant_id are never included."""
+    since = f"datetime('now', '-{int(days)} day')" if db.bind.dialect.name == "sqlite" else f"NOW() - INTERVAL '{int(days)} days'"
+    runs = db.execute(
+        text(
+            f"""
+            SELECT tenant_id, agent_name, insight
+            FROM agent_runs
+            WHERE tenant_id IS NOT NULL AND tenant_id <> '' AND created_at > {since}
+            ORDER BY created_at DESC
+            """
+        )
+    ).fetchall()
+
+    by_workspace: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        row = _row_to_dict(run)
+        name = str(row.get("agent_name") or "").split(":")[0]
+        results = by_workspace.setdefault(row["tenant_id"], {})
+        if not name or name in results:
+            continue
+        insight_value = row.get("insight")
+        if isinstance(insight_value, str):
+            try:
+                insight_value = json.loads(insight_value)
+            except json.JSONDecodeError:
+                insight_value = {"note": insight_value}
+        results[name] = insight_value
+    return by_workspace
+
+
+async def run_board_pack_agent() -> list[str]:
+    """Generate one monthly board pack per workspace from that workspace's runs only."""
     db = SessionLocal()
+    generated: list[str] = []
     try:
         if not _has_agentic_runs_schema(db):
             print("Board pack agent skipped: agent_runs schema not ready")
-            return
-        runs = db.execute(
-            text(
-                """
-                SELECT agent_name, insight
-                FROM agent_runs
-                WHERE created_at > NOW() - INTERVAL '30 days'
-                ORDER BY created_at DESC
-                """
-            )
-        ).fetchall()
-
-        all_results: dict[str, Any] = {}
-        for run in runs:
-            row = _row_to_dict(run)
-            name = row.get("agent_name")
-            if not name or name in all_results:
-                continue
-            insight_value = row.get("insight")
-            if isinstance(insight_value, str):
-                try:
-                    insight_value = json.loads(insight_value)
-                except json.JSONDecodeError:
-                    insight_value = {"note": insight_value}
-            all_results[name] = insight_value
-
-        content = await generate_board_pack_content(all_results)
-        now = datetime.now()
-        pdf_path = await generate_pdf(content, f"board_pack_{now.year}_{now.month}.pdf")
-
-        db.execute(
-            text(
-                """
-                INSERT INTO board_packs (month, year, pdf_path, content, sent_to_cfo)
-                VALUES (:month, :year, :pdf_path, CAST(:content AS JSONB), TRUE)
-                """
-            ),
-            {
-                "month": now.month,
-                "year": now.year,
-                "pdf_path": pdf_path,
-                "content": json.dumps(content, default=str),
-            },
-        )
-        db.commit()
-        await send_email_alert(
-            f"Board Pack Ready — {now.strftime('%B %Y')}",
-            {"board_pack_path": pdf_path, "content": content},
-        )
-        print(f"Board pack generated: {pdf_path}")
+            return generated
+        by_workspace = _runs_by_workspace(db)
     except Exception as exc:
         print(f"Board pack error: {exc}")
-        db.rollback()
+        return generated
     finally:
         db.close()
+
+    stamp = datetime.now().strftime("%Y_%m")
+    for workspace_id, all_results in by_workspace.items():
+        try:
+            content = await generate_board_pack_content(all_results)
+            pdf_path = await generate_pdf(content, f"board_pack_{workspace_id}_{stamp}.pdf")
+            generated.append(pdf_path)
+            print(f"Board pack generated for workspace {workspace_id}: {pdf_path}")
+        except Exception as exc:
+            print(f"Board pack error for workspace {workspace_id}: {exc}")
+    return generated
 
 
 def setup_scheduler():

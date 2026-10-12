@@ -140,8 +140,6 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from app.db import init_db
 from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler, setup_ses_intake_scheduler
-from app.agents.command_center.registry import list_agent_names
-from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
 from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
 
 _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
@@ -694,30 +692,6 @@ async def setup_aws():
     """Create standard folder structure in both S3 buckets (idempotent)."""
     from app.core.aws_config import create_bucket_folders
     return create_bucket_folders()
-
-
-class RunAgentCompatBody(BaseModel):
-    agent_name: str = Field(..., min_length=1)
-    test_mode: bool = False
-    context: dict = Field(default_factory=dict)
-
-
-@app.post("/api/agents/run")
-async def run_agent_compat(
-    body: RunAgentCompatBody,
-    background_tasks: BackgroundTasks,
-    db=Depends(get_db),
-):
-    """
-    Compatibility endpoint for one-body agent trigger style.
-    """
-    agent_name = body.agent_name.strip().lower()
-    valid_agents = list_agent_names()
-    if agent_name not in valid_agents:
-        raise HTTPException(status_code=400, detail=f"Unknown agent. Valid: {', '.join(valid_agents)}")
-    row = create_queued_run(db, "default", agent_name, body.context or {})
-    background_tasks.add_task(execute_cfo_agent_task, row.id)
-    return {"cfo_run_id": row.run_id, "id": row.id, "agent": agent_name, "status": "queued"}
 
 
 _EXCEL_ADDIN_CORS = {

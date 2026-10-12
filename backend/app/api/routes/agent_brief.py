@@ -6,8 +6,9 @@ import os
 import tempfile
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -69,6 +70,35 @@ def _insight(raw, fallback_key: str):
 
 def _board_pack_prefix(workspace_id: str) -> str:
     return f"board_pack_{workspace_id}_"
+
+
+class RunAgentCompatBody(BaseModel):
+    agent_name: str = Field(..., min_length=1)
+    test_mode: bool = False
+    context: dict = Field(default_factory=dict)
+
+
+@router.post("/api/agents/run")
+async def run_agent_compat(
+    body: RunAgentCompatBody,
+    background_tasks: BackgroundTasks,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+):
+    """
+    Compatibility endpoint for one-body agent trigger style.
+    """
+    from app.agents.command_center.registry import list_agent_names
+    from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
+
+    require_workspace_level(db, ctx, "write")
+    agent_name = body.agent_name.strip().lower()
+    valid_agents = list_agent_names()
+    if agent_name not in valid_agents:
+        raise HTTPException(status_code=400, detail=f"Unknown agent. Valid: {', '.join(valid_agents)}")
+    row = create_queued_run(db, ctx.workspace_id, agent_name, body.context or {})
+    background_tasks.add_task(execute_cfo_agent_task, row.id)
+    return {"cfo_run_id": row.run_id, "id": row.id, "agent": agent_name, "status": "queued"}
 
 
 @router.get("/api/agents/latest-brief")

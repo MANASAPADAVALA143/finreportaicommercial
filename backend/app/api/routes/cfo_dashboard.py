@@ -482,7 +482,7 @@ async def generate_forecast(
     - Amazon Nova for insights
     """
     
-    require_workspace_level(db, ctx, "read")
+    require_workspace_level(db, ctx, "write")
     # Generate mock forecast data
     base_value = 328000 if type == "revenue" else 234000
     forecast_periods = {

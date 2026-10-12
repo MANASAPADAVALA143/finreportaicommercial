@@ -11,7 +11,9 @@ import io
 import json
 from datetime import datetime
 
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ifrs_statement import MappingTemplate
 from app.services.ifrs_mapper import IFRSMapper
 
@@ -144,12 +146,15 @@ async def generate_ifrs_statements(
     entity_name: str,
     period_end: str,
     currency: str = "USD",
-    prior_period: Optional[List[Dict[str, Any]]] = None
+    prior_period: Optional[List[Dict[str, Any]]] = None,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
 ):
     """
     Generate full IFRS financial statements
     Returns all 4 core statements + notes
     """
+    require_workspace_level(db, ctx, "write")
     try:
         # Generate statements using mapper service
         statements = ifrs_mapper.generate_statements(
@@ -177,9 +182,10 @@ async def generate_ifrs_statements(
             from app.core.database import SessionLocal
 
             _ifrs_data = result if isinstance(result, dict) else (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+            _key = f"ifrs_statements:{ctx.workspace_id}"
             _db = SessionLocal()
             try:
-                _history = await read_agent_memory("ifrs_statements", _db)
+                _history = await read_agent_memory(_key, _db)
                 _insight = await generate_insight(
                     "ifrs_statements",
                     {
@@ -193,7 +199,7 @@ async def generate_ifrs_statements(
                 _insight["deep_link"] = "/ifrs/statements"
                 _insight["module_label"] = "IFRS Statements"
                 await store_agent_run(
-                    "ifrs_statements",
+                    _key,
                     {
                         "entity_name": entity_name,
                         "period_end": period_end,
@@ -203,8 +209,9 @@ async def generate_ifrs_statements(
                     _ifrs_data,
                     _insight,
                     _db,
+                    tenant_id=ctx.workspace_id,
                 )
-                await update_agent_memory("ifrs_statements", _ifrs_data, _db)
+                await update_agent_memory(_key, _ifrs_data, _db)
             finally:
                 _db.close()
         except Exception as _e:

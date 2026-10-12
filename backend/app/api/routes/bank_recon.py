@@ -10,13 +10,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal, get_db
+from app.core.history_scope import history_key
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.bank_recon import (
     AdjustmentType,
     AffectsSide,
@@ -41,13 +43,20 @@ from app.models.bank_recon import (
 from app.services import recon_engine
 from app.services.recon_file_parser import parse_upload
 
-router = APIRouter(prefix="/api/recon", tags=["bank-recon"])
+router = APIRouter(prefix="/api/recon", tags=["bank-recon"], dependencies=[Depends(validate_workspace)])
 
 MATCH_JOBS: dict[str, dict[str, Any]] = {}
 
 
-def _tenant(tenant_id: Optional[str] = Query(default="default")) -> str:
-    return tenant_id or "default"
+def _tenant(
+    request: Request,
+    tenant_id: Optional[str] = Query(default=None),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> str:
+    """Workspace id, an accessible company UUID, or a label namespaced under the caller's workspace."""
+    level = "read" if request.method == "GET" else "write"
+    return history_key(db, ctx, tenant_id or ctx.workspace_id, level)
 
 
 def _log_audit(
@@ -532,7 +541,7 @@ async def upload_bank(
     }
 
 
-async def _matching_worker(job_id: str, workspace_id: int):
+async def _matching_worker(job_id: str, workspace_id: int, tenant_id: str, owner_workspace_id: str):
     db = SessionLocal()
     try:
         MATCH_JOBS[job_id]["status"] = "running"
@@ -546,9 +555,10 @@ async def _matching_worker(job_id: str, workspace_id: int):
             _recon_data = result if isinstance(result, dict) else (
                 result.model_dump() if hasattr(result, "model_dump") else result.dict()
             )
+            _key = f"bank_recon:{tenant_id}"
             _db = SessionLocal()
             try:
-                _history = await read_agent_memory("bank_recon", _db)
+                _history = await read_agent_memory(_key, _db)
                 _insight = await generate_insight(
                     "bank_recon",
                     {
@@ -563,13 +573,14 @@ async def _matching_worker(job_id: str, workspace_id: int):
                 _insight["deep_link"] = f"/recon/workspace/{workspace_id}"
                 _insight["module_label"] = "Bank Reconciliation"
                 await store_agent_run(
-                    "bank_recon",
+                    _key,
                     {"workspace_id": str(workspace_id)},
                     _recon_data,
                     _insight,
                     _db,
+                    tenant_id=owner_workspace_id,
                 )
-                await update_agent_memory("bank_recon", _recon_data, _db)
+                await update_agent_memory(_key, _recon_data, _db)
             finally:
                 _db.close()
         except Exception as _e:
@@ -601,6 +612,7 @@ async def run_matching(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     tenant_id: str = Depends(_tenant),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
     ws = (
         db.query(ReconWorkspace)
@@ -611,7 +623,7 @@ async def run_matching(
         raise HTTPException(404, "Workspace not found")
     job_id = str(uuid.uuid4())
     MATCH_JOBS[job_id] = {"status": "started", "workspace_id": workspace_id}
-    background_tasks.add_task(_matching_worker, job_id, workspace_id)
+    background_tasks.add_task(_matching_worker, job_id, workspace_id, tenant_id, ctx.workspace_id)
     result = {"job_id": job_id, "status": "started"}
     return result
 

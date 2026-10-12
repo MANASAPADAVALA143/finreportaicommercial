@@ -26,10 +26,20 @@ import {
 import toast from 'react-hot-toast';
 import { useClient } from '../context/ClientContext';
 import { postCfoAgentRun } from '../services/cfoAgents';
+import { getActiveWorkspaceId, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const API_URL =
   (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) ||
   'http://localhost:8000';
+
+function reconFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...workspaceHeaders(null),
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+  };
+  if (init.body instanceof FormData) delete headers['Content-Type'];
+  return fetch(url, { ...init, headers, credentials: 'include' });
+}
 
 type WorkspaceRow = {
   id: number;
@@ -93,7 +103,7 @@ export function BankReconciliationPage() {
   const location = useLocation();
   const { workspaceId } = useParams<{ workspaceId: string }>();
   const { activeClient } = useClient();
-  const tenantId = activeClient?.companyId || 'default';
+  const tenantId = activeClient?.companyId || getActiveWorkspaceId() || 'default';
 
   const tenantQs = useMemo(() => `tenant_id=${encodeURIComponent(tenantId)}`, [tenantId]);
 
@@ -143,7 +153,7 @@ function WorkspaceDashboardSection({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`${API_URL}/api/recon/workspaces?${tenantQs}`);
+      const r = await reconFetch(`${API_URL}/api/recon/workspaces?${tenantQs}`);
       if (!r.ok) throw new Error('Backend not available');
       const data = await r.json();
       setRows(Array.isArray(data) ? data : []);
@@ -168,7 +178,7 @@ function WorkspaceDashboardSection({
     }
     setCreating(true);
     try {
-      const r = await fetch(`${API_URL}/api/recon/workspace?${tenantQs}`, {
+      const r = await reconFetch(`${API_URL}/api/recon/workspace?${tenantQs}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -227,7 +237,16 @@ function WorkspaceDashboardSection({
           </button>
           <button
             type="button"
-            onClick={() => window.open(`${API_URL}/api/recon/analytics?${tenantQs}`, '_blank')}
+            onClick={async () => {
+              const r = await reconFetch(`${API_URL}/api/recon/analytics?${tenantQs}`);
+              if (!r.ok) {
+                toast.error('Export failed');
+                return;
+              }
+              const url = URL.createObjectURL(await r.blob());
+              window.open(url, '_blank');
+              setTimeout(() => URL.revokeObjectURL(url), 60000);
+            }}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50"
           >
             <Download className="w-4 h-4" /> Export JSON
@@ -421,9 +440,9 @@ function WorkspaceDetailSection({
   const loadAll = useCallback(async () => {
     try {
       const [d, m, u] = await Promise.all([
-        fetch(`${API_URL}/api/recon/workspace/${workspaceId}?${tenantQs}`),
-        fetch(`${API_URL}/api/recon/workspace/${workspaceId}/match-results?${tenantQs}`),
-        fetch(`${API_URL}/api/recon/workspace/${workspaceId}/unmatched?${tenantQs}`),
+        reconFetch(`${API_URL}/api/recon/workspace/${workspaceId}?${tenantQs}`),
+        reconFetch(`${API_URL}/api/recon/workspace/${workspaceId}/match-results?${tenantQs}`),
+        reconFetch(`${API_URL}/api/recon/workspace/${workspaceId}/unmatched?${tenantQs}`),
       ]);
       if (d.ok) setDetail(await d.json());
       if (m.ok) setMatchData(await m.json());
@@ -440,7 +459,7 @@ function WorkspaceDetailSection({
   const runMatching = async () => {
     setBusy(true);
     try {
-      const r = await fetch(
+      const r = await reconFetch(
         `${API_URL}/api/recon/workspace/${workspaceId}/run-matching?${tenantQs}`,
         { method: 'POST' }
       );
@@ -460,7 +479,7 @@ function WorkspaceDetailSection({
     fd.append('file', file);
     setBusy(true);
     try {
-      const r = await fetch(
+      const r = await reconFetch(
         `${API_URL}/api/recon/workspace/${workspaceId}/upload/${side}?${tenantQs}`,
         { method: 'POST', body: fd }
       );
@@ -489,13 +508,13 @@ function WorkspaceDetailSection({
   };
 
   const confirmMatch = async (id: number) => {
-    await fetch(`${API_URL}/api/recon/match/${id}/confirm?${tenantQs}`, { method: 'PATCH' });
+    await reconFetch(`${API_URL}/api/recon/match/${id}/confirm?${tenantQs}`, { method: 'PATCH' });
     toast.success('Confirmed');
     loadAll();
   };
 
   const rejectMatch = async (id: number) => {
-    await fetch(`${API_URL}/api/recon/match/${id}/reject?${tenantQs}`, {
+    await reconFetch(`${API_URL}/api/recon/match/${id}/reject?${tenantQs}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason: 'User rejected' }),
@@ -508,7 +527,7 @@ function WorkspaceDetailSection({
   const addAdjustment = async () => {
     setBusy(true);
     try {
-      const r = await fetch(`${API_URL}/api/recon/workspace/${workspaceId}/adjustment?${tenantQs}`, {
+      const r = await reconFetch(`${API_URL}/api/recon/workspace/${workspaceId}/adjustment?${tenantQs}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -531,7 +550,7 @@ function WorkspaceDetailSection({
   };
 
   const preparerSign = async () => {
-    const r = await fetch(
+    const r = await reconFetch(
       `${API_URL}/api/recon/workspace/${workspaceId}/preparer-signoff?${tenantQs}`,
       { method: 'POST' }
     );
@@ -541,7 +560,7 @@ function WorkspaceDetailSection({
   };
 
   const reviewerSign = async () => {
-    const r = await fetch(
+    const r = await reconFetch(
       `${API_URL}/api/recon/workspace/${workspaceId}/reviewer-signoff?${tenantQs}`,
       { method: 'POST' }
     );
@@ -993,7 +1012,7 @@ function AnalyticsSection({ tenantQs, onBack }: { tenantQs: string; onBack: () =
     (async () => {
       setLoading(true);
       try {
-        const r = await fetch(`${API_URL}/api/recon/analytics?${tenantQs}`);
+        const r = await reconFetch(`${API_URL}/api/recon/analytics?${tenantQs}`);
         if (!r.ok) throw new Error('Backend not available');
         const j = await r.json();
         if (!cancelled) setData(j);

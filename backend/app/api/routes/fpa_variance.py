@@ -425,7 +425,7 @@ async def calculate_variance(
     db: Session = Depends(get_db),
 ):
     """Compute variance ₹, %, status, materiality, department totals."""
-    require_workspace_level(db, ctx, "read")
+    require_workspace_level(db, ctx, "write")
     if not body.line_items:
         raise HTTPException(status_code=400, detail="line_items required")
     normalized = []
