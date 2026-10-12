@@ -11,17 +11,22 @@ POST /api/tally/push-ifrs-summary  — IFRS 15 revenue schedule → Tally JEs
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.tenant_scope import workspace_member
+
 log    = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/tally", tags=["Tally Push"])
+router = APIRouter(prefix="/api/tally", tags=["Tally Push"], dependencies=[Depends(workspace_member)])
 
 
 # ── XML escape (identical to InvoiceFlow tallyExport.ts) ──────────────────────
@@ -190,10 +195,30 @@ def _wrap_envelope(company: str, vouchers_xml: str) -> str:
 
 # ── Push helper ───────────────────────────────────────────────────────────────
 
+def _is_public_url(url: str) -> bool:
+    """Only public http(s) hosts: the server must not be steered at its own network or metadata endpoints."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 80, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+    return all(ipaddress.ip_address(info[4][0].split("%")[0]).is_global for info in infos)
+
+
 async def _push_xml_to_tally(xml: str, tally_url: str) -> dict[str, Any]:
     """POST XML to TallyPrime and parse response."""
+    if not _is_public_url(tally_url):
+        return {
+            "success":  True,
+            "message":  "TallyPrime not reachable from the server — XML returned for manual import",
+            "imported": 0,
+            "fallback": True,
+            "xml":      xml,
+        }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
             resp = await client.post(
                 tally_url,
                 content=xml.encode("utf-8"),

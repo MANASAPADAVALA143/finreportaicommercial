@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_company, request_workspace, workspace_reader, workspace_writer
 from app.models.company_setup import UaeCompanyProfile
 from app.modules.ifrs16.ifrs16_audit_pdf import build_ifrs16_audit_pdf
 from app.modules.ifrs16.ifrs16_je_service import post_all_monthly_jes, post_monthly_jes
@@ -30,13 +31,14 @@ from app.modules.ifrs16.ifrs16_repository import (
     _lease_to_dict,
 )
 
-router = APIRouter(prefix="/api/ifrs16", tags=["IFRS 16"])
+router = APIRouter(prefix="/api/ifrs16", tags=["IFRS 16"], dependencies=[Depends(workspace_reader)])
+_write = [Depends(workspace_writer)]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ws(request: Request, query_ws: str | None = None) -> str:
-    return query_ws or request.headers.get("x-workspace-id") or request.headers.get("x-tenant-id") or "demo"
+    return request_workspace(request, query_ws)
 
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
@@ -420,14 +422,14 @@ def get_lease_detail(
     return _lease_to_dict(lease)
 
 
-@router.post("/leases")
+@router.post("/leases", dependencies=_write)
 def save_lease(
     body: SaveLeaseRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _company_id(request)
+    cid = request_company(db, request, body.company_id or _company_id(request), "write")
     data = body.model_dump()
     data["workspace_id"] = ws
     data["company_id"] = cid
@@ -439,7 +441,7 @@ def save_lease(
     return {"status": "success", "lease": _lease_to_dict(lease)}
 
 
-@router.patch("/leases/{lease_id}")
+@router.patch("/leases/{lease_id}", dependencies=_write)
 def patch_lease(
     lease_id: str,
     body: PatchLeaseRequest,
@@ -458,7 +460,7 @@ def patch_lease(
     return {"status": "success", "lease": _lease_to_dict(updated)}
 
 
-@router.delete("/leases/{lease_id}")
+@router.delete("/leases/{lease_id}", dependencies=_write)
 def delete_lease(
     lease_id: str,
     request: Request,
@@ -489,10 +491,10 @@ def get_portfolio_summary(
 
 # ── Phase 3 — Monthly JEs ────────────────────────────────────────────────────
 
-@router.post("/post-monthly-je")
+@router.post("/post-monthly-je", dependencies=_write)
 def post_monthly_je(body: PostMonthlyJeRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _company_id(request)
+    cid = request_company(db, request, body.company_id or _company_id(request), "write")
     try:
         period = date.fromisoformat(body.period_date[:10])
         result = post_monthly_jes(db, body.lease_id, period, ws, cid)
@@ -501,10 +503,10 @@ def post_monthly_je(body: PostMonthlyJeRequest, request: Request, db: Session = 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/post-all-monthly-je")
+@router.post("/post-all-monthly-je", dependencies=_write)
 def post_all_je(body: BulkPostJeRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _company_id(request)
+    cid = request_company(db, request, body.company_id or _company_id(request), "write")
     try:
         period = date.fromisoformat(body.period_date[:10])
         return post_all_monthly_jes(db, ws, cid, period)
@@ -514,10 +516,10 @@ def post_all_je(body: BulkPostJeRequest, request: Request, db: Session = Depends
 
 # ── Phase 3 — CPI Remeasurement ──────────────────────────────────────────────
 
-@router.post("/remeasure")
+@router.post("/remeasure", dependencies=_write)
 def remeasure(body: RemeasureRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _company_id(request)
+    cid = request_company(db, request, body.company_id or _company_id(request), "write")
     try:
         rem_date = date.fromisoformat(body.remeasurement_date[:10])
         return remeasure_lease(
@@ -538,7 +540,7 @@ def remeasure(body: RemeasureRequest, request: Request, db: Session = Depends(ge
 @router.post("/audit-pdf")
 def audit_pdf(body: AuditPdfRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _company_id(request)
+    cid = request_company(db, request, body.company_id or _company_id(request), "read")
     period = body.period_date or date.today().strftime("%Y-%m")
 
     company_name = "Company"

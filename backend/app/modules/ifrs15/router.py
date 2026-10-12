@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -15,17 +16,25 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_reader, workspace_writer
 from app.modules.ifrs15.ifrs15_adapter import extraction_to_portfolio_payload, serialize_calculation_results
 from app.modules.ifrs15.ifrs15_calculator import IFRS15Calculator, IFRS15Input, PerformanceObligation
 from app.modules.ifrs15.ifrs15_extractor import IFRS15ContractExtractor, detect_nonstandard_clauses, read_contract_file_to_text
 from app.modules.ifrs15.ifrs15_excel_export import IFRS15ExcelExporter
 from app.services import ifrs15_service as svc
 
-router = APIRouter(prefix="/api/ifrs15", tags=["IFRS 15"])
+router = APIRouter(prefix="/api/ifrs15", tags=["IFRS 15"], dependencies=[Depends(workspace_reader)])
+
+_FILE_ID = re.compile(r"^[0-9a-f]{12}$")
 
 
 def _ws(request: Request, query_ws: str | None = None) -> str:
-    return query_ws or request.headers.get("x-workspace-id") or request.headers.get("x-tenant-id") or "demo"
+    return request_workspace(request, query_ws)
+
+
+def _export_dir(request: Request) -> Path:
+    ws = re.sub(r"[^A-Za-z0-9-]", "_", _ws(request))
+    return Path(tempfile.gettempdir()) / "ifrs15_exports" / ws
 
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
@@ -76,7 +85,7 @@ class ExportExcelRequest(BaseModel):
     filename: str = "ifrs15_report.xlsx"
 
 
-@router.post("/calculate-contract")
+@router.post("/calculate-contract", dependencies=[Depends(workspace_writer)])
 def calculate_stored_contract(body: CalculateContractRequest, request: Request, db: Session = Depends(get_db)):
     try:
         results = svc.calculate_full_contract(
@@ -192,23 +201,22 @@ async def extract_contract_text(
 
 
 @router.post("/export-excel")
-async def export_excel(body: ExportExcelRequest):
-    out_dir = Path(tempfile.gettempdir()) / "ifrs15_exports"
+async def export_excel(body: ExportExcelRequest, request: Request):
+    out_dir = _export_dir(request)
     out_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in body.filename)
-    filepath = out_dir / safe_name
-    exporter = IFRS15ExcelExporter()
-    exporter.export_ifrs15_workbook(body.calculation_results, str(filepath))
+    stem = "".join(c if c.isalnum() or c in "_-" else "_" for c in Path(body.filename).stem)[:80] or "ifrs15_report"
     file_id = uuid.uuid4().hex[:12]
-    tagged = out_dir / f"{file_id}_{safe_name}"
-    filepath.rename(tagged)
+    tagged = out_dir / f"{file_id}_{stem}.xlsx"
+    exporter = IFRS15ExcelExporter()
+    exporter.export_ifrs15_workbook(body.calculation_results, str(tagged))
     return {"status": "success", "file_id": file_id, "filename": tagged.name}
 
 
 @router.get("/download/{file_id}")
-async def download_export(file_id: str):
-    out_dir = Path(tempfile.gettempdir()) / "ifrs15_exports"
-    matches = sorted(out_dir.glob(f"{file_id}_*.xlsx"))
+async def download_export(file_id: str, request: Request):
+    if not _FILE_ID.match(file_id):
+        raise HTTPException(status_code=404, detail="File not found")
+    matches = sorted(_export_dir(request).glob(f"{file_id}_*.xlsx"))
     if not matches:
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(

@@ -1,19 +1,12 @@
 /** IFRS 16 — calculator, repository, JEs, remeasurement, audit PDF */
 
 import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredWorkspaceId } from './workspaceService';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/ifrs16`;
 
 function hdrs(companyId?: string | null): Record<string, string> {
-  const wsId = getStoredWorkspaceId();
-  const h: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
-  if (companyId) h['X-Company-ID'] = companyId;
-  return h;
+  return workspaceHeaders(getStoredAccessToken(), companyId ? { 'X-Company-ID': companyId } : {});
 }
 
 export interface LeaseCalculatePayload {
@@ -227,10 +220,11 @@ export async function downloadAuditPdf(
 export async function uploadIFRS16Contract(file: File): Promise<LeaseExtractionResult> {
   const form = new FormData();
   form.append('file', file);
-  const wsId = getStoredWorkspaceId();
+  const headers = hdrs();
+  delete headers['Content-Type'];
   const res = await fetch(`${BASE}/upload-contract`, {
     method: 'POST',
-    headers: { 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId },
+    headers,
     body: form,
   });
   if (!res.ok) throw new Error(await res.text());

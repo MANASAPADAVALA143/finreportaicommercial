@@ -1,13 +1,10 @@
 import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredWorkspaceId } from './workspaceService';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/ifrs9`;
 
 function hdrs(companyId?: string | null): Record<string, string> {
-  const ws = getStoredWorkspaceId();
-  const h: Record<string, string> = { 'Content-Type': 'application/json', 'X-Workspace-ID': ws, 'X-Tenant-ID': ws };
-  if (companyId) h['X-Company-ID'] = companyId;
-  return h;
+  return workspaceHeaders(getStoredAccessToken(), companyId ? { 'X-Company-ID': companyId } : {});
 }
 
 export interface ECLAsset {

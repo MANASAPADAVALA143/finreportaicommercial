@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.company_access import AccessLevel, is_super_admin, require_workspace_level
+from app.core.company_access import AccessLevel, is_super_admin, require_company_access, require_workspace_level
 from app.core.database import get_db
 from app.core.history_scope import history_key
 from app.middleware.workspace import WorkspaceContext, validate_workspace
@@ -83,6 +83,13 @@ def request_workspace(request: Request, requested: Optional[str] = None) -> str:
     if asked and asked != ws:
         raise HTTPException(status_code=403, detail="workspace_id does not match the active workspace")
     return ws
+
+
+def request_company(db: Session, request: Request, company_id: Optional[str], level: AccessLevel) -> Optional[str]:
+    """Optional company id, checked against the caller's access when given."""
+    if not (company_id or "").strip():
+        return None
+    return require_company_access(db, _request_ctx(request), company_id, level)
 
 
 def request_user_email(request: Request) -> Optional[str]:

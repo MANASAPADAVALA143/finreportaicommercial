@@ -13,12 +13,12 @@ from datetime import datetime
 
 from app.core.company_access import require_workspace_level
 from app.core.database import get_db
-from app.core.tenant_scope import header_tenant
+from app.core.tenant_scope import header_tenant, workspace_reader
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ifrs_statement import MappingTemplate
 from app.services.ifrs_mapper import IFRSMapper
 
-router = APIRouter(prefix="/api/ifrs", tags=["ifrs-statements"])
+router = APIRouter(prefix="/api/ifrs", tags=["ifrs-statements"], dependencies=[Depends(workspace_reader)])
 
 # Initialize services
 ifrs_mapper = IFRSMapper()

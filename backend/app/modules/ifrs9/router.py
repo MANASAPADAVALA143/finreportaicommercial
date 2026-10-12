@@ -9,13 +9,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_company, request_workspace, workspace_reader, workspace_writer
 from app.services import ifrs9_service as svc
 
-router = APIRouter(prefix="/api/ifrs9", tags=["IFRS 9"])
+router = APIRouter(prefix="/api/ifrs9", tags=["IFRS 9"], dependencies=[Depends(workspace_reader)])
+_write = [Depends(workspace_writer)]
 
 
 def _ws(request: Request, q: str | None = None) -> str:
-    return q or request.headers.get("x-workspace-id") or request.headers.get("x-tenant-id") or "demo"
+    return request_workspace(request, q)
 
 
 def _cid(request: Request, q: str | None = None) -> str | None:
@@ -96,10 +98,10 @@ def calculate_ecl_endpoint(body: CalculateEclRequest, request: Request, db: Sess
     return svc.calculate_ecl(assets, body.asset_class)
 
 
-@router.post("/save-portfolio")
+@router.post("/save-portfolio", dependencies=_write)
 def save_portfolio_endpoint(body: SavePortfolioRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _cid(request)
+    cid = request_company(db, request, body.company_id or _cid(request), "write")
     port = svc.save_portfolio(
         db, workspace_id=ws, company_id=cid,
         portfolio_name=body.portfolio_name, asset_class=body.asset_class,
@@ -109,10 +111,10 @@ def save_portfolio_endpoint(body: SavePortfolioRequest, request: Request, db: Se
     return {"status": "success", "portfolio_id": port.id}
 
 
-@router.post("/post-provision-je")
+@router.post("/post-provision-je", dependencies=_write)
 def post_provision_je_endpoint(body: PostProvisionJeRequest, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id or None)
-    cid = body.company_id or _cid(request)
+    cid = request_company(db, request, body.company_id or _cid(request), "write")
     try:
         return svc.post_provision_je(
             db, portfolio_id=body.portfolio_id,

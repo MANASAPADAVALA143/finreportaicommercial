@@ -9,24 +9,37 @@ All routes are mounted under /api/ifrs (via main.py include_router).
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import header_tenant
+from app.models.ifrs_statement import TrialBalance
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["IFRS Export & CT Bridge"])
 
 
-# ── Dependency: resolve tenant ────────────────────────────────────────────────
+# ── Dependency: the trial balance must belong to the caller's tenant ─────────
 
-def _tenant(x_tenant_id: Annotated[str | None, Header()] = None) -> str:
-    return (x_tenant_id or "default").strip()
+def _owned_tb(
+    trial_balance_id: int,
+    tenant_id: str = Depends(header_tenant),
+    db: Session = Depends(get_db),
+) -> int:
+    found = (
+        db.query(TrialBalance.id)
+        .filter(TrialBalance.id == trial_balance_id, TrialBalance.tenant_id == tenant_id)
+        .first()
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="Trial balance not found")
+    return trial_balance_id
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -39,8 +52,7 @@ def _tenant(x_tenant_id: Annotated[str | None, Header()] = None) -> str:
     response_class=Response,
 )
 async def export_excel(
-    trial_balance_id: int,
-    tenant_id: str = Depends(_tenant),
+    trial_balance_id: int = Depends(_owned_tb),
     db: Session = Depends(get_db),
 ):
     """
@@ -72,8 +84,7 @@ async def export_excel(
     response_class=Response,
 )
 async def export_pdf(
-    trial_balance_id: int,
-    tenant_id: str = Depends(_tenant),
+    trial_balance_id: int = Depends(_owned_tb),
     db: Session = Depends(get_db),
 ):
     """
@@ -105,8 +116,7 @@ async def export_pdf(
     response_class=Response,
 )
 async def export_word(
-    trial_balance_id: int,
-    tenant_id: str = Depends(_tenant),
+    trial_balance_id: int = Depends(_owned_tb),
     db: Session = Depends(get_db),
 ):
     """
@@ -158,8 +168,8 @@ class CTBridgeRequest(BaseModel):
     summary="Calculate UAE Corporate Tax bridge",
 )
 async def generate_ct_bridge(
-    trial_balance_id: int,
     payload: CTBridgeRequest,
+    trial_balance_id: int = Depends(_owned_tb),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
@@ -202,7 +212,7 @@ async def generate_ct_bridge(
     summary="Get saved UAE CT bridge result",
 )
 async def get_ct_bridge(
-    trial_balance_id: int,
+    trial_balance_id: int = Depends(_owned_tb),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """
