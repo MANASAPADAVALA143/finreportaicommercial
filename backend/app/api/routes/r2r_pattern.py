@@ -7,10 +7,13 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.core.r2r_scope import accounting_company_id, owned_client_id
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services.r2r_pattern_engine import R2RPatternEngine
 
-router = APIRouter(prefix="/api/r2r", tags=["r2r-pattern"])
+router = APIRouter(prefix="/api/r2r", tags=["r2r-pattern"], dependencies=[Depends(validate_workspace)])
 
 
 def _mat_float(v: Any) -> float:
@@ -83,7 +86,11 @@ def _run_engine(
 
 
 @router.post("/pattern/analyse")
-async def analyse_pattern(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+async def analyse_pattern(
+    request: Request,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
     """
     Accept either:
     - `Content-Type: application/json` with keys: rows (array), sensitivity, custom_threshold, materiality_*, client_id
@@ -156,6 +163,11 @@ async def analyse_pattern(request: Request, db: Session = Depends(get_db)) -> di
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid rows_json: {e}") from e
 
+    if client_id:
+        client_id = owned_client_id(db, ctx, client_id, "read")
+    else:
+        require_workspace_level(db, ctx, "read")
+
     if df is None or df.empty:
         raise HTTPException(
             status_code=400,
@@ -207,22 +219,25 @@ async def analyse_pattern(request: Request, db: Session = Depends(get_db)) -> di
 async def get_baseline_status(
     company_id: str,
     country: str = "UAE",
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
     """Return R2R historical baseline status for Historical Intelligence tab."""
     from app.modules.r2r.historical import get_baseline_status as _get
-    return _get(company_id, country, db)
+    return _get(accounting_company_id(db, ctx, company_id, "read"), country, db)
 
 
 @router.get("/load-from-accounting")
 async def load_from_accounting(
-    company_id: str = "demo",
+    company_id: str | None = None,
     country: str = "UAE",
     period: str = None,
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
     """Load posted JEs from accounting DB — no file upload needed."""
     from app.modules.r2r.historical import load_entries_for_analysis
+    company_id = accounting_company_id(db, ctx, company_id, "read")
     rows = load_entries_for_analysis(company_id, country, period, db)
     return {
         "rows": rows,
@@ -236,13 +251,14 @@ async def load_from_accounting(
 @router.post("/sync-from-accounting")
 async def sync_from_accounting(
     request: Request,
+    ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
     """Manually bulk-sync all posted JEs from UAE accounting to R2R baseline."""
     from app.modules.r2r.historical import add_to_company_baseline
 
     body = await request.json()
-    company_id = body.get("company_id", "demo")
+    company_id = accounting_company_id(db, ctx, body.get("company_id"), "write")
     country    = body.get("country", "UAE")
     period     = body.get("period")
 

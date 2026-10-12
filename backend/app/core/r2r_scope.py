@@ -23,3 +23,12 @@ def owned_client_id(db: Session, ctx: WorkspaceContext, client_id: str | None, l
     if owned is None:
         raise HTTPException(status_code=404, detail="R2R client not found")
     return cid
+
+
+def accounting_company_id(db: Session, ctx: WorkspaceContext, company_id: str | None, level: AccessLevel) -> str:
+    """Accounting-synced R2R history is keyed by the UAE accounting tenant, which is the workspace id."""
+    require_workspace_level(db, ctx, level)
+    cid = (company_id or "").strip() or ctx.workspace_id
+    if cid != ctx.workspace_id:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return cid

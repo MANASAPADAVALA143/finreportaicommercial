@@ -9,6 +9,7 @@ import * as svc from '../../services/uaeFullAccounting.service';
 import type { JournalEntry, JournalLine, UAEAccount } from '../../services/uaeFullAccounting.service';
 import { useClient } from '../../context/ClientContext';
 import { syncJournalLinesToR2R, uaeJEToHistoryEntries } from '../../services/r2rHistorySync';
+import { getActiveWorkspaceId, workspaceHeaders } from '../../utils/workspaceHeaders';
 
 const SOURCE_COLORS: Record<string, string> = {
   manual:     'bg-blue-900/40 text-blue-400 border-blue-700',
@@ -239,7 +240,12 @@ export default function JournalEntries() {
 
   // Load R2R sync count after entries load
   const refreshR2rCount = () => {
-    fetch('/api/r2r/baseline-status/demo?country=UAE')
+    const ws = getActiveWorkspaceId();
+    if (!ws) return;
+    fetch(`/api/r2r/baseline-status/${encodeURIComponent(ws)}?country=UAE`, {
+      headers: workspaceHeaders(null),
+      credentials: 'include',
+    })
       .then(r => r.json())
       .then(d => setR2rSyncCount(d.total_entries || 0))
       .catch(() => {});
@@ -250,9 +256,11 @@ export default function JournalEntries() {
     try {
       const res = await fetch('/api/r2r/sync-from-accounting', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': 'demo' },
-        body: JSON.stringify({ company_id: 'demo', country: 'UAE', period }),
+        headers: workspaceHeaders(null),
+        credentials: 'include',
+        body: JSON.stringify({ company_id: getActiveWorkspaceId(), country: 'UAE', period }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();
       setR2rMsg(`✅ Synced ${d.synced} entries to R2R baseline`);
       refreshR2rCount();

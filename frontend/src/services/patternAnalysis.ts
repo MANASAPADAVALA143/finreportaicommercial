@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 import { callGemini } from './geminiService';
+import { workspaceHeaders } from './workspaceService';
 
 // ─── WEIGHTS (must sum to 1.0) ───────────────────────────────────
 const W = { ml: 0.4, stat: 0.3, rules: 0.2, nova: 0.1 };
@@ -969,7 +970,8 @@ export async function analyzePatternBackend(
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: workspaceHeaders(null),
+      credentials: 'include',
       body: JSON.stringify(jsonBody),
       signal: controller.signal,
     });

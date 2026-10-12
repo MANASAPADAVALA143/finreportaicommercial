@@ -13,6 +13,7 @@ import { postR2RFeedback, getFeedbackHistory, getLearningProgress, type R2RFeedb
 import { postCfoAgentRun } from "../services/cfoAgents";
 import LearningDashboardTab from "../components/r2r/LearningDashboardTab";
 import { backendOrigin, isBackendConfigured } from "../utils/backendOrigin";
+import { getActiveWorkspaceId, workspaceHeaders } from "../utils/workspaceHeaders";
 
 // ─── Design Tokens (matches CFO Decision Intelligence) ───────────────────────
 const C = {
@@ -1654,8 +1655,12 @@ export default function R2RPatternAnalysisPage() {
     try {
       setAcctLoadMsg("Loading from UAE Accounting…");
       const base = API_BASE || "";
-      const company = selectedClientId || "demo";
-      const res = await fetch(`${base}/api/r2r/load-from-accounting?company_id=${company}&country=${country}`);
+      const company = getActiveWorkspaceId();
+      if (!company) throw new Error("No active workspace");
+      const res = await fetch(
+        `${base}/api/r2r/load-from-accounting?company_id=${encodeURIComponent(company)}&country=${country}`,
+        { headers: workspaceHeaders(null), credentials: "include" },
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.rows && data.rows.length > 0) {
@@ -1673,8 +1678,12 @@ export default function R2RPatternAnalysisPage() {
   const loadBaselineStatus = async () => {
     try {
       const base = API_BASE || "";
-      const company = selectedClientId || "demo";
-      const res = await fetch(`${base}/api/r2r/baseline-status/${company}?country=UAE`);
+      const company = getActiveWorkspaceId();
+      if (!company) return;
+      const res = await fetch(`${base}/api/r2r/baseline-status/${encodeURIComponent(company)}?country=UAE`, {
+        headers: workspaceHeaders(null),
+        credentials: "include",
+      });
       if (res.ok) setAcctBaselineStatus(await res.json());
     } catch { /* silent */ }
   };
