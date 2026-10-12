@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { useClient } from '../context/ClientContext';
 import { useAuth } from '../context/AuthContext';
 import { backendOrigin } from '../utils/backendOrigin';
+import { getActiveWorkspaceId, workspaceHeaders } from '../utils/workspaceHeaders';
 
 interface CloseTask {
   id: string;
@@ -17,12 +18,7 @@ interface CloseTask {
 }
 
 function getWorkspaceId(): string {
-  return (
-    localStorage.getItem('active_workspace_id') ||
-    localStorage.getItem('gnanova_workspace_id') ||
-    localStorage.getItem('tenantId') ||
-    'default'
-  );
+  return getActiveWorkspaceId() || 'default';
 }
 
 export function CloseTrackerPage() {
@@ -40,7 +36,9 @@ export function CloseTrackerPage() {
     setError(null);
     try {
       const base = backendOrigin();
-      const res = await authFetch(`${base}/api/close/${workspaceId}?period=${encodeURIComponent(period)}`);
+      const res = await authFetch(`${base}/api/close/${workspaceId}?period=${encodeURIComponent(period)}`, {
+        headers: workspaceHeaders(),
+      });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setTasks(data.items || []);
@@ -65,7 +63,7 @@ export function CloseTrackerPage() {
         `${base}/api/close/${workspaceId}/items/${id}?period=${encodeURIComponent(period)}`,
         {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: workspaceHeaders(),
           body: JSON.stringify(patch),
         }
       );

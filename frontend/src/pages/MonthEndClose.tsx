@@ -13,6 +13,13 @@ import {
 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
 import { downloadApiFile } from '../utils/apiAuth';
+import { workspaceHeaders } from '../utils/workspaceHeaders';
+
+/** Workspace + login headers without Content-Type, so FormData uploads keep their multipart boundary. */
+function closeHeaders(): Record<string, string> {
+  const { 'Content-Type': _ct, ...h } = workspaceHeaders(null);
+  return h;
+}
 
 type CheckStatus = 'pending' | 'running' | 'passed' | 'failed' | 'flagged' | 'check_error';
 
@@ -128,7 +135,7 @@ export default function MonthEndClose() {
 
   const fetchStatus = useCallback(async () => {
     if (!base || !runId) return;
-    const r = await fetch(`${base}/api/close/status/${runId}`);
+    const r = await fetch(`${base}/api/close/status/${runId}`, { headers: closeHeaders() });
     if (!r.ok) return;
     const j = (await r.json()) as StatusPayload;
     setStatus(j);
@@ -145,7 +152,9 @@ export default function MonthEndClose() {
 
   const loadHistory = async () => {
     if (!base) return;
-    const r = await fetch(`${base}/api/close/history?entity_id=${encodeURIComponent(entityId)}`);
+    const r = await fetch(`${base}/api/close/history?entity_id=${encodeURIComponent(entityId)}`, {
+      headers: closeHeaders(),
+    });
     if (r.ok) {
       const j = await r.json();
       setHistory(j.runs || []);
@@ -170,13 +179,13 @@ export default function MonthEndClose() {
       if (bankFile) fd.append('bank_statement_file', bankFile);
       if (priorFile) fd.append('prior_financials_file', priorFile);
 
-      const r = await fetch(`${base}/api/close/start`, { method: 'POST', body: fd });
+      const r = await fetch(`${base}/api/close/start`, { method: 'POST', body: fd, headers: closeHeaders() });
       if (!r.ok) throw new Error(await r.text());
       const j = await r.json();
       const id = j.run_id as string;
       setRunId(id);
 
-      const r2 = await fetch(`${base}/api/close/run-checks/${id}`, { method: 'POST' });
+      const r2 = await fetch(`${base}/api/close/run-checks/${id}`, { method: 'POST', headers: closeHeaders() });
       if (!r2.ok) throw new Error(await r2.text());
       await fetchStatus();
       void loadHistory();
@@ -193,7 +202,7 @@ export default function MonthEndClose() {
     try {
       const r = await fetch(`${base}/api/close/approve/${runId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(null),
         body: JSON.stringify({ approver: approver || 'CFO' }),
       });
       if (!r.ok) throw new Error(await r.text());
@@ -206,7 +215,7 @@ export default function MonthEndClose() {
 
   const downloadPdf = () => {
     if (!base || !runId) return;
-    downloadApiFile(`${base}/api/close/report/${runId}/pdf`, `month_end_close_${runId}.pdf`).catch((e) =>
+    downloadApiFile(`${base}/api/close/report/${runId}/pdf`, `month_end_close_${runId}.pdf`, closeHeaders()).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   };

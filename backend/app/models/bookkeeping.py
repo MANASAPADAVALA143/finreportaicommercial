@@ -25,7 +25,7 @@ class BookkeepingClientProfile(Base):
 
     __tablename__ = "bookkeeping_client_profiles"
 
-    client_id = Column(String(64), primary_key=True)
+    client_id = Column(String(128), primary_key=True)
     weekend_operations = Column(Boolean, default=False, nullable=False)
     receipt_threshold = Column(Float, default=100.0, nullable=False)
     chart_of_accounts = Column(JSON, default=list)  # list of account/category strings
@@ -36,7 +36,7 @@ class BookkeepingTransaction(Base):
     __tablename__ = "bookkeeping_transactions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     period_year = Column(Integer, nullable=True)
     period_month = Column(Integer, nullable=True)
     txn_date = Column(DateTime, nullable=False)
@@ -70,7 +70,7 @@ class ClientVendor(Base):
     __tablename__ = "client_vendors"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     vendor_name = Column(String(512), nullable=False)
     category = Column(String(256), nullable=True)
     avg_amount = Column(Float, default=0.0)
@@ -84,7 +84,7 @@ class ClientRule(Base):
     __tablename__ = "client_rules"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     vendor_pattern = Column(String(512), nullable=False)
     category = Column(String(256), nullable=False)
     confidence_boost = Column(Float, default=0.05)
@@ -130,7 +130,7 @@ class AccuracyMetric(Base):
     __tablename__ = "accuracy_metrics"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     month = Column(Integer, nullable=False)
     year = Column(Integer, nullable=False)
     total_transactions = Column(Integer, default=0)
@@ -150,7 +150,7 @@ class BookkeepingReconciliationRun(Base):
     __tablename__ = "bookkeeping_reconciliation_runs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     variance_amount = Column(Float, nullable=False)
     escalated = Column(Boolean, default=False, nullable=False)
     summary_json = Column(JSON, default=dict)
@@ -161,7 +161,7 @@ class ReconciliationSignoff(Base):
     __tablename__ = "reconciliation_signoffs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    client_id = Column(String(64), nullable=False, index=True)
+    client_id = Column(String(128), nullable=False, index=True)
     period_month = Column(Integer, nullable=False)
     period_year = Column(Integer, nullable=False)
     signed_by = Column(String(256), nullable=False)

@@ -30,8 +30,8 @@ export function addApiAuth(instance: AxiosInstance): void {
 }
 
 /** Plain links and window.open can't carry the token, so API files are fetched and saved as a blob. */
-export async function downloadApiFile(url: string, fallbackName: string): Promise<void> {
-  const res = await fetch(url, { credentials: 'include' });
+export async function downloadApiFile(url: string, fallbackName: string, headers?: HeadersInit): Promise<void> {
+  const res = await fetch(url, { headers, credentials: 'include' });
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const name = /filename\*?="?([^";]+)"?/.exec(res.headers.get('content-disposition') || '')?.[1];
   const href = URL.createObjectURL(await res.blob());

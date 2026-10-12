@@ -78,7 +78,12 @@ def spacer(ws, row: int) -> None:
     ws.row_dimensions[row].height = 8
 
 
-def generate_period_close_pack(data: dict) -> dict:
+def pack_dir(workspace_id: str) -> Path:
+    """Packs are stored per workspace so a download can only reach the caller's own files."""
+    return REV_REC_EXCEL_OUTPUT_DIR / "rev_rec" / workspace_id
+
+
+def generate_period_close_pack(data: dict, workspace_id: str) -> dict:
     """
     data keys (all optional except period):
     period, customer_name, roll_forward_result, three_way_match_result,
@@ -803,11 +808,12 @@ def generate_period_close_pack(data: dict) -> dict:
             ifrs15_sheets += exporter.append_period_close_sheets(wb, calc, meta, sheet_suffix=suffix)
 
     # ── Save ──────────────────────────────────────────────────────────────
-    file_id = str(uuid.uuid4())[:8]
-    safe_period = str(period).replace(" ", "_").replace("/", "-")
+    file_id = uuid.uuid4().hex
+    safe_period = str(period).replace(" ", "_").replace("/", "-").replace("\\", "-")
     filename = f"RevRec_PeriodClose_{safe_period}_{file_id}.xlsx"
-    REV_REC_EXCEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    filepath = os.path.join(REV_REC_EXCEL_OUTPUT_DIR, filename)
+    out_dir = pack_dir(workspace_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filepath = os.path.join(out_dir, filename)
     wb.save(filepath)
 
     base_sheets = 7

@@ -104,7 +104,7 @@ export const BookkeepingMissingReceiptsPage: React.FC = () => {
                   const u = urls[m.transaction_id]?.trim();
                   if (!u) return toast.error('URL required');
                   try {
-                    await attachReceipt(m.transaction_id, u);
+                    await attachReceipt(clientId, m.transaction_id, u);
                     toast.success('Saved');
                     load();
                   } catch {
@@ -128,7 +128,7 @@ export const BookkeepingMissingReceiptsPage: React.FC = () => {
                 const t = receiptText[m.transaction_id]?.trim();
                 if (!t) return toast.error('Text required');
                 try {
-                  const r = await verifyReceipt(m.transaction_id, t);
+                  const r = await verifyReceipt(clientId, m.transaction_id, t);
                   toast.success(r.matches ? 'Likely match' : 'Review needed');
                 } catch {
                   toast.error('Verify failed');

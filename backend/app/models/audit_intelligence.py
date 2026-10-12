@@ -10,6 +10,7 @@ class AuditRun(Base):
     __tablename__ = "audit_runs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(128), nullable=True, index=True)
     agent_type = Column(String(50), nullable=False, index=True)
     client_name = Column(String(100), nullable=True)
     file_name = Column(String(200), nullable=True)

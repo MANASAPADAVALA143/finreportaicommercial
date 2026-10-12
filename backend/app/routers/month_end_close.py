@@ -14,9 +14,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
-from app.middleware.auth import get_current_user
-from app.models.users import User
+from app.core.history_scope import history_key
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.month_end_close import CloseRun
 from app.services.month_end_close_engine import (
     initial_checklist,
@@ -27,8 +28,7 @@ from app.services.month_end_close_engine import (
 )
 from app.services.month_end_close_pdf import build_close_pdf_bytes
 
-# Example auth protection added below; replicate for other endpoints in this router as needed.
-router = APIRouter(prefix="/api/close", tags=["month-end-close"])
+router = APIRouter(prefix="/api/close", tags=["month-end-close"], dependencies=[Depends(validate_workspace)])
 
 _RESERVED_PATHS = frozenset({"status", "history", "start", "start-json", "report", "workspace"})
 
@@ -62,10 +62,23 @@ def _default_tracker_items() -> list[dict[str, Any]]:
     ]
 
 
-def _get_or_create_tracker_run(db: Session, workspace_id: str, period: str) -> CloseRun:
+def _owned(db: Session, ctx: WorkspaceContext, run_id: str, level: str) -> CloseRun:
+    require_workspace_level(db, ctx, level)
     run = (
         db.query(CloseRun)
-        .filter(CloseRun.entity_id == workspace_id, CloseRun.period == period, CloseRun.status == "tracker")
+        .filter(CloseRun.run_id == run_id, CloseRun.workspace_id == ctx.workspace_id)
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="run_id not found")
+    return run
+
+
+def _get_or_create_tracker_run(db: Session, tracker_key: str, period: str, owner_workspace_id: str) -> CloseRun:
+    """`tracker_key` must already be access-checked (history_key)."""
+    run = (
+        db.query(CloseRun)
+        .filter(CloseRun.entity_id == tracker_key, CloseRun.period == period, CloseRun.status == "tracker")
         .order_by(CloseRun.created_at.desc())
         .first()
     )
@@ -73,7 +86,8 @@ def _get_or_create_tracker_run(db: Session, workspace_id: str, period: str) -> C
         return run
     run = CloseRun(
         run_id=str(uuid.uuid4()),
-        entity_id=workspace_id,
+        workspace_id=owner_workspace_id,
+        entity_id=tracker_key,
         period=period,
         currency="AED",
         status="tracker",
@@ -81,7 +95,7 @@ def _get_or_create_tracker_run(db: Session, workspace_id: str, period: str) -> C
         snapshot_json={},
         audit_trail=[],
     )
-    _append_audit(run, "tracker_created", {"workspace_id": workspace_id, "period": period})
+    _append_audit(run, "tracker_created", {"workspace_id": tracker_key, "period": period})
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -115,7 +129,7 @@ class StartCloseJson(BaseModel):
 @router.post("/start")
 async def start_close(
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    ctx: WorkspaceContext = Depends(validate_workspace),
     entity_id: str = Form(...),
     period: str = Form(...),
     currency: str = Form("INR"),
@@ -129,6 +143,7 @@ async def start_close(
     Multipart close start (TB, JEs, bank, prior-period financials).
     Returns run_id and status started.
     """
+    require_workspace_level(db, ctx, "write")
     run_id = str(uuid.uuid4())
     snap: dict[str, Any] = {
         "uploaded": [],
@@ -166,6 +181,7 @@ async def start_close(
 
     run = CloseRun(
         run_id=run_id,
+        workspace_id=ctx.workspace_id,
         entity_id=entity_id.strip(),
         period=period.strip(),
         company_name=(company_name or "").strip() or None,
@@ -183,11 +199,17 @@ async def start_close(
 
 
 @router.post("/start-json")
-async def start_close_json(body: StartCloseJson, db: Session = Depends(get_db)):
+async def start_close_json(
+    body: StartCloseJson,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     """JSON-only start (metadata + optional file names) for integrations without multipart."""
+    require_workspace_level(db, ctx, "write")
     run_id = str(uuid.uuid4())
     run = CloseRun(
         run_id=run_id,
+        workspace_id=ctx.workspace_id,
         entity_id=body.entity_id.strip(),
         period=body.period.strip(),
         company_name=body.company_name,
@@ -204,10 +226,8 @@ async def start_close_json(body: StartCloseJson, db: Session = Depends(get_db)):
 
 
 @router.get("/status/{run_id}")
-def get_status(run_id: str, db: Session = Depends(get_db)):
-    run = db.get(CloseRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run_id not found")
+def get_status(run_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    run = _owned(db, ctx, run_id, "read")
     cj = run.checks_json or {}
     return {
         "run_id": run.run_id,
@@ -225,10 +245,8 @@ def get_status(run_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/run-checks/{run_id}")
-def run_checks(run_id: str, db: Session = Depends(get_db)):
-    run = db.get(CloseRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run_id not found")
+def run_checks(run_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    run = _owned(db, ctx, run_id, "write")
     run.status = "running_checks"
     cj = dict(run.checks_json or {})
     items = list(cj.get("items") or [])
@@ -266,10 +284,13 @@ class ApproveBody(BaseModel):
 
 
 @router.post("/approve/{run_id}")
-def approve_close(run_id: str, body: ApproveBody, db: Session = Depends(get_db)):
-    run = db.get(CloseRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run_id not found")
+def approve_close(
+    run_id: str,
+    body: ApproveBody,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    run = _owned(db, ctx, run_id, "write")
     if not (body.approver and body.approver.strip()):
         raise HTTPException(status_code=400, detail="approver is required")
     run.approved_by = body.approver.strip()
@@ -282,8 +303,17 @@ def approve_close(run_id: str, body: ApproveBody, db: Session = Depends(get_db))
 
 
 @router.get("/history")
-def list_history(entity_id: Optional[str] = None, db: Session = Depends(get_db)):
-    q = db.query(CloseRun).order_by(CloseRun.created_at.desc())
+def list_history(
+    entity_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    require_workspace_level(db, ctx, "read")
+    q = (
+        db.query(CloseRun)
+        .filter(CloseRun.workspace_id == ctx.workspace_id)
+        .order_by(CloseRun.created_at.desc())
+    )
     if entity_id:
         q = q.filter(CloseRun.entity_id == entity_id.strip())
     rows = q.limit(100).all()
@@ -316,10 +346,12 @@ def get_close_tracker(
     workspace_id: str,
     period: str = Query(..., description="Close period YYYY-MM"),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
     if workspace_id in _RESERVED_PATHS:
         raise HTTPException(status_code=404, detail="Not found")
-    run = _get_or_create_tracker_run(db, workspace_id, period)
+    key = history_key(db, ctx, workspace_id, "read")
+    run = _get_or_create_tracker_run(db, key, period, ctx.workspace_id)
     items = list((run.checks_json or {}).get("tracker_items") or _default_tracker_items())
     complete = sum(1 for it in items if it.get("status") == "Complete" or it.get("completed"))
     progress = round(complete / len(items) * 100) if items else 0
@@ -340,10 +372,12 @@ def patch_close_tracker_item(
     body: TrackerItemPatch,
     period: str = Query(..., description="Close period YYYY-MM"),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
     if workspace_id in _RESERVED_PATHS:
         raise HTTPException(status_code=404, detail="Not found")
-    run = _get_or_create_tracker_run(db, workspace_id, period)
+    key = history_key(db, ctx, workspace_id, "write")
+    run = _get_or_create_tracker_run(db, key, period, ctx.workspace_id)
     cj = dict(run.checks_json or {})
     items = list(cj.get("tracker_items") or _default_tracker_items())
     idx = next((i for i, it in enumerate(items) if it.get("id") == item_id), None)
@@ -380,10 +414,8 @@ def patch_close_tracker_item(
 
 
 @router.get("/report/{run_id}/pdf")
-def download_pdf(run_id: str, db: Session = Depends(get_db)):
-    run = db.get(CloseRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run_id not found")
+def download_pdf(run_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    run = _owned(db, ctx, run_id, "read")
     cj = run.checks_json or {}
     pdf = build_close_pdf_bytes(
         company_name=run.company_name or run.entity_id,

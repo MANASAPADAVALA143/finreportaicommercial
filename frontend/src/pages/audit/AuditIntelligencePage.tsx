@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { downloadApiFile } from '../../utils/apiAuth';
+import { getActiveWorkspaceId, workspaceHeaders } from '../../utils/workspaceHeaders';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).replace(/\/$/, '')) || '';
 
@@ -199,6 +200,12 @@ function managementLetterUrl(runId: number) {
   return `${API_BASE}/api/audit/runs/${runId}/management-letter.docx`;
 }
 
+/** Workspace + login headers without Content-Type, so FormData uploads keep their multipart boundary. */
+function auditHeaders(): Record<string, string> {
+  const { 'Content-Type': _ct, ...h } = workspaceHeaders(null);
+  return h;
+}
+
 function ApiFileLink({ url, name, className, children }: { url: string; name: string; className: string; children: ReactNode }) {
   return (
     <a
@@ -206,7 +213,7 @@ function ApiFileLink({ url, name, className, children }: { url: string; name: st
       className={className}
       onClick={(e) => {
         e.preventDefault();
-        downloadApiFile(url, name).catch((err) => window.alert(err instanceof Error ? err.message : 'Download failed'));
+        downloadApiFile(url, name, auditHeaders()).catch((err) => window.alert(err instanceof Error ? err.message : 'Download failed'));
       }}
     >
       {children}
@@ -259,7 +266,9 @@ export default function AuditIntelligencePage() {
   const refreshHistories = useCallback(async () => {
     const entries = await Promise.all(
       AGENTS.map(async (a) => {
-        const r = await fetch(`${API_BASE}/api/audit/runs?agent_type=${encodeURIComponent(a.key)}&limit=15`);
+        const r = await fetch(`${API_BASE}/api/audit/runs?agent_type=${encodeURIComponent(a.key)}&limit=15`, {
+          headers: auditHeaders(),
+        });
         const j = await r.json();
         return [a.key, j.runs || []] as const;
       })
@@ -354,7 +363,7 @@ export default function AuditIntelligencePage() {
                 setBusy('evidence-collector', true);
                 try {
                   const fd = new FormData(e.currentTarget);
-                  const r = await fetch(`${API_BASE}/api/audit/evidence-collector`, { method: 'POST', body: fd });
+                  const r = await fetch(`${API_BASE}/api/audit/evidence-collector`, { method: 'POST', body: fd, headers: auditHeaders() });
                   const j = await r.json();
                   if (!r.ok) throw new Error(j.detail || r.statusText);
                   setResultMap((m) => ({ ...m, 'evidence-collector': { run_id: j.run_id, result: j.result } }));
@@ -416,7 +425,7 @@ export default function AuditIntelligencePage() {
                 setBusy('ifrs-checker', true);
                 try {
                   const fd = new FormData(e.currentTarget);
-                  const r = await fetch(`${API_BASE}/api/audit/ifrs-checker`, { method: 'POST', body: fd });
+                  const r = await fetch(`${API_BASE}/api/audit/ifrs-checker`, { method: 'POST', body: fd, headers: auditHeaders() });
                   const j = await r.json();
                   if (!r.ok) throw new Error(j.detail || r.statusText);
                   setResultMap((m) => ({ ...m, 'ifrs-checker': { run_id: j.run_id, result: j.result } }));
@@ -482,7 +491,7 @@ export default function AuditIntelligencePage() {
                 setBusy('controls-tester', true);
                 try {
                   const fd = new FormData(e.currentTarget);
-                  const r = await fetch(`${API_BASE}/api/audit/controls-tester`, { method: 'POST', body: fd });
+                  const r = await fetch(`${API_BASE}/api/audit/controls-tester`, { method: 'POST', body: fd, headers: auditHeaders() });
                   const j = await r.json();
                   if (!r.ok) throw new Error(j.detail || r.statusText);
                   setResultMap((m) => ({ ...m, 'controls-tester': { run_id: j.run_id, result: j.result } }));
@@ -543,7 +552,7 @@ export default function AuditIntelligencePage() {
                 setBusy('sox-checker', true);
                 try {
                   const fd = new FormData(e.currentTarget);
-                  const r = await fetch(`${API_BASE}/api/audit/sox-checker`, { method: 'POST', body: fd });
+                  const r = await fetch(`${API_BASE}/api/audit/sox-checker`, { method: 'POST', body: fd, headers: auditHeaders() });
                   const j = await r.json();
                   if (!r.ok) throw new Error(j.detail || r.statusText);
                   setResultMap((m) => ({ ...m, 'sox-checker': { run_id: j.run_id, result: j.result } }));
@@ -603,7 +612,7 @@ export default function AuditIntelligencePage() {
                 setBusy('aml-monitor', true);
                 try {
                   const fd = new FormData(e.currentTarget);
-                  const r = await fetch(`${API_BASE}/api/audit/aml-monitor`, { method: 'POST', body: fd });
+                  const r = await fetch(`${API_BASE}/api/audit/aml-monitor`, { method: 'POST', body: fd, headers: auditHeaders() });
                   const j = await r.json();
                   if (!r.ok) throw new Error(j.detail || r.statusText);
                   setResultMap((m) => ({ ...m, 'aml-monitor': { run_id: j.run_id, result: j.result } }));
@@ -680,7 +689,7 @@ export default function AuditIntelligencePage() {
                   };
                   const r = await fetch(`${API_BASE}/api/audit/going-concern`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: workspaceHeaders(null),
                     body: JSON.stringify(payload),
                   });
                   const j = await r.json();
@@ -700,7 +709,13 @@ export default function AuditIntelligencePage() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <div>
                   <label className={labelCls}>Workspace ID</label>
-                  <input name="workspace_id" className={inputCls} placeholder="workspace id" required />
+                  <input
+                    name="workspace_id"
+                    className={inputCls}
+                    placeholder="workspace id"
+                    defaultValue={getActiveWorkspaceId() ?? ''}
+                    required
+                  />
                 </div>
                 <div>
                   <label className={labelCls}>Company ID</label>

@@ -4,26 +4,19 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import active_workspace
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.workspace_audit import WorkspaceAuditLog
 
-router = APIRouter(prefix="/api/audit", tags=["Audit Log"])
-
-
-def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+router = APIRouter(prefix="/api/audit", tags=["Audit Log"], dependencies=[Depends(validate_workspace)])
 
 
 @router.get("/log")
 def get_audit_log(
-    request: Request,
     workspace_id: Optional[str] = None,
     company_id: Optional[str] = None,
     from_date: Optional[str] = None,
@@ -32,8 +25,9 @@ def get_audit_log(
     page: int = 0,
     page_size: int = 50,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
-    tenant_id = workspace_id or _tenant(request)
+    tenant_id = active_workspace(db, ctx, workspace_id, "read")
     q = db.query(WorkspaceAuditLog).filter(WorkspaceAuditLog.workspace_id == tenant_id)
 
     if company_id:

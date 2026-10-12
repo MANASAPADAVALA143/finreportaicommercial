@@ -3,9 +3,8 @@ import toast from 'react-hot-toast';
 import {
   getMonthlyReport,
   getAccuracy,
-  monthlyReportPdfUrl,
+  downloadMonthlyReportPdf,
 } from '../../services/bookkeeping.service';
-import { downloadApiFile } from '../../utils/apiAuth';
 import {
   Line,
   LineChart,
@@ -86,7 +85,7 @@ export const BookkeepingMonthlyPage: React.FC = () => {
           type="button"
           disabled={!clientId}
           onClick={() =>
-            downloadApiFile(monthlyReportPdfUrl(clientId, month, year), `bookkeeping_${clientId}_${year}_${month}.pdf`).catch(
+            downloadMonthlyReportPdf(clientId, month, year).catch(
               (e) => toast.error(e instanceof Error ? e.message : 'Download failed'),
             )
           }

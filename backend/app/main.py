@@ -377,6 +377,30 @@ def _run_critical_migrations() -> None:
                 except Exception as _e:
                     logger.warning("Widen %s.agent_name skipped: %s", _agent_table, _e)
 
+        # ── Step 8: bookkeeping client ids are namespaced per workspace (ws:<id>:<label>) ──
+        if _engine.dialect.name == "postgresql":
+            for _bk_table in (
+                "bookkeeping_client_profiles",
+                "bookkeeping_transactions",
+                "client_vendors",
+                "client_rules",
+                "accuracy_metrics",
+                "bookkeeping_reconciliation_runs",
+                "reconciliation_signoffs",
+            ):
+                try:
+                    with _engine.begin() as conn:
+                        _len = conn.execute(_text(
+                            "SELECT character_maximum_length FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :t AND column_name = 'client_id'"
+                        ), {"t": _bk_table}).scalar()
+                        if _len is not None and _len < 128:
+                            conn.execute(_text(
+                                f"ALTER TABLE public.{_bk_table} ALTER COLUMN client_id TYPE VARCHAR(128)"
+                            ))
+                except Exception as _e:
+                    logger.warning("Widen %s.client_id skipped: %s", _bk_table, _e)
+
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 

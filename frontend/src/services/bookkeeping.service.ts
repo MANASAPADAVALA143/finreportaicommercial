@@ -1,6 +1,15 @@
+import { downloadApiFile } from '../utils/apiAuth';
+import { workspaceHeaders } from '../utils/workspaceHeaders';
+
 const API_BASE =
   (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) ||
   'http://localhost:8000';
+
+/** Workspace + login headers without Content-Type, for GETs and FormData uploads. */
+function bareHeaders(): Record<string, string> {
+  const { 'Content-Type': _ct, ...h } = workspaceHeaders();
+  return h;
+}
 
 export type BookTxn = {
   id: number;
@@ -38,7 +47,11 @@ export async function uploadTransactions(
   fd.append('file', file);
   if (periodMonth != null) fd.append('period_month', String(periodMonth));
   if (periodYear != null) fd.append('period_year', String(periodYear));
-  const r = await fetch(`${API_BASE}/api/bookkeeping/upload-transactions`, { method: 'POST', body: fd });
+  const r = await fetch(`${API_BASE}/api/bookkeeping/upload-transactions`, {
+    method: 'POST',
+    body: fd,
+    headers: bareHeaders(),
+  });
   return parseJson(r);
 }
 
@@ -50,7 +63,7 @@ export async function categorise(
 ): Promise<{ transactions: BookTxn[] }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/categorise`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({
       client_id: clientId,
       transaction_ids: transactionIds?.length ? transactionIds : null,
@@ -67,7 +80,7 @@ export async function detectAnomalies(
 ): Promise<{ transactions: BookTxn[]; anomaly_report: unknown }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/detect-anomalies`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({ client_id: clientId, transaction_ids: transactionIds?.length ? transactionIds : null }),
   });
   return parseJson(r);
@@ -79,7 +92,7 @@ export async function reconcileBookkeeping(
 ): Promise<{ reconciliation_summary: unknown }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/reconcile`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({ client_id: clientId, transaction_ids: transactionIds?.length ? transactionIds : null }),
   });
   return parseJson(r);
@@ -93,7 +106,7 @@ export async function learningFeedback(
 ): Promise<void> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/learning-feedback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({
       client_id: clientId,
       transaction_id: transactionId,
@@ -105,7 +118,9 @@ export async function learningFeedback(
 }
 
 export async function getReviewQueue(clientId: string): Promise<unknown> {
-  const r = await fetch(`${API_BASE}/api/bookkeeping/review-queue?client_id=${encodeURIComponent(clientId)}`);
+  const r = await fetch(`${API_BASE}/api/bookkeeping/review-queue?client_id=${encodeURIComponent(clientId)}`, {
+    headers: bareHeaders(),
+  });
   return parseJson(r);
 }
 
@@ -117,14 +132,14 @@ export async function listTransactions(
   const q = new URLSearchParams({ client_id: clientId });
   if (periodMonth != null) q.set('period_month', String(periodMonth));
   if (periodYear != null) q.set('period_year', String(periodYear));
-  const r = await fetch(`${API_BASE}/api/bookkeeping/transactions?${q}`);
+  const r = await fetch(`${API_BASE}/api/bookkeeping/transactions?${q}`, { headers: bareHeaders() });
   return parseJson(r);
 }
 
 export async function bulkApprove(clientId: string, transactionIds: number[]): Promise<{ approved_count: number }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/bulk-approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({ client_id: clientId, transaction_ids: transactionIds }),
   });
   return parseJson(r);
@@ -136,30 +151,30 @@ export async function putClientProfile(
 ): Promise<void> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/client-profile/${encodeURIComponent(clientId)}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify(body),
   });
   await parseJson(r);
 }
 
-export async function attachReceipt(transactionId: number, receiptUrl: string): Promise<void> {
+export async function attachReceipt(clientId: string, transactionId: number, receiptUrl: string): Promise<void> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/transactions/${transactionId}/receipt`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ receipt_url: receiptUrl }),
+    headers: workspaceHeaders(),
+    body: JSON.stringify({ client_id: clientId, receipt_url: receiptUrl }),
   });
   await parseJson(r);
 }
 
-export async function verifyReceipt(transactionId: number, receiptText: string): Promise<{
+export async function verifyReceipt(clientId: string, transactionId: number, receiptText: string): Promise<{
   matches: boolean;
   confidence: number;
   reason: string;
 }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/verify-receipt`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transaction_id: transactionId, receipt_text: receiptText }),
+    headers: workspaceHeaders(),
+    body: JSON.stringify({ client_id: clientId, transaction_id: transactionId, receipt_text: receiptText }),
   });
   return parseJson(r);
 }
@@ -168,7 +183,7 @@ export async function receiptReminder(clientId: string, transactionIds?: number[
   const url = `${API_BASE}/api/bookkeeping/receipt-reminder?client_id=${encodeURIComponent(clientId)}`;
   const r = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({ transaction_ids: transactionIds ?? null, channel: 'whatsapp' }),
   });
   return parseJson(r);
@@ -184,7 +199,7 @@ export async function reconSignOff(
 ): Promise<void> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/recon-sign-off`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({
       client_id: clientId,
       period_month: periodMonth,
@@ -204,7 +219,7 @@ export async function anomalyAction(
 ): Promise<{ transaction: BookTxn }> {
   const r = await fetch(`${API_BASE}/api/bookkeeping/anomaly-action`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: workspaceHeaders(),
     body: JSON.stringify({ client_id: clientId, transaction_id: transactionId, action }),
   });
   return parseJson(r);
@@ -220,7 +235,9 @@ export async function getAccuracy(clientId: string): Promise<
     staff_corrected: number;
   }>
 > {
-  const r = await fetch(`${API_BASE}/api/bookkeeping/accuracy/${encodeURIComponent(clientId)}`);
+  const r = await fetch(`${API_BASE}/api/bookkeeping/accuracy/${encodeURIComponent(clientId)}`, {
+    headers: bareHeaders(),
+  });
   return parseJson(r);
 }
 
@@ -230,7 +247,7 @@ export async function getMonthlyReport(clientId: string, month: number, year: nu
     month: String(month),
     year: String(year),
   });
-  const r = await fetch(`${API_BASE}/api/bookkeeping/monthly-report?${q}`);
+  const r = await fetch(`${API_BASE}/api/bookkeeping/monthly-report?${q}`, { headers: bareHeaders() });
   return parseJson(r);
 }
 
@@ -241,4 +258,12 @@ export function monthlyReportPdfUrl(clientId: string, month: number, year: numbe
     year: String(year),
   });
   return `${API_BASE}/api/bookkeeping/monthly-report/pdf?${q}`;
+}
+
+export function downloadMonthlyReportPdf(clientId: string, month: number, year: number): Promise<void> {
+  return downloadApiFile(
+    monthlyReportPdfUrl(clientId, month, year),
+    `bookkeeping_${clientId}_${year}_${month}.pdf`,
+    bareHeaders(),
+  );
 }

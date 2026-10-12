@@ -8,7 +8,10 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import active_workspace
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.audit_intelligence import AuditRun
 from app.modules.gulftax.ported_mount import get_ported_db
 from app.services.audit_command_center_service import (
@@ -20,7 +23,7 @@ from app.services.audit_command_center_service import (
 from app.services.audit_pdf_report import build_command_center_memo_pdf
 from app.services.llm_service import LLMNotConfiguredError, LLMRateLimitError
 
-router = APIRouter(tags=["audit-command-center"])
+router = APIRouter(tags=["audit-command-center"], dependencies=[Depends(validate_workspace)])
 
 
 class ScoreBody(BaseModel):
@@ -41,6 +44,10 @@ class NarrativeBody(BaseModel):
     vat_flags: list[str] = Field(default_factory=list)
 
 
+def _member(db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)) -> None:
+    require_workspace_level(db, ctx, "read")
+
+
 def _company_from_headers(
     body_company: str | None,
     x_company_id: str | None,
@@ -57,20 +64,22 @@ def audit_command_center_score(
     db: Session = Depends(get_db),
     ported_db: Session = Depends(get_ported_db),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
+    workspace_id = active_workspace(db, ctx, body.workspace_id, "read")
     company_id = _company_from_headers(body.company_id, x_company_id)
     try:
         result = compute_command_center_score(
             db,
             ported_db,
             period=body.period.strip(),
-            workspace_id=body.workspace_id.strip(),
+            workspace_id=workspace_id,
             company_id=company_id,
         )
         period = body.period.strip()
         latest_gc = (
             db.query(AuditRun)
-            .filter(AuditRun.agent_type == "going_concern")
+            .filter(AuditRun.agent_type == "going_concern", AuditRun.workspace_id == workspace_id)
             .order_by(AuditRun.run_timestamp.desc())
             .limit(50)
             .all()
@@ -81,7 +90,7 @@ def audit_command_center_score(
             full = run.full_result if isinstance(run.full_result, dict) else {}
             if (
                 str(full.get("period") or "") == period
-                and str(full.get("workspace_id") or "") == body.workspace_id.strip()
+                and str(full.get("workspace_id") or "") == workspace_id
                 and str(full.get("company_id") or "") == company_id
             ):
                 matched = full
@@ -101,7 +110,7 @@ def audit_command_center_score(
         raise HTTPException(status_code=500, detail=f"Score computation failed: {exc}") from exc
 
 
-@router.post("/api/audit/narrative")
+@router.post("/api/audit/narrative", dependencies=[Depends(_member)])
 def audit_narrative(body: NarrativeBody) -> dict[str, Any]:
     try:
         return generate_audit_narrative(body.model_dump())
@@ -119,7 +128,7 @@ class NarrativePdfBody(NarrativeBody):
     composite_risk: Optional[str] = None
 
 
-@router.post("/api/audit/narrative/pdf")
+@router.post("/api/audit/narrative/pdf", dependencies=[Depends(_member)])
 def audit_narrative_pdf(body: NarrativePdfBody) -> Response:
     try:
         pdf = build_command_center_memo_pdf(
@@ -148,10 +157,12 @@ def r2r_pattern_summary(
     company_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
+    ws = active_workspace(db, ctx, workspace_id, "read")
     cid = (company_id or x_company_id or "").strip() or None
     return summarize_je_pattern(
-        db, period=period, workspace_id=workspace_id, company_id=cid
+        db, period=period, workspace_id=ws, company_id=cid
     )
 
 
@@ -162,10 +173,12 @@ def ap_anomaly_summary(
     company_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     x_company_id: Optional[str] = Header(default=None, alias="X-Company-Id"),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ) -> dict[str, Any]:
+    ws = active_workspace(db, ctx, workspace_id, "read")
     cid = (company_id or x_company_id or "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="company_id required")
     return summarize_ap_anomaly(
-        db, period=period, workspace_id=workspace_id, company_id=cid
+        db, period=period, workspace_id=ws, company_id=cid
     )

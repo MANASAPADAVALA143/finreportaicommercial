@@ -14,7 +14,10 @@ from openpyxl import Workbook
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import AccessLevel, require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import active_workspace
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.audit_intelligence import AuditRun
 from app.models.client_data import ApInvoice, CtReturn, GulftaxTransaction
 from app.models.uae_accounting_full import (
@@ -35,7 +38,7 @@ from app.services.llm_service import invoke
 from app.services.r2r_pattern_engine import R2RPatternEngine
 from docx import Document
 
-router = APIRouter(prefix="/api/audit", tags=["audit-intelligence"])
+router = APIRouter(prefix="/api/audit", tags=["audit-intelligence"], dependencies=[Depends(validate_workspace)])
 
 
 GOING_CONCERN_SYSTEM_PROMPT = (
@@ -470,6 +473,7 @@ def _merge_evidence_result(
 
 def _persist(
     db: Session,
+    ctx: WorkspaceContext,
     *,
     agent_type: str,
     client_name: str | None,
@@ -477,6 +481,7 @@ def _persist(
     result: dict[str, Any],
 ) -> AuditRun:
     row = AuditRun(
+        workspace_id=ctx.workspace_id,
         agent_type=agent_type,
         client_name=(client_name or None),
         file_name=file_name,
@@ -490,6 +495,24 @@ def _persist(
     return row
 
 
+def _owned_run(db: Session, ctx: WorkspaceContext, run_id: int, level: AccessLevel = "read") -> AuditRun:
+    require_workspace_level(db, ctx, level)
+    row = (
+        db.query(AuditRun)
+        .filter(AuditRun.id == run_id, AuditRun.workspace_id == ctx.workspace_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return row
+
+
+def _writer(db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)) -> WorkspaceContext:
+    """Agent runs call the LLM and save a run, so they need write access."""
+    require_workspace_level(db, ctx, "write")
+    return ctx
+
+
 @router.post("/evidence-collector")
 async def audit_evidence_collector(
     file: UploadFile = File(...),
@@ -500,6 +523,7 @@ async def audit_evidence_collector(
     authorisation_limit: float = Form(0),
     client_name: str | None = Form(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(_writer),
 ):
     df, row_count = await read_upload_as_dataframe(file)
     csv_text = df.to_csv(index=False)
@@ -536,6 +560,7 @@ Raw data (CSV):
     )
     run = _persist(
         db,
+        ctx,
         agent_type="evidence-collector",
         client_name=client_name,
         file_name=file.filename,
@@ -552,6 +577,7 @@ async def audit_ifrs_checker(
     financial_text: str = Form(""),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(_writer),
 ):
     file_name = None
     parts = [
@@ -570,6 +596,7 @@ async def audit_ifrs_checker(
     result = invoke_audit_json(SYS_IFRS, user)
     run = _persist(
         db,
+        ctx,
         agent_type="ifrs-checker",
         client_name=client_name,
         file_name=file_name,
@@ -585,6 +612,7 @@ async def audit_controls_tester(
     company_size: str = Form(...),
     client_name: str | None = Form(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(_writer),
 ):
     user = f"""Control category: {control_type}
 Company size: {company_size}
@@ -595,6 +623,7 @@ Process description:
     result = invoke_audit_json(SYS_CONTROLS, user)
     run = _persist(
         db,
+        ctx,
         agent_type="controls-tester",
         client_name=client_name,
         file_name=None,
@@ -610,6 +639,7 @@ async def audit_sox_checker(
     quarter: str = Form(...),
     client_name: str | None = Form(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(_writer),
 ):
     csv_text, row_count = await read_upload_as_csv_text(file)
     user = f"""SOX scope: {section}
@@ -620,6 +650,7 @@ Control testing results ({row_count} rows):
     result = invoke_audit_json(SYS_SOX, user)
     run = _persist(
         db,
+        ctx,
         agent_type="sox-checker",
         client_name=client_name,
         file_name=file.filename,
@@ -635,6 +666,7 @@ async def audit_aml_monitor(
     jurisdiction: str = Form(...),
     client_name: str | None = Form(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(_writer),
 ):
     csv_text, row_count = await read_upload_as_csv_text(file)
     user = f"""Jurisdiction: {jurisdiction}
@@ -645,6 +677,7 @@ Transaction data ({row_count} rows):
     result = invoke_audit_json(SYS_AML, user)
     run = _persist(
         db,
+        ctx,
         agent_type="aml-monitor",
         client_name=client_name,
         file_name=file.filename,
@@ -658,8 +691,14 @@ def list_audit_runs(
     agent_type: str | None = None,
     limit: int = 25,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    q = db.query(AuditRun).order_by(AuditRun.run_timestamp.desc())
+    require_workspace_level(db, ctx, "read")
+    q = (
+        db.query(AuditRun)
+        .filter(AuditRun.workspace_id == ctx.workspace_id)
+        .order_by(AuditRun.run_timestamp.desc())
+    )
     if agent_type:
         q = q.filter(AuditRun.agent_type == agent_type)
     rows = q.limit(min(limit, 100)).all()
@@ -682,10 +721,9 @@ def list_audit_runs(
 def download_audit_pdf(
     run_id: int,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    row = db.query(AuditRun).filter(AuditRun.id == run_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    row = _owned_run(db, ctx, run_id)
     labels = {
         "evidence-collector": "Audit Evidence Collection Agent",
         "ifrs-checker": "IFRS Compliance Checker Agent",
@@ -713,10 +751,9 @@ def download_audit_pdf(
 def download_evidence_checklist_xlsx(
     run_id: int,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    row = db.query(AuditRun).filter(AuditRun.id == run_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    row = _owned_run(db, ctx, run_id)
     if row.agent_type != "evidence-collector":
         raise HTTPException(status_code=400, detail="Checklist is only available for evidence collector runs.")
     result = row.full_result if isinstance(row.full_result, dict) else {}
@@ -753,10 +790,9 @@ def download_evidence_checklist_xlsx(
 def download_management_letter_docx(
     run_id: int,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    row = db.query(AuditRun).filter(AuditRun.id == run_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    row = _owned_run(db, ctx, run_id)
     if row.agent_type != "evidence-collector":
         raise HTTPException(status_code=400, detail="Management letter is only available for evidence collector runs.")
     result = row.full_result if isinstance(row.full_result, dict) else {}
@@ -860,7 +896,9 @@ def _is_expense_account(account_type: str | None, account_code: str | None, acco
 def audit_going_concern(
     body: GoingConcernIn,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
+    body.workspace_id = active_workspace(db, ctx, body.workspace_id, "write")
     start, end = parse_period_dates(body.period)
 
     # 1) Net loss from uae_journal_entries (CR revenue < DR expenses)
@@ -1069,6 +1107,7 @@ def audit_going_concern(
     }
     run = _persist(
         db,
+        ctx,
         agent_type="going_concern",
         client_name=body.company_id,
         file_name=None,

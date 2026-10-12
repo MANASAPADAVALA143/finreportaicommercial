@@ -13,6 +13,7 @@ class CloseRun(Base):
     __tablename__ = "close_runs"
 
     run_id = Column(String(64), primary_key=True)
+    workspace_id = Column(String(128), nullable=True, index=True)
     entity_id = Column(String(128), nullable=False, index=True)
     period = Column(String(32), nullable=False, index=True)
     company_name = Column(String(256), nullable=True)

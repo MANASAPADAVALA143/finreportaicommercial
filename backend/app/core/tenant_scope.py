@@ -8,12 +8,22 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.core.company_access import AccessLevel, require_workspace_level
 from app.core.database import get_db
 from app.core.history_scope import history_key
 from app.middleware.workspace import WorkspaceContext, validate_workspace
+
+
+def active_workspace(db: Session, ctx: WorkspaceContext, requested: Optional[str], level: AccessLevel) -> str:
+    """A workspace id sent in a body or query string must be the active (header) workspace."""
+    ws = (requested or "").strip()
+    if ws and ws != ctx.workspace_id:
+        raise HTTPException(status_code=403, detail="workspace_id does not match the active workspace")
+    require_workspace_level(db, ctx, level)
+    return ctx.workspace_id
 
 
 def header_tenant(

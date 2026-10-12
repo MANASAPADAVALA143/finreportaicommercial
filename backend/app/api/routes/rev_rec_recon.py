@@ -1,10 +1,7 @@
 """IFRS 15 revenue recognition reconciliation — POST endpoints under /api/rev-rec."""
 import asyncio
-import glob
 import json
-import os
-import shutil
-import tempfile
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -14,7 +11,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import AccessLevel, require_workspace_level
 from app.core.database import get_db
+from app.core.tenant_scope import active_workspace
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.services import llm_service
 from app.services.rev_rec_leakage_service import (
     get_leakage_snapshot,
@@ -34,7 +34,11 @@ from app.services.ifrs15_service import (
     _contract_dict,
 )
 
-router = APIRouter(prefix="/api/rev-rec", tags=["Rev Rec Reconciliation"])
+def _member(db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)) -> None:
+    require_workspace_level(db, ctx, "read")
+
+
+router = APIRouter(prefix="/api/rev-rec", tags=["Rev Rec Reconciliation"], dependencies=[Depends(_member)])
 
 
 async def call_nova(prompt: str, max_tokens: int = 600, temperature: float = 0.25) -> str:
@@ -917,15 +921,17 @@ async def download_excel_pack(
     request: PeriodClosePackRequest,
     req: Request,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
     from app.services.rev_rec_excel import generate_period_close_pack
     from app.modules.ifrs15.ifrs15_repository import get_contract, list_calculated_contract_ids
     import json as _json
 
+    ws = _ws(db, ctx, request.workspace_id, "read")
+
     def _run() -> dict:
         data = request.model_dump()
         engine_payloads = list(data.get("ifrs15_engine_results") or [])
-        ws = _ws(req, request.workspace_id)
         cid = request.company_id or _company_id(req)
 
         contract_ids = list(request.ifrs15_contract_ids or [])
@@ -959,34 +965,35 @@ async def download_excel_pack(
         if engine_payloads:
             data["ifrs15_engine_results"] = engine_payloads
             data["ifrs15_contract_ids"] = contract_ids
-        return generate_period_close_pack(data)
+        return generate_period_close_pack(data, ws)
 
     return await asyncio.to_thread(_run)
 
 
-@router.get("/download-file/{file_id}")
-async def download_rev_rec_file(file_id: str):
-    from app.services.rev_rec_excel import REV_REC_EXCEL_OUTPUT_DIR
+_FILE_ID = re.compile(r"[0-9a-f]{32}")
 
-    if not file_id or len(file_id) > 64:
-        raise HTTPException(status_code=400, detail="Invalid file_id")
-    pattern = os.path.join(str(REV_REC_EXCEL_OUTPUT_DIR), f"*{file_id}*.xlsx")
-    matches = sorted(glob.glob(pattern))
+
+@router.get("/download-file/{file_id}")
+async def download_rev_rec_file(file_id: str, ctx: WorkspaceContext = Depends(validate_workspace)):
+    from app.services.rev_rec_excel import pack_dir
+
+    if not _FILE_ID.fullmatch(file_id):
+        raise HTTPException(status_code=404, detail="File not found")
+    matches = sorted(pack_dir(ctx.workspace_id).glob(f"RevRec_PeriodClose_*_{file_id}.xlsx"))
     if not matches:
         raise HTTPException(status_code=404, detail="File not found")
     filepath = matches[-1]
-    filename = os.path.basename(filepath)
     return FileResponse(
-        path=filepath,
+        path=str(filepath),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
+        filename=filepath.name,
     )
 
 
 # ── IFRS 15 contract register (Phase 3) ──────────────────────────────────────
 
-def _ws(request: Request, query_ws: str | None = None) -> str:
-    return query_ws or request.headers.get("x-workspace-id") or request.headers.get("x-tenant-id") or "demo"
+def _ws(db: Session, ctx: WorkspaceContext, requested: str | None, level: AccessLevel) -> str:
+    return active_workspace(db, ctx, requested, level)
 
 
 def _company_id(request: Request, query_cid: str | None = None) -> str | None:
@@ -998,11 +1005,12 @@ def persist_leakage_snapshot(
     body: LeakageSnapshotSaveRequest,
     request: Request,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
     """Persist revenue leakage rollup for a period (from three-way match items)."""
+    ws = _ws(db, ctx, body.workspace_id, "write")
     if not body.items:
         raise HTTPException(status_code=400, detail="items required")
-    ws = _ws(request, body.workspace_id or None)
     cid = body.company_id or _company_id(request)
     return save_leakage_snapshot(db, ws, cid, body.period, body.items)
 
@@ -1014,8 +1022,9 @@ def fetch_leakage_snapshot(
     company_id: str | None = None,
     workspace_id: str | None = None,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    ws = _ws(request, workspace_id)
+    ws = _ws(db, ctx, workspace_id, "read")
     cid = company_id or _company_id(request)
     row = get_leakage_snapshot(db, ws, cid, period)
     if not row:
@@ -1074,9 +1083,14 @@ class PostRecognitionJeRequest(BaseModel):
 
 
 @router.post("/contracts")
-def save_contract(body: ContractSaveRequest, request: Request, db: Session = Depends(get_db)):
+def save_contract(
+    body: ContractSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     data = body.model_dump()
-    data["workspace_id"] = _ws(request, body.workspace_id or None)
+    data["workspace_id"] = _ws(db, ctx, body.workspace_id, "write")
     data["company_id"] = body.company_id or _company_id(request)
     data["performance_obligations"] = [o.model_dump() if hasattr(o, "model_dump") else o for o in body.performance_obligations]
     c = create_contract(db, data)
@@ -1089,8 +1103,9 @@ def get_contracts(
     workspace_id: str | None = Query(None),
     company_id: str | None = Query(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    ws = _ws(request, workspace_id)
+    ws = _ws(db, ctx, workspace_id, "read")
     cid = company_id or _company_id(request)
     return {"contracts": list_contracts(db, ws, cid)}
 
@@ -1103,8 +1118,9 @@ def patch_contract(
     workspace_id: str | None = Query(None),
     company_id: str | None = Query(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    ws = _ws(request, workspace_id)
+    ws = _ws(db, ctx, workspace_id, "write")
     cid = company_id or _company_id(request)
     c = get_contract(db, contract_id, ws, cid)
     if not c:
@@ -1120,23 +1136,36 @@ def get_ifrs15_portfolio_summary(
     workspace_id: str | None = Query(None),
     company_id: str | None = Query(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    return ifrs15_portfolio_summary(db, _ws(request, workspace_id), company_id or _company_id(request))
+    return ifrs15_portfolio_summary(db, _ws(db, ctx, workspace_id, "read"), company_id or _company_id(request))
 
 
 @router.post("/calculate-recognition")
-def calc_recognition(body: CalculateRecognitionRequest, request: Request, db: Session = Depends(get_db)):
+def calc_recognition(
+    body: CalculateRecognitionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    ws = _ws(db, ctx, body.workspace_id, "write")
     try:
         return calculate_recognition(
             db, body.contract_id, body.obligation_index, body.method, body.method_data,
-            _ws(request, body.workspace_id or None), body.company_id or _company_id(request),
+            ws, body.company_id or _company_id(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/post-recognition-je")
-def post_rev_recognition_je(body: PostRecognitionJeRequest, request: Request, db: Session = Depends(get_db)):
+def post_rev_recognition_je(
+    body: PostRecognitionJeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    ws = _ws(db, ctx, body.workspace_id, "write")
     try:
         return post_recognition_je(
             db,
@@ -1144,7 +1173,7 @@ def post_rev_recognition_je(body: PostRecognitionJeRequest, request: Request, db
             obligation_index=body.obligation_index,
             period_date=date.fromisoformat(body.period_date[:10]),
             amount_aed=body.amount_aed,
-            workspace_id=_ws(request, body.workspace_id or None),
+            workspace_id=ws,
             company_id=body.company_id or _company_id(request),
             billed_amount=body.billed_amount_aed,
         )

@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { reconcileBookkeeping, reconSignOff, monthlyReportPdfUrl } from '../../services/bookkeeping.service';
+import { reconcileBookkeeping, reconSignOff, downloadMonthlyReportPdf } from '../../services/bookkeeping.service';
 import { Download } from 'lucide-react';
-import { downloadApiFile } from '../../utils/apiAuth';
 
 type Summary = {
   matched: Array<Record<string, unknown>>;
@@ -53,8 +52,6 @@ export const BookkeepingReconPage: React.FC = () => {
       toast.error('Sign-off failed');
     }
   };
-
-  const pdfUrl = clientId ? monthlyReportPdfUrl(clientId, month, year) : '';
 
   return (
     <div>
@@ -150,9 +147,9 @@ export const BookkeepingReconPage: React.FC = () => {
           </button>
           <button
             type="button"
-            disabled={!pdfUrl}
+            disabled={!clientId}
             onClick={() =>
-              downloadApiFile(pdfUrl, `bookkeeping_${clientId}_${year}_${month}.pdf`).catch((e) =>
+              downloadMonthlyReportPdf(clientId, month, year).catch((e) =>
                 toast.error(e instanceof Error ? e.message : 'Download failed'),
               )
             }

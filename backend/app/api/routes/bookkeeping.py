@@ -10,7 +10,10 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import AccessLevel
 from app.core.database import get_db
+from app.core.history_scope import history_key
+from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.bookkeeping import (
     AccuracyMetric,
     BookkeepingReconciliationRun,
@@ -21,13 +24,25 @@ from app.models.bookkeeping import (
 from app.services import bookkeeping_engine
 from app.services.bookkeeping_parser import parse_bank_file
 
-router = APIRouter(prefix="/api/bookkeeping", tags=["bookkeeping"])
+router = APIRouter(prefix="/api/bookkeeping", tags=["bookkeeping"], dependencies=[Depends(validate_workspace)])
+
+
+def _key(db: Session, ctx: WorkspaceContext, client_id: str, level: AccessLevel) -> str:
+    """Storage key for a client: access-checked, and free-text labels are namespaced to the workspace."""
+    return history_key(db, ctx, client_id, level)
+
+
+def _label(key: str | None) -> str | None:
+    """The client id as the caller typed it (strips the `ws:<workspace>:` namespace)."""
+    if key and key.startswith("ws:"):
+        return key.split(":", 2)[2]
+    return key
 
 
 def _tx_out(t: BookkeepingTransaction) -> dict[str, Any]:
     return {
         "id": t.id,
-        "client_id": t.client_id,
+        "client_id": _label(t.client_id),
         "date": t.txn_date.date().isoformat() if t.txn_date else None,
         "description": t.description,
         "amount": t.amount,
@@ -41,6 +56,17 @@ def _tx_out(t: BookkeepingTransaction) -> dict[str, Any]:
         "vendor_name": t.vendor_name,
         "bank_account_id": t.bank_account_id,
     }
+
+
+def _owned_txn(db: Session, key: str, transaction_id: int) -> BookkeepingTransaction:
+    t = (
+        db.query(BookkeepingTransaction)
+        .filter(BookkeepingTransaction.id == transaction_id, BookkeepingTransaction.client_id == key)
+        .first()
+    )
+    if not t:
+        raise HTTPException(404, "Transaction not found")
+    return t
 
 
 class CategoriseBody(BaseModel):
@@ -75,10 +101,12 @@ class ClientProfileBody(BaseModel):
 
 
 class ReceiptUrlBody(BaseModel):
+    client_id: str
     receipt_url: str
 
 
 class VerifyReceiptBody(BaseModel):
+    client_id: str
     transaction_id: int
     receipt_text: str
 
@@ -111,7 +139,9 @@ async def upload_transactions(
     period_month: Optional[int] = Form(None),
     period_year: Optional[int] = Form(None),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
+    client_id = _key(db, ctx, client_id, "write")
     raw = await file.read()
     try:
         from app.core.aws_config import upload_to_s3
@@ -147,10 +177,10 @@ async def upload_transactions(
 
 
 @router.post("/categorise")
-def categorise(body: CategoriseBody, db: Session = Depends(get_db)):
+def categorise(body: CategoriseBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
     txs = bookkeeping_engine.categorise_transactions(
         db,
-        body.client_id,
+        _key(db, ctx, body.client_id, "write"),
         body.transaction_ids,
         period_month=body.period_month,
         period_year=body.period_year,
@@ -164,8 +194,9 @@ def categorise(body: CategoriseBody, db: Session = Depends(get_db)):
 
 
 @router.post("/detect-anomalies")
-def detect_anomalies(body: DetectBody, db: Session = Depends(get_db)):
-    txs = bookkeeping_engine.detect_anomalies_for_client(db, body.client_id, body.transaction_ids)
+def detect_anomalies(body: DetectBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    key = _key(db, ctx, body.client_id, "write")
+    txs = bookkeeping_engine.detect_anomalies_for_client(db, key, body.transaction_ids)
     db.commit()
     report = _build_anomaly_report(txs)
     return {"success": True, "anomaly_report": report, "transactions": [_tx_out(t) for t in txs]}
@@ -189,17 +220,22 @@ def _build_anomaly_report(txs: list[BookkeepingTransaction]) -> dict[str, Any]:
 
 
 @router.post("/reconcile")
-def reconcile(body: ReconcileBody, db: Session = Depends(get_db)):
-    summary = bookkeeping_engine.reconcile_bank_to_gl(db, body.client_id, body.transaction_ids)
+def reconcile(body: ReconcileBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    key = _key(db, ctx, body.client_id, "write")
+    summary = bookkeeping_engine.reconcile_bank_to_gl(db, key, body.transaction_ids)
     db.commit()
     return {"success": True, "reconciliation_summary": summary}
 
 
 @router.post("/learning-feedback")
-def learning_feedback(body: LearningFeedbackBody, db: Session = Depends(get_db)):
+def learning_feedback(
+    body: LearningFeedbackBody,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
     bookkeeping_engine.apply_learning_feedback(
         db,
-        body.client_id,
+        _key(db, ctx, body.client_id, "write"),
         body.transaction_id,
         body.correct_category,
         vendor_name=body.vendor_name,
@@ -209,7 +245,8 @@ def learning_feedback(body: LearningFeedbackBody, db: Session = Depends(get_db))
 
 
 @router.get("/review-queue")
-def review_queue(client_id: str, db: Session = Depends(get_db)):
+def review_queue(client_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    client_id = _key(db, ctx, client_id, "read")
     flagged = (
         db.query(BookkeepingTransaction)
         .filter(BookkeepingTransaction.client_id == client_id)
@@ -281,8 +318,10 @@ def list_transactions(
     period_month: Optional[int] = None,
     period_year: Optional[int] = None,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    q = db.query(BookkeepingTransaction).filter(BookkeepingTransaction.client_id == client_id)
+    key = _key(db, ctx, client_id, "read")
+    q = db.query(BookkeepingTransaction).filter(BookkeepingTransaction.client_id == key)
     if period_month is not None:
         q = q.filter(BookkeepingTransaction.period_month == period_month)
     if period_year is not None:
@@ -297,10 +336,11 @@ class BulkApproveBody(BaseModel):
 
 
 @router.post("/bulk-approve")
-def bulk_approve(body: BulkApproveBody, db: Session = Depends(get_db)):
+def bulk_approve(body: BulkApproveBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    key = _key(db, ctx, body.client_id, "write")
     q = (
         db.query(BookkeepingTransaction)
-        .filter(BookkeepingTransaction.client_id == body.client_id)
+        .filter(BookkeepingTransaction.client_id == key)
         .filter(BookkeepingTransaction.id.in_(body.transaction_ids))
     )
     n = 0
@@ -315,11 +355,11 @@ def bulk_approve(body: BulkApproveBody, db: Session = Depends(get_db)):
 
 
 @router.get("/client-profile/{client_id}")
-def get_client_profile(client_id: str, db: Session = Depends(get_db)):
-    p = bookkeeping_engine.ensure_client_profile(db, client_id)
+def get_client_profile(client_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    p = bookkeeping_engine.ensure_client_profile(db, _key(db, ctx, client_id, "read"))
     db.commit()
     return {
-        "client_id": p.client_id,
+        "client_id": _label(p.client_id),
         "weekend_operations": p.weekend_operations,
         "receipt_threshold": p.receipt_threshold,
         "chart_of_accounts": p.chart_of_accounts or [],
@@ -327,8 +367,13 @@ def get_client_profile(client_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/client-profile/{client_id}")
-def put_client_profile(client_id: str, body: ClientProfileBody, db: Session = Depends(get_db)):
-    p = bookkeeping_engine.ensure_client_profile(db, client_id)
+def put_client_profile(
+    client_id: str,
+    body: ClientProfileBody,
+    db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    p = bookkeeping_engine.ensure_client_profile(db, _key(db, ctx, client_id, "write"))
     if body.weekend_operations is not None:
         p.weekend_operations = body.weekend_operations
     if body.receipt_threshold is not None:
@@ -344,10 +389,9 @@ def attach_receipt(
     transaction_id: int,
     body: ReceiptUrlBody,
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
-    t = db.query(BookkeepingTransaction).filter(BookkeepingTransaction.id == transaction_id).first()
-    if not t:
-        raise HTTPException(404, "Transaction not found")
+    t = _owned_txn(db, _key(db, ctx, body.client_id, "write"), transaction_id)
     t.receipt_url = body.receipt_url
     mr = db.query(MissingReceiptRow).filter(MissingReceiptRow.transaction_id == transaction_id).first()
     if mr:
@@ -357,10 +401,8 @@ def attach_receipt(
 
 
 @router.post("/verify-receipt")
-def verify_receipt(body: VerifyReceiptBody, db: Session = Depends(get_db)):
-    t = db.query(BookkeepingTransaction).filter(BookkeepingTransaction.id == body.transaction_id).first()
-    if not t:
-        raise HTTPException(404, "Transaction not found")
+def verify_receipt(body: VerifyReceiptBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    t = _owned_txn(db, _key(db, ctx, body.client_id, "write"), body.transaction_id)
     result = bookkeeping_engine.claude_verify_receipt(
         t.description or "",
         t.vendor_name or "",
@@ -375,11 +417,13 @@ def receipt_reminder(
     body: ReminderBody,
     client_id: str = Query(...),
     db: Session = Depends(get_db),
+    ctx: WorkspaceContext = Depends(validate_workspace),
 ):
+    key = _key(db, ctx, client_id, "write")
     q = (
         db.query(MissingReceiptRow)
         .join(BookkeepingTransaction)
-        .filter(BookkeepingTransaction.client_id == client_id)
+        .filter(BookkeepingTransaction.client_id == key)
         .filter(MissingReceiptRow.resolved.is_(False))
     )
     if body.transaction_ids:
@@ -397,10 +441,10 @@ def receipt_reminder(
 
 
 @router.post("/recon-sign-off")
-def recon_sign_off(body: ReconSignoffBody, db: Session = Depends(get_db)):
+def recon_sign_off(body: ReconSignoffBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
     db.add(
         ReconciliationSignoff(
-            client_id=body.client_id,
+            client_id=_key(db, ctx, body.client_id, "write"),
             period_month=body.period_month,
             period_year=body.period_year,
             signed_by=body.signed_by,
@@ -413,18 +457,13 @@ def recon_sign_off(body: ReconSignoffBody, db: Session = Depends(get_db)):
 
 
 @router.post("/anomaly-action")
-def anomaly_action(body: AnomalyActionBody, db: Session = Depends(get_db)):
-    t = (
-        db.query(BookkeepingTransaction)
-        .filter(BookkeepingTransaction.id == body.transaction_id, BookkeepingTransaction.client_id == body.client_id)
-        .first()
-    )
-    if not t:
-        raise HTTPException(404, "Transaction not found")
+def anomaly_action(body: AnomalyActionBody, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    key = _key(db, ctx, body.client_id, "write")
+    t = _owned_txn(db, key, body.transaction_id)
     if body.action == "approve":
         t.flag_for_review = False
         acc = bookkeeping_engine.get_or_create_accuracy(
-            db, body.client_id, t.period_month or datetime.utcnow().month, t.period_year or datetime.utcnow().year
+            db, key, t.period_month or datetime.utcnow().month, t.period_year or datetime.utcnow().year
         )
         acc.anomalies_false_positive = (acc.anomalies_false_positive or 0) + 1
     elif body.action == "investigate":
@@ -444,10 +483,11 @@ def anomaly_action(body: AnomalyActionBody, db: Session = Depends(get_db)):
 
 
 @router.get("/accuracy/{client_id}")
-def accuracy_history(client_id: str, db: Session = Depends(get_db)):
+def accuracy_history(client_id: str, db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace)):
+    key = _key(db, ctx, client_id, "read")
     rows = (
         db.query(AccuracyMetric)
-        .filter(AccuracyMetric.client_id == client_id)
+        .filter(AccuracyMetric.client_id == key)
         .order_by(AccuracyMetric.year, AccuracyMetric.month)
         .all()
     )
@@ -467,19 +507,31 @@ def accuracy_history(client_id: str, db: Session = Depends(get_db)):
     ]
 
 
+def _monthly_report(db: Session, ctx: WorkspaceContext, client_id: str, month: int, year: int) -> dict[str, Any]:
+    data = bookkeeping_engine.monthly_report_aggregate(db, _key(db, ctx, client_id, "read"), month, year)
+    data["client_id"] = client_id
+    return data
+
+
 @router.get("/monthly-report")
-def monthly_report(client_id: str, month: int, year: int, db: Session = Depends(get_db)):
-    return bookkeeping_engine.monthly_report_aggregate(db, client_id, month, year)
+def monthly_report(
+    client_id: str, month: int, year: int,
+    db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace),
+):
+    return _monthly_report(db, ctx, client_id, month, year)
 
 
 @router.get("/monthly-report/pdf")
-def monthly_report_pdf(client_id: str, month: int, year: int, db: Session = Depends(get_db)):
+def monthly_report_pdf(
+    client_id: str, month: int, year: int,
+    db: Session = Depends(get_db), ctx: WorkspaceContext = Depends(validate_workspace),
+):
     try:
         from fpdf import FPDF
     except ImportError:
         raise HTTPException(500, "PDF library not available")
 
-    data = bookkeeping_engine.monthly_report_aggregate(db, client_id, month, year)
+    data = _monthly_report(db, ctx, client_id, month, year)
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
