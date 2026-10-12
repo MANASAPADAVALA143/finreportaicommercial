@@ -8,6 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import {
   CheckCircle2,
   Circle,
@@ -117,7 +118,7 @@ export default function IndiaCloseStatus() {
   const load = (p: string) => {
     setLoading(true);
     setError('');
-    fetch(`${API_BASE}/api/india/accounting/close-status/${p}`)
+    fetch(`${API_BASE}/api/india/accounting/close-status/${p}`, { headers: workspaceHeaders(getStoredAccessToken()) })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<CloseStatusData>;

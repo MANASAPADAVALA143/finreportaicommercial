@@ -16,6 +16,7 @@ class GLEntry(Base):
     __tablename__ = "gl_entries"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(36), index=True)  # workspace id; NULL = pre-isolation row
     je_id = Column(String(50))
     account_code = Column(String(20), nullable=False)
     account_name = Column(String(200))
@@ -55,6 +56,7 @@ class AccountingAuditLog(Base):
     __tablename__ = "accounting_audit_log"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(36), index=True)  # workspace id; NULL = pre-isolation row
     timestamp = Column(DateTime, default=datetime.utcnow)
     user_id = Column(String(100), default="system")
     action_type = Column(String(100))
@@ -69,6 +71,7 @@ class AccrualSuggestion(Base):
     __tablename__ = "accrual_suggestions"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(36), index=True)  # workspace id; NULL = pre-isolation row
     period = Column(String(7))
     description = Column(String(500))
     amount_aed = Column(Float)
@@ -84,6 +87,7 @@ class BankReconMatch(Base):
     __tablename__ = "bank_recon_matches"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(String(36), index=True)  # workspace id; NULL = pre-isolation row
     period = Column(String(7))
     gl_reference = Column(String(200))
     bank_reference = Column(String(200))

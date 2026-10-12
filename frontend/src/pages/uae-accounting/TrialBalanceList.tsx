@@ -2,6 +2,7 @@
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../components/layout/Sidebar';
 import { joinApiUrl } from '../../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import toast from 'react-hot-toast';
 import {
   listTrialBalances,
@@ -48,7 +49,9 @@ export default function TrialBalanceList() {
     setGenError('');
     setGenResult(null);
     try {
-      const res = await fetch(joinApiUrl(`/api/uae/accounting/trial-balance/generate/${genPeriod}`));
+      const res = await fetch(joinApiUrl(`/api/uae/accounting/trial-balance/generate/${genPeriod}`), {
+        headers: workspaceHeaders(getStoredAccessToken()),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setGenResult(data);

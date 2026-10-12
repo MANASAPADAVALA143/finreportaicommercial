@@ -4,6 +4,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import {
   ArrowLeft,
   Upload,
@@ -724,7 +725,7 @@ Write concise CFO commentary and 3 numeric action items.`;
       const period = new Date().toISOString().slice(0, 7);
       const res = await fetch(`${API_BASE}/api/fpa/sync-actuals`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: workspaceHeaders(getStoredAccessToken()),
         body: JSON.stringify({ period, source: 'ifrs_statements' }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

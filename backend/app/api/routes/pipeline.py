@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_manager, workspace_member
+from app.middleware.workspace import WorkspaceContext
 from app.models.pipeline import (
     AccountingAuditLog,
     AccrualSuggestion,
@@ -34,7 +36,7 @@ from app.models.pipeline import (
     GLEntry,
 )
 
-router = APIRouter(tags=["pipeline"])
+router = APIRouter(tags=["pipeline"], dependencies=[Depends(workspace_member)])
 
 VAT_RATE = 0.05  # UAE VAT 5 %
 
@@ -68,10 +70,16 @@ def _period_now() -> str:
     return datetime.utcnow().strftime("%Y-%m")
 
 
-def _log(db: Session, action: str, entity_type: str, entity_id: str,
+def _scoped(db: Session, model, ctx: WorkspaceContext):
+    return db.query(model).filter(model.tenant_id == ctx.workspace_id)
+
+
+def _log(db: Session, ctx: WorkspaceContext, action: str, entity_type: str, entity_id: str,
          new_value: Any = None, old_value: Any = None) -> None:
     try:
         db.add(AccountingAuditLog(
+            tenant_id=ctx.workspace_id,
+            user_id=getattr(ctx.user, "email", None) or "system",
             action_type=action,
             entity_type=entity_type,
             entity_id=str(entity_id),
@@ -123,7 +131,7 @@ class SyncActualsRequest(BaseModel):
 # ── POST /api/accounting/invoice-to-je ─────────────────────────────────────────
 
 @router.post("/api/accounting/invoice-to-je")
-async def invoice_to_je(req: InvoiceToJERequest, db: Session = Depends(get_db)):
+async def invoice_to_je(req: InvoiceToJERequest, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Convert an AP or AR invoice into GL journal entry lines."""
     try:
         je_id = f"JE-{req.invoice_id}-{uuid.uuid4().hex[:6].upper()}"
@@ -151,6 +159,7 @@ async def invoice_to_je(req: InvoiceToJERequest, db: Session = Depends(get_db)):
         # Persist as draft GL entries
         for ln in lines:
             db.add(GLEntry(
+                tenant_id=ctx.workspace_id,
                 je_id=je_id,
                 account_code=ln["account_code"],
                 account_name=ln["account_name"],
@@ -160,7 +169,7 @@ async def invoice_to_je(req: InvoiceToJERequest, db: Session = Depends(get_db)):
                 source="invoice",
             ))
 
-        _log(db, "invoice_to_je", "invoice", req.invoice_id, new_value={"je_id": je_id, "lines": lines})
+        _log(db, ctx, "invoice_to_je", "invoice", req.invoice_id, new_value={"je_id": je_id, "lines": lines})
         db.commit()
 
         return {"je_id": je_id, "lines": lines, "status": "draft", "period": period,
@@ -173,7 +182,7 @@ async def invoice_to_je(req: InvoiceToJERequest, db: Session = Depends(get_db)):
 # ── POST /api/accounting/validate-and-post ─────────────────────────────────────
 
 @router.post("/api/accounting/validate-and-post")
-async def validate_and_post(req: ValidateAndPostRequest, db: Session = Depends(get_db)):
+async def validate_and_post(req: ValidateAndPostRequest, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Run risk scoring on a JE and auto-post, flag, or block it."""
     try:
         score = 100
@@ -206,11 +215,11 @@ async def validate_and_post(req: ValidateAndPostRequest, db: Session = Depends(g
 
         # If auto-posted, update existing GL entries for this JE
         if auto_posted:
-            existing = db.query(GLEntry).filter(GLEntry.je_id == req.je_id).all()
+            existing = _scoped(db, GLEntry, ctx).filter(GLEntry.je_id == req.je_id).all()
             for row in existing:
                 row.source = row.source or "manual"
 
-        _log(db, "validate_and_post", "journal_entry", req.je_id,
+        _log(db, ctx, "validate_and_post", "journal_entry", req.je_id,
              new_value={"status": status, "risk_score": score, "flags": flags})
         db.commit()
 
@@ -230,11 +239,11 @@ async def validate_and_post(req: ValidateAndPostRequest, db: Session = Depends(g
 # ── POST /api/accounting/suggest-accruals ──────────────────────────────────────
 
 @router.post("/api/accounting/suggest-accruals")
-async def suggest_accruals(req: SuggestAccrualsRequest, db: Session = Depends(get_db)):
+async def suggest_accruals(req: SuggestAccrualsRequest, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Generate accrual suggestions based on recurring GL patterns."""
     try:
         # Look at gl_entries and find recurring patterns
-        rows = db.query(GLEntry).filter(GLEntry.source == "invoice").all()
+        rows = _scoped(db, GLEntry, ctx).filter(GLEntry.source == "invoice").all()
 
         # Group by account_code and compute averages
         by_account: dict[str, list[float]] = defaultdict(list)
@@ -262,6 +271,7 @@ async def suggest_accruals(req: SuggestAccrualsRequest, db: Session = Depends(ge
             amount = _aed(base * pattern["base_pct"])
             confidence = round(75.0 - i * 5, 1)
             suggestion = AccrualSuggestion(
+                tenant_id=ctx.workspace_id,
                 period=req.period,
                 description=pattern["desc"],
                 amount_aed=amount,
@@ -295,25 +305,25 @@ async def suggest_accruals(req: SuggestAccrualsRequest, db: Session = Depends(ge
 # ── POST /api/accounting/accept-accrual/{accrual_id} ──────────────────────────
 
 @router.post("/api/accounting/accept-accrual/{accrual_id}")
-async def accept_accrual(accrual_id: int, db: Session = Depends(get_db)):
+async def accept_accrual(accrual_id: int, ctx: WorkspaceContext = Depends(workspace_manager), db: Session = Depends(get_db)):
     """Accept an accrual suggestion and create a posted JE."""
     try:
-        accrual = db.query(AccrualSuggestion).filter(AccrualSuggestion.id == accrual_id).first()
+        accrual = _scoped(db, AccrualSuggestion, ctx).filter(AccrualSuggestion.id == accrual_id).first()
         if not accrual:
             raise HTTPException(status_code=404, detail="Accrual suggestion not found")
 
         je_id = f"JE-ACCRUAL-{accrual_id}-{uuid.uuid4().hex[:4].upper()}"
         period = accrual.period or _period_now()
 
-        db.add(GLEntry(je_id=je_id, account_code=accrual.debit_account,
+        db.add(GLEntry(tenant_id=ctx.workspace_id, je_id=je_id, account_code=accrual.debit_account,
                        account_name=COA_NAMES.get(accrual.debit_account, accrual.debit_account),
                        debit=accrual.amount_aed, credit=0.0, period=period, source="manual"))
-        db.add(GLEntry(je_id=je_id, account_code=accrual.credit_account,
+        db.add(GLEntry(tenant_id=ctx.workspace_id, je_id=je_id, account_code=accrual.credit_account,
                        account_name=COA_NAMES.get(accrual.credit_account, accrual.credit_account),
                        debit=0.0, credit=accrual.amount_aed, period=period, source="manual"))
 
         accrual.status = "accepted"
-        _log(db, "accept_accrual", "accrual", str(accrual_id), new_value={"je_id": je_id})
+        _log(db, ctx, "accept_accrual", "accrual", str(accrual_id), new_value={"je_id": je_id})
         db.commit()
 
         return {"je_id": je_id, "accrual_id": accrual_id, "status": "accepted",
@@ -328,10 +338,10 @@ async def accept_accrual(accrual_id: int, db: Session = Depends(get_db)):
 # ── GET /api/accounting/trial-balance/{period} ────────────────────────────────
 
 @router.get("/api/accounting/trial-balance/{period}")
-async def get_trial_balance(period: str, db: Session = Depends(get_db)):
+async def get_trial_balance(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Return trial balance for a period. Falls back to demo data if no entries."""
     try:
-        rows = db.query(GLEntry).filter(GLEntry.period == period).all()
+        rows = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).all()
 
         if not rows:
             # Return demo data so frontend never crashes on empty DB
@@ -394,10 +404,10 @@ async def get_trial_balance(period: str, db: Session = Depends(get_db)):
 # ── POST /api/fpa/sync-actuals ─────────────────────────────────────────────────
 
 @router.post("/api/fpa/sync-actuals")
-async def sync_actuals(req: SyncActualsRequest, db: Session = Depends(get_db)):
+async def sync_actuals(req: SyncActualsRequest, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Pull trial balance for period and return variance-ready data."""
     try:
-        rows = db.query(GLEntry).filter(GLEntry.period == req.period).all()
+        rows = _scoped(db, GLEntry, ctx).filter(GLEntry.period == req.period).all()
 
         revenue = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("4"))
         expenses = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("6"))
@@ -428,18 +438,18 @@ async def sync_actuals(req: SyncActualsRequest, db: Session = Depends(get_db)):
 # ── GET /api/accounting/close-status/{period} ─────────────────────────────────
 
 @router.get("/api/accounting/close-status/{period}")
-async def get_close_status(period: str, db: Session = Depends(get_db)):
+async def get_close_status(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Return month-end close checklist with completion %."""
     try:
-        ap_count   = db.query(GLEntry).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
-        je_count   = db.query(GLEntry).filter(GLEntry.period == period).count()
-        recon_count = db.query(BankReconMatch).filter(BankReconMatch.period == period).count()
+        ap_count   = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
+        je_count   = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).count()
+        recon_count = _scoped(db, BankReconMatch, ctx).filter(BankReconMatch.period == period).count()
 
         # Check for trial balance entries
         tb_generated = je_count > 0
 
         # Check for accruals
-        accruals_done = db.query(AccrualSuggestion).filter(
+        accruals_done = _scoped(db, AccrualSuggestion, ctx).filter(
             AccrualSuggestion.period == period,
             AccrualSuggestion.status == "accepted"
         ).count() > 0
@@ -463,7 +473,7 @@ async def get_close_status(period: str, db: Session = Depends(get_db)):
                 "step": "accruals_posted",
                 "label": "Accruals Posted",
                 "status": "complete" if accruals_done else "pending",
-                "count": db.query(AccrualSuggestion).filter(AccrualSuggestion.period == period).count(),
+                "count": _scoped(db, AccrualSuggestion, ctx).filter(AccrualSuggestion.period == period).count(),
                 "path": "/uae-full/accruals",
             },
             {
@@ -517,11 +527,12 @@ async def get_audit_trail(
     entity_type: Optional[str] = Query(default=None),
     period: Optional[str] = Query(default=None),
     limit: int = Query(default=100, le=500),
+    ctx: WorkspaceContext = Depends(workspace_member),
     db: Session = Depends(get_db),
 ):
     """Return accounting audit log records."""
     try:
-        q = db.query(AccountingAuditLog)
+        q = _scoped(db, AccountingAuditLog, ctx)
         if entity_type:
             q = q.filter(AccountingAuditLog.entity_type == entity_type)
         rows = q.order_by(AccountingAuditLog.timestamp.desc()).limit(limit).all()
@@ -547,7 +558,7 @@ async def get_audit_trail(
 # ── POST /api/recon/match ──────────────────────────────────────────────────────
 
 @router.post("/api/recon/match")
-async def recon_match(req: ReconMatchRequest, db: Session = Depends(get_db)):
+async def recon_match(req: ReconMatchRequest, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """4-tier GL ↔ bank statement matching."""
     try:
         matched: list[dict]    = []
@@ -596,6 +607,7 @@ async def recon_match(req: ReconMatchRequest, db: Session = Depends(get_db)):
 
             if best_match and best_tier in (1, 2):
                 match_row = BankReconMatch(
+                    tenant_id=ctx.workspace_id,
                     period=req.period, gl_reference=gl_ref,
                     bank_reference=str(best_match.get("reference", "")),
                     amount=gl_amt, match_tier=best_tier, match_type="auto",
@@ -608,6 +620,7 @@ async def recon_match(req: ReconMatchRequest, db: Session = Depends(get_db)):
 
             elif best_match and best_tier == 3:
                 match_row = BankReconMatch(
+                    tenant_id=ctx.workspace_id,
                     period=req.period, gl_reference=gl_ref,
                     bank_reference=str(best_match.get("reference", "")),
                     amount=gl_amt, match_tier=3, match_type="auto",
@@ -625,6 +638,7 @@ async def recon_match(req: ReconMatchRequest, db: Session = Depends(get_db)):
                     f"Ref: {gl_ref}  Date: {gl_date}"
                 )
                 match_row = BankReconMatch(
+                    tenant_id=ctx.workspace_id,
                     period=req.period, gl_reference=gl_ref,
                     bank_reference="UNMATCHED",
                     amount=gl_amt, match_tier=4, match_type="exception",
@@ -656,10 +670,10 @@ async def recon_match(req: ReconMatchRequest, db: Session = Depends(get_db)):
 # ── POST /api/recon/approve-match/{match_id} ──────────────────────────────────
 
 @router.post("/api/recon/approve-match/{match_id}")
-async def approve_match(match_id: int, db: Session = Depends(get_db)):
+async def approve_match(match_id: int, ctx: WorkspaceContext = Depends(workspace_manager), db: Session = Depends(get_db)):
     """Approve a recon match — auto-creates GL entry for exceptions."""
     try:
-        match = db.query(BankReconMatch).filter(BankReconMatch.id == match_id).first()
+        match = _scoped(db, BankReconMatch, ctx).filter(BankReconMatch.id == match_id).first()
         if not match:
             raise HTTPException(status_code=404, detail="Match not found")
 
@@ -667,12 +681,14 @@ async def approve_match(match_id: int, db: Session = Depends(get_db)):
             # Auto-create posted JE for exception
             je_id = f"JE-RECON-{match_id}-{uuid.uuid4().hex[:4].upper()}"
             db.add(GLEntry(
+                tenant_id=ctx.workspace_id,
                 je_id=je_id, account_code="7001",
                 account_name="Bank Charges",
                 debit=match.amount or 0.0, credit=0.0,
                 period=match.period, source="recon",
             ))
             db.add(GLEntry(
+                tenant_id=ctx.workspace_id,
                 je_id=je_id, account_code="1001",
                 account_name="Cash at Bank",
                 debit=0.0, credit=match.amount or 0.0,
@@ -681,7 +697,7 @@ async def approve_match(match_id: int, db: Session = Depends(get_db)):
 
         match.status = "reconciled"
         match.match_type = "manual"
-        _log(db, "approve_match", "bank_recon_match", str(match_id),
+        _log(db, ctx, "approve_match", "bank_recon_match", str(match_id),
              new_value={"status": "reconciled"})
         db.commit()
 
@@ -696,7 +712,7 @@ async def approve_match(match_id: int, db: Session = Depends(get_db)):
 # ── UAE-specific invoice-to-JE (5% VAT, AED) ─────────────────────────────────
 
 @router.post("/api/uae/accounting/invoice-to-je")
-async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
+async def uae_invoice_to_je(body: dict, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """UAE invoice-to-JE. AR invoices redirect to unified approve-and-post (uae_journal_entries)."""
     invoice_type = str(body.get("invoice_type", "AP")).upper()
     if invoice_type == "AR":
@@ -712,6 +728,7 @@ async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
         inv = (
             db.query(UAESalesInvoice)
             .filter(
+                UAESalesInvoice.tenant_id == ctx.workspace_id,
                 (UAESalesInvoice.id == inv_ref) | (UAESalesInvoice.invoice_number == inv_ref),
             )
             .first()
@@ -779,11 +796,12 @@ async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
 
         for ln in lines:
             db.add(GLEntry(
+                tenant_id=ctx.workspace_id,
                 je_id=je_id, account_code=ln["account_code"],
                 account_name=ln["account_name"], debit=ln["debit"],
                 credit=ln["credit"], period=period, source="invoice",
             ))
-        _log(db, "uae_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "UAE"})
+        _log(db, ctx, "uae_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "UAE"})
         db.commit()
 
         return {
@@ -799,7 +817,7 @@ async def uae_invoice_to_je(body: dict, db: Session = Depends(get_db)):
 # ── India-specific invoice-to-JE (18% GST, INR) ──────────────────────────────
 
 @router.post("/api/india/accounting/invoice-to-je")
-async def india_invoice_to_je(body: dict, db: Session = Depends(get_db)):
+async def india_invoice_to_je(body: dict, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """India-specific invoice-to-JE: 18% GST, INR, India GL codes."""
     try:
         invoice_id = body.get("invoice_id", f"INV-{uuid.uuid4().hex[:6].upper()}")
@@ -834,11 +852,12 @@ async def india_invoice_to_je(body: dict, db: Session = Depends(get_db)):
 
         for ln in lines:
             db.add(GLEntry(
+                tenant_id=ctx.workspace_id,
                 je_id=je_id, account_code=ln["account_code"],
                 account_name=ln["account_name"], debit=ln["debit"],
                 credit=ln["credit"], period=period, source="invoice",
             ))
-        _log(db, "india_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "India"})
+        _log(db, ctx, "india_invoice_to_je", "invoice", invoice_id, new_value={"je_id": je_id, "country": "India"})
         db.commit()
 
         return {
@@ -854,14 +873,14 @@ async def india_invoice_to_je(body: dict, db: Session = Depends(get_db)):
 # ── UAE close status ──────────────────────────────────────────────────────────
 
 @router.get("/api/uae/accounting/close-status/{period}")
-async def uae_close_status(period: str, db: Session = Depends(get_db)):
+async def uae_close_status(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """UAE month-end close checklist with completion %."""
     try:
-        ap_count    = db.query(GLEntry).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
-        je_count    = db.query(GLEntry).filter(GLEntry.period == period).count()
-        recon_count = db.query(BankReconMatch).filter(BankReconMatch.period == period).count()
+        ap_count    = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
+        je_count    = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).count()
+        recon_count = _scoped(db, BankReconMatch, ctx).filter(BankReconMatch.period == period).count()
         tb_generated = je_count > 0
-        accruals_done = db.query(AccrualSuggestion).filter(
+        accruals_done = _scoped(db, AccrualSuggestion, ctx).filter(
             AccrualSuggestion.period == period, AccrualSuggestion.status == "accepted"
         ).count() > 0
 
@@ -890,14 +909,14 @@ async def uae_close_status(period: str, db: Session = Depends(get_db)):
 # ── India close status ────────────────────────────────────────────────────────
 
 @router.get("/api/india/accounting/close-status/{period}")
-async def india_close_status(period: str, db: Session = Depends(get_db)):
+async def india_close_status(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """India month-end close checklist (Apr-Mar fiscal year, INR, GST 18%)."""
     try:
-        ap_count    = db.query(GLEntry).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
-        je_count    = db.query(GLEntry).filter(GLEntry.period == period).count()
-        recon_count = db.query(BankReconMatch).filter(BankReconMatch.period == period).count()
+        ap_count    = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period, GLEntry.source == "invoice").count()
+        je_count    = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).count()
+        recon_count = _scoped(db, BankReconMatch, ctx).filter(BankReconMatch.period == period).count()
         tb_generated = je_count > 0
-        accruals_done = db.query(AccrualSuggestion).filter(
+        accruals_done = _scoped(db, AccrualSuggestion, ctx).filter(
             AccrualSuggestion.period == period, AccrualSuggestion.status == "accepted"
         ).count() > 0
 
@@ -927,10 +946,10 @@ async def india_close_status(period: str, db: Session = Depends(get_db)):
 # ── UAE trial balance from posted JEs ────────────────────────────────────────
 
 @router.get("/api/uae/accounting/trial-balance/generate/{period}")
-async def generate_uae_trial_balance(period: str, db: Session = Depends(get_db)):
+async def generate_uae_trial_balance(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Generate UAE trial balance from posted GL journal entries."""
     try:
-        rows = db.query(GLEntry).filter(GLEntry.period == period).all()
+        rows = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).all()
         source_label = "Posted Journal Entries"
 
         if not rows:
@@ -986,10 +1005,10 @@ async def generate_uae_trial_balance(period: str, db: Session = Depends(get_db))
 # ── UAE TB to IFRS ────────────────────────────────────────────────────────────
 
 @router.post("/api/uae/accounting/tb-to-ifrs/{period}")
-async def tb_to_ifrs(period: str, db: Session = Depends(get_db)):
+async def tb_to_ifrs(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Map trial balance to IFRS P&L structure for UAE."""
     try:
-        rows = db.query(GLEntry).filter(GLEntry.period == period).all()
+        rows = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).all()
         revenue   = sum((r.credit - r.debit) for r in rows if r.account_code.startswith("4"))
         expenses  = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("6"))
         assets    = sum((r.debit - r.credit) for r in rows if r.account_code.startswith("1"))
@@ -1031,7 +1050,7 @@ async def tb_to_ifrs(period: str, db: Session = Depends(get_db)):
 # ── Bank recon → JE suggestion ────────────────────────────────────────────────
 
 @router.post("/api/uae/accounting/recon-to-je")
-async def recon_to_je(body: dict, db: Session = Depends(get_db)):
+async def recon_to_je(body: dict, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Create JE suggestion for an unmatched bank item."""
     try:
         amount = float(body.get("amount", 0))
@@ -1051,12 +1070,12 @@ async def recon_to_je(body: dict, db: Session = Depends(get_db)):
 # ── FP&A sync from accounting ─────────────────────────────────────────────────
 
 @router.post("/api/fpa/sync-from-accounting")
-async def sync_fpa_from_accounting(body: dict, db: Session = Depends(get_db)):
+async def sync_fpa_from_accounting(body: dict, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Pull trial balance for period and return variance-ready rows for FP&A."""
     try:
         country = body.get("country", "UAE")
         period  = body.get("period", _period_now())
-        rows    = db.query(GLEntry).filter(GLEntry.period == period).all()
+        rows    = _scoped(db, GLEntry, ctx).filter(GLEntry.period == period).all()
 
         currency = "AED" if country == "UAE" else "INR"
 
@@ -1092,10 +1111,10 @@ async def sync_fpa_from_accounting(body: dict, db: Session = Depends(get_db)):
 # ── GET /api/recon/status/{period} ────────────────────────────────────────────
 
 @router.get("/api/recon/status/{period}")
-async def recon_status(period: str, db: Session = Depends(get_db)):
+async def recon_status(period: str, ctx: WorkspaceContext = Depends(workspace_member), db: Session = Depends(get_db)):
     """Return reconciliation summary for a period."""
     try:
-        all_matches = db.query(BankReconMatch).filter(BankReconMatch.period == period).all()
+        all_matches = _scoped(db, BankReconMatch, ctx).filter(BankReconMatch.period == period).all()
 
         matched_count   = sum(1 for m in all_matches if m.status in ("matched", "reconciled"))
         unmatched_count = sum(1 for m in all_matches if m.status in ("exception", "review"))

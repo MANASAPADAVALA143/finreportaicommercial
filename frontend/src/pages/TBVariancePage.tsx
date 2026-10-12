@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 import { useClient } from '../context/ClientContext';
 
 type VarianceImpact = 'favorable' | 'unfavorable' | 'neutral';
@@ -525,7 +526,9 @@ export function TBVariancePage() {
     setGLLoading(true);
     setGLMsg('');
     try {
-      const res = await fetch(`${API_BASE_TB}/api/accounting/trial-balance/${glPeriod}`);
+      const res = await fetch(`${API_BASE_TB}/api/accounting/trial-balance/${glPeriod}`, {
+        headers: workspaceHeaders(getStoredAccessToken()),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as {
         rows: { account_code: string; account_name: string; total_debit: number; total_credit: number; net: number }[];
