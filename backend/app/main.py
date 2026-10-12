@@ -364,6 +364,22 @@ def _run_critical_migrations() -> None:
             except Exception as _e:
                 logger.warning("AP migration %s skipped: %s", _ap_file, _e)
 
+        # ── Step 7: agent memory keys are scoped per workspace/client and exceed 50 chars ──
+        if _engine.dialect.name == "postgresql":
+            for _agent_table in ("agent_memory", "agent_runs"):
+                try:
+                    with _engine.begin() as conn:
+                        _len = conn.execute(_text(
+                            "SELECT character_maximum_length FROM information_schema.columns "
+                            "WHERE table_schema = 'public' AND table_name = :t AND column_name = 'agent_name'"
+                        ), {"t": _agent_table}).scalar()
+                        if _len is not None and _len < 128:
+                            conn.execute(_text(
+                                f"ALTER TABLE public.{_agent_table} ALTER COLUMN agent_name TYPE VARCHAR(128)"
+                            ))
+                except Exception as _e:
+                    logger.warning("Widen %s.agent_name skipped: %s", _agent_table, _e)
+
     except Exception as e:
         logger.exception("Critical migration failed: %s", e)
 

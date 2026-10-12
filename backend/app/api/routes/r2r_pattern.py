@@ -16,6 +16,12 @@ from app.services.r2r_pattern_engine import R2RPatternEngine
 router = APIRouter(prefix="/api/r2r", tags=["r2r-pattern"], dependencies=[Depends(validate_workspace)])
 
 
+def memory_key(workspace_id: str, client_id: str | None = None) -> str:
+    # Never read the legacy shared "r2r_pattern" row: it mixes every tenant's runs.
+    key = f"r2r_pattern:{workspace_id}"
+    return f"{key}:{client_id}" if client_id else key
+
+
 def _mat_float(v: Any) -> float:
     if v is None:
         return 0.0
@@ -182,9 +188,10 @@ async def analyse_pattern(
         from app.core.database import SessionLocal
 
         _r2r_data = result if isinstance(result, dict) else (result.model_dump() if hasattr(result, "model_dump") else result.dict())
+        _key = memory_key(ctx.workspace_id, client_id)
         _db = SessionLocal()
         try:
-            _history = await read_agent_memory("r2r_pattern", _db)
+            _history = await read_agent_memory(_key, _db)
             _insight = await generate_insight(
                 "r2r_pattern",
                 {
@@ -204,8 +211,8 @@ async def analyse_pattern(
                 "materiality_pct": materiality_pct,
                 "row_count": len(df) if df is not None else 0,
             }
-            await store_agent_run("r2r_pattern", _input, _r2r_data, _insight, _db)
-            await update_agent_memory("r2r_pattern", _r2r_data, _db)
+            await store_agent_run(_key, _input, _r2r_data, _insight, _db)
+            await update_agent_memory(_key, _r2r_data, _db)
         finally:
             _db.close()
     except Exception as _e:

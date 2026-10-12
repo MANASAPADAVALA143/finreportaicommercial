@@ -174,6 +174,68 @@ def test_sync_from_accounting_needs_own_workspace_and_write_role(client, env):
     assert client.get(f"/api/r2r/load-from-accounting?company_id={WS_A}").status_code == 200
 
 
+@pytest.fixture()
+def memory(monkeypatch, engine_calls):
+    import app.agents.memory as agent_memory
+
+    store: dict[str, list] = {"r2r_pattern": [{"data": {"secret": "legacy-shared"}}]}
+    runs: list[str] = []
+    seen_history: list[list] = []
+
+    async def read(name, _db):
+        return list(store.get(name, []))
+
+    async def update(name, data, _db):
+        store.setdefault(name, []).append({"data": data})
+
+    async def store_run(name, *_args):
+        runs.append(name)
+
+    async def insight(_agent, _data, history):
+        seen_history.append(history)
+        return {}
+
+    monkeypatch.setattr(agent_memory, "read_agent_memory", read)
+    monkeypatch.setattr(agent_memory, "update_agent_memory", update)
+    monkeypatch.setattr(agent_memory, "store_agent_run", store_run)
+    monkeypatch.setitem(sys.modules, "app.agents.intelligence", SimpleNamespace(generate_insight=insight))
+    return SimpleNamespace(store=store, runs=runs, seen=seen_history)
+
+
+def test_memory_key_format():
+    assert r2r_pattern.memory_key(WS_A) == f"r2r_pattern:{WS_A}"
+    assert r2r_pattern.memory_key(WS_A, "clientA") == f"r2r_pattern:{WS_A}:clientA"
+    assert len(r2r_pattern.memory_key(WS_A, "c" * 64)) <= 128
+
+
+def test_pattern_memory_is_isolated_per_workspace(client, env, memory):
+    analyse = lambda: client.post("/api/r2r/pattern/analyse", json={"rows": ROWS})
+
+    assert analyse().status_code == 200
+    env.workspace = WS_B
+    assert analyse().status_code == 200
+    env.workspace = WS_A
+    assert analyse().status_code == 200
+
+    first_a, first_b, second_a = memory.seen
+    assert first_a == [] and first_b == []
+    assert len(second_a) == 1 and second_a[0]["data"]["client_id"] is None
+    assert len(memory.store[f"r2r_pattern:{WS_A}"]) == 2
+    assert len(memory.store[f"r2r_pattern:{WS_B}"]) == 1
+    assert memory.store["r2r_pattern"] == [{"data": {"secret": "legacy-shared"}}]
+    assert memory.runs == [f"r2r_pattern:{WS_A}", f"r2r_pattern:{WS_B}", f"r2r_pattern:{WS_A}"]
+
+
+def test_pattern_memory_is_isolated_per_client(client, memory):
+    assert client.post("/api/r2r/pattern/analyse", json={"rows": ROWS, "client_id": "clientA"}).status_code == 200
+    assert client.post("/api/r2r/pattern/analyse", json={"rows": ROWS}).status_code == 200
+    assert client.post("/api/r2r/pattern/analyse", json={"rows": ROWS, "client_id": "clientA"}).status_code == 200
+
+    assert [len(h) for h in memory.seen] == [0, 0, 1]
+    assert len(memory.store[f"r2r_pattern:{WS_A}:clientA"]) == 2
+    assert len(memory.store[f"r2r_pattern:{WS_A}"]) == 1
+
+
 def test_non_member_is_forbidden(client, env):
     env.roles.pop(WS_A)
     assert client.get(f"/api/r2r/load-from-accounting?company_id={WS_A}").status_code == 403

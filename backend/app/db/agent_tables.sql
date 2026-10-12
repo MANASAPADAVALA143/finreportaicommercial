@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS agent_runs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  agent_name VARCHAR(50) NOT NULL,
+  agent_name VARCHAR(128) NOT NULL,
   run_time TIMESTAMP DEFAULT NOW(),
   input_data JSONB,
   output_data JSONB,
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 );
 
 CREATE TABLE IF NOT EXISTS agent_memory (
-  agent_name VARCHAR(50) PRIMARY KEY,
+  agent_name VARCHAR(128) PRIMARY KEY,
   last_6_months JSONB DEFAULT '[]',
   patterns JSONB DEFAULT '{}',
   updated_at TIMESTAMP DEFAULT NOW()
