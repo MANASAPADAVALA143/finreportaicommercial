@@ -211,7 +211,7 @@ async def analyse_pattern(
                 "materiality_pct": materiality_pct,
                 "row_count": len(df) if df is not None else 0,
             }
-            await store_agent_run(_key, _input, _r2r_data, _insight, _db)
+            await store_agent_run(_key, _input, _r2r_data, _insight, _db, tenant_id=ctx.workspace_id)
             await update_agent_memory(_key, _r2r_data, _db)
         finally:
             _db.close()

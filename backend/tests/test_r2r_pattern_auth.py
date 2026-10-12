@@ -188,7 +188,8 @@ def memory(monkeypatch, engine_calls):
     async def update(name, data, _db):
         store.setdefault(name, []).append({"data": data})
 
-    async def store_run(name, *_args):
+    async def store_run(name, *_args, tenant_id=None):
+        assert name.startswith(f"r2r_pattern:{tenant_id}")
         runs.append(name)
 
     async def insight(_agent, _data, history):

@@ -1,6 +1,7 @@
 import '@fontsource/ibm-plex-mono';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { workspaceHeaders } from '../utils/workspaceHeaders';
 
 const AITHENTIC = {
   bg: '#060A12',
@@ -60,7 +61,11 @@ export default function CommandCenter() {
   const fetchLatestBrief = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/agents/latest-brief');
+      const res = await fetch('/api/agents/latest-brief', {
+        headers: workspaceHeaders(null),
+        credentials: 'include',
+      });
+      if (!res.ok) throw new Error(`Brief failed (${res.status})`);
       const data = (await res.json()) as BriefResponse;
       setBrief(data);
     } catch (error) {
@@ -74,7 +79,15 @@ export default function CommandCenter() {
     setBoardPackProgress([]);
     setBoardPackReady(false);
 
-    const response = await fetch('/api/board-pack/generate', { method: 'POST' });
+    const response = await fetch('/api/board-pack/generate', {
+      method: 'POST',
+      headers: workspaceHeaders(null),
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      setBoardPackProgress([`Board pack failed (${response.status})`]);
+      return;
+    }
     const reader = response.body?.getReader();
     if (!reader) return;
     const decoder = new TextDecoder();
@@ -95,6 +108,24 @@ export default function CommandCenter() {
         }
       }
     }
+  };
+
+  const downloadBoardPack = async () => {
+    const filename = boardPackPath.split(/[\\/]/).pop() ?? '';
+    const res = await fetch(`/api/board-pack/download-file/${encodeURIComponent(filename)}`, {
+      headers: workspaceHeaders(null),
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      setBoardPackProgress((prev) => [...prev, `Download failed (${res.status})`]);
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const AlertCard = ({ alert, color }: { alert: AlertItem; color: string }) => (
@@ -265,10 +296,9 @@ export default function CommandCenter() {
             </div>
           ))}
           {boardPackReady && (
-            <a
-              href={`/api/board-pack/download-file/${encodeURIComponent(
-                boardPackPath.split(/[\\/]/).pop() ?? ''
-              )}`}
+            <button
+              type="button"
+              onClick={() => void downloadBoardPack()}
               style={{
                 display: 'inline-block',
                 marginTop: 12,
@@ -276,13 +306,15 @@ export default function CommandCenter() {
                 color: AITHENTIC.bg,
                 padding: '8px 16px',
                 borderRadius: 2,
+                border: 'none',
+                cursor: 'pointer',
                 fontSize: 12,
                 fontWeight: 700,
                 textDecoration: 'none',
               }}
             >
               ↓ DOWNLOAD BOARD PACK PDF
-            </a>
+            </button>
           )}
         </div>
       )}

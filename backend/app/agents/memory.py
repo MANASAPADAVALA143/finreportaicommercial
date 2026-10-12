@@ -65,20 +65,22 @@ async def store_agent_run(
     output_data: dict[str, Any],
     insight: dict[str, Any],
     db: Session,
+    tenant_id: str | None = None,
 ) -> None:
-    """Store complete agent run in DB."""
+    """Store complete agent run in DB. Only runs with a tenant_id appear in the workspace brief."""
     try:
         urgency = insight.get("urgency", "green")
+        tenant_col, tenant_val = (", tenant_id", ", :tenant_id") if tenant_id else ("", "")
         db.execute(
             text(
-                """
-                INSERT INTO agent_runs (agent_name, input_data, output_data, insight, urgency)
+                f"""
+                INSERT INTO agent_runs (agent_name, input_data, output_data, insight, urgency{tenant_col})
                 VALUES (
                   :agent_name,
                   CAST(:input_data AS JSONB),
                   CAST(:output_data AS JSONB),
                   CAST(:insight AS JSONB),
-                  :urgency
+                  :urgency{tenant_val}
                 )
                 """
             ),
@@ -88,6 +90,7 @@ async def store_agent_run(
                 "output_data": json.dumps(output_data, default=str),
                 "insight": json.dumps(insight, default=str),
                 "urgency": urgency,
+                "tenant_id": tenant_id,
             },
         )
         db.commit()

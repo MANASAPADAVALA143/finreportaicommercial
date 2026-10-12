@@ -47,6 +47,7 @@ from app.routers import internal_audit as internal_audit_router
 from app.routers import internal_audit_je as internal_audit_je_router
 from app.api.routes import gulftax_audit_routes
 from app.api.routes.ar_collections_routes import router as ar_collections_router
+from app.api.routes.agent_brief import router as agent_brief_router
 from app.api.routes import (
     fpa_master_upload,
     upload_routes,
@@ -138,8 +139,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from app.db import init_db
-from app.agents.intelligence import generate_board_pack_content
-from app.board_pack_generator import generate_pdf
 from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler, setup_ses_intake_scheduler
 from app.agents.command_center.registry import list_agent_names
 from app.services.cfo_orchestrator_service import create_queued_run, execute_cfo_agent_task
@@ -391,22 +390,6 @@ def _init_db_safe() -> None:
         logger.exception("init_db failed — API will run but DB-backed routes may error until fixed")
 
 
-def _is_sqlite(db) -> bool:
-    try:
-        return db.bind is not None and db.bind.dialect.name == "sqlite"
-    except Exception:
-        return False
-
-
-def _has_agentic_runs_schema(db) -> bool:
-    try:
-        cols = {c.get("name") for c in inspect(db.bind).get_columns("agent_runs")}
-        required = {"agent_name", "insight", "urgency", "created_at"}
-        return required.issubset(cols)
-    except Exception:
-        return False
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Critical column migrations first — must complete before any login request.
@@ -528,6 +511,7 @@ app.include_router(erp_integration.router, prefix="/api")
 app.include_router(erp_connections.router)
 app.include_router(bookkeeping.router)
 app.include_router(r2r_pattern.router)
+app.include_router(agent_brief_router)
 app.include_router(r2r_learning_routes.router)
 app.include_router(board_pack_routes.router, prefix="/api/board-pack")
 app.include_router(excel_suite.router, prefix="/api/excel")
@@ -734,166 +718,6 @@ async def run_agent_compat(
     row = create_queued_run(db, "default", agent_name, body.context or {})
     background_tasks.add_task(execute_cfo_agent_task, row.id)
     return {"cfo_run_id": row.run_id, "id": row.id, "agent": agent_name, "status": "queued"}
-
-
-@app.get("/api/agents/latest-brief")
-async def get_latest_brief(db=Depends(get_db)):
-    """
-    Called automatically on CFO login.
-    Returns today's insights with 3-tier urgency buckets.
-    """
-    try:
-        if not _has_agentic_runs_schema(db):
-            return {
-                "date": datetime.now().isoformat(),
-                "alerts": {"red": [], "yellow": [], "green": []},
-                "total_agents_run": 0,
-                "last_run": None,
-            }
-
-        if _is_sqlite(db):
-            rows = db.execute(
-                text(
-                    """
-                    SELECT ar.agent_name, ar.insight, ar.urgency, ar.created_at
-                    FROM agent_runs ar
-                    INNER JOIN (
-                      SELECT agent_name, MAX(created_at) AS max_created_at
-                      FROM agent_runs
-                      WHERE created_at > datetime('now', '-1 day')
-                      GROUP BY agent_name
-                    ) latest
-                      ON ar.agent_name = latest.agent_name
-                     AND ar.created_at = latest.max_created_at
-                    ORDER BY ar.created_at DESC
-                    """
-                )
-            ).fetchall()
-        else:
-            rows = db.execute(
-                text(
-                    """
-                    SELECT DISTINCT ON (agent_name)
-                      agent_name, insight, urgency, created_at
-                    FROM agent_runs
-                    WHERE created_at > NOW() - INTERVAL '24 hours'
-                    ORDER BY agent_name, created_at DESC
-                    """
-                )
-            ).fetchall()
-
-        alerts: dict[str, list[dict]] = {"red": [], "yellow": [], "green": []}
-        for row in rows:
-            item = dict(row._mapping)
-            insight = item.get("insight")
-            if isinstance(insight, str):
-                try:
-                    insight = json.loads(insight)
-                except json.JSONDecodeError:
-                    insight = {"what_happened": insight}
-            urgency = (item.get("urgency") or "green").lower()
-            if urgency not in alerts:
-                urgency = "green"
-            alerts[urgency].append(
-                {
-                    "agent": item.get("agent_name"),
-                    "insight": insight,
-                    "time": str(item.get("created_at")),
-                }
-            )
-
-        return {
-            "date": datetime.now().isoformat(),
-            "alerts": alerts,
-            "total_agents_run": len(rows),
-            "last_run": str(rows[0]._mapping["created_at"]) if rows else None,
-        }
-    except Exception as exc:
-        return {
-            "date": datetime.now().isoformat(),
-            "alerts": {"red": [], "yellow": [], "green": []},
-            "total_agents_run": 0,
-            "error": str(exc),
-        }
-
-
-@app.post("/api/board-pack/generate")
-async def generate_board_pack(db=Depends(get_db)):
-    """
-    Generate board pack with streaming progress updates.
-    """
-
-    async def stream_progress():
-        steps = [
-            "Collecting variance data",
-            "Running forecast analysis",
-            "Analysing cash position",
-            "Generating AI commentary",
-            "Compiling board pack",
-            "Generating PDF",
-        ]
-
-        for step in steps:
-            yield f"data: {json.dumps({'step': step, 'status': 'running'})}\n\n"
-            await asyncio.sleep(1)
-
-        rows = []
-        if _has_agentic_runs_schema(db):
-            if _is_sqlite(db):
-                rows = db.execute(
-                    text(
-                        """
-                        SELECT ar.agent_name, ar.insight
-                        FROM agent_runs ar
-                        INNER JOIN (
-                          SELECT agent_name, MAX(created_at) AS max_created_at
-                          FROM agent_runs
-                          WHERE created_at > datetime('now', '-30 days')
-                          GROUP BY agent_name
-                        ) latest
-                          ON ar.agent_name = latest.agent_name
-                         AND ar.created_at = latest.max_created_at
-                        ORDER BY ar.created_at DESC
-                        """
-                    )
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    text(
-                        """
-                        SELECT DISTINCT ON (agent_name)
-                          agent_name, insight
-                        FROM agent_runs
-                        WHERE created_at > NOW() - INTERVAL '30 days'
-                        ORDER BY agent_name, created_at DESC
-                        """
-                    )
-                ).fetchall()
-        all_results = {}
-        for row in rows:
-            item = dict(row._mapping)
-            insight = item.get("insight")
-            if isinstance(insight, str):
-                try:
-                    insight = json.loads(insight)
-                except json.JSONDecodeError:
-                    insight = {"note": insight}
-            all_results[item.get("agent_name", "unknown")] = insight
-
-        content = await generate_board_pack_content(all_results)
-        pdf_path = await generate_pdf(content, f"board_pack_{datetime.now().strftime('%Y_%m')}.pdf")
-        yield f"data: {json.dumps({'step': 'complete', 'pdf_path': pdf_path, 'content': content}, default=str)}\n\n"
-
-    return StreamingResponse(stream_progress(), media_type="text/event-stream")
-
-
-@app.get("/api/board-pack/download-file/{filename}")
-async def download_board_pack(filename: str):
-    """Download generated board pack PDF."""
-    path = os.path.join(tempfile.gettempdir(), filename)
-    if os.path.exists(path):
-        return FileResponse(path, media_type="application/pdf", filename=filename)
-    return {"error": "Board pack not found"}
 
 
 _EXCEL_ADDIN_CORS = {
