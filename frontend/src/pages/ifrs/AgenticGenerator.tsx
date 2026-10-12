@@ -37,11 +37,6 @@ type OutputPayload = {
   exports: { xlsx_url: string; docx_url: string; pdf_url: string };
 };
 
-function wsUrlFor(runId: string, tenantId: string) {
-  const base = API_BASE.replace(/^http/, 'ws').replace(/\/$/, '');
-  return `${base}/api/ifrs/agentic/${runId}/stream?tenant_id=${encodeURIComponent(tenantId)}`;
-}
-
 export default function AgenticGenerator() {
   const { activeClient } = useClient();
   useSyncIfrsTenant();
@@ -64,7 +59,6 @@ export default function AgenticGenerator() {
   const [output, setOutput] = useState<OutputPayload | null>(null);
   const [busy, setBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
   const fetchStatus = useCallback(async (id: string) => {
     const { data } = await axios.get<StatusPayload>(`${AGENTIC}/${id}/status`, { headers: hdr() });
@@ -89,47 +83,6 @@ export default function AgenticGenerator() {
     const iv = window.setInterval(tick, 2000);
     return () => window.clearInterval(iv);
   }, [runId, fetchStatus]);
-
-  useEffect(() => {
-    if (!runId || !status) return;
-    if (status.status !== 'running' && status.status !== 'started') {
-      wsRef.current?.close();
-      wsRef.current = null;
-      return;
-    }
-    const ws = new WebSocket(wsUrlFor(runId, tenantId));
-    wsRef.current = ws;
-    ws.onmessage = (ev) => {
-      try {
-        const j = JSON.parse(ev.data as string);
-        if (j.agent_id && j.message) {
-          setStatus((prev) => {
-            if (!prev) return prev;
-            const next = [...prev.logs, { agent_id: j.agent_id, message: j.message, ts: j.ts || '' }];
-            return { ...prev, logs: next.slice(-50) };
-          });
-        }
-        if (j.heartbeat) {
-          setStatus((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  status: j.status,
-                  progress_pct: j.progress_pct,
-                  current_agent: j.current_agent,
-                }
-              : prev
-          );
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-    ws.onerror = () => {};
-    return () => {
-      ws.close();
-    };
-  }, [runId, status?.status]);
 
   useEffect(() => {
     if (logRef.current) {
@@ -487,7 +440,7 @@ export default function AgenticGenerator() {
         </div>
 
         <p className="mt-6 text-xs text-slate-600">
-          API: {AGENTIC}/start · Poll /status every 2s · WebSocket /stream for live logs.
+          API: {AGENTIC}/start · Poll /status every 2s for live logs.
         </p>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { reconcileBookkeeping, reconSignOff, monthlyReportPdfUrl } from '../../services/bookkeeping.service';
 import { Download } from 'lucide-react';
+import { downloadApiFile } from '../../utils/apiAuth';
 
 type Summary = {
   matched: Array<Record<string, unknown>>;
@@ -147,15 +148,19 @@ export const BookkeepingReconPage: React.FC = () => {
           >
             Sign off period
           </button>
-          <a
-            href={pdfUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center justify-center gap-2 w-full py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-700/50 text-sm"
+          <button
+            type="button"
+            disabled={!pdfUrl}
+            onClick={() =>
+              downloadApiFile(pdfUrl, `bookkeeping_${clientId}_${year}_${month}.pdf`).catch((e) =>
+                toast.error(e instanceof Error ? e.message : 'Download failed'),
+              )
+            }
+            className="flex items-center justify-center gap-2 w-full py-2 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-700/50 disabled:opacity-40 text-sm"
           >
             <Download className="w-4 h-4" />
             Export monthly PDF (summary)
-          </a>
+          </button>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Lock, Table2 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
+import { downloadApiFile } from '../utils/apiAuth';
 
 type StmtTab = 'pl' | 'bs' | 'cfs';
 
@@ -203,12 +204,16 @@ export default function ModelBuilder() {
 
   const downloadPdf = () => {
     if (!base || !modelId) return;
-    window.open(`${base}/api/model/report/${modelId}/pdf`, '_blank');
+    downloadApiFile(`${base}/api/model/report/${modelId}/pdf`, `model_${modelId}.pdf`).catch((e) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
   };
 
   const downloadExcel = () => {
     if (!base || !modelId) return;
-    window.open(`${base}/api/model/export/${modelId}/excel`, '_blank');
+    downloadApiFile(`${base}/api/model/export/${modelId}/excel`, `model_${modelId}.xlsx`).catch((e) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
   };
 
   const approve = async () => {

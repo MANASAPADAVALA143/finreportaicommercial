@@ -1,7 +1,6 @@
 """Multi-agent IFRS orchestration API (additive; wraps Week 1 + Week 2)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -14,8 +13,6 @@ from fastapi import (
     Form,
     HTTPException,
     UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
 )
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,7 +23,7 @@ from app.agents.nexus_orchestrator import (
     resume_agentic_pipeline,
 )
 from app.agents.packager_agent import load_export_bytes
-from app.core.database import SessionLocal, get_db
+from app.core.database import get_db
 from app.core.tenant_scope import header_tenant as tenant_id_header
 from app.models.ifrs_agentic import AgentHumanReview, AgentRun, AgentRunLog, AgentRunStatus, AgentValidation, HumanReviewStatus
 from app.models.ifrs_statement import TrialBalance
@@ -266,60 +263,3 @@ def download_export(
     from fastapi.responses import Response
 
     return Response(content=data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
-
-
-@router.websocket("/{run_id}/stream")
-async def ws_stream(websocket: WebSocket, run_id: str):
-    await websocket.accept()
-    tenant_id = (websocket.headers.get("x-tenant-id") or websocket.query_params.get("tenant_id") or "default").strip()
-    last_log_id = 0
-    run: AgentRun | None = None
-    try:
-        while True:
-            db = SessionLocal()
-            try:
-                run = db.query(AgentRun).filter(AgentRun.run_id == run_id, AgentRun.tenant_id == tenant_id).first()
-                if not run:
-                    await websocket.send_json({"error": "run_not_found"})
-                    break
-                rows = (
-                    db.query(AgentRunLog)
-                    .filter(AgentRunLog.agent_run_id == run.id, AgentRunLog.id > last_log_id)
-                    .order_by(AgentRunLog.id)
-                    .all()
-                )
-                for r in rows:
-                    last_log_id = max(last_log_id, r.id)
-                    await websocket.send_json(
-                        {
-                            "agent_id": r.agent_id,
-                            "message": r.message,
-                            "ts": r.timestamp.isoformat(),
-                        }
-                    )
-                await websocket.send_json(
-                    {
-                        "heartbeat": True,
-                        "status": run.status.value,
-                        "progress_pct": run.progress_pct,
-                        "current_agent": run.current_agent,
-                    }
-                )
-            finally:
-                db.close()
-
-            if run is None:
-                break
-            if run.status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.paused):
-                await asyncio.sleep(0.5)
-                if run.status in (AgentRunStatus.completed, AgentRunStatus.failed):
-                    break
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        logger.info("agentic ws disconnect %s", run_id)
-    except Exception as e:
-        logger.warning("agentic ws error: %s", e)
-        try:
-            await websocket.send_json({"error": str(e)})
-        except Exception:
-            pass

@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { ErrorBoundary } from './ErrorBoundary.tsx';
 import { AuthProvider } from './context/AuthContext';
+import { installApiAuth } from './utils/apiAuth';
 import './index.css';
+
+installApiAuth();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {

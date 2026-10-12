@@ -5,6 +5,7 @@
 
 import axios from 'axios';
 import { supabase as apSupabaseClient } from './ap-invoice/supabase';
+import { addApiAuth } from '../utils/apiAuth';
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/$/, '') ?? '';
 
@@ -13,6 +14,7 @@ export const invoiceFlowApi = axios.create({
   baseURL: API_BASE || undefined,
   timeout: 30_000,
 });
+addApiAuth(invoiceFlowApi);
 
 invoiceFlowApi.interceptors.request.use((config) => {
   try {

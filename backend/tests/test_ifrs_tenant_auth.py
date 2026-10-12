@@ -132,6 +132,10 @@ def test_routes_reject_requests_without_login(factory, method, path):
     assert res.status_code == 401, res.text
 
 
+def test_agentic_router_has_no_unauthenticated_websocket():
+    assert [r.path for r in ifrs_agentic.router.routes if not isinstance(r, APIRoute)] == []
+
+
 def test_board_pack_share_links_stay_public(factory):
     anon = TestClient(_app(factory, None))
     assert anon.get("/api/board-pack/view/nope").status_code == 404

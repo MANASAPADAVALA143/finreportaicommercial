@@ -5,6 +5,7 @@ import {
   getAccuracy,
   monthlyReportPdfUrl,
 } from '../../services/bookkeeping.service';
+import { downloadApiFile } from '../../utils/apiAuth';
 import {
   Line,
   LineChart,
@@ -81,14 +82,18 @@ export const BookkeepingMonthlyPage: React.FC = () => {
         >
           Refresh
         </button>
-        <a
-          href={clientId ? monthlyReportPdfUrl(clientId, month, year) : '#'}
-          target="_blank"
-          rel="noreferrer"
-          className="px-4 py-2 bg-emerald-700 rounded-lg text-white text-sm font-medium inline-flex items-center"
+        <button
+          type="button"
+          disabled={!clientId}
+          onClick={() =>
+            downloadApiFile(monthlyReportPdfUrl(clientId, month, year), `bookkeeping_${clientId}_${year}_${month}.pdf`).catch(
+              (e) => toast.error(e instanceof Error ? e.message : 'Download failed'),
+            )
+          }
+          className="px-4 py-2 bg-emerald-700 rounded-lg text-white text-sm font-medium inline-flex items-center disabled:opacity-40"
         >
           Download PDF
-        </a>
+        </button>
       </div>
 
       <div className="grid gap-8 lg:grid-cols-2">

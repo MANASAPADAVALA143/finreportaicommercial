@@ -11,6 +11,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
+import { downloadApiFile } from '../utils/apiAuth';
 
 type TabKey = 'prior' | 'budget' | 'consensus';
 
@@ -483,7 +484,12 @@ export default function EarningsReviewer() {
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => reviewId && window.open(`${base}/api/earnings/report/${reviewId}/pdf`, '_blank')}
+                  onClick={() =>
+                    reviewId &&
+                    downloadApiFile(`${base}/api/earnings/report/${reviewId}/pdf`, `earnings_${reviewId}.pdf`).catch((e) =>
+                      setError(e instanceof Error ? e.message : String(e)),
+                    )
+                  }
                   className="inline-flex items-center gap-2 rounded-lg border border-slate-600 px-4 py-2 text-sm"
                 >
                   <Download className="h-4 w-4" />

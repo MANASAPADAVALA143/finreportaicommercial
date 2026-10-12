@@ -1,5 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { clearAllAuthStorage } from '../utils/authToken';
+import { addApiAuth } from '../utils/apiAuth';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_VERSION = '/api/v1';
@@ -14,6 +15,7 @@ class ApiClient {
         'Content-Type': 'application/json',
       },
     });
+    addApiAuth(this.client);
 
     // Request interceptor to add auth token
     this.client.interceptors.request.use(

@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { backendOrigin } from '../utils/backendOrigin';
+import { downloadApiFile } from '../utils/apiAuth';
 
 type CheckStatus = 'pending' | 'running' | 'passed' | 'failed' | 'flagged' | 'check_error';
 
@@ -205,7 +206,9 @@ export default function MonthEndClose() {
 
   const downloadPdf = () => {
     if (!base || !runId) return;
-    window.open(`${base}/api/close/report/${runId}/pdf`, '_blank', 'noopener,noreferrer');
+    downloadApiFile(`${base}/api/close/report/${runId}/pdf`, `month_end_close_${runId}.pdf`).catch((e) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
   };
 
   const integ = status?.integrity || {};

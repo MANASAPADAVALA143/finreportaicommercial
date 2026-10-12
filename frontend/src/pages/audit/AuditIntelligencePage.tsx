@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
+import { downloadApiFile } from '../../utils/apiAuth';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).replace(/\/$/, '')) || '';
 
@@ -196,6 +197,21 @@ function evidenceChecklistUrl(runId: number) {
 
 function managementLetterUrl(runId: number) {
   return `${API_BASE}/api/audit/runs/${runId}/management-letter.docx`;
+}
+
+function ApiFileLink({ url, name, className, children }: { url: string; name: string; className: string; children: ReactNode }) {
+  return (
+    <a
+      href={url}
+      className={className}
+      onClick={(e) => {
+        e.preventDefault();
+        downloadApiFile(url, name).catch((err) => window.alert(err instanceof Error ? err.message : 'Download failed'));
+      }}
+    >
+      {children}
+    </a>
+  );
 }
 
 const cardBase =
@@ -729,9 +745,9 @@ function AgentResult({ data }: { data: { run_id: number; result: unknown } | nul
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-white">Results</h3>
         {canPdf && (
-          <a href={pdfUrl(run_id)} className={btnGhost} target="_blank" rel="noreferrer">
+          <ApiFileLink url={pdfUrl(run_id)} name={`audit_run_${run_id}.pdf`} className={btnGhost}>
             Download Report PDF
-          </a>
+          </ApiFileLink>
         )}
       </div>
       <pre className="max-h-96 overflow-auto rounded-lg bg-[#0A0F1E] p-3 text-xs text-slate-300 whitespace-pre-wrap">
@@ -766,9 +782,9 @@ function AuditEvidenceDashboard({ data }: { data: { run_id: number; result: unkn
           <h3 className="text-sm font-semibold text-white">Results Dashboard</h3>
           {run_id > 0 && (
             <div className="flex flex-wrap gap-2">
-              <a href={pdfUrl(run_id)} className={btnGhost} target="_blank" rel="noreferrer">Download Full Audit Report PDF</a>
-              <a href={evidenceChecklistUrl(run_id)} className={btnGhost} target="_blank" rel="noreferrer">Download Evidence Checklist Excel</a>
-              <a href={managementLetterUrl(run_id)} className={btnGhost} target="_blank" rel="noreferrer">Download Management Letter Word</a>
+              <ApiFileLink url={pdfUrl(run_id)} name={`audit_run_${run_id}.pdf`} className={btnGhost}>Download Full Audit Report PDF</ApiFileLink>
+              <ApiFileLink url={evidenceChecklistUrl(run_id)} name={`evidence_checklist_${run_id}.xlsx`} className={btnGhost}>Download Evidence Checklist Excel</ApiFileLink>
+              <ApiFileLink url={managementLetterUrl(run_id)} name={`management_letter_${run_id}.docx`} className={btnGhost}>Download Management Letter Word</ApiFileLink>
             </div>
           )}
         </div>
@@ -937,9 +953,9 @@ function GoingConcernResultCard({ data }: { data: { run_id: number; result: unkn
         {typed.generated_at ? <span>{new Date(typed.generated_at).toLocaleString()}</span> : null}
       </div>
       {data.run_id > 0 ? (
-        <a href={pdfUrl(data.run_id)} className={btnGhost} target="_blank" rel="noreferrer">
+        <ApiFileLink url={pdfUrl(data.run_id)} name={`audit_run_${data.run_id}.pdf`} className={btnGhost}>
           Download Report PDF
-        </a>
+        </ApiFileLink>
       ) : null}
     </div>
   );
@@ -984,9 +1000,9 @@ function HistoryTable({ rows }: { rows: AuditRunRow[] }) {
                 <td className="py-2 pr-2 text-slate-400">{r.file_name || '—'}</td>
                 <td className="py-2 pr-2 text-slate-300">{r.result_summary || '—'}</td>
                 <td className="py-2">
-                  <a href={pdfUrl(r.id)} className="text-[#F5A623] hover:underline" target="_blank" rel="noreferrer">
+                  <ApiFileLink url={pdfUrl(r.id)} name={`audit_run_${r.id}.pdf`} className="text-[#F5A623] hover:underline">
                     Download
-                  </a>
+                  </ApiFileLink>
                 </td>
               </tr>
             ))}
