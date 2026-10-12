@@ -9,13 +9,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.services import ct_return_service as svc
 
-router = APIRouter(prefix="/api/gulftax/ct-return", tags=["CT Return"])
-
-
-def _tenant(request: Request) -> str:
-    return request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or "demo"
+router = APIRouter(prefix="/api/gulftax/ct-return", tags=["CT Return"], dependencies=[Depends(workspace_member)])
 
 
 class GenerateCtReturnBody(BaseModel):
@@ -35,7 +32,7 @@ def generate_ct_return_endpoint(
     workspace_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    tenant = workspace_id or _tenant(request)
+    tenant = request_workspace(request, workspace_id)
     company_id = body.company_id or request.headers.get("X-Company-ID")
     if not company_id:
         raise HTTPException(400, "company_id required")
@@ -60,7 +57,7 @@ def list_ct_returns_endpoint(
     workspace_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    tenant = workspace_id or _tenant(request)
+    tenant = request_workspace(request, workspace_id)
     cid = company_id or request.headers.get("X-Company-ID")
     if not cid:
         raise HTTPException(400, "company_id required")
@@ -71,9 +68,10 @@ def list_ct_returns_endpoint(
 @router.get("/{return_id}")
 def get_ct_return_endpoint(
     return_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    row = svc.get_ct_return(db, return_id)
+    row = svc.get_ct_return(db, request_workspace(request), return_id)
     if not row:
         raise HTTPException(404, "CT return not found")
     return row
@@ -82,10 +80,11 @@ def get_ct_return_endpoint(
 @router.post("/{return_id}/approve")
 def approve_ct_return_endpoint(
     return_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     try:
-        return svc.approve_ct_return(db, return_id)
+        return svc.approve_ct_return(db, request_workspace(request), return_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -93,12 +92,14 @@ def approve_ct_return_endpoint(
 @router.post("/{return_id}/file")
 def file_ct_return_endpoint(
     return_id: str,
+    request: Request,
     body: FileCtReturnBody | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     try:
         return svc.file_ct_return(
             db,
+            request_workspace(request),
             return_id,
             override_reason=body.override_reason if body else None,
         )

@@ -140,11 +140,11 @@ class CtReturnServiceTests(unittest.TestCase):
         self.db.add(row)
         self.db.commit()
 
-        approved = svc.approve_ct_return(self.db, row.id)
+        approved = svc.approve_ct_return(self.db, self.tenant, row.id)
         self.assertEqual(approved["status"], "approved")
         self.assertIsNotNone(approved["approved_at"])
 
-        filed = svc.file_ct_return(self.db, row.id)
+        filed = svc.file_ct_return(self.db, self.tenant, row.id)
         self.assertEqual(filed["status"], "filed")
         self.assertFalse(filed.get("blocked"))
         self.assertIsNotNone(filed["filed_at"])
@@ -162,12 +162,12 @@ class CtReturnServiceTests(unittest.TestCase):
         self.db.add(row)
         self.db.commit()
 
-        result = svc.file_ct_return(self.db, row.id)
+        result = svc.file_ct_return(self.db, self.tenant, row.id)
         self.assertTrue(result["blocked"])
         self.assertTrue(result["warning"])
         self.assertEqual(result["status"], "draft")
 
-        override = svc.file_ct_return(self.db, row.id, override_reason="CFO expedited filing")
+        override = svc.file_ct_return(self.db, self.tenant, row.id, override_reason="CFO expedited filing")
         self.assertEqual(override["status"], "filed")
         self.assertEqual(override["override_reason"], "CFO expedited filing")
 

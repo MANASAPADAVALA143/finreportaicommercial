@@ -261,8 +261,12 @@ def generate_ct_return(
     return _serialize(row)
 
 
-def get_ct_return(db: Session, return_id: str) -> dict[str, Any] | None:
-    row = db.query(CtReturn).filter(CtReturn.id == return_id).first()
+def _tenant_row(db: Session, tenant_id: str, return_id: str) -> CtReturn | None:
+    return db.query(CtReturn).filter(CtReturn.id == return_id, CtReturn.tenant_id == tenant_id).first()
+
+
+def get_ct_return(db: Session, tenant_id: str, return_id: str) -> dict[str, Any] | None:
+    row = _tenant_row(db, tenant_id, return_id)
     return _serialize(row) if row else None
 
 
@@ -282,8 +286,8 @@ def list_ct_returns(
     return [_serialize(r) for r in rows]
 
 
-def approve_ct_return(db: Session, return_id: str) -> dict[str, Any]:
-    row = db.query(CtReturn).filter(CtReturn.id == return_id).first()
+def approve_ct_return(db: Session, tenant_id: str, return_id: str) -> dict[str, Any]:
+    row = _tenant_row(db, tenant_id, return_id)
     if not row:
         raise ValueError("CT return not found")
     if row.status != "draft":
@@ -298,11 +302,12 @@ def approve_ct_return(db: Session, return_id: str) -> dict[str, Any]:
 
 def file_ct_return(
     db: Session,
+    tenant_id: str,
     return_id: str,
     override_reason: str | None = None,
 ) -> dict[str, Any]:
     """Transition approved → filed. Soft gate if still draft unless override_reason supplied."""
-    row = db.query(CtReturn).filter(CtReturn.id == return_id).first()
+    row = _tenant_row(db, tenant_id, return_id)
     if not row:
         raise ValueError("CT return not found")
     if row.status == "filed":

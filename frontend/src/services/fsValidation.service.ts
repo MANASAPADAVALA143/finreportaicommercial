@@ -1,9 +1,9 @@
+import { workspaceHeaders } from '../utils/workspaceHeaders';
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? 'http://localhost:8000';
 const BASE = `${API_BASE}/api/uae/fs`;
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return { 'Content-Type': 'application/json', 'X-Workspace-ID': wsId, 'X-Tenant-ID': wsId };
+  return workspaceHeaders();
 }
 
 function params(periodStart: string, periodEnd: string): string {

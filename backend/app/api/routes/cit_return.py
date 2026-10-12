@@ -9,14 +9,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.models.company_setup import UaeCompanyProfile
 from app.services.uae_journal_service import create_journal_entry, get_trial_balance
 
-router = APIRouter(prefix="/api/gulftax/cit-return", tags=["CIT Return"])
-
-
-def _tenant(request: Request) -> str:
-    return request.headers.get("X-Workspace-ID") or request.headers.get("X-Tenant-ID") or "demo"
+router = APIRouter(prefix="/api/gulftax/cit-return", tags=["CIT Return"], dependencies=[Depends(workspace_member)])
 
 
 def _period_key(from_date: str, to_date: str) -> str:
@@ -62,7 +59,7 @@ def generate_cit_return(
     to_date: str = Query(...),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = workspace_id or _tenant(request)
+    ws = request_workspace(request, workspace_id)
     period = _period_key(from_date, to_date)
     tb = get_trial_balance(ws, period, db, company_id=company_id)
     gl = _gl_totals(tb)
@@ -71,7 +68,7 @@ def generate_cit_return(
     if company_id:
         profile = (
             db.query(UaeCompanyProfile)
-            .filter(UaeCompanyProfile.id == company_id)
+            .filter(UaeCompanyProfile.id == company_id, UaeCompanyProfile.workspace_id == ws)
             .first()
         )
 
@@ -145,7 +142,7 @@ def record_cit_voucher(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = body.workspace_id or _tenant(request)
+    ws = request_workspace(request, body.workspace_id)
     period = _period_key(body.period_from, body.period_to)
     amount = round(body.tax_amount_aed, 2)
     if amount <= 0:

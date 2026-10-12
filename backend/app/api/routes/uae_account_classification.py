@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.services.uae_account_classification_service import (
     ai_classify_accounts,
     classification_summary,
@@ -16,15 +17,7 @@ from app.services.uae_account_classification_service import (
     manual_classify,
 )
 
-router = APIRouter(prefix="/api/uae/accounts", tags=["UAE Account Classification"])
-
-
-def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("X-Workspace-ID")
-        or request.headers.get("X-Tenant-ID")
-        or "demo"
-    )
+router = APIRouter(prefix="/api/uae/accounts", tags=["UAE Account Classification"], dependencies=[Depends(workspace_member)])
 
 
 class AIClassifyBody(BaseModel):
@@ -52,7 +45,7 @@ def get_unclassified(
     period: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = workspace_id or _tenant(request)
+    ws = request_workspace(request, workspace_id)
     accounts = list_accounts_with_status(db, ws, company_id, period)
     return {"accounts": accounts, "summary": classification_summary(db, ws, company_id)}
 
@@ -64,7 +57,7 @@ def get_summary(
     company_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = workspace_id or _tenant(request)
+    ws = request_workspace(request, workspace_id)
     return classification_summary(db, ws, company_id)
 
 
@@ -74,7 +67,7 @@ def post_ai_classify(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = body.workspace_id or _tenant(request)
+    ws = request_workspace(request, body.workspace_id)
     ids = body.account_ids if body.account_ids else None
     try:
         return ai_classify_accounts(db, workspace_id=ws, company_id=body.company_id, account_ids=ids)
@@ -91,7 +84,7 @@ def post_manual_classify(
     company_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = workspace_id or _tenant(request)
+    ws = request_workspace(request, workspace_id)
     try:
         return manual_classify(db, account_id, ws, company_id, body.model_dump(exclude_none=True))
     except ValueError as exc:
@@ -105,6 +98,6 @@ def delete_clear(
     company_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    ws = workspace_id or _tenant(request)
+    ws = request_workspace(request, workspace_id)
     count = clear_classifications(db, ws, company_id)
     return {"cleared": count}

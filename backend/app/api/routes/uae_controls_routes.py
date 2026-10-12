@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
 from app.models.uae_accounting_full import UAEJournalEntry
 from app.services import company_setup_service as setup_svc
 from app.exceptions.period_control import PeriodControlError
@@ -16,15 +17,11 @@ from app.services.notification_service import scan_notifications
 from app.services.uae_controls_service import get_controls, validate_journal_entry
 from app.services.uae_journal_service import post_journal_entry
 
-router = APIRouter(prefix="/api/uae/controls", tags=["UAE Controls"])
+router = APIRouter(prefix="/api/uae/controls", tags=["UAE Controls"], dependencies=[Depends(workspace_member)])
 
 
 def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request)
 
 
 class ControlsUpdate(BaseModel):
@@ -53,7 +50,7 @@ def get_workspace_controls(request: Request, db: Session = Depends(get_db)):
     return {"controls": setup_svc._controls_dict(controls)}
 
 
-@router.patch("")
+@router.patch("", dependencies=[Depends(workspace_manager)])
 def update_workspace_controls(body: ControlsUpdate, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request)
     data = body.model_dump(exclude_none=True)
@@ -95,7 +92,7 @@ def pending_journals(
     }
 
 
-@router.post("/journals/{je_id}/approve")
+@router.post("/journals/{je_id}/approve", dependencies=[Depends(workspace_manager)])
 def approve_journal(je_id: str, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
@@ -103,7 +100,7 @@ def approve_journal(je_id: str, request: Request, db: Session = Depends(get_db))
         raise HTTPException(status_code=404, detail="Journal entry not found")
     if je.status != "pending_approval":
         raise HTTPException(status_code=400, detail="Journal is not pending approval")
-    approver = request.headers.get("x-user-email") or "approver"
+    approver = request_user_email(request) or "approver"
     try:
         post_journal_entry(je, db)
     except PeriodControlError as exc:
@@ -125,7 +122,7 @@ def approve_journal(je_id: str, request: Request, db: Session = Depends(get_db))
     return {"id": je.id, "status": je.status}
 
 
-@router.post("/journals/{je_id}/reject")
+@router.post("/journals/{je_id}/reject", dependencies=[Depends(workspace_manager)])
 def reject_journal(je_id: str, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=je_id, tenant_id=tenant_id).first()
@@ -134,7 +131,7 @@ def reject_journal(je_id: str, request: Request, db: Session = Depends(get_db)):
     if je.status != "pending_approval":
         raise HTTPException(status_code=400, detail="Journal is not pending approval")
     from datetime import datetime
-    approver = request.headers.get("x-user-email") or "approver"
+    approver = request_user_email(request) or "approver"
     je.status = "rejected"
     je.rejection_reason = "Rejected via controls queue"
     je.approved_by = approver

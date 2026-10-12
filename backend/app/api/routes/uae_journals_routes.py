@@ -9,21 +9,18 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
 from app.exceptions.period_control import PeriodControlError
 from app.models.uae_accounting_full import UAEJournalEntry
 from app.services.audit_log_service import log_audit
 from app.services.notification_service import scan_notifications
 from app.services.uae_journal_service import post_journal_entry
 
-router = APIRouter(prefix="/api/uae/journals", tags=["UAE Journals"])
+router = APIRouter(prefix="/api/uae/journals", tags=["UAE Journals"], dependencies=[Depends(workspace_member)])
 
 
 def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request)
 
 
 class ApproveJEIn(BaseModel):
@@ -33,7 +30,7 @@ class ApproveJEIn(BaseModel):
     approved_by: Optional[str] = None
 
 
-@router.post("/approve-je")
+@router.post("/approve-je", dependencies=[Depends(workspace_manager)])
 def approve_je(body: ApproveJEIn, request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request)
     je = db.query(UAEJournalEntry).filter_by(id=body.je_id, tenant_id=tenant_id).first()
@@ -42,7 +39,7 @@ def approve_je(body: ApproveJEIn, request: Request, db: Session = Depends(get_db
     if je.status != "pending_approval":
         raise HTTPException(status_code=400, detail="Journal is not pending approval")
 
-    approver = body.approved_by or request.headers.get("x-user-email") or "approver"
+    approver = request_user_email(request) or "approver"
     action = (body.action or "").lower()
 
     if action == "approved":

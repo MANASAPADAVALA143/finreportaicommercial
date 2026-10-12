@@ -265,7 +265,7 @@ def manual_classify(
     company_id: str | None,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    acct = db.query(UAEAccount).filter(UAEAccount.id == account_id).first()
+    acct = db.query(UAEAccount).filter(UAEAccount.id == account_id, UAEAccount.tenant_id == workspace_id).first()
     if not acct:
         raise ValueError("Account not found")
     balances = _account_balances(db, workspace_id, company_id)
