@@ -2,6 +2,7 @@ import '@fontsource/ibm-plex-mono';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { workspaceHeaders } from '../utils/workspaceHeaders';
+import { joinApiUrl } from '../utils/backendOrigin';
 
 const AITHENTIC = {
   bg: '#060A12',
@@ -61,7 +62,7 @@ export default function CommandCenter() {
   const fetchLatestBrief = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/agents/latest-brief', {
+      const res = await fetch(joinApiUrl('/api/agents/latest-brief'), {
         headers: workspaceHeaders(null),
         credentials: 'include',
       });
@@ -79,7 +80,7 @@ export default function CommandCenter() {
     setBoardPackProgress([]);
     setBoardPackReady(false);
 
-    const response = await fetch('/api/board-pack/generate', {
+    const response = await fetch(joinApiUrl('/api/board-pack/generate'), {
       method: 'POST',
       headers: workspaceHeaders(null),
       credentials: 'include',
@@ -112,7 +113,7 @@ export default function CommandCenter() {
 
   const downloadBoardPack = async () => {
     const filename = boardPackPath.split(/[\\/]/).pop() ?? '';
-    const res = await fetch(`/api/board-pack/download-file/${encodeURIComponent(filename)}`, {
+    const res = await fetch(joinApiUrl(`/api/board-pack/download-file/${encodeURIComponent(filename)}`), {
       headers: workspaceHeaders(null),
       credentials: 'include',
     });

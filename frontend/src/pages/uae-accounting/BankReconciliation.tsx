@@ -7,6 +7,7 @@ import { Landmark, Upload, Zap, CheckCircle2, AlertCircle, RefreshCw } from 'luc
 import * as svc from '../../services/uaeFullAccounting.service';
 import type { BankAccount, BankStatement } from '../../services/uaeFullAccounting.service';
 import { getStoredAccessToken } from '../../utils/workspaceHeaders';
+import { joinApiUrl } from '../../utils/backendOrigin';
 
 const BANKS = ['ENBD', 'FAB', 'ADCB', 'RAKBank', 'DIB'];
 
@@ -84,7 +85,7 @@ export default function BankReconciliation() {
     setCreatingJE(true);
     setSuggestedJE(null);
     try {
-      const res = await fetch('/api/uae/accounting/recon-to-je', {
+      const res = await fetch(joinApiUrl('/api/uae/accounting/recon-to-je'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: parseFloat(reconJEAmount) || 0, description: reconJEDesc || 'Unmatched bank item' }),

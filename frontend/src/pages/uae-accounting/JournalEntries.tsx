@@ -10,6 +10,7 @@ import type { JournalEntry, JournalLine, UAEAccount } from '../../services/uaeFu
 import { useClient } from '../../context/ClientContext';
 import { syncJournalLinesToR2R, uaeJEToHistoryEntries } from '../../services/r2rHistorySync';
 import { getActiveWorkspaceId, workspaceHeaders } from '../../utils/workspaceHeaders';
+import { joinApiUrl } from '../../utils/backendOrigin';
 
 const SOURCE_COLORS: Record<string, string> = {
   manual:     'bg-blue-900/40 text-blue-400 border-blue-700',
@@ -242,7 +243,7 @@ export default function JournalEntries() {
   const refreshR2rCount = () => {
     const ws = getActiveWorkspaceId();
     if (!ws) return;
-    fetch(`/api/r2r/baseline-status/${encodeURIComponent(ws)}?country=UAE`, {
+    fetch(joinApiUrl(`/api/r2r/baseline-status/${encodeURIComponent(ws)}?country=UAE`), {
       headers: workspaceHeaders(null),
       credentials: 'include',
     })
@@ -254,7 +255,7 @@ export default function JournalEntries() {
   const handleSyncToR2R = async () => {
     setSendingR2R(true);
     try {
-      const res = await fetch('/api/r2r/sync-from-accounting', {
+      const res = await fetch(joinApiUrl('/api/r2r/sync-from-accounting'), {
         method: 'POST',
         headers: workspaceHeaders(null),
         credentials: 'include',

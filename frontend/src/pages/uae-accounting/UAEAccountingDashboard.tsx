@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from '../../components/layout/Sidebar';
+import { joinApiUrl } from '../../utils/backendOrigin';
 import {
   getUAEStats,
   listConnectedAccounts,
@@ -54,7 +55,7 @@ export default function UAEAccountingDashboard() {
       .finally(() => setLoading(false));
 
     // Fetch pipeline close status
-    fetch(`/api/uae/accounting/close-status/${CURRENT_MONTH}`)
+    fetch(joinApiUrl(`/api/uae/accounting/close-status/${CURRENT_MONTH}`))
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setPipelineStatus(d); })
       .catch(() => null);

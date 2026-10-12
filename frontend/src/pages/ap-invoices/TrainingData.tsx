@@ -8,6 +8,7 @@ import * as XLSX from 'xlsx';
 import { useToast } from '@/hooks/use-toast';
 import { getMyCompany } from '@/lib/ap-invoice/companyService';
 import { supabase } from '@/lib/ap-invoice/supabase';
+import { joinApiUrl } from '@/utils/backendOrigin';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -381,7 +382,7 @@ export function TrainingData() {
       if (session?.access_token) {
         authHeaders.Authorization = `Bearer ${session.access_token}`;
       }
-      const resp = await fetch('/api/tally/read-history', {
+      const resp = await fetch(joinApiUrl('/api/tally/read-history'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({
@@ -423,7 +424,7 @@ export function TrainingData() {
         authHeaders.Authorization = `Bearer ${session.access_token}`;
       }
       const timer = setInterval(() => setUploadProgress((p) => Math.min(p + 5, 75)), 400);
-      const resp = await fetch('/api/training/upload', {
+      const resp = await fetch(joinApiUrl('/api/training/upload'), {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ company_id: companyId, invoices: parsedRows, file_name: fileName }),

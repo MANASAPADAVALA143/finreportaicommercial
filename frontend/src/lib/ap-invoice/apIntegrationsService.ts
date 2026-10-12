@@ -4,6 +4,7 @@
 import { loadZohoSettings } from './zohoService';
 import { loadQBSettings } from './quickbooksService';
 import { supabase } from './supabase';
+import { joinApiUrl } from '../../utils/backendOrigin';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 
 export type IntegrationId = 'zoho' | 'quickbooks';
@@ -47,7 +48,7 @@ async function fetchErpConnections(): Promise<
   }>
 > {
   try {
-    const res = await fetch('/api/connections/status');
+    const res = await fetch(joinApiUrl('/api/connections/status'));
     if (!res.ok) return [];
     const j = (await res.json()) as { connections?: typeof connections };
     const connections = j.connections ?? [];
@@ -68,7 +69,7 @@ async function fetchApIntegrationStatus(): Promise<
   }>
 > {
   try {
-    const res = await fetch('/api/ap/integrations/status');
+    const res = await fetch(joinApiUrl('/api/ap/integrations/status'));
     if (!res.ok) return [];
     const j = (await res.json()) as { integrations?: Array<{
       id: string;
@@ -85,7 +86,7 @@ async function fetchApIntegrationStatus(): Promise<
 }
 
 export async function getZohoOAuthUrl(): Promise<string> {
-  const res = await fetch('/api/ap/integrations/zoho/auth-url');
+  const res = await fetch(joinApiUrl('/api/ap/integrations/zoho/auth-url'));
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
     throw new Error((j as { detail?: string }).detail ?? 'Could not get Zoho OAuth URL');
@@ -95,7 +96,7 @@ export async function getZohoOAuthUrl(): Promise<string> {
 }
 
 export async function getQuickBooksOAuthUrl(): Promise<string> {
-  const res = await fetch('/api/ap/integrations/qbo/auth-url');
+  const res = await fetch(joinApiUrl('/api/ap/integrations/qbo/auth-url'));
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
     throw new Error((j as { detail?: string }).detail ?? 'Could not get QuickBooks OAuth URL');
@@ -204,7 +205,7 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
 
 export async function disconnectIntegration(id: IntegrationId, connectionId: string | null): Promise<void> {
   if (connectionId) {
-    await fetch(`/api/connections/${connectionId}`, { method: 'DELETE' });
+    await fetch(joinApiUrl(`/api/connections/${connectionId}`), { method: 'DELETE' });
   }
   await writeSetting(SYNC_KEYS[id], JSON.stringify({ at: null, status: 'never' }));
   logAction('integration.disconnect', id, null, getInvoiceflowWorkEmail(), {});

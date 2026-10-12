@@ -4,6 +4,7 @@ import { listInvoicesViaApi } from './listInvoicesService';
 import { resolveApSupabaseCompanyId } from './workspaceCompanySync';
 import { effectivePaymentDate, normalizedOpenPaymentStatus } from './paymentService';
 import { anonymiseVendor, redactDemoVendorNames } from './vendorDisplay';
+import { joinApiUrl } from '../../utils/backendOrigin';
 
 export type StrategicInsightPriority = 'critical' | 'high' | 'strategic';
 export type StrategicInsightCategory =
@@ -1087,7 +1088,7 @@ MoM intake change: ${kpis.momChange}%
 
 Give exactly 3 numbered strategic recommendations (cash, risk, process). Max 3 sentences each. Plain English.`;
 
-  const res = await fetch('/api/bank-match', {
+  const res = await fetch(joinApiUrl('/api/bank-match'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
