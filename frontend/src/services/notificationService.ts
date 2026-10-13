@@ -1,16 +1,12 @@
 /** In-app notifications — /api/notifications */
 
 import { backendOrigin } from '../utils/backendOrigin';
+import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 const BASE = `${backendOrigin()}/api/notifications`;
 
 function hdrs(): Record<string, string> {
-  const wsId = localStorage.getItem('gnanova_workspace_id') ?? localStorage.getItem('tenantId');
-  return {
-    'Content-Type': 'application/json',
-    'X-Workspace-ID': wsId,
-    'X-Tenant-ID': wsId,
-  };
+  return workspaceHeaders(getStoredAccessToken());
 }
 
 function companyQs(extra = ''): string {

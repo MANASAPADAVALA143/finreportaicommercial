@@ -1,19 +1,15 @@
 /** Industry-aware workspace config API client */
 
 import { backendOrigin } from '../utils/backendOrigin';
-import { getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
+import { getActiveWorkspaceId, getStoredAccessToken, workspaceHeaders } from '../utils/workspaceHeaders';
 
 function companyId(): string {
   return localStorage.getItem('active_company_id') || localStorage.getItem('ap_company_id') || '';
 }
 
+/** Must match the X-Workspace-ID header: the backend rejects a body/query workspace_id that differs. */
 function workspaceId(): string {
-  return (
-    localStorage.getItem('gnanova_workspace_id') ||
-    localStorage.getItem('active_workspace_id') ||
-    localStorage.getItem('tenantId') ||
-    ''
-  );
+  return getActiveWorkspaceId() || '';
 }
 
 function hdrs(): Record<string, string> {

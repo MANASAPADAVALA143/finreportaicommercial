@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_company, request_workspace, workspace_reader, workspace_writer
 from app.services.notification_service import (
     get_workspace_role_email,
     list_notifications,
@@ -17,15 +18,12 @@ from app.services.notification_service import (
     send_notification,
 )
 
-router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
+# Read access suffices for the feed itself: viewers may refresh it and mark items read.
+router = APIRouter(prefix="/api/notifications", tags=["Notifications"], dependencies=[Depends(workspace_reader)])
 
 
 def _tenant(request: Request) -> str:
-    return (
-        request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or "demo"
-    )
+    return request_workspace(request)
 
 
 @router.get("")
@@ -35,7 +33,7 @@ def get_notifications(
     db: Session = Depends(get_db),
 ):
     tenant_id = _tenant(request)
-    company_id = request.query_params.get("company_id")
+    company_id = request_company(db, request, request.query_params.get("company_id"), "read")
     scan_notifications(db, tenant_id, company_id)
     items = list_notifications(db, tenant_id, unread_only=unread_only)
     unread = sum(1 for i in items if not i["is_read"])
@@ -45,7 +43,7 @@ def get_notifications(
 @router.post("/scan")
 def trigger_scan(request: Request, db: Session = Depends(get_db)):
     tenant_id = _tenant(request)
-    company_id = request.query_params.get("company_id")
+    company_id = request_company(db, request, request.query_params.get("company_id"), "read")
     count = scan_notifications(db, tenant_id, company_id)
     items = list_notifications(db, tenant_id, unread_only=True)
     return {"scanned": count, "unread_count": len(items)}
@@ -73,7 +71,7 @@ class APInvoiceUploadNotifyIn(BaseModel):
     currency: str = "AED"
 
 
-@router.post("/ap-invoice-uploaded")
+@router.post("/ap-invoice-uploaded", dependencies=[Depends(workspace_writer)])
 def notify_ap_invoice_uploaded(
     body: APInvoiceUploadNotifyIn,
     request: Request,

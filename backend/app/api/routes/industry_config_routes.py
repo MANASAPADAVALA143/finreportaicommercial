@@ -7,17 +7,19 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.company_access import AccessLevel
 from app.core.database import engine, get_db
+from app.core.tenant_scope import request_company, request_workspace, workspace_manager, workspace_member
 from app.models.industry_config import INDUSTRY_DEFAULTS, CostCenter, IndustryConfig
 from app.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/config", tags=["Industry Config"])
+router = APIRouter(prefix="/api/config", tags=["Industry Config"], dependencies=[Depends(workspace_member)])
 
 _SEED_ROWS: list[dict[str, Any]] = [
     {
@@ -171,31 +173,12 @@ def _normalize_industry_key(raw: str | None) -> str:
     return s
 
 
-def _ws(
-    request: Request,
-    workspace_id: str | None = None,
-    x_workspace_id: str | None = None,
-) -> str:
-    return (
-        (workspace_id or "").strip()
-        or (x_workspace_id or "").strip()
-        or request.headers.get("x-workspace-id")
-        or request.headers.get("x-tenant-id")
-        or ""
-    )
-
-
-def _company(
-    request: Request,
-    company_id: str | None = None,
-    x_company_id: str | None = None,
-) -> str:
-    return (
-        (company_id or "").strip()
-        or (x_company_id or "").strip()
-        or request.headers.get("x-company-id")
-        or ""
-    )
+def _company(db: Session, request: Request, ws: str, company_id: str | None, level: AccessLevel) -> str:
+    """Cost centers are keyed by company; without one (or with the workspace id) they belong to the workspace."""
+    raw = (company_id or "").strip() or (request.headers.get("x-company-id") or "").strip()
+    if not raw or raw == ws:
+        return ws
+    return request_company(db, request, raw, level) or ws
 
 
 def _config_dict(cfg: IndustryConfig, *, industry_key: str, workspace: Workspace | None) -> dict[str, Any]:
@@ -305,12 +288,10 @@ def list_industries(db: Session = Depends(get_db)) -> dict[str, Any]:
 def get_tenant_industry(
     request: Request,
     workspace_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_industry_tables(db)
-    ws_id = _ws(request, workspace_id, x_workspace_id)
-    workspace = db.get(Workspace, ws_id) if ws_id else None
+    workspace = db.get(Workspace, request_workspace(request, workspace_id))
     key = _normalize_industry_key(getattr(workspace, "industry", None) if workspace else "general")
     cfg = db.query(IndustryConfig).filter(IndustryConfig.industry == key).first()
     if not cfg:
@@ -323,18 +304,14 @@ class SetIndustryIn(BaseModel):
     workspace_id: Optional[str] = None
 
 
-@router.post("/industry")
+@router.post("/industry", dependencies=[Depends(workspace_manager)])
 def set_tenant_industry(
     body: SetIndustryIn,
     request: Request,
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_industry_tables(db)
-    ws_id = _ws(request, body.workspace_id, x_workspace_id)
-    if not ws_id:
-        raise HTTPException(400, "workspace_id required")
-    workspace = db.get(Workspace, ws_id)
+    workspace = db.get(Workspace, request_workspace(request, body.workspace_id))
     if not workspace:
         raise HTTPException(404, "Workspace not found")
     key = _normalize_industry_key(body.industry)
@@ -352,15 +329,14 @@ def set_tenant_industry(
     return _fallback_config(key)
 
 
-@router.patch("/industry")
+@router.patch("/industry", dependencies=[Depends(workspace_manager)])
 def patch_tenant_industry(
     body: SetIndustryIn,
     request: Request,
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Alias for set_tenant_industry — IndustrySelector uses PATCH."""
-    return set_tenant_industry(body, request, x_workspace_id, db)
+    return set_tenant_industry(body, request, db)
 
 
 class CostCenterIn(BaseModel):
@@ -399,15 +375,11 @@ def list_cost_centers(
     workspace_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
     active_only: bool = Query(True),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
-    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_industry_tables(db)
-    ws = _ws(request, workspace_id, x_workspace_id)
-    cid = _company(request, company_id, x_company_id) or ws
-    if not ws:
-        raise HTTPException(400, "workspace_id required")
+    ws = request_workspace(request, workspace_id)
+    cid = _company(db, request, ws, company_id, "read")
     q = db.query(CostCenter).filter(CostCenter.tenant_id == ws, CostCenter.company_id == cid)
     if active_only:
         q = q.filter(CostCenter.is_active.is_(True))
@@ -419,15 +391,11 @@ def list_cost_centers(
 def create_cost_center(
     body: CostCenterIn,
     request: Request,
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
-    x_company_id: Optional[str] = Header(None, alias="X-Company-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_industry_tables(db)
-    ws = _ws(request, body.workspace_id, x_workspace_id)
-    cid = _company(request, body.company_id, x_company_id) or ws
-    if not ws:
-        raise HTTPException(400, "workspace_id required")
+    ws = request_workspace(request, body.workspace_id)
+    cid = _company(db, request, ws, body.company_id, "write")
     name = body.name.strip()
     code = (body.code or "").strip().upper()
     if not code:
@@ -466,11 +434,10 @@ def update_cost_center(
     body: CostCenterUpdateIn,
     request: Request,
     workspace_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     ensure_industry_tables(db)
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     row = (
         db.query(CostCenter)
         .filter(CostCenter.id == cost_center_id, CostCenter.tenant_id == ws)
@@ -498,12 +465,11 @@ def delete_cost_center(
     cost_center_id: str,
     request: Request,
     workspace_id: Optional[str] = Query(None),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-Id"),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Soft-delete — sets is_active=false."""
     ensure_industry_tables(db)
-    ws = _ws(request, workspace_id, x_workspace_id)
+    ws = request_workspace(request, workspace_id)
     row = (
         db.query(CostCenter)
         .filter(CostCenter.id == cost_center_id, CostCenter.tenant_id == ws)
