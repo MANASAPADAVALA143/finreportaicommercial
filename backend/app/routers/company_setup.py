@@ -196,8 +196,8 @@ async def upload_logo(
 @router.get("/logo/{filename}")
 def serve_logo(filename: str) -> Any:
     from fastapi.responses import FileResponse
-    path = _LOGO_DIR / filename
-    if not path.exists():
+    path = (_LOGO_DIR / filename).resolve()
+    if path.parent != _LOGO_DIR.resolve() or not path.is_file():
         raise HTTPException(status_code=404, detail="Logo not found")
     return FileResponse(path)
 

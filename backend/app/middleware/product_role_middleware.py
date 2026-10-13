@@ -43,6 +43,12 @@ PUBLIC_PREFIXES = (
     "/api/uae/zoho/callback",
     "/api/uae/qbo/callback",
     "/api/ap/whatsapp-intake/webhook",
+    # Zoho server-to-server, verified by X-Zoho-Signature in the route
+    "/api/rera/webhooks/zoho",
+    # Share links and <img> tags cannot send a bearer token; access is by unguessable name
+    "/api/board-pack/view/",
+    "/api/board-pack/download/",
+    "/api/company-setup/logo/",
     # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
     "/api/agent/extract-image",
 )
@@ -142,7 +148,11 @@ def auth_gate_mode() -> str:
 
 
 def _is_public(path: str) -> bool:
-    return any(path == p or path.startswith(f"{p}/") for p in PUBLIC_PREFIXES)
+    """A prefix ending in "/" matches only paths below it, never the prefix itself."""
+    return any(
+        path.startswith(p) if p.endswith("/") else (path == p or path.startswith(f"{p}/"))
+        for p in PUBLIC_PREFIXES
+    )
 
 
 def _auth_any_role(path: str) -> bool:
