@@ -103,7 +103,6 @@ from app.api.routes import (
     india_excel_routes,
     pipeline as pipeline_router,
     o2c_routes,
-    crm_routes,
     training_routes,
     agent_extract,
     ap_anomaly,
@@ -272,7 +271,6 @@ def _run_critical_migrations() -> None:
             import app.models.company_setup  # noqa: F401
             import app.models.workspace_notification  # noqa: F401
             import app.models.workspace_audit  # noqa: F401
-            import app.models.crm  # noqa: F401
             import app.models.ifrs16_lease  # noqa: F401
             import app.models.ifrs15_contract  # noqa: F401
             import app.models.ifrs9_ecl  # noqa: F401
@@ -594,7 +592,6 @@ app.include_router(accounting_memo_router.router)
 app.include_router(ap_integrations.router)
 app.include_router(ap_integrations.callback_router)
 app.include_router(o2c_routes.router)
-app.include_router(crm_routes.router)
 app.include_router(training_routes.router)
 app.include_router(entity_health.router)
 app.include_router(payment_calendar.router)

@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.uae_accounting_full import UAESalesInvoice
-from app.services.credit_risk_service import recalc_for_customer_name
 from app.services.notification_service import send_notification
 
 PAYMENT_LINK_BASE = "https://pay.example.com/invoices"
@@ -195,8 +194,6 @@ def run_dunning(
         inv.last_dunning_sent_at = datetime.utcnow()
         inv.dunning_count = (inv.dunning_count or 0) + 1
         db.add(inv)
-        if cust and cust.name:
-            recalc_for_customer_name(db, tenant_id, company_id, cust.name)
 
         sent.append({
             "invoice_number": inv.invoice_number,

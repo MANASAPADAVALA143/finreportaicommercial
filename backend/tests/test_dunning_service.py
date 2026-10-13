@@ -112,8 +112,7 @@ class DunningServiceTests(unittest.TestCase):
         self.assertIn("final notice", l4.lower())
 
     @patch("app.services.dunning_service.send_notification", return_value=True)
-    @patch("app.services.dunning_service.recalc_for_customer_name")
-    def test_run_dunning_sent_and_skipped_counts(self, _recalc, mock_send):
+    def test_run_dunning_sent_and_skipped_counts(self, mock_send):
         with_email = self._customer("With Email", "pay@acme.ae")
         no_email = self._customer("No Email Co", None)
         self._invoice(with_email, "INV-L1", 10)
@@ -140,8 +139,7 @@ class DunningServiceTests(unittest.TestCase):
         mock_send.assert_any_call("pay@acme.ae", l1_subject, ANY)
 
     @patch("app.services.dunning_service.send_notification", return_value=True)
-    @patch("app.services.dunning_service.recalc_for_customer_name")
-    def test_get_dunning_history(self, _recalc, _mock_send):
+    def test_get_dunning_history(self, _mock_send):
         cust = self._customer("History Co", "hist@acme.ae")
         self._invoice(cust, "INV-HIST", 40, email_sent_before=True)
         self.db.commit()

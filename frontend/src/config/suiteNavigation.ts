@@ -163,16 +163,6 @@ export const UAE_NAV: NavEntry[] = [
       { label: 'O2C Dashboard',  path: '/o2c',                   icon: 'activity', badge: 'O2C' },
     ],
   },
-  {
-    section: 'CRM',
-    items: [
-      { label: 'Dashboard',  path: '/crm',             icon: 'layout-dashboard' },
-      { label: 'Contacts',   path: '/crm/contacts',    icon: 'users' },
-      { label: 'Deals',      path: '/crm/deals',       icon: 'trending-up' },
-      { label: 'Quotes',     path: '/crm/quotes',      icon: 'file-text' },
-      { label: 'Activities', path: '/crm/activities',  icon: 'calendar' },
-    ],
-  },
   { label: 'AP InvoiceFlow',     path: '/ap-invoices',           icon: 'shopping-cart',  badge: 'AP', pinMarket: 'uae' },
   { label: 'Bank Recon',         path: '/uae-full/bank-recon',   icon: 'landmark' },
   { label: 'Accruals',           path: '/uae-full/accruals',     icon: 'clock' },

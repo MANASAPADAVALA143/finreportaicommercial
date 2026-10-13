@@ -10,9 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.tenant_scope import request_workspace, workspace_member
-from app.models.crm import CRMDeal
 from app.models.uae_accounting_full import UAESalesInvoice
-from app.services.credit_risk_service import credit_risk_summary
 from app.services.dso_service import build_dso_metrics
 from app.services.payment_prediction_service import predict_payments
 
@@ -42,34 +40,7 @@ def o2c_summary(
         db, ws, company_id,
         month_start.isoformat(), month_end.isoformat(),
     )
-    credit = credit_risk_summary(db, ws, company_id)
     predictions = predict_payments(db, ws, company_id)
-
-    deals = (
-        db.query(CRMDeal)
-        .filter(CRMDeal.workspace_id == ws, CRMDeal.company_id == company_id)
-        .all()
-    )
-    active_stages = ["New", "Qualified", "Proposal", "Negotiation"]
-    pipeline_by_stage: dict[str, dict[str, Any]] = {}
-    for stage in active_stages:
-        stage_deals = [d for d in deals if d.stage == stage]
-        pipeline_by_stage[stage] = {
-            "stage": stage,
-            "count": len(stage_deals),
-            "value_aed": round(sum(float(d.value_aed or 0) for d in stage_deals), 2),
-        }
-
-    won_this_month = [
-        d for d in deals
-        if d.stage == "Won" and d.updated_at and d.updated_at.date() >= month_start
-    ]
-    won_revenue = 0.0
-    for d in won_this_month:
-        if d.ar_invoice_id:
-            inv = db.query(UAESalesInvoice).filter_by(id=d.ar_invoice_id, tenant_id=ws).first()
-            if inv:
-                won_revenue += float(inv.total_amount or 0)
 
     invoices = (
         db.query(UAESalesInvoice)
@@ -85,6 +56,11 @@ def o2c_summary(
             status_amounts[st] = status_amounts.get(st, 0) + _f(inv.outstanding or inv.total_amount)
 
     aging_buckets = _aging_buckets(invoices, today)
+    total_overdue = sum(
+        _f(i.outstanding or i.total_amount)
+        for i in invoices
+        if (i.status or "").lower() != "paid" and i.due_date and i.due_date < today
+    )
 
     week_ago = today - timedelta(days=7)
     recent_dunning = [
@@ -117,15 +93,9 @@ def o2c_summary(
             "dso_vs_benchmark_label": dso["dso_vs_benchmark_label"],
             "industry_benchmark": dso["industry_benchmark"],
             "collections_efficiency_pct": dso["collections_efficiency_pct"],
-            "portfolio_risk_score": credit["summary"]["portfolio_risk_score"],
             "expected_cash_30_days": predictions["total_predicted_cash_next_30_days"],
-            "total_overdue_aed": credit["summary"]["total_overdue_aed"],
+            "total_overdue_aed": round(total_overdue, 2),
             "total_outstanding_aed": dso["total_outstanding_aed"],
-        },
-        "pipeline": {
-            "stages": list(pipeline_by_stage.values()),
-            "won_this_month_count": len(won_this_month),
-            "won_this_month_revenue_aed": round(won_revenue, 2),
         },
         "ar_status": {
             "by_status": [
@@ -133,18 +103,6 @@ def o2c_summary(
                 for k in sorted(status_counts.keys())
             ],
             "aging_buckets": aging_buckets,
-        },
-        "credit_risk": {
-            "distribution": {
-                "low": credit["summary"]["low_risk_count"],
-                "medium": credit["summary"]["medium_risk_count"],
-                "high": credit["summary"]["high_risk_count"],
-                "critical": credit["summary"]["critical_risk_count"],
-            },
-            "top_risk_customers": [
-                c for c in credit["customers"]
-                if c["risk_category"] in ("HIGH", "CRITICAL")
-            ][:8],
         },
         "cash_forecast": {
             "next_30_days": predictions["total_predicted_cash_next_30_days"],

@@ -32,7 +32,6 @@ def init_db():
     import app.models.company_setup  # noqa: F401 - Company onboarding wizard
     import app.models.workspace_notification  # noqa: F401 - In-app notifications
     import app.models.workspace_audit  # noqa: F401 - Workspace audit log
-    import app.models.crm  # noqa: F401 - CRM contacts/deals/quotes
     import app.models.ifrs16_lease  # noqa: F401 - IFRS 16 lease register
     import app.models.ifrs15_contract  # noqa: F401 - IFRS 15 contracts
     import app.models.ifrs9_ecl  # noqa: F401 - IFRS 9 ECL portfolios
@@ -95,22 +94,6 @@ def init_db():
                     conn.execute(__import__("sqlalchemy").text(ddl))
             if je_cols:
                 conn.commit()
-            crm_cols = {
-                row[1]
-                for row in conn.execute(
-                    __import__("sqlalchemy").text("PRAGMA table_info(crm_contacts)")
-                )
-            }
-            for col, ddl in (
-                ("credit_score", "ALTER TABLE crm_contacts ADD COLUMN credit_score NUMERIC(5,1)"),
-                ("risk_category", "ALTER TABLE crm_contacts ADD COLUMN risk_category VARCHAR(20)"),
-                ("credit_limit_aed", "ALTER TABLE crm_contacts ADD COLUMN credit_limit_aed NUMERIC(15,2)"),
-            ):
-                if crm_cols and col not in crm_cols:
-                    conn.execute(__import__("sqlalchemy").text(ddl))
-            if crm_cols:
-                conn.commit()
-
             pc_cols = {
                 row[1]
                 for row in conn.execute(

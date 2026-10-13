@@ -270,7 +270,7 @@ export const postInvoice = (invId: string) =>
 
 /**
  * Canonical AR approve-and-post — routes through /api/uae/ar/approve-and-post
- * (same path as AR Suite + CRM) rather than the legacy /full/invoices/{id}/post alias.
+ * (same path as AR Suite) rather than the legacy /full/invoices/{id}/post alias.
  */
 export async function approveAndPostSalesInvoice(invoiceId: string): Promise<{
   success: boolean;

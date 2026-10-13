@@ -16,8 +16,6 @@ from app.services.ar_classify_service import (
     classify_ar_invoice_sync,
 )
 from app.services.ar_invoice_post_service import post_sales_invoice_to_gl_and_tax
-from app.services.credit_risk_service import recalc_for_customer_name
-
 
 def _f(v: Any) -> float:
     try:
@@ -94,13 +92,6 @@ def get_or_create_customer(
     db.add(cust)
     db.flush()
     return cust
-
-
-def _recalc_credit(
-    db: Session, tenant_id: str, company_id: str | None, customer_name: str,
-) -> None:
-    if customer_name:
-        recalc_for_customer_name(db, tenant_id, company_id, customer_name)
 
 
 def create_ar_invoice_with_classify(
@@ -213,7 +204,6 @@ def create_ar_invoice_with_classify(
         inv.status = "draft"
         inv.flag_for_review = True
         db.add(inv)
-        _recalc_credit(db, tenant_id, company_id, customer_name)
         if commit:
             db.commit()
             db.refresh(inv)
@@ -243,7 +233,6 @@ def create_ar_invoice_with_classify(
     if not auto_post:
         inv.status = "draft"
         db.add(inv)
-        _recalc_credit(db, tenant_id, company_id, customer_name)
         if commit:
             db.commit()
             db.refresh(inv)
@@ -284,7 +273,6 @@ def create_ar_invoice_with_classify(
             gulftax_reasoning=clf.get("reasoning"),
         )
 
-    _recalc_credit(db, tenant_id, company_id, customer_name)
     if commit:
         db.commit()
         db.refresh(inv)

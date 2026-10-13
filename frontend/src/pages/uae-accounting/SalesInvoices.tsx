@@ -1,6 +1,6 @@
 /**
  * Sales Invoices — UAE FTA-compliant VAT invoices + AR Aging
- * Approve/Post routes through POST /api/uae/ar/approve-and-post (same as AR Suite + CRM).
+ * Approve/Post routes through POST /api/uae/ar/approve-and-post (same as AR Suite).
  */
 import { useEffect, useState } from 'react';
 import { FileText, AlertTriangle, RefreshCw } from 'lucide-react';

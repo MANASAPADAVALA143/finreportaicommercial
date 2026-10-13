@@ -104,7 +104,6 @@ ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
         "/api/ap",
         "/api/training",
         "/api/uae",
-        "/api/crm",
         "/api/o2c",
         "/api/vat",
         "/api/invoice",

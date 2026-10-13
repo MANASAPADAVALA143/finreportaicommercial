@@ -32,7 +32,7 @@ const BLOCKED_FOR_UAE_SUITE = [
 const ROLE_PATH_PREFIXES: Record<ProductRole, string[] | null> = {
   uae_client: ['/ap-invoices', '/uae-full/ar', '/gulftax', '/ifrs/16', '/uae-select', '/dashboard', '/settings'],
   uae_suite: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/ifrs/16', '/uae-full', '/uae-full/ar', '/dashboard', '/settings'],
-  uae_full: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/crm', '/o2c', '/company-setup', '/ifrs/16', '/dashboard', '/fpa', '/settings'],
+  uae_full: ['/uae-select', '/uae-suite', '/ap-invoices', '/gulftax', '/uae-full', '/uae-accounting', '/o2c', '/company-setup', '/ifrs/16', '/dashboard', '/fpa', '/settings'],
   india_client: ['/india-full', '/ap-invoices', '/fpa', '/ca-firm', '/dashboard', '/settings'],
   india_full: ['/india-full', '/ap-invoices', '/fpa', '/ca-firm', '/dashboard', '/ifrs-statement', '/settings'],
   fpa_client: ['/fpa', '/dashboard'],

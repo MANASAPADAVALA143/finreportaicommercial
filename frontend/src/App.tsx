@@ -413,12 +413,6 @@ const ARInvoiceExtract       = safeLazy(() => import('./pages/uae-full/ARInvoice
 const ARCustomerRisk         = safeLazy(() => import('./pages/uae-full/ARCustomerRisk'));
 const ARDunning              = safeLazy(() => import('./pages/uae-full/ARDunning'));
 const ARRecurringInvoices    = safeLazy(() => import('./pages/uae-full/ARRecurringInvoices'));
-const CRMLayout              = safeLazy(() => import('./pages/crm/CRMLayout'));
-const CRMDashboard           = safeLazy(() => import('./pages/crm/CRMDashboard'));
-const CRMContacts            = safeLazy(() => import('./pages/crm/CRMContacts'));
-const CRMDeals               = safeLazy(() => import('./pages/crm/CRMDeals'));
-const CRMQuotes              = safeLazy(() => import('./pages/crm/CRMQuotes'));
-const CRMActivities          = safeLazy(() => import('./pages/crm/CRMActivities'));
 const UAEBankReconciliation  = safeLazy(() => import('./pages/uae-accounting/BankReconciliation'));
 const UAEFixedAssets         = safeLazy(() => import('./pages/uae-accounting/FixedAssets'));
 const UAEAccruals            = safeLazy(() => import('./pages/uae-accounting/Accruals'));
@@ -771,13 +765,6 @@ function App() {
                 <Route path="/uae-full/ar/dunning"                       element={<ARDunning />} />
                 <Route path="/uae-full/ar/recurring"                     element={<ARRecurringInvoices />} />
                 <Route path="/o2c"                                         element={<O2CDashboard />} />
-                <Route path="/crm" element={<CRMLayout />}>
-                  <Route index element={<CRMDashboard />} />
-                  <Route path="contacts" element={<CRMContacts />} />
-                  <Route path="deals" element={<CRMDeals />} />
-                  <Route path="quotes" element={<CRMQuotes />} />
-                  <Route path="activities" element={<CRMActivities />} />
-                </Route>
                 <Route path="/uae-full/bank-recon"                        element={<UAEBankReconciliation />} />
                 <Route path="/uae-full/fixed-assets"                      element={<UAEFixedAssets />} />
                 <Route path="/uae-full/accruals"                          element={<UAEAccruals />} />

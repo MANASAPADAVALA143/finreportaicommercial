@@ -24,7 +24,6 @@ from app.models.uae_accounting_full import (
     UAEBankStatement,
     UAEBankStatementLine,
 )
-from app.services.credit_risk_service import recalc_for_customer_name
 from app.services.dso_service import build_dso_metrics
 from app.services.notification_service import get_workspace_role_email, send_notification
 from app.services.payment_prediction_service import predict_payments
@@ -77,11 +76,6 @@ def _f(v: Any) -> float:
         return float(v or 0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def _recalc_credit(db: Session, ws: str, company_id: str | None, customer_name: str) -> None:
-    if customer_name:
-        recalc_for_customer_name(db, ws, company_id, customer_name)
 
 
 def _get_or_create_customer(
@@ -145,9 +139,6 @@ def _flag_overdue(inv: UAESalesInvoice, today: date, db: Session) -> bool:
     if inv.status == "sent" and inv.due_date and inv.due_date < today:
         inv.status = "overdue"
         db.add(inv)
-        cust_name = inv.customer.name if inv.customer else ""
-        if cust_name:
-            _recalc_credit(db, inv.tenant_id, inv.company_id, cust_name)
         email = get_workspace_role_email(db, inv.tenant_id, ["AR Manager", "CFO"])
         if email and not inv.overdue_notified_at:
             cust_name = inv.customer.name if inv.customer else "Customer"
@@ -806,8 +797,6 @@ def send_invoice(body: SendInvoiceIn, request: Request, db: Session = Depends(ge
     inv.status = "sent"
     inv.sent_at = datetime.utcnow()
     db.add(inv)
-    cust_name = inv.customer.name if inv.customer else ""
-    _recalc_credit(db, ws, inv.company_id, cust_name)
     db.commit()
 
     return {"sent": True, "invoice_number": inv.invoice_number, "warning": warning}
@@ -860,7 +849,6 @@ def record_payment(body: RecordPaymentIn, request: Request, db: Session = Depend
     else:
         inv.status = "partial"
     db.add(inv)
-    _recalc_credit(db, ws, body.company_id, cust_name)
     db.commit()
 
     return {"success": True, "receipt_je_id": je.id, "status": inv.status}
@@ -1205,8 +1193,4 @@ def create_credit_note_for_invoice(
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
-    cust_name = result.get("credit_note", {}).get("customer_name", "")
-    if cust_name:
-        _recalc_credit(db, ws, body.company_id or _company_id(request), cust_name)
-        db.commit()
     return result

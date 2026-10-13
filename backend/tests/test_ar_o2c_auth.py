@@ -1,5 +1,5 @@
-"""AR collections, CRM and O2C: login + workspace membership required; every read and write is keyed
-by the validated workspace, and ids from the client (invoices, deals, contacts) must belong to it."""
+"""AR collections and O2C: login + workspace membership required; every read and write is keyed
+by the validated workspace, and invoice ids from the client must belong to it."""
 
 from __future__ import annotations
 
@@ -13,15 +13,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.api.routes import ar_collections, ar_collections_routes, crm_routes, o2c_routes
+from app.api.routes import ar_collections, ar_collections_routes, o2c_routes
 from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
-from app.models.crm import CRMActivity, CRMContact, CRMDeal, CRMQuote
 from app.models.workspace import WorkspaceRole
 
 WS_A = "aaaaaaaa-0000-4000-8000-000000000001"
@@ -29,7 +25,7 @@ WS_B = "bbbbbbbb-0000-4000-8000-000000000002"
 CO_A = "cccccccc-0000-4000-8000-00000000000a"
 CO_B = "cccccccc-0000-4000-8000-00000000000b"
 
-ROUTERS = [ar_collections.router, ar_collections_routes.router, crm_routes.router, o2c_routes.router]
+ROUTERS = [ar_collections.router, ar_collections_routes.router, o2c_routes.router]
 
 
 class Env:
@@ -136,7 +132,7 @@ ROUTES = [
 
 
 def test_every_route_is_covered():
-    assert len(ROUTES) == 33
+    assert len(ROUTES) == 18
 
 
 @pytest.mark.parametrize("method,path", ROUTES, ids=[f"{m} {p}" for m, p in ROUTES])
@@ -238,92 +234,3 @@ def test_ar_summary_uses_the_validated_workspace_and_viewers_get_insights(env, f
 def test_o2c_summary_rejects_another_workspace(env, fake_sql):
     client = TestClient(_app(env, lambda: fake_sql))
     assert client.get("/api/o2c/summary", params={"company_id": CO_A, "workspace_id": WS_B}).status_code == 403
-
-
-# ─── CRM (real SQLite tables) ─────────────────────────────────────────────────
-
-
-@pytest.fixture()
-def crm(env):
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    for model in (CRMContact, CRMDeal, CRMActivity, CRMQuote):
-        model.__table__.create(engine)
-    factory = sessionmaker(bind=engine)
-
-    def _db():
-        db = factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    seed = factory()
-    seed.add_all(
-        [
-            CRMContact(id="contact-a", workspace_id=WS_A, name="Alice"),
-            CRMContact(id="contact-b", workspace_id=WS_B, name="Bob", company_name="Victim Co"),
-            CRMDeal(id="deal-b", workspace_id=WS_B, deal_name="Their deal", stage="Proposal"),
-        ]
-    )
-    seed.commit()
-    seed.close()
-    return SimpleNamespace(client=TestClient(_app(env, _db)), session=factory)
-
-
-def test_crm_lists_only_the_validated_workspace(crm):
-    res = crm.client.get("/api/crm/contacts", headers={"X-Workspace-ID": WS_B, "X-Tenant-ID": WS_B})
-    assert res.status_code == 200, res.text
-    assert [c["id"] for c in res.json()["contacts"]] == ["contact-a"]
-    assert crm.client.get("/api/crm/contacts", params={"workspace_id": WS_B}).status_code == 403
-
-
-@pytest.mark.parametrize(
-    "path,body",
-    [
-        ("/api/crm/activities", {"subject": "call", "deal_id": "deal-b"}),
-        ("/api/crm/activities", {"subject": "call", "contact_id": "contact-b"}),
-        ("/api/crm/quotes", {"line_items": [{"description": "x", "unit_price": 10}], "contact_id": "contact-b"}),
-        ("/api/crm/quotes", {"line_items": [{"description": "x", "unit_price": 10}], "deal_id": "deal-b"}),
-        ("/api/crm/deals", {"deal_name": "d", "contact_id": "contact-b"}),
-    ],
-)
-def test_crm_rejects_references_to_another_workspace(crm, path, body):
-    assert crm.client.post(path, json=body).status_code == 404
-
-
-def test_convert_quote_never_touches_another_workspaces_deal_or_contact(crm, monkeypatch):
-    from app.api.routes import uae_ar_routes
-    from app.services import ar_invoice_post_service
-
-    invoices: list = []
-
-    def _create(payload, request, db):
-        invoices.append(payload)
-        return {"invoice_id": "inv-new", "invoice_number": "INV-9", "total": 10.5, "posted": False}
-
-    monkeypatch.setattr(uae_ar_routes, "create_invoice", _create)
-    monkeypatch.setattr(ar_invoice_post_service, "post_sales_invoice_to_gl_and_tax", lambda *a, **k: {"ok": True})
-
-    s = crm.session()
-    s.add(CRMQuote(id="q-legacy", workspace_id=WS_A, deal_id="deal-b", contact_id="contact-b",
-                   line_items=[{"description": "x", "qty": 1, "unit_price": 10, "vat_rate": 5}]))
-    s.commit()
-    s.close()
-
-    res = crm.client.post("/api/crm/quotes/q-legacy/convert-to-invoice", json={"company_id": CO_A})
-    assert res.status_code == 200, res.text
-    assert invoices[0].customer_name == "Customer"
-    assert invoices[0].workspace_id == WS_A
-    s = crm.session()
-    assert s.get(CRMDeal, "deal-b").stage == "Proposal"
-    assert s.get(CRMDeal, "deal-b").ar_invoice_id is None
-    s.close()
-
-
-def test_convert_quote_requires_access_to_the_company(crm, env):
-    env.roles[WS_B] = None
-    s = crm.session()
-    s.add(CRMQuote(id="q1", workspace_id=WS_A, line_items=[{"description": "x", "unit_price": 10}]))
-    s.commit()
-    s.close()
-    assert crm.client.post("/api/crm/quotes/q1/convert-to-invoice", json={"company_id": CO_B}).status_code == 403

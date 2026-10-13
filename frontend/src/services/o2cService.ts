@@ -16,28 +16,13 @@ export interface O2CSummary {
     dso_vs_benchmark_label: string;
     industry_benchmark: number;
     collections_efficiency_pct: number;
-    portfolio_risk_score: number;
     expected_cash_30_days: number;
     total_overdue_aed: number;
     total_outstanding_aed: number;
   };
-  pipeline: {
-    stages: Array<{ stage: string; count: number; value_aed: number }>;
-    won_this_month_count: number;
-    won_this_month_revenue_aed: number;
-  };
   ar_status: {
     by_status: Array<{ status: string; count: number; amount_aed: number }>;
     aging_buckets: Array<{ bucket: string; amount_aed: number }>;
-  };
-  credit_risk: {
-    distribution: { low: number; medium: number; high: number; critical: number };
-    top_risk_customers: Array<{
-      customer_name: string;
-      credit_score: number;
-      risk_category: string;
-      total_outstanding_aed: number;
-    }>;
   };
   cash_forecast: {
     next_30_days: number;
