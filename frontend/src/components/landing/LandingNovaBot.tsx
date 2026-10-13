@@ -2,9 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2 } from 'lucide-react';
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || '';
-const INVOKE_URL = `${API_BASE.replace(/\/$/, '')}/api/ai/invoke`;
-
-const SYSTEM_PROMPT = `You are a helpful assistant for FinReport AI (finreportai.com), an AI finance platform. Answer in 2-3 sentences max. Be clear and non-technical.`;
+const CHAT_URL = `${API_BASE.replace(/\/$/, '')}/api/ai/landing-chat`;
+const MAX_QUESTION_LENGTH = 500;
 
 const SUGGESTED_QUESTIONS = [
   'What does FinReportAI detect?',
@@ -34,20 +33,14 @@ export const LandingNovaBot: React.FC = () => {
     setInput('');
     setLoading(true);
     try {
-      const prompt = `${SYSTEM_PROMPT}\n\nUser question: ${trimmed}`;
-      const res = await fetch(INVOKE_URL, {
+      const res = await fetch(CHAT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model_id: '',
-          prompt,
-          max_tokens: 300,
-          temperature: 0.3,
-        }),
+        body: JSON.stringify({ question: trimmed }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({})) as { detail?: string };
-        throw new Error(err.detail ?? `Request failed: ${res.status}`);
+        const err = await res.json().catch(() => ({})) as { detail?: unknown };
+        throw new Error(typeof err.detail === 'string' ? err.detail : `Request failed: ${res.status}`);
       }
       const data = (await res.json()) as { text?: string };
       const reply = (data.text ?? '').trim() || 'No response.';
@@ -148,6 +141,7 @@ export const LandingNovaBot: React.FC = () => {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                maxLength={MAX_QUESTION_LENGTH}
                 placeholder="Ask anything..."
                 className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                 disabled={loading}

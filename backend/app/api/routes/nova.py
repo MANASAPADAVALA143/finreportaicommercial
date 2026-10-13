@@ -1,13 +1,16 @@
 import os
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
+from app.core.rate_limit import RateLimit, client_ip
 from app.core.security import get_current_user
 from app.api.schemas import NovaPrompt, NovaResponse
 from app.services import llm_service
 from app.services.llm_service import LLMNotConfiguredError, LLMRateLimitError
 
 router = APIRouter(prefix="/ai", tags=["AI"])
+# Mounted without sign-in: only the landing-page assistant, with a fixed prompt and rate limits.
+public_router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 class AIInvokeRequest(BaseModel):
@@ -175,3 +178,40 @@ async def voice_ai(
     except Exception as e:
         text_response = f"Sorry, I couldn't process that. ({str(e)})"
     return {"transcript": transcript_text, "text_response": text_response, "audio_base64": None}
+
+
+LANDING_SYSTEM_PROMPT = (
+    "You are a helpful assistant for FinReport AI (finreportai.com), an AI finance platform. "
+    "Answer in 2-3 sentences max. Be clear and non-technical. "
+    "Only answer questions about FinReport AI, finance and accounting; politely decline anything else."
+)
+LANDING_PER_IP_MINUTE = RateLimit(5, 60)
+LANDING_PER_IP_DAY = RateLimit(50, 86_400)
+LANDING_DAILY = RateLimit(int(os.getenv("LANDING_CHAT_DAILY_CAP", "500")), 86_400)
+
+
+class LandingChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+
+
+@public_router.post("/landing-chat")
+def landing_chat(body: LandingChatRequest, request: Request):
+    """Landing-page assistant for visitors who are not signed in."""
+    ip = client_ip(request)
+    LANDING_PER_IP_MINUTE.check(ip)
+    LANDING_PER_IP_DAY.check(ip)
+    LANDING_DAILY.check("all")
+    try:
+        text = llm_service.invoke(
+            prompt=body.question.strip(),
+            system=LANDING_SYSTEM_PROMPT,
+            max_tokens=300,
+            temperature=0.3,
+        )
+    except LLMNotConfiguredError as e:
+        raise HTTPException(status_code=503, detail="Assistant is not available right now") from e
+    except LLMRateLimitError as e:
+        raise HTTPException(status_code=429, detail="Assistant is busy, please try again shortly") from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Assistant is not available right now") from e
+    return {"text": text}

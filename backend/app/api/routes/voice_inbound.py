@@ -4,19 +4,26 @@ Inbound demo lead capture: persist to Supabase, trigger VAPI outbound call with 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Literal
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.config import settings
+from app.core.rate_limit import RateLimit, client_ip
 from app.core.supabase import get_supabase
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
+
+# Public form: limit submissions per visitor, and outbound calls per number and per day.
+LEADS_PER_IP = RateLimit(3, 3600)
+CALLS_PER_PHONE = RateLimit(1, 86_400)
+CALLS_PER_DAY = RateLimit(int(os.getenv("DEMO_CALL_DAILY_CAP", "30")), 86_400)
 
 RoleOption = Literal[
     "CFO",
@@ -130,11 +137,12 @@ def _trigger_vapi_call(body: InboundLeadBody) -> tuple[bool, str | None, str | N
 
 
 @router.post("/inbound-lead")
-def inbound_lead(body: InboundLeadBody):
+def inbound_lead(body: InboundLeadBody, request: Request):
     try:
         lead = body.model_copy(update={"phone": _normalize_e164(body.phone)})
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    LEADS_PER_IP.check(client_ip(request))
 
     row = {
         "full_name": lead.full_name,
@@ -165,7 +173,11 @@ def inbound_lead(body: InboundLeadBody):
 
     lead_id = ins.data[0]["id"]
 
-    ok, vapi_call_id, vapi_err = _trigger_vapi_call(lead)
+    if CALLS_PER_PHONE.allow(lead.phone) and CALLS_PER_DAY.allow("all"):
+        ok, vapi_call_id, vapi_err = _trigger_vapi_call(lead)
+    else:
+        logger.warning("Demo call skipped for lead %s: call limit reached", lead_id)
+        ok, vapi_call_id, vapi_err = False, None, "call limit reached"
     now = datetime.now(timezone.utc).isoformat()
 
     if ok:

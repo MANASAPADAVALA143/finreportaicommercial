@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
+from app.core.tenant_scope import request_company, workspace_reader
 from app.services.ap_training_service import train_from_invoices
 
-router = APIRouter(prefix="/api/training", tags=["AP Training"])
+router = APIRouter(prefix="/api/training", tags=["AP Training"], dependencies=[Depends(workspace_reader)])
 
 
 class TrainingUploadBody(BaseModel):
@@ -19,9 +22,12 @@ class TrainingUploadBody(BaseModel):
 
 
 @router.post("/upload")
-def training_upload(body: TrainingUploadBody) -> dict[str, Any]:
+def training_upload(
+    body: TrainingUploadBody, request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    company_id = request_company(db, request, body.company_id, "write")
     try:
-        return train_from_invoices(body.company_id, body.invoices, body.file_name)
+        return train_from_invoices(company_id, body.invoices, body.file_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -41,8 +47,11 @@ class CheckAnomalyBody(BaseModel):
 
 
 @router.post("/check-anomaly")
-def check_anomaly(body: CheckAnomalyBody) -> dict[str, Any]:
+def check_anomaly(
+    body: CheckAnomalyBody, request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     """Lightweight vendor-profile check used by InvoiceFlow upload/import."""
+    company_id = request_company(db, request, body.company_id, "read")
     vendor = (body.vendor_name or "").strip()
     empty = {
         "profile_found": False,
@@ -63,7 +72,7 @@ def check_anomaly(body: CheckAnomalyBody) -> dict[str, Any]:
         res = (
             sb.table("vendor_profiles")
             .select("*")
-            .eq("company_id", body.company_id.strip())
+            .eq("company_id", company_id)
             .ilike("vendor_name", vendor)
             .limit(1)
             .execute()

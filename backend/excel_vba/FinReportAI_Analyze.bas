@@ -3,6 +3,9 @@ Attribute VB_Name = "FinReportAI_Analyze"
 ' FinReportAI - Excel -> POST /excel/analyze (multipart/form-data)
 ' Pure VBA: MSXML2 + ADODB.Stream. No curl / PowerShell required.
 '
+' Note: This endpoint now requires authentication.
+' Use the Office Add-in (task pane) instead of this macro.
+'
 ' Setup:
 '   1. In Excel: Alt+F11 -> File -> Import File -> select this .bas (or paste into a module).
 '   2. Edit FINREPORT_API_BASE to your Railway URL: include https:// (or host only - see NormalizeApiBase).

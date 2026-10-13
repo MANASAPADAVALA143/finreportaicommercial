@@ -30,7 +30,9 @@ PUBLIC_PREFIXES = (
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
     "/api/v1/auth",
-    "/api/voice",
+    # Marketing-site forms, rate limited in the routes
+    "/api/voice/inbound-lead",
+    "/api/ai/landing-chat",
     # n8n server-to-server calls, verified by X-N8N-Signature in the route
     "/api/gulftax/einvoicing/asp/inbound",
     "/api/vat/n8n/inbound",
@@ -49,8 +51,6 @@ PUBLIC_PREFIXES = (
     "/api/board-pack/view/",
     "/api/board-pack/download/",
     "/api/company-setup/logo/",
-    # OCR extract — used by AP InvoiceFlow while login is temporarily disabled
-    "/api/agent/extract-image",
 )
 
 AUTH_ANY_ROLE_PREFIXES = (
