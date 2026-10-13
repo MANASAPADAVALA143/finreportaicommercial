@@ -92,6 +92,34 @@ def request_company(db: Session, request: Request, company_id: Optional[str], le
     return require_company_access(db, _request_ctx(request), company_id, level)
 
 
+async def company_guard(
+    request: Request,
+    ctx: WorkspaceContext = Depends(workspace_member),
+    db: Session = Depends(get_db),
+) -> None:
+    """Router guard for routes that take `company_id` from the path, query, X-Company-ID header,
+    JSON body or form body: every value given must be a company the caller may use."""
+    level: AccessLevel = "read" if request.method in ("GET", "HEAD") else "write"
+    raws = {
+        request.path_params.get("company_id"),
+        request.query_params.get("company_id"),
+        request.headers.get("x-company-id"),
+    }
+    ctype = request.headers.get("content-type", "")
+    if "application/json" in ctype:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            raws.add(body.get("company_id"))
+    elif "form" in ctype:
+        raws.add((await request.form()).get("company_id"))
+    for raw in raws:
+        if isinstance(raw, str) and raw.strip():
+            require_company_access(db, ctx, raw, level)
+
+
 def request_user_email(request: Request) -> Optional[str]:
     """Signed-in user's email, for audit trails (never a client-supplied header)."""
     user = _request_ctx(request).user

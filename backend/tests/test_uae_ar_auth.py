@@ -25,6 +25,7 @@ from app.models.workspace import WorkspaceRole
 
 WS_A = "aaaaaaaa-0000-4000-8000-000000000001"
 WS_B = "bbbbbbbb-0000-4000-8000-000000000002"
+CO_A = "cccccccc-0000-4000-8000-00000000000a"
 
 
 class Env:
@@ -58,6 +59,7 @@ def posted(monkeypatch):
 def env(monkeypatch):
     e = Env()
     monkeypatch.setattr(company_access, "_workspace_role", lambda _db, _ctx, ws: e.roles.get(ws))
+    monkeypatch.setattr(company_access, "_company_workspace_ids", lambda _db, cid: iter([WS_A] if cid == CO_A else []))
     return e
 
 
@@ -120,7 +122,7 @@ def test_body_workspace_must_match_the_active_workspace(client, posted):
 
 @pytest.mark.parametrize("path", ["/api/uae/ar/invoices", "/api/uae/ar/aging", "/api/uae/ar/dunning-history"])
 def test_query_workspace_must_match_the_active_workspace(client, path):
-    assert client.get(path, params={"workspace_id": WS_B, "company_id": "c1"}).status_code == 403
+    assert client.get(path, params={"workspace_id": WS_B, "company_id": CO_A}).status_code == 403
 
 
 def test_non_members_get_403(client, env, posted):

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
+from app.core.tenant_scope import company_guard, request_user_email, request_workspace, workspace_member
 from app.exceptions.period_control import PeriodControlError
 from app.models.company_setup import UaeCompanyProfile
 from app.models.uae_accounting_full import (
@@ -57,7 +57,11 @@ from app.services.recurring_invoice_service import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/uae/ar", tags=["UAE AR"], dependencies=[Depends(workspace_member)])
+router = APIRouter(
+    prefix="/api/uae/ar",
+    tags=["UAE AR"],
+    dependencies=[Depends(workspace_member), Depends(company_guard)],
+)
 
 
 def _ws(request: Request, query_ws: str | None = None) -> str:

@@ -35,6 +35,7 @@ from app.models.workspace import WorkspaceRole
 
 WS_A = "aaaaaaaa-0000-4000-8000-000000000001"
 WS_B = "bbbbbbbb-0000-4000-8000-000000000002"
+CO_A = "cccccccc-0000-4000-8000-00000000000a"
 ROUTERS = [ct.router, cit.router, acc.router, fs.router, ctrl.router, jr.router]
 TABLES = [CtReturn, UaeCompanyProfile, UAEAccount, UAEAccountClassification, UAEJournalEntry, UAEJournalLine]
 
@@ -58,6 +59,7 @@ class Env:
 def env(monkeypatch):
     e = Env()
     monkeypatch.setattr(company_access, "_workspace_role", lambda _db, _ctx, ws: e.roles.get(ws))
+    monkeypatch.setattr(company_access, "_company_workspace_ids", lambda _db, cid: iter([WS_A] if cid == CO_A else []))
     return e
 
 
@@ -114,7 +116,7 @@ def test_routes_reject_requests_without_login(factory, method, path):
 
 
 @pytest.mark.parametrize("path,params", [
-    ("/api/gulftax/ct-return", {"company_id": "c1"}),
+    ("/api/gulftax/ct-return", {"company_id": CO_A}),
     ("/api/gulftax/cit-return/generate", {"from_date": "2026-01-01", "to_date": "2026-12-31"}),
     ("/api/uae/accounts/unclassified", {}),
     ("/api/uae/accounts/classification-summary", {}),

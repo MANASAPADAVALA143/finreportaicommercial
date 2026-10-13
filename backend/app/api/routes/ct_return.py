@@ -9,10 +9,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_workspace, workspace_member
+from app.core.tenant_scope import company_guard, request_workspace, workspace_member
 from app.services import ct_return_service as svc
 
-router = APIRouter(prefix="/api/gulftax/ct-return", tags=["CT Return"], dependencies=[Depends(workspace_member)])
+router = APIRouter(
+    prefix="/api/gulftax/ct-return",
+    tags=["CT Return"],
+    dependencies=[Depends(workspace_member), Depends(company_guard)],
+)
 
 
 class GenerateCtReturnBody(BaseModel):
