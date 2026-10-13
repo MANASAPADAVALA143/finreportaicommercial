@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { workspaceHeaders, getStoredAccessToken } from '../../utils/workspaceHeaders';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
@@ -39,7 +40,7 @@ export default function ZohoCallback() {
       try {
         const res  = await fetch(`${API}/api/connections/zoho/connect`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: workspaceHeaders(getStoredAccessToken()),
           body: JSON.stringify({
             client_name: clientName,
             org_id:      orgId,

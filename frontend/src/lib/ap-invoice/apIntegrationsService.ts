@@ -5,6 +5,7 @@ import { loadZohoSettings } from './zohoService';
 import { loadQBSettings } from './quickbooksService';
 import { getSharedSettings } from './sharedSettingsService';
 import { joinApiUrl } from '../../utils/backendOrigin';
+import { workspaceHeaders, getStoredAccessToken } from '../../utils/workspaceHeaders';
 import { logAction, getInvoiceflowWorkEmail } from './auditService';
 
 export type IntegrationId = 'zoho' | 'quickbooks';
@@ -38,7 +39,9 @@ async function fetchErpConnections(): Promise<
   }>
 > {
   try {
-    const res = await fetch(joinApiUrl('/api/connections/status'));
+    const res = await fetch(joinApiUrl('/api/connections/status'), {
+      headers: workspaceHeaders(getStoredAccessToken()),
+    });
     if (!res.ok) return [];
     const j = (await res.json()) as { connections?: typeof connections };
     const connections = j.connections ?? [];
@@ -171,7 +174,7 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
 
   if (connectionId) {
     const path = id === 'zoho' ? `/api/connections/zoho/sync/${connectionId}` : `/api/connections/quickbooks/sync/${connectionId}`;
-    const res = await fetch(path, { method: 'POST' });
+    const res = await fetch(joinApiUrl(path), { method: 'POST', headers: workspaceHeaders(getStoredAccessToken()) });
     const j = await res.json().catch(() => ({}));
     ok = res.ok;
     message = ok ? (j.message as string) || 'Sync completed' : (j.detail as string) || 'Sync failed';
@@ -191,7 +194,10 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
 
 export async function disconnectIntegration(id: IntegrationId, connectionId: string | null): Promise<void> {
   if (connectionId) {
-    await fetch(joinApiUrl(`/api/connections/${connectionId}`), { method: 'DELETE' });
+    await fetch(joinApiUrl(`/api/connections/${connectionId}`), {
+      method: 'DELETE',
+      headers: workspaceHeaders(getStoredAccessToken()),
+    });
   }
   logAction('integration.disconnect', id, null, getInvoiceflowWorkEmail(), {});
 }

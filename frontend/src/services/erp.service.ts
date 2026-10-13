@@ -1,10 +1,17 @@
 import axios from "axios";
+import { getIfrsTenantId } from "./ifrsTenant";
+import { workspaceHeaders } from "../utils/workspaceHeaders";
 
 const API_BASE = (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) || "http://localhost:8000";
 const ERP_BASE = `${API_BASE.replace(/\/$/, "")}/api/erp`;
-const TENANT = (import.meta.env.VITE_TENANT_ID && String(import.meta.env.VITE_TENANT_ID).trim()) || "default";
 
-const headers = () => ({ "X-Tenant-ID": TENANT });
+/** Imported trial balances land in the IFRS tenant, so send the same tenant the IFRS pages use. */
+const headers = () => {
+  const { "Content-Type": _ct, ...h } = workspaceHeaders(null);
+  const tid = getIfrsTenantId();
+  if (tid !== "default") h["X-Tenant-ID"] = tid;
+  return h;
+};
 
 export type ErpConnectionRow = {
   id: number;
@@ -23,7 +30,7 @@ export const erpService = {
     const { data } = await axios.post(
       `${ERP_BASE}/tally/test-connection`,
       { host, port },
-      { headers: { "Content-Type": "application/json" } }
+      { headers: { ...headers(), "Content-Type": "application/json" } }
     );
     return data as {
       connected: boolean;

@@ -11,8 +11,10 @@ import {
   Plug, RefreshCw, Trash2, CheckCircle, XCircle,
   Clock, AlertTriangle, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import { workspaceHeaders, getStoredAccessToken } from '../../utils/workspaceHeaders';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const authHeaders = () => workspaceHeaders(getStoredAccessToken());
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -92,7 +94,7 @@ export default function ConnectionsPage() {
 
   const loadConnections = async () => {
     try {
-      const res = await fetch(`${API}/api/connections/status`);
+      const res = await fetch(`${API}/api/connections/status`, { headers: authHeaders() });
       const data = await res.json();
       setConnections(data.connections ?? []);
     } catch {
@@ -104,7 +106,7 @@ export default function ConnectionsPage() {
 
   const loadLogs = async (connId: string) => {
     try {
-      const res = await fetch(`${API}/api/connections/logs/${connId}`);
+      const res = await fetch(`${API}/api/connections/logs/${connId}`, { headers: authHeaders() });
       const data = await res.json();
       setLogs(prev => ({ ...prev, [connId]: data.logs ?? [] }));
     } catch { /* silent */ }
@@ -131,7 +133,10 @@ export default function ConnectionsPage() {
   const handleTestTally = async () => {
     setTallyTesting(true);
     try {
-      const res  = await fetch(`${API}/api/connections/tally/companies?server_ip=${tallyIp}&port=${tallyPort}`);
+      const res  = await fetch(
+        `${API}/api/connections/tally/companies?server_ip=${encodeURIComponent(tallyIp)}&port=${tallyPort}`,
+        { headers: authHeaders() },
+      );
       const data = await res.json();
       if (data.connected) {
         setTallyCompanies(data.companies ?? []);
@@ -152,7 +157,7 @@ export default function ConnectionsPage() {
     try {
       const res  = await fetch(`${API}/api/connections/tally/connect`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ client_name: tallyName, server_ip: tallyIp, port: tallyPort, company_name: tallyCompany }),
       });
       const data = await res.json();
@@ -174,7 +179,7 @@ export default function ConnectionsPage() {
     setBusy(b => ({ ...b, [conn.id]: true }));
     try {
       const url = `${API}/api/connections/${conn.erp_type}/sync/${conn.id}`;
-      const res  = await fetch(url, { method: 'POST' });
+      const res  = await fetch(url, { method: 'POST', headers: authHeaders() });
       const data = await res.json();
       toast.success(`Sync complete — ${data.results?.invoices ?? 0} invoices, ${data.results?.je ?? 0} JEs`);
       void loadConnections();
@@ -189,7 +194,7 @@ export default function ConnectionsPage() {
   const handleDisconnect = async (connId: string) => {
     if (!confirm('Disconnect this ERP? Existing data is not deleted.')) return;
     try {
-      await fetch(`${API}/api/connections/${connId}`, { method: 'DELETE' });
+      await fetch(`${API}/api/connections/${connId}`, { method: 'DELETE', headers: authHeaders() });
       toast.success('Connection removed');
       void loadConnections();
     } catch {

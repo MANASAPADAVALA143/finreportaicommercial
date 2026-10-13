@@ -21,15 +21,34 @@ import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.core.outbound_host import require_public_host
 from app.core.supabase import get_supabase
+from app.core.tenant_scope import request_workspace, workspace_member
 from app.services.erp_sync_service import ERPSyncService
 
 log    = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/connections", tags=["ERP Connections"])
+router = APIRouter(
+    prefix="/api/connections",
+    tags=["ERP Connections"],
+    dependencies=[Depends(workspace_member)],
+)
 _sync  = ERPSyncService()
+
+# erp_connections has no workspace column; the owning workspace lives in config.workspace_id.
+_WS = "config->>workspace_id"
+
+
+def _own_connection(request: Request, connection_id: str) -> dict[str, Any]:
+    rows = (
+        get_supabase().table("erp_connections").select("*")
+        .eq("id", connection_id).eq(_WS, request_workspace(request)).execute()
+    )
+    if not rows.data:
+        raise HTTPException(404, detail="Connection not found")
+    return rows.data[0]
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -58,7 +77,7 @@ class TallyConnectRequest(BaseModel):
 # ── Zoho ───────────────────────────────────────────────────────────────────────
 
 @router.post("/zoho/connect")
-async def connect_zoho(req: ZohoConnectRequest) -> dict[str, Any]:
+async def connect_zoho(req: ZohoConnectRequest, request: Request) -> dict[str, Any]:
     """Exchange Zoho auth code for OAuth tokens and persist the connection."""
     from app.services.zoho_service import ZohoService  # noqa: PLC0415
 
@@ -79,7 +98,7 @@ async def connect_zoho(req: ZohoConnectRequest) -> dict[str, Any]:
         "sync_journal_entries": req.sync_journal_entries,
         "sync_hour":            req.sync_hour,
         "days_to_pull":         req.days_to_pull,
-        "config":               {"org_id": req.org_id},
+        "config":               {"org_id": req.org_id, "workspace_id": request_workspace(request)},
     }).execute()
 
     conn = result.data[0]
@@ -93,25 +112,21 @@ async def connect_zoho(req: ZohoConnectRequest) -> dict[str, Any]:
 
 
 @router.post("/zoho/sync/{connection_id}")
-async def sync_zoho_now(connection_id: str) -> dict[str, Any]:
+async def sync_zoho_now(connection_id: str, request: Request) -> dict[str, Any]:
     """Trigger an immediate Zoho sync (called by 'Sync Now' button)."""
-    sb   = get_supabase()
-    rows = sb.table("erp_connections").select("*").eq("id", connection_id).execute()
-    if not rows.data:
-        raise HTTPException(404, detail="Connection not found")
-
-    results = await _sync.sync_zoho(rows.data[0])
+    results = await _sync.sync_zoho(_own_connection(request, connection_id))
     return {"success": True, "results": results}
 
 
 # ── Tally ──────────────────────────────────────────────────────────────────────
 
 @router.post("/tally/connect")
-async def connect_tally(req: TallyConnectRequest) -> dict[str, Any]:
+async def connect_tally(req: TallyConnectRequest, request: Request) -> dict[str, Any]:
     """Test Tally connectivity, then persist the connection config."""
     from app.services.tally_service import TallyService  # noqa: PLC0415
 
     import asyncio  # noqa: PLC0415
+    require_public_host(req.server_ip)
     tally  = TallyService(host=req.server_ip, port=req.port)
     test   = await asyncio.to_thread(tally.test_connection)
     if not test.get("connected"):
@@ -132,6 +147,7 @@ async def connect_tally(req: TallyConnectRequest) -> dict[str, Any]:
             "server_ip":    req.server_ip,
             "port":         req.port,
             "company_name": req.company_name,
+            "workspace_id": request_workspace(request),
         },
     }).execute()
 
@@ -146,14 +162,11 @@ async def connect_tally(req: TallyConnectRequest) -> dict[str, Any]:
 
 
 @router.post("/tally/sync/{connection_id}")
-async def sync_tally_now(connection_id: str) -> dict[str, Any]:
+async def sync_tally_now(connection_id: str, request: Request) -> dict[str, Any]:
     """Trigger an immediate Tally sync."""
-    sb   = get_supabase()
-    rows = sb.table("erp_connections").select("*").eq("id", connection_id).execute()
-    if not rows.data:
-        raise HTTPException(404, detail="Connection not found")
-
-    results = await _sync.sync_tally(rows.data[0])
+    conn = _own_connection(request, connection_id)
+    require_public_host((conn.get("config") or {}).get("server_ip") or conn.get("tally_server_ip") or "localhost")
+    results = await _sync.sync_tally(conn)
     return {"success": True, "results": results}
 
 
@@ -166,6 +179,7 @@ async def get_tally_companies(
     from app.services.tally_service import TallyService  # noqa: PLC0415
 
     import asyncio  # noqa: PLC0415
+    require_public_host(server_ip)
     tally = TallyService(host=server_ip, port=port)
     test  = await asyncio.to_thread(tally.test_connection)
     if not test.get("connected"):
@@ -178,20 +192,21 @@ async def get_tally_companies(
 # ── Status / management ────────────────────────────────────────────────────────
 
 @router.get("/status")
-async def get_all_connections() -> dict[str, Any]:
-    """Return all active ERP connections (for Connections page)."""
+async def get_all_connections(request: Request) -> dict[str, Any]:
+    """Return the workspace's active ERP connections (for Connections page)."""
     sb   = get_supabase()
     rows = sb.table("erp_connections").select(
         "id, client_name, erp_type, is_active, last_sync_at, last_sync_status, "
         "sync_invoices, sync_journal_entries, sync_hour, days_to_pull, "
         "zoho_org_id, tally_server_ip, tally_port, tally_company_name"
-    ).eq("is_active", True).execute()
+    ).eq("is_active", True).eq(_WS, request_workspace(request)).execute()
     return {"connections": rows.data}
 
 
 @router.get("/logs/{connection_id}")
-async def get_sync_logs(connection_id: str, limit: int = 10) -> dict[str, Any]:
+async def get_sync_logs(connection_id: str, request: Request, limit: int = 10) -> dict[str, Any]:
     """Return recent sync history for a connection."""
+    _own_connection(request, connection_id)
     sb   = get_supabase()
     rows = sb.table("sync_logs").select("*").eq(
         "connection_id", connection_id
@@ -200,8 +215,11 @@ async def get_sync_logs(connection_id: str, limit: int = 10) -> dict[str, Any]:
 
 
 @router.delete("/{connection_id}")
-async def disconnect_erp(connection_id: str) -> dict[str, Any]:
+async def disconnect_erp(connection_id: str, request: Request) -> dict[str, Any]:
     """Soft-delete: marks the connection inactive without destroying logs."""
+    _own_connection(request, connection_id)
     sb = get_supabase()
-    sb.table("erp_connections").update({"is_active": False}).eq("id", connection_id).execute()
+    sb.table("erp_connections").update({"is_active": False}).eq("id", connection_id).eq(
+        _WS, request_workspace(request)
+    ).execute()
     return {"success": True, "message": "ERP connection deactivated"}

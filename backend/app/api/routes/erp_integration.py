@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.outbound_host import require_public_host
+from app.core.tenant_scope import header_tenant, workspace_member
 from app.models.connector_client import ConnectorClient
 from app.models.ifrs_statement import (
     ERPConnection,
@@ -41,8 +43,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/erp", tags=["ERP Integration"])
 
 
-def _tenant_id(x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")) -> str:
-    return (x_tenant_id or "default").strip() or "default"
+def _tenant_id(tenant: str = Depends(header_tenant)) -> str:
+    """Same tenant key as the IFRS routes, so imported trial balances show up there."""
+    return tenant
+
+
+def _tally(host: str, port: int) -> TallyService:
+    require_public_host(host)
+    return TallyService(host, port)
 
 
 def _resolve_connector_client(
@@ -250,9 +258,9 @@ def _df_from_connector_gl_rows(gl_rows: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
-@router.post("/tally/test-connection")
+@router.post("/tally/test-connection", dependencies=[Depends(workspace_member)])
 def tally_test_connection(body: TallyTestBody) -> dict[str, Any]:
-    svc = TallyService(body.host, body.port)
+    svc = _tally(body.host, body.port)
     return svc.test_connection()
 
 
@@ -262,7 +270,7 @@ def tally_save_connection(
     tenant_id: str = Depends(_tenant_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    svc = TallyService(body.tally_host, body.tally_port)
+    svc = _tally(body.tally_host, body.tally_port)
     test = svc.test_connection()
     if not test.get("connected"):
         raise HTTPException(
@@ -366,7 +374,7 @@ def tally_import_trial_balance(
     if not conn:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    svc = TallyService(conn.tally_host, conn.tally_port)
+    svc = _tally(conn.tally_host, conn.tally_port)
     p_from = _parse_date(body.period_from)
     p_to = _parse_date(body.period_to)
 
@@ -458,7 +466,7 @@ def tally_import_multi_year(
     if not conn:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    svc = TallyService(conn.tally_host, conn.tally_port)
+    svc = _tally(conn.tally_host, conn.tally_port)
     summary: dict[str, Any] = {}
     for year in body.years:
         p_from = date(year, 4, 1)
@@ -538,7 +546,7 @@ def tally_quick_import(
     tenant_id: str = Depends(_tenant_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    svc = TallyService(body.host, body.port)
+    svc = _tally(body.host, body.port)
     test = svc.test_connection()
     if not test.get("connected"):
         raise HTTPException(
