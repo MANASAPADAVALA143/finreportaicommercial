@@ -12,13 +12,18 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.tenant import assert_write_allowed, get_company_id, get_tenant_id
+from app.core.tenant_scope import company_guard, workspace_member
 from app.models.client_data import (
     BadDebtReliefClaim,
     DesignatedZoneTransaction,
     PartialExemptionCalculation,
 )
 
-router = APIRouter(prefix="/api/gulftax/vat-advanced", tags=["VAT Advanced RDS"])
+router = APIRouter(
+    prefix="/api/gulftax/vat-advanced",
+    tags=["VAT Advanced RDS"],
+    dependencies=[Depends(workspace_member), Depends(company_guard)],
+)
 
 
 class PartialExemptionIn(BaseModel):
