@@ -15,6 +15,7 @@ class Company(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     total_uploads = Column(Integer, default=0)
     last_upload = Column(DateTime, nullable=True)
+    workspace_id = Column(String(64), nullable=True)
 
 
 class JournalHistory(Base):

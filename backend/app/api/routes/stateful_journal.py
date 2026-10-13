@@ -11,16 +11,28 @@ services/baseline_service.py, services/scoring_service.py
 import io
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 import pandas as pd
 
 from app.core.database import get_db
+from app.core.tenant_scope import request_user_email, request_workspace, workspace_member
 from app.db.models import Company, CompanyProfile, JournalHistory, ScoringResult
 from app.services.baseline_service import recalculate_company_baseline
 from app.services.scoring_service import score_entry_against_company_baseline
 
-router = APIRouter(prefix="/api", tags=["stateful-journal"])
+router = APIRouter(prefix="/api", tags=["stateful-journal"], dependencies=[Depends(workspace_member)])
+
+
+def _own_company(db: Session, request: Request, company_id: str) -> Company:
+    company = (
+        db.query(Company)
+        .filter(Company.id == company_id, Company.workspace_id == request_workspace(request))
+        .first()
+    )
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
 
 # Column mapping: upload file columns → our schema
 UPLOAD_TO_ENTRY = {
@@ -93,12 +105,13 @@ def _normalize_df_to_entries(df: pd.DataFrame) -> list[dict]:
 
 @router.post("/companies")
 def create_company(
+    request: Request,
     name: str,
     industry: str = "General",
     db: Session = Depends(get_db),
 ):
     company_id = f"client_{uuid.uuid4().hex[:8]}"
-    company = Company(id=company_id, name=name, industry=industry)
+    company = Company(id=company_id, name=name, industry=industry, workspace_id=request_workspace(request))
     db.add(company)
     db.commit()
     db.refresh(company)
@@ -106,8 +119,13 @@ def create_company(
 
 
 @router.get("/companies")
-def list_companies(db: Session = Depends(get_db)):
-    companies = db.query(Company).order_by(Company.name).all()
+def list_companies(request: Request, db: Session = Depends(get_db)):
+    companies = (
+        db.query(Company)
+        .filter(Company.workspace_id == request_workspace(request))
+        .order_by(Company.name)
+        .all()
+    )
     return [
         {
             "id": c.id,
@@ -122,15 +140,14 @@ def list_companies(db: Session = Depends(get_db)):
 
 @router.post("/analyze")
 async def analyze_journal_entries(
+    request: Request,
     file: UploadFile = File(...),
     company_id: str = Form(...),
     db: Session = Depends(get_db),
 ):
     if not company_id:
         raise HTTPException(status_code=400, detail="company_id is required")
-    company = db.query(Company).filter(Company.id == company_id).first()
-    if not company:
-        raise HTTPException(status_code=404, detail="Company not found")
+    company = _own_company(db, request, company_id)
 
     contents = await file.read()
     try:
@@ -240,12 +257,15 @@ async def analyze_journal_entries(
 
 @router.post("/feedback")
 def save_feedback(
+    request: Request,
     company_id: str,
     journal_id: str,
     is_real: bool,
     reviewed_by: str = "auditor",
     db: Session = Depends(get_db),
 ):
+    _own_company(db, request, company_id)
+    reviewed_by = request_user_email(request) or reviewed_by
     result = (
         db.query(ScoringResult)
         .filter(ScoringResult.company_id == company_id, ScoringResult.journal_id == journal_id)
@@ -261,7 +281,8 @@ def save_feedback(
 
 
 @router.get("/companies/{company_id}/profile")
-def get_company_profile(company_id: str, db: Session = Depends(get_db)):
+def get_company_profile(company_id: str, request: Request, db: Session = Depends(get_db)):
+    _own_company(db, request, company_id)
     profiles = db.query(CompanyProfile).filter(CompanyProfile.company_id == company_id).all()
     return {
         "company_id": company_id,

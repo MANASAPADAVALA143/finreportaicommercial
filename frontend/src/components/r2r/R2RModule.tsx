@@ -3,7 +3,14 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Upload, FileText, AlertTriangle, CheckCircle, TrendingUp, X, BarChart3, Shield, ArrowLeft, LayoutGrid } from 'lucide-react';
 import axios from 'axios';
 import { formatApiError } from '../../utils/apiError';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 import toast from 'react-hot-toast';
+
+/** Sign-in + workspace headers without Content-Type, so FormData uploads keep their multipart boundary. */
+const authHeaders = (): Record<string, string> => {
+  const { 'Content-Type': _ct, ...h } = workspaceHeaders(getStoredAccessToken());
+  return h;
+};
 
 interface ShapBreakdown {
   amountAnomaly: number;
@@ -97,7 +104,7 @@ export const R2RModule: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/companies`)
+    fetch(`${API_BASE}/api/companies`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data) => setCompanies(Array.isArray(data) ? data : []))
       .catch(() => setCompanies([]));
@@ -153,8 +160,9 @@ export const R2RModule: React.FC = () => {
     try {
       const r = await fetch(
         `${API_BASE}/api/companies?name=${encodeURIComponent(name)}&industry=General`,
-        { method: 'POST' }
+        { method: 'POST', headers: authHeaders() }
       );
+      if (!r.ok) throw new Error(`Could not add company (${r.status})`);
       const c = await r.json();
       setCompanies((prev) => [...prev, { id: c.company_id, name: c.name, industry: c.industry }]);
       setSelectedCompany(c.company_id);
@@ -189,7 +197,7 @@ export const R2RModule: React.FC = () => {
       console.log('📤 Uploading file:', file.name, useStateful ? `(company: ${selectedCompany})` : '(stateless)');
       console.log('🎯 Detection threshold:', customThreshold);
 
-      const response = await axios.post(url, formData);
+      const response = await axios.post(url, formData, { headers: authHeaders() });
 
       console.log('✅ Upload response:', response.data);
 

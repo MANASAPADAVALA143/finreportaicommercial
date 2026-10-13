@@ -7,6 +7,7 @@ import {
   putClientProfile,
   type BookTxn,
 } from '../../services/bookkeeping.service';
+import { getStoredAccessToken, workspaceHeaders } from '../../utils/workspaceHeaders';
 
 const API_BASE =
   (import.meta.env.VITE_API_URL && String(import.meta.env.VITE_API_URL).trim()) ||
@@ -29,7 +30,7 @@ export const BookkeepingUploadPage: React.FC = () => {
   const [lastTx, setLastTx] = useState<BookTxn[]>([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/companies`)
+    fetch(`${API_BASE}/api/companies`, { headers: workspaceHeaders(getStoredAccessToken()) })
       .then((r) => r.json())
       .then((d) => {
         const list = Array.isArray(d) ? d : [];

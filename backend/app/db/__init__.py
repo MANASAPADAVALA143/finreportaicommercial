@@ -189,6 +189,14 @@ def init_db():
                         conn.execute(text("ALTER TABLE rbac_users ADD COLUMN tenant_id VARCHAR(36)"))
                 except Exception:
                     pass
+        # Stateful R2R companies are listed per workspace
+        if insp.has_table("companies"):
+            if "workspace_id" not in {c["name"] for c in insp.get_columns("companies")}:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE companies ADD COLUMN workspace_id VARCHAR(64)"))
+                except Exception:
+                    pass
         # UAE fixed assets — dashboard/_apply_company filters company_id; column missing on some RDS DBs
         if insp.has_table("uae_fixed_assets"):
             fa_cols = {c["name"] for c in insp.get_columns("uae_fixed_assets")}
