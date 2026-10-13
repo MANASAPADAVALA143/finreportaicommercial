@@ -147,12 +147,13 @@ def test_ct_return_workflow_still_works_in_own_workspace(client, factory):
 
 def test_cit_return_does_not_expose_another_workspaces_company_profile(client, factory, monkeypatch):
     monkeypatch.setattr(cit, "get_trial_balance", lambda *_a, **_k: {"totals": {}, "lines": []})
-    _seed(factory, UaeCompanyProfile(id="co-b", workspace_id=WS_B, company_name="Victim LLC",
+    co_b = "cccccccc-0000-4000-8000-00000000000b"
+    _seed(factory, UaeCompanyProfile(id=co_b, workspace_id=WS_B, company_name="Victim LLC",
                                      trn="100000000000003", address="Dubai"))
     res = client.get("/api/gulftax/cit-return/generate",
-                     params={"company_id": "co-b", "from_date": "2026-01-01", "to_date": "2026-12-31"})
-    assert res.status_code == 200, res.text
-    assert res.json()["entity_name"] == "" and res.json()["trn"] == ""
+                     params={"company_id": co_b, "from_date": "2026-01-01", "to_date": "2026-12-31"})
+    assert res.status_code == 403
+    assert "Victim" not in res.text
 
 
 def test_cannot_classify_another_workspaces_account(client, factory):

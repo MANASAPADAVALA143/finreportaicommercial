@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
+from app.core.tenant_scope import company_guard, request_user_email, request_workspace, workspace_manager, workspace_member
 from app.models.uae_accounting_full import UAEJournalEntry
 from app.services import company_setup_service as setup_svc
 from app.exceptions.period_control import PeriodControlError
@@ -17,7 +17,7 @@ from app.services.notification_service import scan_notifications
 from app.services.uae_controls_service import get_controls, validate_journal_entry
 from app.services.uae_journal_service import post_journal_entry
 
-router = APIRouter(prefix="/api/uae/controls", tags=["UAE Controls"], dependencies=[Depends(workspace_member)])
+router = APIRouter(prefix="/api/uae/controls", tags=["UAE Controls"], dependencies=[Depends(workspace_member), Depends(company_guard)])
 
 
 def _tenant(request: Request) -> str:

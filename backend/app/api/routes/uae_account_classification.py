@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_workspace, workspace_member
+from app.core.tenant_scope import company_guard, request_workspace, workspace_member
 from app.services.uae_account_classification_service import (
     ai_classify_accounts,
     classification_summary,
@@ -17,7 +17,7 @@ from app.services.uae_account_classification_service import (
     manual_classify,
 )
 
-router = APIRouter(prefix="/api/uae/accounts", tags=["UAE Account Classification"], dependencies=[Depends(workspace_member)])
+router = APIRouter(prefix="/api/uae/accounts", tags=["UAE Account Classification"], dependencies=[Depends(workspace_member), Depends(company_guard)])
 
 
 class AIClassifyBody(BaseModel):

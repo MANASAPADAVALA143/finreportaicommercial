@@ -9,11 +9,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_workspace, workspace_member
+from app.core.tenant_scope import company_guard, request_workspace, workspace_member
 from app.models.company_setup import UaeCompanyProfile
 from app.services.uae_journal_service import create_journal_entry, get_trial_balance
 
-router = APIRouter(prefix="/api/gulftax/cit-return", tags=["CIT Return"], dependencies=[Depends(workspace_member)])
+router = APIRouter(prefix="/api/gulftax/cit-return", tags=["CIT Return"], dependencies=[Depends(workspace_member), Depends(company_guard)])
 
 
 def _period_key(from_date: str, to_date: str) -> str:

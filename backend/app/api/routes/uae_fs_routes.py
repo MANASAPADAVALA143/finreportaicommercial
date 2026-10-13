@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 import io
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_workspace, workspace_member
+from app.core.tenant_scope import company_guard, request_workspace, workspace_member
 from app.services.uae_fs_validation_service import export_fs_excel, validate_financial_statements
 
-router = APIRouter(prefix="/api/uae/fs", tags=["UAE Financial Statements"], dependencies=[Depends(workspace_member)])
+router = APIRouter(prefix="/api/uae/fs", tags=["UAE Financial Statements"], dependencies=[Depends(workspace_member), Depends(company_guard)])
 
 
 @router.get("/validate")

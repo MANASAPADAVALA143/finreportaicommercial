@@ -26,7 +26,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.tenant_scope import request_user_email, request_workspace, workspace_manager, workspace_member
+from app.core.tenant_scope import company_guard, request_user_email, request_workspace, workspace_manager, workspace_member
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.uae_accounting_full import (
     UAEAccount, UAEJournalEntry, UAEJournalLine,
@@ -53,7 +53,9 @@ from app.services.uae_bank_recon_service import (
 from app.services.ar_aging_service import compute_ar_aging
 
 router = APIRouter(
-    prefix="/api/uae/full", tags=["UAE Full Accounting"], dependencies=[Depends(workspace_member)]
+    prefix="/api/uae/full",
+    tags=["UAE Full Accounting"],
+    dependencies=[Depends(workspace_member), Depends(company_guard)],
 )
 
 # ===========================================================================
@@ -61,7 +63,9 @@ router = APIRouter(
 # ===========================================================================
 
 fx_router = APIRouter(
-    prefix="/api/uae/fx", tags=["UAE FX Revaluation"], dependencies=[Depends(workspace_member)]
+    prefix="/api/uae/fx",
+    tags=["UAE FX Revaluation"],
+    dependencies=[Depends(workspace_member), Depends(company_guard)],
 )
 
 
