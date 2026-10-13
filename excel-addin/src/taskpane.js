@@ -12,7 +12,7 @@ function getApiBase() {
     const o = window.location.origin;
     if (o.includes('localhost') || o.includes('127.0.0.1')) return '';
   }
-  return 'https://finreportai.railway.app';
+  return 'https://finreportaicommercial.onrender.com';
 }
 
 function apiUrl(path) {

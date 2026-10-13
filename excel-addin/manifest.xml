@@ -12,11 +12,11 @@
   <Description DefaultValue="AI-powered FP&amp;A analysis for CFOs"/>
   <IconUrl DefaultValue="http://localhost:3006/addin/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="http://localhost:3006/addin/assets/icon-64.png"/>
-  <SupportUrl DefaultValue="https://finreportai.railway.app"/>
+  <SupportUrl DefaultValue="https://finreportaicommercial.onrender.com"/>
   <AppDomains>
     <AppDomain>http://localhost:3006</AppDomain>
     <AppDomain>http://localhost:8000</AppDomain>
-    <AppDomain>https://finreportai.railway.app</AppDomain>
+    <AppDomain>https://finreportaicommercial.onrender.com</AppDomain>
   </AppDomains>
   <Hosts>
     <Host Name="Workbook"/>

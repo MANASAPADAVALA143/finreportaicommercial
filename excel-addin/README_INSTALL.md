@@ -16,7 +16,7 @@ This add-in talks to your existing FastAPI FP&A endpoints (`/api/fpa/*`, `/api/r
 ### Settings in the task pane
 
 - Leave **API base URL** empty while testing on `localhost:3006` so requests use the same origin and Vite’s **`/api` proxy** to `http://localhost:8000`.
-- For a hosted web app (no proxy), set API base to your public API origin, e.g. `https://finreportai.railway.app` (no trailing slash).
+- For a hosted web app (no proxy), set API base to your public API origin, e.g. `https://finreportaicommercial.onrender.com` (no trailing slash).
 
 ## Production / Railway
 
