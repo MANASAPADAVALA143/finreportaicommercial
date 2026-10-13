@@ -27,6 +27,7 @@ This add-in talks to your existing FastAPI FP&A endpoints (`/api/fpa/*`, `/api/r
 
 ## Security notes
 
+- The task pane asks for your **FinReportAI email and password** and keeps the login token in the add-in’s own storage; every API call sends it, and the backend rejects calls without it. **Sign out** is under Settings.
 - The add-in uses **ReadWriteDocument** to append a **FinReportAI** results block under the used range.
 - Chat sends a **snippet of the sheet** (first ~30 rows) to `/api/chat/ask` — avoid confidential data in those rows or tighten the range in `taskpane.js` later.
 

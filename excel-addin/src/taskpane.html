@@ -19,6 +19,22 @@
       </div>
     </header>
     <main>
+      <section id="auth-panel" class="hidden">
+        <div class="chat-head">Sign in to FinReportAI</div>
+        <form id="auth-form" class="settings-body">
+          <label>
+            Email
+            <input id="auth-email" type="email" autocomplete="username" required />
+          </label>
+          <label>
+            Password
+            <input id="auth-password" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="btn btn-primary" id="btn-sign-in" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <div id="app-panel" class="hidden">
       <section class="chat-panel">
         <div class="chat-head">FinReportAI Assistant</div>
         <div id="chat-messages" aria-live="polite"></div>
@@ -42,6 +58,7 @@
           <button class="module board" type="button" data-module="boardpack">Board Pack PDF</button>
         </div>
       </section>
+      </div>
 
       <div id="status-bar"></div>
 
@@ -55,7 +72,9 @@
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button class="btn btn-primary" id="btn-save-cfg" type="button">Save</button>
             <button class="btn btn-ghost" id="btn-test" type="button">Test connection</button>
+            <button class="btn btn-ghost hidden" id="btn-sign-out" type="button">Sign out</button>
           </div>
+          <div id="auth-user"></div>
         </div>
       </details>
     </main>

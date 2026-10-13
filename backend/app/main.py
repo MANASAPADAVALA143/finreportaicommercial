@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
 from app.middleware.product_role_middleware import ProductRoleMiddleware
 from app.core.database import get_db
+from app.core.tenant_scope import workspace_reader
 from app.routers import consolidation as consolidation_router
 from app.routers import month_end_close as month_end_close_router
 from app.routers import earnings_review as earnings_review_router
@@ -774,6 +775,8 @@ class ExcelAddinExportBody(BaseModel):
 
 
 _EXCEL_ADDIN_OPENAPI_TAGS = ["Excel Add-in", "FP&A"]
+# Every add-in call runs Claude on our key, so callers must be signed in to a workspace.
+_EXCEL_ADDIN_AUTH = [Depends(workspace_reader)]
 
 _EXCEL_ANALYZE_OPENAPI_EXAMPLES: dict[str, dict] = {
     "variance": {
@@ -821,6 +824,7 @@ async def excel_addin_analyze_options():
 @app.post(
     "/api/excel-addin/analyze",
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="Unified FP&A analyze (Power Automate / Controls sheet)",
     response_model=ExcelAddinAnalyzeResponse,
 )
@@ -1075,6 +1079,7 @@ def _with_defaults(data: dict[str, Any], company: str, period: str, currency: st
 @app.post(
     "/api/excel-addin/export",
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="Export all 6 Excel add-in analyses into one XLSX workbook",
 )
 async def excel_addin_export(body: ExcelAddinExportBody):
@@ -1130,6 +1135,7 @@ async def excel_addin_export(body: ExcelAddinExportBody):
     "/api/excel-addin/variance",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] Variance — use /api/excel-addin/analyze",
 )
 async def excel_addin_variance_legacy(request: Request):
@@ -1155,6 +1161,7 @@ async def excel_addin_variance_legacy(request: Request):
     "/api/excel-addin/budget",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] Budget — use /api/excel-addin/analyze",
 )
 async def excel_addin_budget_legacy(request: Request):
@@ -1180,6 +1187,7 @@ async def excel_addin_budget_legacy(request: Request):
     "/api/excel-addin/kpi",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] KPI — use /api/excel-addin/analyze",
 )
 async def excel_addin_kpi_legacy(request: Request):
@@ -1205,6 +1213,7 @@ async def excel_addin_kpi_legacy(request: Request):
     "/api/excel-addin/forecast",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] Forecast — use /api/excel-addin/analyze",
 )
 async def excel_addin_forecast_legacy(request: Request):
@@ -1230,6 +1239,7 @@ async def excel_addin_forecast_legacy(request: Request):
     "/api/excel-addin/scenarios",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] Scenarios — use /api/excel-addin/analyze",
 )
 async def excel_addin_scenarios_legacy(request: Request):
@@ -1255,6 +1265,7 @@ async def excel_addin_scenarios_legacy(request: Request):
     "/api/excel-addin/reports",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="[Deprecated] Reports — use /api/excel-addin/analyze",
 )
 async def excel_addin_reports_legacy(request: Request):
@@ -1292,6 +1303,7 @@ class ExcelAddinChatBody(BaseModel):
     "/api/excel-addin/chat",
     methods=["POST", "OPTIONS"],
     tags=_EXCEL_ADDIN_OPENAPI_TAGS,
+    dependencies=_EXCEL_ADDIN_AUTH,
     summary="CFO chat (intent + context)",
 )
 async def excel_addin_chat(request: Request):

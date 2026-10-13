@@ -7,14 +7,15 @@ import logging
 import re
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.tenant_scope import workspace_reader
 from app.services import llm_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/chat", tags=["Chat"])
+router = APIRouter(prefix="/chat", tags=["Chat"], dependencies=[Depends(workspace_reader)])
 
 
 class ChatHistoryItem(BaseModel):

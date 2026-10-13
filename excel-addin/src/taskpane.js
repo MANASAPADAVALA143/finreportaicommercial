@@ -21,6 +21,53 @@ function apiUrl(path) {
   return (base || '') + path;
 }
 
+const TOKEN_KEY = 'finreportai_addin_token';
+const USER_KEY = 'finreportai_addin_user';
+
+function showSignedIn(on) {
+  document.getElementById('auth-panel').classList.toggle('hidden', on);
+  document.getElementById('app-panel').classList.toggle('hidden', !on);
+  document.getElementById('btn-sign-out').classList.toggle('hidden', !on);
+  const who = document.getElementById('auth-user');
+  if (who) who.textContent = on ? 'Signed in as ' + (localStorage.getItem(USER_KEY) || '') : '';
+}
+
+function signOut(message) {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  chatHistory.length = 0;
+  const box = document.getElementById('chat-messages');
+  if (box) box.innerHTML = '';
+  showSignedIn(false);
+  setStatus(message || 'Signed out');
+}
+
+/** fetch() against the API with the signed-in user's token; a 401 sends the user back to sign-in. */
+async function apiFetch(path, init) {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const headers = { ...((init && init.headers) || {}) };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(apiUrl(path), { ...init, headers });
+  if (res.status === 401) {
+    signOut('Session expired — please sign in again.');
+    throw new Error('Not signed in');
+  }
+  return res;
+}
+
+async function signIn(email, password) {
+  const res = await fetch(apiUrl('/api/auth/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw new Error(res.status === 401 ? 'Wrong email or password' : (await res.text()) || res.statusText);
+  const j = await res.json();
+  if (!j.access_token) throw new Error('Login response had no token');
+  localStorage.setItem(TOKEN_KEY, j.access_token);
+  localStorage.setItem(USER_KEY, (j.user && j.user.email) || email);
+}
+
 function setStatus(t) {
   const el = document.getElementById('status-bar');
   if (el) el.textContent = t || '';
@@ -326,7 +373,7 @@ async function runModule(moduleKey) {
   else if (moduleKey === 'boardpack') body = buildBoardPackBody(context);
   else body = {};
 
-  const res = await fetch(apiUrl(path), {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -354,7 +401,7 @@ async function sendMessage(userMessage) {
   chatHistory.push({ role: 'user', message: userMessage });
   setThinking(true);
   const context = await readSheetContext();
-  const res = await fetch(apiUrl('/api/chat/ask'), {
+  const res = await apiFetch('/api/chat/ask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -391,7 +438,7 @@ async function sendMessage(userMessage) {
 async function sendGreeting(context) {
   setThinking(true);
   try {
-    const res = await fetch(apiUrl('/api/chat/ask'), {
+    const res = await apiFetch('/api/chat/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -419,6 +466,12 @@ async function initApp() {
   const base = getApiBase();
   if (disp) disp.textContent = base ? 'API: ' + base : 'API: (same origin /api → proxy)';
 
+  if (!localStorage.getItem(TOKEN_KEY)) {
+    showSignedIn(false);
+    setStatus('Sign in to use FinReportAI');
+    return;
+  }
+  showSignedIn(true);
   try {
     const context = await readSheetContext();
     await sendGreeting(context);
@@ -428,6 +481,24 @@ async function initApp() {
 }
 
 function wireUi() {
+  document.getElementById('auth-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById('btn-sign-in');
+    const pw = document.getElementById('auth-password');
+    btn.disabled = true;
+    setStatus('Signing in…');
+    try {
+      await signIn(document.getElementById('auth-email').value.trim(), pw.value);
+      pw.value = '';
+      setStatus('');
+      await initApp();
+    } catch (e) {
+      setStatus('Sign-in failed: ' + (e && e.message ? e.message : String(e)));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById('btn-sign-out').addEventListener('click', () => signOut());
   document.getElementById('btn-send').addEventListener('click', async () => {
     const inp = document.getElementById('chat-input');
     const v = (inp && inp.value) || '';
