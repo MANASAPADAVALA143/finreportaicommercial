@@ -432,10 +432,21 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def _api_docs_enabled() -> bool:
+    """Building the schema for ~800 routes is too heavy for the Render instance; set ENABLE_API_DOCS=true to serve it there."""
+    default = "false" if os.getenv("RENDER") else "true"
+    return os.getenv("ENABLE_API_DOCS", default).strip().lower() in ("1", "true", "yes")
+
+
+_API_DOCS = _api_docs_enabled()
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
     lifespan=lifespan,
+    docs_url="/docs" if _API_DOCS else None,
+    redoc_url="/redoc" if _API_DOCS else None,
+    openapi_url="/openapi.json" if _API_DOCS else None,
 )
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
