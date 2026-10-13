@@ -29,7 +29,7 @@ from app.core.config import settings
 from app.core.mcp_auth_middleware import add_mcp_api_key_middleware
 from app.middleware.product_role_middleware import ProductRoleMiddleware
 from app.core.database import get_db
-from app.core.tenant_scope import workspace_reader
+from app.core.tenant_scope import platform_admin, workspace_reader
 from app.routers import consolidation as consolidation_router
 from app.routers import month_end_close as month_end_close_router
 from app.routers import earnings_review as earnings_review_router
@@ -743,14 +743,14 @@ async def health():
     }
 
 
-@app.get("/api/test-aws", tags=["AWS"])
+@app.get("/api/test-aws", tags=["AWS"], dependencies=[Depends(platform_admin)])
 async def test_aws():
     """Test connectivity to both S3 buckets (UAE + India)."""
     from app.core.aws_config import test_aws_connection
     return test_aws_connection()
 
 
-@app.post("/api/setup-aws", tags=["AWS"])
+@app.post("/api/setup-aws", tags=["AWS"], dependencies=[Depends(platform_admin)])
 async def setup_aws():
     """Create standard folder structure in both S3 buckets (idempotent)."""
     from app.core.aws_config import create_bucket_folders
