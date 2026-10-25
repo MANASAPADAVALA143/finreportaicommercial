@@ -117,14 +117,14 @@ def _colored(val: Any, palette: dict[str, Any], style) -> Paragraph:
 
 
 def _table(rows: list[list[Any]], col_widths: list[float | None], *, header: bool = True,
-           label_cols: tuple[int, ...] = (), padding: int = 6, repeat: bool = False) -> Table:
+           label_cols: tuple[int, ...] = (), padding: int = 6, hpad: int = 6, repeat: bool = False) -> Table:
     t = Table(rows, colWidths=col_widths, repeatRows=1 if repeat else 0)
     style: list[tuple] = [
         ("GRID", (0, 0), (-1, -1), 0.5, _BORDER),
         ("TOPPADDING", (0, 0), (-1, -1), padding),
         ("BOTTOMPADDING", (0, 0), (-1, -1), padding),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), hpad),
+        ("RIGHTPADDING", (0, 0), (-1, -1), hpad),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]
     if header:
@@ -294,27 +294,50 @@ def _findings_section(num: int, findings: list[dict], s) -> list:
     return el
 
 
+_ESCALATION_LABELS = {"none": None, "management": "Management", "cfo": "CFO", "audit_committee": "Audit Committee"}
+
+
+def _followup_text(fu: dict[str, Any] | None) -> str:
+    if not fu:
+        return escape("None logged")
+    head = escape(_text(fu.get("contacted_at")))
+    if fu.get("contacted_person"):
+        head += f" · {escape(str(fu['contacted_person']))}"
+    notes = (fu.get("response_notes") or "").strip()
+    if notes:
+        notes = notes[:120] + ("…" if len(notes) > 120 else "")
+        return f"<b>{head}</b><br/>{_esc(notes)}"
+    return f"<b>{head}</b>"
+
+
 def _capa_section(num: int, findings: list[dict], today: str, s) -> list:
     el: list = [Paragraph(f"{num}. Corrective Action Plan (CAPA) Tracker", s["RH1"]), _rule()]
     open_f = [f for f in findings if f.get("status") not in _CLOSED]
     if not open_f:
         return el + [_p("All findings have been implemented or verified. No open corrective actions.", s["RBody"])]
 
-    rows = [[Paragraph(h, s["RTableH"]) for h in ("Ref", "Finding", "Risk", "Owner", "Due Date", "Status")]]
+    hs, cs = s["RTableHS"], s["RTableCS"]
+    rows = [[Paragraph(h, hs) for h in
+             ("Ref", "Finding", "Risk", "Owner", "Due Date", "Status", "Escalation", "Latest Follow-up")]]
     for f in sorted(open_f, key=lambda x: x.get("action_due_date") or "9999"):
         due = _esc(f.get("action_due_date"))
         if is_overdue(f, today):
             due = f'<font color="{_hex(_RED)}"><b>{due} (overdue)</b></font>'
+        original = f.get("original_due_date")
+        if original and original != f.get("action_due_date"):
+            due += f'<br/><font color="{_hex(_GREY)}">originally {escape(original)}</font>'
         title = _text(f.get("title"))
         rows.append([
-            _p(f.get("finding_ref"), s["RTableC"]),
-            _p(title[:80] + ("…" if len(title) > 80 else ""), s["RTableC"]),
-            _colored(f.get("risk_rating"), _RISK_COLORS, s["RTableC"]),
-            _p(f.get("action_owner"), s["RTableC"]),
-            Paragraph(due, s["RTableC"]),
-            _colored(f.get("status"), _STATUS_COLORS, s["RTableC"]),
+            _p(f.get("finding_ref"), cs),
+            _p(title[:80] + ("…" if len(title) > 80 else ""), cs),
+            _colored(f.get("risk_rating"), _RISK_COLORS, cs),
+            _p(f.get("action_owner"), cs),
+            Paragraph(due, cs),
+            _colored(f.get("status"), _STATUS_COLORS, cs),
+            _p(_ESCALATION_LABELS.get(f.get("escalation_level") or "none"), cs),
+            Paragraph(_followup_text(f.get("latest_followup")), cs),
         ])
-    el.append(_table(rows, _cols(0.11, 0.31, 0.11, 0.17, 0.16, 0.14), repeat=True))
+    el.append(_table(rows, _cols(0.10, 0.17, 0.09, 0.12, 0.13, 0.10, 0.11, 0.18), padding=4, hpad=3, repeat=True))
 
     overdue = sum(1 for f in open_f if is_overdue(f, today))
     if overdue:

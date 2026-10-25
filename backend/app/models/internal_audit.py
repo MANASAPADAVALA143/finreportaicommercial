@@ -1,6 +1,6 @@
 """Internal Audit — audit universe, engagements and findings (IIA lifecycle)."""
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -73,5 +73,39 @@ class AuditFinding(Base):
     is_repeat = Column(Boolean, default=False)
     repeat_from_year = Column(String(10), nullable=True)
     evidence_ref = Column(String(200), nullable=True)
+    # Startup reconciliation adds new columns as nullable without defaults; NULL means "none".
+    escalation_level = Column(String(32), nullable=True, default="none")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class AuditFindingFollowup(Base):
+    """One contact with the action owner about an overdue corrective action."""
+
+    __tablename__ = "audit_finding_followups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("audit_findings.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    contacted_at = Column(Date, nullable=False)
+    contacted_person = Column(String(200), nullable=True)
+    response_notes = Column(Text, nullable=True)
+    logged_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditFindingDueDateRevision(Base):
+    """Append-only record of each agreed change to a finding's action due date."""
+
+    __tablename__ = "audit_finding_due_date_revisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    finding_id = Column(Integer, ForeignKey("audit_findings.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    original_due_date = Column(String(20), nullable=True)
+    revised_due_date = Column(String(20), nullable=False)
+    reason = Column(Text, nullable=False)
+    revised_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

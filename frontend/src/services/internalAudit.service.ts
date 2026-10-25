@@ -63,6 +63,44 @@ export type Finding = {
   is_repeat: boolean;
   repeat_from_year: string | null;
   evidence_ref: string | null;
+  escalation_level?: EscalationLevel | null;
+};
+
+export type EscalationLevel = 'none' | 'management' | 'cfo' | 'audit_committee';
+export const ESCALATION_LEVELS: { value: EscalationLevel; label: string }[] = [
+  { value: 'none', label: 'Not escalated' },
+  { value: 'management', label: 'Management' },
+  { value: 'cfo', label: 'CFO' },
+  { value: 'audit_committee', label: 'Audit Committee' },
+];
+
+export type FindingFollowup = {
+  id: number;
+  finding_id: number;
+  contacted_at: string;
+  contacted_person: string | null;
+  response_notes: string | null;
+  logged_by: string | null;
+  created_at: string | null;
+};
+
+export type DueDateRevision = {
+  id: number;
+  finding_id: number;
+  original_due_date: string | null;
+  revised_due_date: string;
+  reason: string;
+  revised_by: string | null;
+  created_at: string | null;
+};
+
+export type OverdueFinding = Finding & {
+  escalation_level: EscalationLevel;
+  days_overdue: number;
+  latest_followup: FindingFollowup | null;
+  followup_count: number;
+  revision_count: number;
+  original_due_date: string | null;
 };
 
 export type AuditDashboard = {
@@ -147,6 +185,27 @@ export const engagementsApi = {
   },
 };
 export const findingsApi = crud<Finding>('findings');
+
+export const followUpApi = {
+  overdue: (companyId: string) => request<OverdueFinding[]>('/overdue-findings', companyId),
+  history: (companyId: string, findingId: number) =>
+    request<{ followups: FindingFollowup[]; revisions: DueDateRevision[] }>(`/findings/${findingId}/follow-up-history`, companyId),
+  logFollowup: (
+    companyId: string,
+    findingId: number,
+    body: { contacted_at: string; contacted_person?: string; response_notes?: string },
+  ) => request<FindingFollowup>(`/findings/${findingId}/followups`, companyId, { method: 'POST', body: JSON.stringify(body) }),
+  reviseDueDate: (companyId: string, findingId: number, body: { revised_due_date: string; reason: string }) =>
+    request<{ revision: DueDateRevision; finding: Finding }>(`/findings/${findingId}/revise-due-date`, companyId, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  setEscalation: (companyId: string, findingId: number, escalation_level: EscalationLevel) =>
+    request<Finding>(`/findings/${findingId}/escalation`, companyId, {
+      method: 'PATCH',
+      body: JSON.stringify({ escalation_level }),
+    }),
+};
 export const getAuditDashboard = (companyId: string) => request<AuditDashboard>('/dashboard', companyId);
 
 export function isOverdue(f: Pick<Finding, 'action_due_date' | 'status'>, today = new Date().toISOString().slice(0, 10)) {

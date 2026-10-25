@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { AlertTriangle, Briefcase, FileSearch, Globe, History, LayoutDashboard, Shield } from 'lucide-react';
+import { AlertTriangle, Briefcase, Clock, FileSearch, Globe, History, LayoutDashboard, Shield } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 
 const tabs = [
@@ -7,6 +7,7 @@ const tabs = [
   { label: 'Audit Universe & Plan', path: '/internal-audit/universe', icon: Globe },
   { label: 'Engagements', path: '/internal-audit/engagements', icon: Briefcase },
   { label: 'Findings & CAPA', path: '/internal-audit/findings', icon: AlertTriangle },
+  { label: 'Overdue Follow-up', path: '/internal-audit/overdue', icon: Clock },
   { label: 'Historical Baseline', path: '/internal-audit/baseline', icon: History },
   { label: 'JE Review', path: '/internal-audit/je-review', icon: FileSearch },
   { label: 'Audit Intelligence (AI)', path: '/audit', icon: Shield },

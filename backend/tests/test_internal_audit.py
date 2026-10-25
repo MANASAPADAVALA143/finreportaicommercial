@@ -19,7 +19,13 @@ from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.history_models import JEAnomalyReview
-from app.models.internal_audit import AuditEngagement, AuditFinding, AuditUniverse
+from app.models.internal_audit import (
+    AuditEngagement,
+    AuditFinding,
+    AuditFindingDueDateRevision,
+    AuditFindingFollowup,
+    AuditUniverse,
+)
 from app.models.workspace import WorkspaceRole
 from app.routers import internal_audit
 
@@ -63,7 +69,9 @@ def env(monkeypatch):
 @pytest.fixture()
 def session_factory():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    for model in (AuditUniverse, AuditEngagement, AuditFinding, JEAnomalyReview):
+    for model in (
+        AuditUniverse, AuditEngagement, AuditFinding, AuditFindingFollowup, AuditFindingDueDateRevision, JEAnomalyReview,
+    ):
         model.__table__.create(engine)
     return sessionmaker(bind=engine)
 
@@ -111,6 +119,11 @@ ROUTES = [
     ("POST", "/api/internal-audit/findings"),
     ("PUT", "/api/internal-audit/findings/1"),
     ("DELETE", "/api/internal-audit/findings/1"),
+    ("GET", "/api/internal-audit/overdue-findings"),
+    ("GET", "/api/internal-audit/findings/1/follow-up-history"),
+    ("POST", "/api/internal-audit/findings/1/followups"),
+    ("POST", "/api/internal-audit/findings/1/revise-due-date"),
+    ("PATCH", "/api/internal-audit/findings/1/escalation"),
 ]
 
 
@@ -330,3 +343,177 @@ def test_report_pdf_je_section_uses_period_and_company(client, env, captured, se
     call = captured[0]
     assert call["period"] == period
     assert {r["journal_id"] for r in call["je_entries"]} == expected
+
+
+# ── Overdue follow-up queue ──────────────────────────────────────────────────
+
+TODAY = date.today()
+
+
+def _days_ago(n: int) -> str:
+    return (TODAY - timedelta(days=n)).isoformat()
+
+
+def _finding(client, title, due, co=CO_A, **extra):
+    res = client.post("/api/internal-audit/findings" + q(co), json={"title": title, "action_due_date": due, **extra})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_overdue_queue_lists_only_open_past_due_findings_in_company(client, env):
+    _finding(client, "Late 10", _days_ago(10), risk_rating="High")
+    _finding(client, "Late 95", _days_ago(95))
+    _finding(client, "Due today", TODAY.isoformat())
+    _finding(client, "Future", TOMORROW)
+    _finding(client, "No date", "")
+    _finding(client, "Closed late", _days_ago(40), status="Implemented")
+    _finding(client, "Sibling late", _days_ago(40), co=CO_A2)
+
+    items = client.get("/api/internal-audit/overdue-findings" + q()).json()
+    assert [(i["title"], i["days_overdue"]) for i in items] == [("Late 95", 95), ("Late 10", 10)]
+    first = items[0]
+    assert first["escalation_level"] == "none"
+    assert first["latest_followup"] is None
+    assert (first["followup_count"], first["revision_count"], first["original_due_date"]) == (0, 0, None)
+
+
+def test_follow_up_is_logged_by_signed_in_user_and_summarised(client, env):
+    f = _finding(client, "Late", _days_ago(20))
+    url = f"/api/internal-audit/findings/{f['id']}/followups" + q()
+    first = client.post(url, json={"contacted_at": _days_ago(5), "contacted_person": " CFO ", "response_notes": "Promised by Friday"})
+    assert first.status_code == 201, first.text
+    assert first.json()["logged_by"] == "auditor@example.com"
+    assert first.json()["contacted_person"] == "CFO"
+    client.post(url, json={"contacted_at": _days_ago(1), "logged_by": "someone-else"})
+
+    item = client.get("/api/internal-audit/overdue-findings" + q()).json()[0]
+    assert item["followup_count"] == 2
+    assert item["latest_followup"]["contacted_at"] == _days_ago(1)
+    assert item["latest_followup"]["logged_by"] == "auditor@example.com"
+
+    history = client.get(f"/api/internal-audit/findings/{f['id']}/follow-up-history" + q()).json()
+    assert [h["contacted_at"] for h in history["followups"]] == [_days_ago(1), _days_ago(5)]
+    assert history["revisions"] == []
+
+
+def test_follow_up_validation(client, env):
+    f = _finding(client, "Late", _days_ago(20))
+    url = f"/api/internal-audit/findings/{f['id']}/followups" + q()
+    assert client.post(url, json={"contacted_at": (TODAY + timedelta(days=3)).isoformat()}).status_code == 422
+    assert client.post(url, json={"contacted_at": "25/10/2026"}).status_code == 422
+    assert client.post(url, json={}).status_code == 422
+
+
+def test_revise_due_date_keeps_original_and_leaves_queue(client, env):
+    original = _days_ago(30)
+    f = _finding(client, "Late", original)
+    url = f"/api/internal-audit/findings/{f['id']}/revise-due-date" + q()
+    new_date = (TODAY + timedelta(days=30)).isoformat()
+
+    res = client.post(url, json={"revised_due_date": new_date, "reason": "  Vendor delay agreed with CFO  "})
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["finding"]["action_due_date"] == new_date
+    rev = body["revision"]
+    assert (rev["original_due_date"], rev["revised_due_date"]) == (original, new_date)
+    assert rev["reason"] == "Vendor delay agreed with CFO"
+    assert rev["revised_by"] == "auditor@example.com"
+
+    assert client.get("/api/internal-audit/overdue-findings" + q()).json() == []
+    history = client.get(f"/api/internal-audit/findings/{f['id']}/follow-up-history" + q()).json()
+    assert [r["original_due_date"] for r in history["revisions"]] == [original]
+
+
+def test_queue_reports_first_original_due_date_after_several_revisions(client, env, session_factory):
+    original = _days_ago(60)
+    f = _finding(client, "Late", original)
+    url = f"/api/internal-audit/findings/{f['id']}/revise-due-date" + q()
+    client.post(url, json={"revised_due_date": TOMORROW, "reason": "first"})
+    client.post(url, json={"revised_due_date": (TODAY + timedelta(days=9)).isoformat(), "reason": "second"})
+
+    db = session_factory()
+    db.query(AuditFinding).filter(AuditFinding.id == f["id"]).update({AuditFinding.action_due_date: _days_ago(2)})
+    db.commit()
+    db.close()
+
+    item = client.get("/api/internal-audit/overdue-findings" + q()).json()[0]
+    assert (item["revision_count"], item["original_due_date"], item["days_overdue"]) == (2, original, 2)
+
+
+@pytest.mark.parametrize("body,status", [
+    ({"revised_due_date": TOMORROW, "reason": "   "}, 422),
+    ({"revised_due_date": TOMORROW}, 422),
+    ({"revised_due_date": (TODAY - timedelta(days=5)).isoformat(), "reason": "x"}, 422),
+    ({"revised_due_date": "not-a-date", "reason": "x"}, 422),
+])
+def test_revise_due_date_validation(client, env, body, status):
+    f = _finding(client, "Late", _days_ago(10))
+    res = client.post(f"/api/internal-audit/findings/{f['id']}/revise-due-date" + q(), json=body)
+    assert res.status_code == status, res.text
+    assert client.get(f"/api/internal-audit/findings/{f['id']}/follow-up-history" + q()).json()["revisions"] == []
+
+
+def test_revise_due_date_rejects_closed_finding_and_same_date(client, env):
+    closed = _finding(client, "Done", _days_ago(10), status="Verified")
+    res = client.post(f"/api/internal-audit/findings/{closed['id']}/revise-due-date" + q(), json={"revised_due_date": TOMORROW, "reason": "x"})
+    assert res.status_code == 409
+    same = _finding(client, "Later", TOMORROW)
+    res = client.post(f"/api/internal-audit/findings/{same['id']}/revise-due-date" + q(), json={"revised_due_date": TOMORROW, "reason": "x"})
+    assert res.status_code == 422
+
+
+def test_escalation_levels(client, env):
+    f = _finding(client, "Late", _days_ago(10))
+    url = f"/api/internal-audit/findings/{f['id']}/escalation" + q()
+    assert client.patch(url, json={"escalation_level": "board"}).status_code == 422
+    res = client.patch(url, json={"escalation_level": "audit_committee"})
+    assert res.status_code == 200 and res.json()["escalation_level"] == "audit_committee"
+    assert client.get("/api/internal-audit/overdue-findings" + q()).json()[0]["escalation_level"] == "audit_committee"
+
+
+def test_follow_up_routes_respect_roles_and_company(client, env):
+    f = _finding(client, "Late", _days_ago(10))
+    fid = f["id"]
+    env.roles[WS_A] = "viewer"
+    assert client.get("/api/internal-audit/overdue-findings" + q()).status_code == 200
+    assert client.get(f"/api/internal-audit/findings/{fid}/follow-up-history" + q()).status_code == 200
+    assert client.post(f"/api/internal-audit/findings/{fid}/followups" + q(), json={"contacted_at": _days_ago(1)}).status_code == 403
+    assert client.patch(f"/api/internal-audit/findings/{fid}/escalation" + q(), json={"escalation_level": "cfo"}).status_code == 403
+
+    env.roles[WS_A] = "accountant"
+    for method, path, body in (
+        ("GET", f"/api/internal-audit/findings/{fid}/follow-up-history", None),
+        ("POST", f"/api/internal-audit/findings/{fid}/followups", {"contacted_at": _days_ago(1)}),
+        ("POST", f"/api/internal-audit/findings/{fid}/revise-due-date", {"revised_due_date": TOMORROW, "reason": "x"}),
+        ("PATCH", f"/api/internal-audit/findings/{fid}/escalation", {"escalation_level": "cfo"}),
+    ):
+        assert client.request(method, path + q(CO_A2), json=body).status_code == 404
+        assert client.request(method, path + q(CO_B), json=body).status_code == 403
+    assert client.get("/api/internal-audit/overdue-findings" + q(CO_A2)).json() == []
+
+
+def test_deleting_finding_removes_its_follow_up_history(client, env, session_factory):
+    f = _finding(client, "Late", _days_ago(10))
+    client.post(f"/api/internal-audit/findings/{f['id']}/followups" + q(), json={"contacted_at": _days_ago(1)})
+    client.post(f"/api/internal-audit/findings/{f['id']}/revise-due-date" + q(), json={"revised_due_date": TOMORROW, "reason": "x"})
+    env.roles[WS_A] = "owner"
+    assert client.delete(f"/api/internal-audit/findings/{f['id']}" + q()).status_code == 204
+    db = session_factory()
+    assert db.query(AuditFindingFollowup).count() == 0
+    assert db.query(AuditFindingDueDateRevision).count() == 0
+    db.close()
+
+
+def test_report_pdf_receives_follow_up_summary(client, env, captured):
+    original = _days_ago(30)
+    e = client.post("/api/internal-audit/engagements" + q(), json={"title": "E"}).json()
+    f = _finding(client, "Late", original, engagement_id=e["id"])
+    client.post(f"/api/internal-audit/findings/{f['id']}/followups" + q(), json={"contacted_at": _days_ago(2), "contacted_person": "CFO"})
+    client.post(f"/api/internal-audit/findings/{f['id']}/revise-due-date" + q(), json={"revised_due_date": TOMORROW, "reason": "agreed"})
+    client.patch(f"/api/internal-audit/findings/{f['id']}/escalation" + q(), json={"escalation_level": "cfo"})
+
+    assert client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf" + q()).status_code == 200
+    sent = captured[0]["findings"][0]
+    assert sent["escalation_level"] == "cfo"
+    assert sent["original_due_date"] == original and sent["action_due_date"] == TOMORROW
+    assert sent["latest_followup"]["contacted_person"] == "CFO"
