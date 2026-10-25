@@ -120,8 +120,32 @@ function crud<T extends { id: number }>(resource: string) {
   };
 }
 
+async function saveBlob(res: Response, filename: string) {
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const auditUniverseApi = crud<AuditUnit>('universe');
-export const engagementsApi = crud<Engagement>('engagements');
+export const engagementsApi = {
+  ...crud<Engagement>('engagements'),
+  /** `period` is YYYY-Qn, YYYY-MM or YYYY; omit it to leave the JE anomaly section out. */
+  async downloadReport(companyId: string, engagement: Engagement, period: string | null, companyName?: string) {
+    const res = await send(
+      `/api/internal-audit/engagements/${engagement.id}/report.pdf${queryString({
+        period: period ?? undefined,
+        company_name: companyName,
+      })}`,
+      companyId,
+    );
+    await saveBlob(res, `internal-audit-report-${engagement.engagement_ref || `IA-${engagement.id}`}.pdf`);
+  },
+};
 export const findingsApi = crud<Finding>('findings');
 export const getAuditDashboard = (companyId: string) => request<AuditDashboard>('/dashboard', companyId);
 
@@ -257,13 +281,6 @@ export const jeReviewsApi = {
       `/api/internal-audit/je-reviews/export${queryString({ ...filterParams(filters), format, company_name: companyName })}`,
       companyId,
     );
-    const url = URL.createObjectURL(await res.blob());
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `je-review-${new Date().toISOString().slice(0, 10)}.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    await saveBlob(res, `je-review-${new Date().toISOString().slice(0, 10)}.${format}`);
   },
 };

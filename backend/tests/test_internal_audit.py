@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
+from app.models.history_models import JEAnomalyReview
 from app.models.internal_audit import AuditEngagement, AuditFinding, AuditUniverse
 from app.models.workspace import WorkspaceRole
 from app.routers import internal_audit
@@ -62,7 +63,7 @@ def env(monkeypatch):
 @pytest.fixture()
 def session_factory():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    for model in (AuditUniverse, AuditEngagement, AuditFinding):
+    for model in (AuditUniverse, AuditEngagement, AuditFinding, JEAnomalyReview):
         model.__table__.create(engine)
     return sessionmaker(bind=engine)
 
@@ -105,6 +106,7 @@ ROUTES = [
     ("POST", "/api/internal-audit/engagements"),
     ("PUT", "/api/internal-audit/engagements/1"),
     ("DELETE", "/api/internal-audit/engagements/1"),
+    ("GET", "/api/internal-audit/engagements/1/report.pdf"),
     ("GET", "/api/internal-audit/findings"),
     ("POST", "/api/internal-audit/findings"),
     ("PUT", "/api/internal-audit/findings/1"),
@@ -244,3 +246,87 @@ def test_dashboard_counts(client, env):
     assert d["engagements_by_status"] == {"Closed": 1}
     assert d["universe_by_risk"] == {"High": 1}
     assert {f["title"] for f in d["recent_open_findings"]} == {"Overdue", "Due later", "No date"}
+
+
+# ── Engagement report PDF ────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def captured(monkeypatch):
+    calls: list[dict] = []
+
+    def fake(**kw):
+        calls.append(kw)
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(internal_audit, "build_internal_audit_report_pdf", fake)
+    return calls
+
+
+def _review(session_factory, journal_id, posting_date, company=CO_A, score=90.0):
+    db = session_factory()
+    db.add(JEAnomalyReview(
+        workspace_id=COMPANY_WORKSPACE[company], company_id=company, journal_id=journal_id,
+        account="6100", amount=1000.0, posting_date=posting_date, risk_score=score, severity="Critical",
+    ))
+    db.commit()
+    db.close()
+
+
+def test_report_pdf_contains_engagement_findings_only(client, env, captured):
+    e = client.post("/api/internal-audit/engagements" + q(), json={"title": "P2P audit"}).json()
+    client.post("/api/internal-audit/findings" + q(), json={"title": "Linked", "engagement_id": e["id"]})
+    client.post("/api/internal-audit/findings" + q(), json={"title": "Unlinked"})
+
+    res = client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf" + q() + "&company_name=Acme%20LLC")
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/pdf"
+    assert f'internal-audit-report-{e["engagement_ref"]}.pdf' in res.headers["content-disposition"]
+    call = captured[0]
+    assert call["engagement"]["title"] == "P2P audit"
+    assert [f["title"] for f in call["findings"]] == ["Linked"]
+    assert call["company_name"] == "Acme LLC"
+    assert call["period"] is None and call["je_entries"] == []
+
+
+def test_report_pdf_of_sibling_company_engagement_is_not_found(client, env, captured):
+    e = client.post("/api/internal-audit/engagements" + q(CO_A), json={"title": "Payroll"}).json()
+    assert client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf" + q(CO_A2)).status_code == 404
+    assert client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf" + q(CO_B)).status_code == 403
+    assert captured == []
+
+
+def test_report_pdf_viewer_can_download(client, env, captured):
+    e = client.post("/api/internal-audit/engagements" + q(), json={"title": "E"}).json()
+    env.roles[WS_A] = "viewer"
+    assert client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf" + q()).status_code == 200
+
+
+@pytest.mark.parametrize("period", ["2026-Q5", "2026-13", "26", "Q2-2026", "<b>"])
+def test_report_pdf_rejects_bad_period(client, env, captured, period):
+    e = client.post("/api/internal-audit/engagements" + q(), json={"title": "E"}).json()
+    res = client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf", params={"company_id": CO_A, "period": period})
+    assert res.status_code == 422
+    assert "YYYY-Qn" in res.text
+    assert captured == []
+
+
+@pytest.mark.parametrize("period,expected", [
+    ("2026-Q2", {"in-apr", "in-jun-30", "in-jun-30-time"}),
+    ("2026-06", {"in-jun-30", "in-jun-30-time"}),
+    ("2026", {"before", "in-apr", "in-jun-30", "in-jun-30-time", "in-jul"}),
+])
+def test_report_pdf_je_section_uses_period_and_company(client, env, captured, session_factory, period, expected):
+    e = client.post("/api/internal-audit/engagements" + q(), json={"title": "E"}).json()
+    _review(session_factory, "before", "2026-03-31")
+    _review(session_factory, "in-apr", "2026-04-01")
+    _review(session_factory, "in-jun-30", "2026-06-30")
+    _review(session_factory, "in-jun-30-time", "2026-06-30 18:45:00")
+    _review(session_factory, "in-jul", "2026-07-01")
+    _review(session_factory, "sibling", "2026-05-01", company=CO_A2)
+
+    res = client.get(f"/api/internal-audit/engagements/{e['id']}/report.pdf", params={"company_id": CO_A, "period": period})
+    assert res.status_code == 200, res.text
+    call = captured[0]
+    assert call["period"] == period
+    assert {r["journal_id"] for r in call["je_entries"]} == expected

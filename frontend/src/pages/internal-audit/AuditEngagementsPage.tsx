@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { FileText, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import {
   ENGAGEMENT_STATUSES,
   RISK_OPTIONS,
@@ -21,6 +21,7 @@ import {
   inputCls,
   useAuditCompanyId,
 } from './shared';
+import { AuditReportModal } from './AuditReportModal';
 
 type EngagementForm = {
   title: string;
@@ -106,6 +107,7 @@ export default function AuditEngagementsPage() {
   const [editing, setEditing] = useState<{ id: number | null; form: EngagementForm } | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [reportFor, setReportFor] = useState<Engagement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -266,6 +268,8 @@ export default function AuditEngagementsPage() {
         </Modal>
       )}
 
+      {reportFor && <AuditReportModal engagement={reportFor} onClose={() => setReportFor(null)} />}
+
       {loading && engagements.length === 0 ? (
         <div className="flex items-center justify-center h-40 text-muted-foreground gap-2">
           <RefreshCw className="h-4 w-4 animate-spin" /> Loading…
@@ -304,6 +308,7 @@ export default function AuditEngagementsPage() {
                     <td className="px-4 py-3 text-center">{e.findings_count ?? 0}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
+                        <button onClick={() => setReportFor(e)} aria-label="Download report" title="Download report PDF" className="p-1 text-muted-foreground hover:text-blue-600 rounded"><FileText className="h-3.5 w-3.5" /></button>
                         <button onClick={() => open(e)} aria-label="Edit" className="p-1 text-muted-foreground hover:text-foreground rounded"><Pencil className="h-3.5 w-3.5" /></button>
                         <button onClick={() => void remove(e)} aria-label="Delete" className="p-1 text-muted-foreground hover:text-red-600 rounded"><Trash2 className="h-3.5 w-3.5" /></button>
                       </div>

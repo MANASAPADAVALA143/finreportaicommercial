@@ -5,7 +5,9 @@ requested company: read for any member, write to create/edit, manage to delete.
 """
 from __future__ import annotations
 
-from datetime import date
+import re
+from calendar import monthrange
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -16,7 +18,9 @@ from sqlalchemy.orm import Session
 from app.core.company_access import AccessLevel, require_company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
+from app.models.history_models import JEAnomalyReview
 from app.models.internal_audit import AuditEngagement, AuditFinding, AuditUniverse
+from app.services.internal_audit_report import build_internal_audit_report_pdf
 
 router = APIRouter(prefix="/api/internal-audit", tags=["internal-audit"])
 
@@ -363,3 +367,85 @@ def dashboard(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
         "universe_by_risk": {(r or "Unrated"): n for r, n in universe_rows},
         "recent_open_findings": [_row(f) for f in recent],
     }
+
+
+# ── Engagement report PDF ────────────────────────────────────────────────────
+
+_QUARTER_RE = re.compile(r"^(\d{4})-Q([1-4])$")
+_MONTH_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+_YEAR_RE = re.compile(r"^(\d{4})$")
+
+
+def _period_bounds(period: str) -> tuple[str, str]:
+    """`2026-Q2`, `2026-06` or `2026` → (first day, day after last day) as YYYY-MM-DD."""
+    if m := _QUARTER_RE.match(period):
+        year, q = int(m.group(1)), int(m.group(2))
+        first, last = (q - 1) * 3 + 1, q * 3
+    elif m := _MONTH_RE.match(period):
+        year, first = int(m.group(1)), int(m.group(2))
+        last = first
+    elif m := _YEAR_RE.match(period):
+        year, first, last = int(m.group(1)), 1, 12
+    else:
+        raise HTTPException(status_code=422, detail="period must be YYYY-Qn, YYYY-MM or YYYY")
+    end = date(year, last, monthrange(year, last)[1])
+    return date(year, first, 1).isoformat(), (end + timedelta(days=1)).isoformat()
+
+
+def _company_name(db: Session, company_id: str) -> str | None:
+    from app.models.users import Company
+
+    try:
+        row = db.query(Company.name).filter(Company.id == company_id).first()
+    except Exception:
+        db.rollback()
+        return None
+    return row[0] if row else None
+
+
+@router.get("/engagements/{eid}/report.pdf")
+def engagement_report_pdf(
+    eid: int,
+    period: str | None = Query(default=None, max_length=10, description="YYYY-Qn, YYYY-MM or YYYY; omit to skip the JE section"),
+    company_name: str | None = Query(default=None, max_length=200),
+    scope: Scope = Depends(_read),
+    db: Session = Depends(get_db),
+):
+    eng = _get_or_404(db, AuditEngagement, eid, scope)
+    findings = (
+        db.query(AuditFinding)
+        .filter(AuditFinding.engagement_id == eid, *scope.filter(AuditFinding))
+        .order_by(AuditFinding.id)
+        .all()
+    )
+
+    period = (period or "").strip() or None
+    je_rows: list[dict[str, Any]] = []
+    if period:
+        start, end_exclusive = _period_bounds(period)
+        reviews = (
+            db.query(JEAnomalyReview)
+            .filter(
+                *scope.filter(JEAnomalyReview),
+                JEAnomalyReview.posting_date >= start,
+                JEAnomalyReview.posting_date < end_exclusive,
+            )
+            .order_by(JEAnomalyReview.risk_score.desc())
+            .all()
+        )
+        je_rows = [_row(r) for r in reviews]
+
+    name = (company_name or "").strip() or _company_name(db, scope.company_id)
+    pdf = build_internal_audit_report_pdf(
+        engagement=_row(eng),
+        findings=[_row(f) for f in findings],
+        company_name=name,
+        je_entries=je_rows,
+        period=period,
+    )
+    ref = re.sub(r"[^A-Za-z0-9_-]", "", eng.engagement_ref or "") or f"IA-{eid}"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="internal-audit-report-{ref}.pdf"'},
+    )
