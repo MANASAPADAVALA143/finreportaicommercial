@@ -375,6 +375,7 @@ const AuditUniversePage = safeLazy(() => import('./pages/internal-audit/AuditUni
 const AuditEngagementsPage = safeLazy(() => import('./pages/internal-audit/AuditEngagementsPage'));
 const AuditFindingsPage = safeLazy(() => import('./pages/internal-audit/AuditFindingsPage'));
 const OverdueFindingsPage = safeLazy(() => import('./pages/internal-audit/OverdueFindingsPage'));
+const WorkpapersPage = safeLazy(() => import('./pages/internal-audit/WorkpapersPage'));
 const AuditBaselinePage = safeLazy(() => import('./pages/internal-audit/BaselinePage'));
 const JEReviewPage = safeLazy(() => import('./pages/internal-audit/JEReviewPage'));
 // CA Firm Tools
@@ -824,6 +825,7 @@ function App() {
                   <Route path="dashboard" element={<AuditCommitteeDashboard />} />
                   <Route path="universe" element={<AuditUniversePage />} />
                   <Route path="engagements" element={<AuditEngagementsPage />} />
+                  <Route path="engagements/:eid/workpapers" element={<WorkpapersPage />} />
                   <Route path="findings" element={<AuditFindingsPage />} />
                   <Route path="overdue" element={<OverdueFindingsPage />} />
                   <Route path="baseline" element={<AuditBaselinePage />} />

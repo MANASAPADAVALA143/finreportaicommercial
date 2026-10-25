@@ -115,9 +115,11 @@ export type AuditDashboard = {
 
 async function send(path: string, companyId: string, init: RequestInit = {}): Promise<Response> {
   const sep = path.includes('?') ? '&' : '?';
+  const headers = workspaceHeaders(null);
+  if (init.body instanceof FormData) delete headers['Content-Type'];
   const res = await fetch(joinApiUrl(`${path}${sep}company_id=${encodeURIComponent(companyId)}`), {
     ...init,
-    headers: workspaceHeaders(null),
+    headers,
     credentials: 'include',
   });
   if (!res.ok) {
@@ -185,6 +187,67 @@ export const engagementsApi = {
   },
 };
 export const findingsApi = crud<Finding>('findings');
+
+export type WorkpaperStatus = 'not_started' | 'in_progress' | 'done';
+export const WORKPAPER_STATUSES: { value: WorkpaperStatus; label: string }[] = [
+  { value: 'not_started', label: 'Not started' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'done', label: 'Done' },
+];
+
+export type WorkpaperProcedure = {
+  id: number;
+  engagement_id: number;
+  title: string;
+  description: string | null;
+  assigned_to: string | null;
+  status: WorkpaperStatus;
+  notes: string | null;
+  completed_by: string | null;
+  completed_at: string | null;
+  sort_order: number;
+  evidence_count: number;
+};
+
+export type WorkpaperEvidence = {
+  id: number;
+  procedure_id: number;
+  file_name: string;
+  file_size: number | null;
+  content_type: string | null;
+  uploaded_by: string | null;
+  notes: string | null;
+  created_at: string | null;
+};
+
+export const EVIDENCE_ACCEPT = '.pdf,.xlsx,.xls,.csv,.docx,.txt,.png,.jpg,.jpeg';
+export const EVIDENCE_MAX_BYTES = 20 * 1024 * 1024;
+
+export const workpapersApi = {
+  list: (companyId: string, engagementId: number) =>
+    request<{ engagement: Engagement; procedures: WorkpaperProcedure[] }>(`/engagements/${engagementId}/workpapers`, companyId),
+  create: (companyId: string, engagementId: number, body: { title: string; description?: string; assigned_to?: string }) =>
+    request<WorkpaperProcedure>(`/engagements/${engagementId}/workpapers`, companyId, { method: 'POST', body: JSON.stringify(body) }),
+  update: (
+    companyId: string,
+    procedureId: number,
+    body: Partial<Pick<WorkpaperProcedure, 'title' | 'description' | 'assigned_to' | 'status' | 'notes'>>,
+  ) => request<WorkpaperProcedure>(`/workpapers/${procedureId}`, companyId, { method: 'PATCH', body: JSON.stringify(body) }),
+  remove: (companyId: string, procedureId: number) =>
+    request<void>(`/workpapers/${procedureId}`, companyId, { method: 'DELETE' }),
+  evidence: (companyId: string, procedureId: number) =>
+    request<WorkpaperEvidence[]>(`/workpapers/${procedureId}/evidence`, companyId),
+  upload: (companyId: string, procedureId: number, file: File, notes?: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (notes) form.append('notes', notes);
+    return request<WorkpaperEvidence>(`/workpapers/${procedureId}/evidence`, companyId, { method: 'POST', body: form });
+  },
+  downloadUrl: (companyId: string, evidenceId: number) =>
+    request<{ url: string; expires_in: number }>(`/evidence/${evidenceId}/download`, companyId),
+  removeEvidence: (companyId: string, evidenceId: number) =>
+    request<void>(`/evidence/${evidenceId}`, companyId, { method: 'DELETE' }),
+};
 
 export const followUpApi = {
   overdue: (companyId: string) => request<OverdueFinding[]>('/overdue-findings', companyId),

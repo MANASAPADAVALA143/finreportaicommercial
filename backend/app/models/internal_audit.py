@@ -1,6 +1,6 @@
 """Internal Audit — audit universe, engagements and findings (IIA lifecycle)."""
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -108,4 +108,45 @@ class AuditFindingDueDateRevision(Base):
     revised_due_date = Column(String(20), nullable=False)
     reason = Column(Text, nullable=False)
     revised_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditWorkpaperProcedure(Base):
+    """One audit procedure in an engagement's workpaper checklist."""
+
+    __tablename__ = "audit_workpaper_procedures"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    engagement_id = Column(Integer, ForeignKey("audit_engagements.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    description = Column(Text, nullable=True)
+    assigned_to = Column(String(100), nullable=True)
+    status = Column(String(20), nullable=False, default="not_started")
+    notes = Column(Text, nullable=True)
+    completed_by = Column(String(255), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class AuditWorkpaperEvidence(Base):
+    """An evidence file attached to a workpaper procedure; the bytes live in Supabase Storage."""
+
+    __tablename__ = "audit_workpaper_evidence"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    procedure_id = Column(
+        Integer, ForeignKey("audit_workpaper_procedures.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    file_name = Column(String(255), nullable=False)
+    storage_path = Column(String(500), nullable=False)
+    file_size = Column(BigInteger, nullable=True)
+    content_type = Column(String(100), nullable=True)
+    uploaded_by = Column(String(255), nullable=True)
+    notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

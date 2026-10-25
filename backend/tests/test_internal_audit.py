@@ -25,7 +25,10 @@ from app.models.internal_audit import (
     AuditFindingDueDateRevision,
     AuditFindingFollowup,
     AuditUniverse,
+    AuditWorkpaperEvidence,
+    AuditWorkpaperProcedure,
 )
+from app.services import audit_workpaper_storage as wp_storage
 from app.models.workspace import WorkspaceRole
 from app.routers import internal_audit
 
@@ -71,6 +74,7 @@ def session_factory():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     for model in (
         AuditUniverse, AuditEngagement, AuditFinding, AuditFindingFollowup, AuditFindingDueDateRevision, JEAnomalyReview,
+        AuditWorkpaperProcedure, AuditWorkpaperEvidence,
     ):
         model.__table__.create(engine)
     return sessionmaker(bind=engine)
@@ -124,6 +128,14 @@ ROUTES = [
     ("POST", "/api/internal-audit/findings/1/followups"),
     ("POST", "/api/internal-audit/findings/1/revise-due-date"),
     ("PATCH", "/api/internal-audit/findings/1/escalation"),
+    ("GET", "/api/internal-audit/engagements/1/workpapers"),
+    ("POST", "/api/internal-audit/engagements/1/workpapers"),
+    ("PATCH", "/api/internal-audit/workpapers/1"),
+    ("DELETE", "/api/internal-audit/workpapers/1"),
+    ("GET", "/api/internal-audit/workpapers/1/evidence"),
+    ("POST", "/api/internal-audit/workpapers/1/evidence"),
+    ("GET", "/api/internal-audit/evidence/1/download"),
+    ("DELETE", "/api/internal-audit/evidence/1"),
 ]
 
 
@@ -517,3 +529,214 @@ def test_report_pdf_receives_follow_up_summary(client, env, captured):
     assert sent["escalation_level"] == "cfo"
     assert sent["original_due_date"] == original and sent["action_due_date"] == TOMORROW
     assert sent["latest_followup"]["contacted_person"] == "CFO"
+
+
+# ── Digital workpapers ───────────────────────────────────────────────────────
+
+PDF = b"%PDF-1.7 sample"
+PNG = b"\x89PNG\r\n\x1a\nrest"
+
+
+class FakeBucket:
+    def __init__(self):
+        self.objects: dict[str, tuple[bytes, str]] = {}
+        self.removed: list[str] = []
+        self.fail_upload = False
+
+    def upload(self, path, data, content_type):
+        if self.fail_upload:
+            raise RuntimeError("storage down")
+        assert path not in self.objects
+        self.objects[path] = (data, content_type)
+
+    def signed_url(self, path, download_name):
+        if path not in self.objects:
+            raise RuntimeError("missing")
+        return f"https://storage.example/{path}?download={download_name}"
+
+    def remove(self, paths):
+        self.removed += paths
+        for p in paths:
+            self.objects.pop(p, None)
+
+
+@pytest.fixture()
+def bucket(monkeypatch):
+    b = FakeBucket()
+    monkeypatch.setattr(wp_storage, "upload", b.upload)
+    monkeypatch.setattr(wp_storage, "signed_url", b.signed_url)
+    monkeypatch.setattr(wp_storage, "remove", b.remove)
+    return b
+
+
+def _engagement(client, co=CO_A):
+    return client.post("/api/internal-audit/engagements" + q(co), json={"title": "P2P"}).json()
+
+
+def _procedure(client, eid, title="Vouch payments", co=CO_A):
+    res = client.post(f"/api/internal-audit/engagements/{eid}/workpapers" + q(co), json={"title": title})
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _upload(client, pid, name="invoice.pdf", data=PDF, co=CO_A, **form):
+    return client.post(
+        f"/api/internal-audit/workpapers/{pid}/evidence" + q(co),
+        files={"file": (name, data, "application/octet-stream")},
+        data=form,
+    )
+
+
+def test_procedures_are_ordered_and_listed_with_engagement(client, env, bucket):
+    e = _engagement(client)
+    first = _procedure(client, e["id"], "Walkthrough")
+    second = _procedure(client, e["id"], "Sample testing")
+    assert (first["sort_order"], second["sort_order"], first["status"]) == (0, 1, "not_started")
+
+    res = client.get(f"/api/internal-audit/engagements/{e['id']}/workpapers" + q()).json()
+    assert res["engagement"]["title"] == "P2P"
+    assert [p["title"] for p in res["procedures"]] == ["Walkthrough", "Sample testing"]
+    assert all(p["evidence_count"] == 0 for p in res["procedures"])
+
+
+def test_completing_a_procedure_records_signed_in_user(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    url = f"/api/internal-audit/workpapers/{p['id']}" + q()
+    done = client.patch(url, json={"status": "done", "notes": "No exceptions in 25 items"}).json()
+    assert done["completed_by"] == "auditor@example.com" and done["completed_at"]
+    assert done["notes"] == "No exceptions in 25 items"
+
+    again = client.patch(url, json={"status": "done", "completed_by": "someone-else"}).json()
+    assert again["completed_at"] == done["completed_at"] and again["completed_by"] == "auditor@example.com"
+
+    reopened = client.patch(url, json={"status": "in_progress"}).json()
+    assert reopened["completed_at"] is None and reopened["completed_by"] is None
+    assert client.patch(url, json={"status": "finished"}).status_code == 422
+    assert client.patch(url, json={"title": "   "}).status_code == 422
+
+
+def test_evidence_upload_list_and_download(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    res = _upload(client, p["id"], "C:\\fakepath\\Bank stmt.pdf", notes=" Sample 14 ")
+    assert res.status_code == 201, res.text
+    ev = res.json()
+    assert ev["file_name"] == "Bank stmt.pdf" and ev["content_type"] == "application/pdf"
+    assert ev["uploaded_by"] == "auditor@example.com" and ev["notes"] == "Sample 14"
+    assert "storage_path" not in ev
+
+    same_name = _upload(client, p["id"], "Bank stmt.pdf").json()
+    assert len(bucket.objects) == 2
+    path = next(iter(bucket.objects))
+    assert path.startswith(f"{WS_A}/{CO_A}/{p['id']}/")
+
+    listed = client.get(f"/api/internal-audit/workpapers/{p['id']}/evidence" + q()).json()
+    assert [e["id"] for e in listed] == [ev["id"], same_name["id"]]
+    assert all("storage_path" not in e for e in listed)
+    counts = client.get(f"/api/internal-audit/engagements/{p['engagement_id']}/workpapers" + q()).json()
+    assert counts["procedures"][0]["evidence_count"] == 2
+
+    dl = client.get(f"/api/internal-audit/evidence/{ev['id']}/download" + q()).json()
+    assert dl["url"].startswith("https://storage.example/") and dl["expires_in"] == 3600
+
+
+@pytest.mark.parametrize("name,data", [
+    ("script.exe", b"MZ"),
+    ("page.html", b"<script>"),
+    ("fake.pdf", b"<html>not a pdf"),
+    ("photo.png", b"\xff\xd8\xff jpeg bytes"),
+    ("empty.pdf", b""),
+    ("binary.csv", b"a,b\x00\x01"),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_evidence_upload_rejects_bad_files(client, env, bucket, name, data):
+    p = _procedure(client, _engagement(client)["id"])
+    assert _upload(client, p["id"], name, data).status_code == 422
+    assert bucket.objects == {}
+
+
+def test_evidence_upload_rejects_files_over_20_mb(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    res = _upload(client, p["id"], "big.pdf", b"%PDF" + b"0" * wp_storage.MAX_BYTES)
+    assert res.status_code == 413
+    assert bucket.objects == {}
+
+
+def test_evidence_upload_accepts_each_allowed_type(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    for name, data in [("a.png", PNG), ("b.csv", b"x,y\n1,2"), ("c.txt", b"notes"), ("d.xlsx", b"PK\x03\x04..")]:
+        assert _upload(client, p["id"], name, data).status_code == 201, name
+    types = sorted(ct for _, ct in bucket.objects.values())
+    assert types == sorted(["image/png", "text/csv", "text/plain", wp_storage.CONTENT_TYPES[".xlsx"]])
+
+
+def test_storage_failure_leaves_no_evidence_row(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    bucket.fail_upload = True
+    assert _upload(client, p["id"]).status_code == 502
+    assert client.get(f"/api/internal-audit/workpapers/{p['id']}/evidence" + q()).json() == []
+
+
+def test_workpaper_roles(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    ev = _upload(client, p["id"]).json()
+
+    env.roles[WS_A] = "viewer"
+    assert client.get(f"/api/internal-audit/workpapers/{p['id']}/evidence" + q()).status_code == 200
+    assert client.get(f"/api/internal-audit/evidence/{ev['id']}/download" + q()).status_code == 200
+    assert _upload(client, p["id"]).status_code == 403
+    assert client.patch(f"/api/internal-audit/workpapers/{p['id']}" + q(), json={"status": "done"}).status_code == 403
+
+    env.roles[WS_A] = "accountant"
+    assert client.delete(f"/api/internal-audit/evidence/{ev['id']}" + q()).status_code == 403
+    assert client.delete(f"/api/internal-audit/workpapers/{p['id']}" + q()).status_code == 403
+    assert len(bucket.objects) == 1
+
+
+def test_workpapers_are_isolated_between_companies(client, env, bucket):
+    e = _engagement(client, CO_A)
+    p = _procedure(client, e["id"])
+    ev = _upload(client, p["id"]).json()
+    env.roles[WS_A] = "owner"
+    for method, path in (
+        ("GET", f"/api/internal-audit/engagements/{e['id']}/workpapers"),
+        ("POST", f"/api/internal-audit/engagements/{e['id']}/workpapers"),
+        ("PATCH", f"/api/internal-audit/workpapers/{p['id']}"),
+        ("GET", f"/api/internal-audit/workpapers/{p['id']}/evidence"),
+        ("GET", f"/api/internal-audit/evidence/{ev['id']}/download"),
+        ("DELETE", f"/api/internal-audit/evidence/{ev['id']}"),
+        ("DELETE", f"/api/internal-audit/workpapers/{p['id']}"),
+    ):
+        body = {"title": "x"} if method in ("POST", "PATCH") else None
+        assert client.request(method, path + q(CO_A2), json=body).status_code == 404, (method, path)
+        assert client.request(method, path + q(CO_B), json=body).status_code == 403, (method, path)
+    assert _upload(client, p["id"], co=CO_A2).status_code == 404
+    assert len(bucket.objects) == 1 and bucket.removed == []
+
+
+def test_deleting_evidence_procedure_and_engagement_removes_stored_files(client, env, bucket, session_factory):
+    env.roles[WS_A] = "owner"
+    e = _engagement(client)
+    p1 = _procedure(client, e["id"], "One")
+    p2 = _procedure(client, e["id"], "Two")
+    ev1 = _upload(client, p1["id"]).json()
+    _upload(client, p1["id"], "b.png", PNG)
+    _upload(client, p2["id"], "c.txt", b"x")
+    assert len(bucket.objects) == 3
+
+    assert client.delete(f"/api/internal-audit/evidence/{ev1['id']}" + q()).status_code == 204
+    assert len(bucket.objects) == 2
+    assert client.delete(f"/api/internal-audit/workpapers/{p1['id']}" + q()).status_code == 204
+    assert len(bucket.objects) == 1
+    assert client.delete(f"/api/internal-audit/engagements/{e['id']}" + q()).status_code == 204
+    assert bucket.objects == {} and len(bucket.removed) == 3
+
+    db = session_factory()
+    assert db.query(AuditWorkpaperProcedure).count() == 0
+    assert db.query(AuditWorkpaperEvidence).count() == 0
+    db.close()
+
+
+def test_missing_stored_file_gives_404_on_download(client, env, bucket):
+    p = _procedure(client, _engagement(client)["id"])
+    ev = _upload(client, p["id"]).json()
+    bucket.objects.clear()
+    assert client.get(f"/api/internal-audit/evidence/{ev['id']}/download" + q()).status_code == 404

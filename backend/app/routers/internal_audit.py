@@ -5,12 +5,13 @@ requested company: read for any member, write to create/edit, manage to delete.
 """
 from __future__ import annotations
 
+import logging
 import re
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -25,8 +26,13 @@ from app.models.internal_audit import (
     AuditFindingDueDateRevision,
     AuditFindingFollowup,
     AuditUniverse,
+    AuditWorkpaperEvidence,
+    AuditWorkpaperProcedure,
 )
+from app.services import audit_workpaper_storage as wp_storage
 from app.services.internal_audit_report import build_internal_audit_report_pdf
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/internal-audit", tags=["internal-audit"])
 
@@ -222,8 +228,14 @@ def delete_engagement(eid: int, scope: Scope = Depends(_manage), db: Session = D
     db.query(AuditFinding).filter(AuditFinding.engagement_id == eid, *scope.filter(AuditFinding)).update(
         {AuditFinding.engagement_id: None}, synchronize_session=False
     )
+    procedure_ids = [
+        pid for (pid,) in db.query(AuditWorkpaperProcedure.id)
+        .filter(AuditWorkpaperProcedure.engagement_id == eid, *scope.filter(AuditWorkpaperProcedure))
+    ]
+    paths = _delete_procedures(db, scope, procedure_ids)
     db.delete(obj)
     db.commit()
+    _remove_stored_files(paths)
     return Response(status_code=204)
 
 
@@ -624,3 +636,217 @@ def engagement_report_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="internal-audit-report-{ref}.pdf"'},
     )
+
+
+# ── Digital workpapers ───────────────────────────────────────────────────────
+
+WorkpaperStatus = Literal["not_started", "in_progress", "done"]
+_EVIDENCE_FIELDS = ("id", "procedure_id", "file_name", "file_size", "content_type", "uploaded_by", "notes", "created_at")
+
+
+def _evidence_out(ev: AuditWorkpaperEvidence) -> dict[str, Any]:
+    """Evidence row without its storage path, which stays server-side."""
+    row = _row(ev)
+    return {k: row[k] for k in _EVIDENCE_FIELDS}
+
+
+def _delete_procedures(db: Session, scope: Scope, procedure_ids: list[int]) -> list[str]:
+    """Delete procedures and their evidence rows; return storage paths to remove after commit."""
+    if not procedure_ids:
+        return []
+    evidence = db.query(AuditWorkpaperEvidence).filter(
+        AuditWorkpaperEvidence.procedure_id.in_(procedure_ids), *scope.filter(AuditWorkpaperEvidence)
+    )
+    paths = [ev.storage_path for ev in evidence]
+    evidence.delete(synchronize_session=False)
+    db.query(AuditWorkpaperProcedure).filter(
+        AuditWorkpaperProcedure.id.in_(procedure_ids), *scope.filter(AuditWorkpaperProcedure)
+    ).delete(synchronize_session=False)
+    return paths
+
+
+def _remove_stored_files(paths: list[str]) -> None:
+    """Best effort: an orphaned object is harmless, a row pointing at a missing file is not."""
+    try:
+        wp_storage.remove(paths)
+    except Exception as exc:
+        logger.warning("audit-workpapers: could not remove %d stored file(s): %s", len(paths), exc)
+
+
+@router.get("/engagements/{eid}/workpapers")
+def list_workpapers(eid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    eng = _get_or_404(db, AuditEngagement, eid, scope)
+    procedures = (
+        db.query(AuditWorkpaperProcedure)
+        .filter(AuditWorkpaperProcedure.engagement_id == eid, *scope.filter(AuditWorkpaperProcedure))
+        .order_by(AuditWorkpaperProcedure.sort_order, AuditWorkpaperProcedure.id)
+        .all()
+    )
+    counts = dict(
+        db.query(AuditWorkpaperEvidence.procedure_id, func.count(AuditWorkpaperEvidence.id))
+        .filter(
+            AuditWorkpaperEvidence.procedure_id.in_([p.id for p in procedures]),
+            *scope.filter(AuditWorkpaperEvidence),
+        )
+        .group_by(AuditWorkpaperEvidence.procedure_id)
+        .all()
+    ) if procedures else {}
+    return {
+        "engagement": _row(eng),
+        "procedures": [{**_row(p), "evidence_count": counts.get(p.id, 0)} for p in procedures],
+    }
+
+
+class ProcedureIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=4000)
+    assigned_to: str | None = Field(default=None, max_length=100)
+
+
+@router.post("/engagements/{eid}/workpapers", status_code=201)
+def create_workpaper(eid: int, body: ProcedureIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    _get_or_404(db, AuditEngagement, eid, scope)
+    data = _clean(body, partial=False)
+    if not (data.get("title") or "").strip():
+        raise HTTPException(status_code=422, detail="Procedure title is required")
+    last = (
+        db.query(func.max(AuditWorkpaperProcedure.sort_order))
+        .filter(AuditWorkpaperProcedure.engagement_id == eid, *scope.filter(AuditWorkpaperProcedure))
+        .scalar()
+    )
+    obj = AuditWorkpaperProcedure(
+        **{**data, "title": data["title"].strip()},
+        engagement_id=eid,
+        workspace_id=scope.workspace_id,
+        company_id=scope.company_id,
+        status="not_started",
+        sort_order=(last if last is not None else -1) + 1,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return {**_row(obj), "evidence_count": 0}
+
+
+class ProcedureUpdateIn(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=4000)
+    assigned_to: str | None = Field(default=None, max_length=100)
+    status: WorkpaperStatus | None = None
+    notes: str | None = Field(default=None, max_length=10000)
+
+
+@router.patch("/workpapers/{pid}")
+def update_workpaper(pid: int, body: ProcedureUpdateIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    obj = _get_or_404(db, AuditWorkpaperProcedure, pid, scope)
+    data = _clean(body, partial=True)
+    if "title" in data:
+        if not (data["title"] or "").strip():
+            raise HTTPException(status_code=422, detail="Procedure title is required")
+        data["title"] = data["title"].strip()
+    if "status" in data:
+        if data["status"] is None:
+            raise HTTPException(status_code=422, detail="status cannot be empty")
+        if data["status"] == "done" and obj.status != "done":
+            obj.completed_at = datetime.now(timezone.utc)
+            obj.completed_by = scope.user_email
+        elif data["status"] != "done":
+            obj.completed_at = None
+            obj.completed_by = None
+    for k, v in data.items():
+        setattr(obj, k, v)
+    db.commit()
+    db.refresh(obj)
+    count = (
+        db.query(func.count(AuditWorkpaperEvidence.id))
+        .filter(AuditWorkpaperEvidence.procedure_id == pid, *scope.filter(AuditWorkpaperEvidence))
+        .scalar()
+        or 0
+    )
+    return {**_row(obj), "evidence_count": count}
+
+
+@router.delete("/workpapers/{pid}", status_code=204)
+def delete_workpaper(pid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    _get_or_404(db, AuditWorkpaperProcedure, pid, scope)
+    paths = _delete_procedures(db, scope, [pid])
+    db.commit()
+    _remove_stored_files(paths)
+    return Response(status_code=204)
+
+
+@router.get("/workpapers/{pid}/evidence")
+def list_evidence(pid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    _get_or_404(db, AuditWorkpaperProcedure, pid, scope)
+    rows = (
+        db.query(AuditWorkpaperEvidence)
+        .filter(AuditWorkpaperEvidence.procedure_id == pid, *scope.filter(AuditWorkpaperEvidence))
+        .order_by(AuditWorkpaperEvidence.id)
+        .all()
+    )
+    return [_evidence_out(ev) for ev in rows]
+
+
+@router.post("/workpapers/{pid}/evidence", status_code=201)
+def upload_evidence(
+    pid: int,
+    file: UploadFile = File(...),
+    notes: str | None = Form(default=None, max_length=2000),
+    scope: Scope = Depends(_write),
+    db: Session = Depends(get_db),
+):
+    _get_or_404(db, AuditWorkpaperProcedure, pid, scope)
+    data = file.file.read(wp_storage.MAX_BYTES + 1)
+    try:
+        name, content_type = wp_storage.check_file(file.filename or "", data)
+    except wp_storage.EvidenceRejected as exc:
+        raise HTTPException(status_code=413 if len(data) > wp_storage.MAX_BYTES else 422, detail=str(exc)) from exc
+
+    path = wp_storage.object_path(scope.workspace_id, scope.company_id, pid, name)
+    try:
+        wp_storage.upload(path, data, content_type)
+    except Exception as exc:
+        logger.warning("audit-workpapers: upload failed for procedure %s: %s", pid, exc)
+        raise HTTPException(status_code=502, detail="Storage upload failed") from exc
+
+    ev = AuditWorkpaperEvidence(
+        procedure_id=pid,
+        workspace_id=scope.workspace_id,
+        company_id=scope.company_id,
+        file_name=name,
+        storage_path=path,
+        file_size=len(data),
+        content_type=content_type,
+        uploaded_by=scope.user_email,
+        notes=(notes or "").strip() or None,
+    )
+    try:
+        db.add(ev)
+        db.commit()
+    except Exception:
+        db.rollback()
+        _remove_stored_files([path])
+        raise
+    db.refresh(ev)
+    return _evidence_out(ev)
+
+
+@router.get("/evidence/{evid}/download")
+def evidence_download_url(evid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    ev = _get_or_404(db, AuditWorkpaperEvidence, evid, scope)
+    try:
+        url = wp_storage.signed_url(ev.storage_path, ev.file_name)
+    except Exception as exc:
+        logger.warning("audit-workpapers: signed URL failed for evidence %s: %s", evid, exc)
+        raise HTTPException(status_code=404, detail="File not found in storage") from exc
+    return {"url": url, "expires_in": wp_storage.SIGNED_URL_TTL_SECONDS}
+
+
+@router.delete("/evidence/{evid}", status_code=204)
+def delete_evidence(evid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    ev = _get_or_404(db, AuditWorkpaperEvidence, evid, scope)
+    path = ev.storage_path
+    db.delete(ev)
+    db.commit()
+    _remove_stored_files([path])
+    return Response(status_code=204)
