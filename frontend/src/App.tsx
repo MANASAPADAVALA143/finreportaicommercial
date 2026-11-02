@@ -377,6 +377,14 @@ const AuditFindingsPage = safeLazy(() => import('./pages/internal-audit/AuditFin
 const OverdueFindingsPage = safeLazy(() => import('./pages/internal-audit/OverdueFindingsPage'));
 const WorkpapersPage = safeLazy(() => import('./pages/internal-audit/WorkpapersPage'));
 const CaroChecklistPage = safeLazy(() => import('./pages/internal-audit/CaroChecklistPage'));
+const TechnicalAccountingLayout = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingLayout'));
+const TechnicalAccountingOverviewPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingOverviewPage'));
+const TechnicalAccountingAssistantPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingAssistantPage'));
+const TechnicalAccountingIfrsPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingIfrsPage'));
+const TechnicalAccountingRevenuePage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingRevenuePage'));
+const TechnicalAccountingLeasesPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingLeasesPage'));
+const TechnicalAccountingDisclosuresPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingDisclosuresPage'));
+const TechnicalAccountingMemosPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingMemosPage'));
 const AuditBaselinePage = safeLazy(() => import('./pages/internal-audit/BaselinePage'));
 const JEReviewPage = safeLazy(() => import('./pages/internal-audit/JEReviewPage'));
 // CA Firm Tools
@@ -832,6 +840,16 @@ function App() {
                   <Route path="overdue" element={<OverdueFindingsPage />} />
                   <Route path="baseline" element={<AuditBaselinePage />} />
                   <Route path="je-review" element={<JEReviewPage />} />
+                </Route>
+                <Route path="/technical-accounting" element={<TechnicalAccountingLayout />}>
+                  <Route index element={<TechnicalAccountingOverviewPage />} />
+                  <Route path="overview" element={<TechnicalAccountingOverviewPage />} />
+                  <Route path="assistant" element={<TechnicalAccountingAssistantPage />} />
+                  <Route path="ifrs" element={<TechnicalAccountingIfrsPage />} />
+                  <Route path="revenue" element={<TechnicalAccountingRevenuePage />} />
+                  <Route path="leases" element={<TechnicalAccountingLeasesPage />} />
+                  <Route path="disclosures" element={<TechnicalAccountingDisclosuresPage />} />
+                  <Route path="memos" element={<TechnicalAccountingMemosPage />} />
                 </Route>
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />

@@ -42,6 +42,20 @@ export const INTERNAL_AUDIT_NAV: NavSection = {
   ],
 };
 
+// ── Technical Accounting AI (UAE + India suites) ─────────────────────────────
+export const TECHNICAL_ACCOUNTING_NAV: NavSection = {
+  section: 'Technical Accounting AI',
+  items: [
+    { label: 'Overview',                path: '/technical-accounting/overview',    icon: 'layout-dashboard' },
+    { label: 'AI Assistant',            path: '/technical-accounting/assistant',   icon: 'message-square', badge: 'Dev' },
+    { label: 'IFRS / Ind AS',           path: '/technical-accounting/ifrs',        icon: 'book',           badge: 'Soon' },
+    { label: 'Revenue Recognition',     path: '/technical-accounting/revenue',     icon: 'trending-up',    badge: 'Soon' },
+    { label: 'Lease Accounting',        path: '/technical-accounting/leases',      icon: 'building-2',     badge: 'Soon' },
+    { label: 'Disclosure Intelligence', path: '/technical-accounting/disclosures', icon: 'file-search',    badge: 'Soon' },
+    { label: 'Accounting Memos',        path: '/technical-accounting/memos',       icon: 'file-text',      badge: 'Soon' },
+  ],
+};
+
 // ── UAE Finance Suite (uae_client role) ───────────────────────────────────────
 export const UAE_FINANCE_SUITE_NAV: NavEntry[] = [
   {
@@ -125,6 +139,7 @@ export const INDIA_NAV: NavEntry[] = [
     ],
   },
   INTERNAL_AUDIT_NAV,
+  TECHNICAL_ACCOUNTING_NAV,
 ];
 
 // ── UAE Suite ─────────────────────────────────────────────────────────────────
@@ -225,6 +240,7 @@ export const UAE_NAV: NavEntry[] = [
     ],
   },
   INTERNAL_AUDIT_NAV,
+  TECHNICAL_ACCOUNTING_NAV,
 ];
 
 // ── FP&A Suite ────────────────────────────────────────────────────────────────
