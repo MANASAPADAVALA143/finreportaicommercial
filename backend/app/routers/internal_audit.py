@@ -14,6 +14,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.company_access import AccessLevel, require_company_access
@@ -21,6 +22,8 @@ from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.history_models import JEAnomalyReview
 from app.models.internal_audit import (
+    AuditCaroClause,
+    AuditCaroResponse,
     AuditEngagement,
     AuditFinding,
     AuditFindingDueDateRevision,
@@ -29,6 +32,7 @@ from app.models.internal_audit import (
     AuditWorkpaperEvidence,
     AuditWorkpaperProcedure,
 )
+from app.seed.caro_2020_clauses import seed_caro_clauses
 from app.services import audit_workpaper_storage as wp_storage
 from app.services.internal_audit_report import build_internal_audit_report_pdf
 
@@ -233,6 +237,9 @@ def delete_engagement(eid: int, scope: Scope = Depends(_manage), db: Session = D
         .filter(AuditWorkpaperProcedure.engagement_id == eid, *scope.filter(AuditWorkpaperProcedure))
     ]
     paths = _delete_procedures(db, scope, procedure_ids)
+    db.query(AuditCaroResponse).filter(
+        AuditCaroResponse.engagement_id == eid, *scope.filter(AuditCaroResponse)
+    ).delete(synchronize_session=False)
     db.delete(obj)
     db.commit()
     _remove_stored_files(paths)
@@ -850,3 +857,94 @@ def delete_evidence(evid: int, scope: Scope = Depends(_manage), db: Session = De
     db.commit()
     _remove_stored_files([path])
     return Response(status_code=204)
+
+
+# ── CARO 2020 checklist ──────────────────────────────────────────────────────
+
+CaroAnswer = Literal["yes", "no", "na"]
+
+
+def _caro_item(clause: AuditCaroClause, resp: AuditCaroResponse | None) -> dict[str, Any]:
+    r = _row(resp) if resp is not None else {}
+    return {
+        "clause_id": clause.id,
+        "clause_no": clause.clause_no,
+        "matter": clause.matter,
+        "description": clause.description,
+        "sort_order": clause.sort_order,
+        "response_id": r.get("id"),
+        "response": r.get("response"),
+        "explanation": r.get("explanation"),
+        "updated_by": r.get("updated_by"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+@router.get("/engagements/{eid}/caro")
+def caro_checklist(eid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    """Every CARO 2020 clause with this engagement's answer, answered or not."""
+    eng = _get_or_404(db, AuditEngagement, eid, scope)
+    clauses = db.query(AuditCaroClause).order_by(AuditCaroClause.sort_order).all()
+    if not clauses:
+        seed_caro_clauses(db)
+        clauses = db.query(AuditCaroClause).order_by(AuditCaroClause.sort_order).all()
+    responses = {
+        r.clause_id: r
+        for r in db.query(AuditCaroResponse).filter(
+            AuditCaroResponse.engagement_id == eid, *scope.filter(AuditCaroResponse)
+        )
+    }
+    return {"engagement": _row(eng), "clauses": [_caro_item(c, responses.get(c.id)) for c in clauses]}
+
+
+class CaroResponseIn(BaseModel):
+    response: CaroAnswer | None = None
+    explanation: str | None = Field(default=None, max_length=10000)
+
+
+@router.put("/engagements/{eid}/caro/{clause_id}")
+def save_caro_response(
+    eid: int,
+    clause_id: int,
+    body: CaroResponseIn,
+    scope: Scope = Depends(_write),
+    db: Session = Depends(get_db),
+):
+    """Upsert the answer to one clause. Only the fields sent are changed."""
+    _get_or_404(db, AuditEngagement, eid, scope)
+    clause = db.get(AuditCaroClause, clause_id)
+    if clause is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    data = body.model_dump(exclude_unset=True)
+    if "explanation" in data:
+        data["explanation"] = (data["explanation"] or "").strip() or None
+
+    query = db.query(AuditCaroResponse).filter(
+        AuditCaroResponse.engagement_id == eid,
+        AuditCaroResponse.clause_id == clause_id,
+        *scope.filter(AuditCaroResponse),
+    )
+    resp = query.first()
+    if resp is None:
+        resp = AuditCaroResponse(
+            engagement_id=eid, clause_id=clause_id, workspace_id=scope.workspace_id, company_id=scope.company_id,
+        )
+        db.add(resp)
+    for k, v in data.items():
+        setattr(resp, k, v)
+    resp.updated_by = scope.user_email
+    resp.updated_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        resp = query.first()
+        if resp is None:
+            raise
+        for k, v in data.items():
+            setattr(resp, k, v)
+        resp.updated_by = scope.user_email
+        resp.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    db.refresh(resp)
+    return _caro_item(clause, resp)

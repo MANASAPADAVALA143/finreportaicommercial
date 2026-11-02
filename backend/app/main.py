@@ -413,11 +413,26 @@ def _init_db_safe() -> None:
         logger.exception("init_db failed — API will run but DB-backed routes may error until fixed")
 
 
+def _seed_reference_data() -> None:
+    from app.core.database import SessionLocal
+    from app.seed.caro_2020_clauses import seed_caro_clauses
+
+    db = SessionLocal()
+    try:
+        seed_caro_clauses(db)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("CARO 2020 clause seed skipped: %s", exc)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Critical column migrations first — must complete before any login request.
     await asyncio.to_thread(_run_critical_migrations)
     await asyncio.to_thread(_init_db_safe)
+    await asyncio.to_thread(_seed_reference_data)
     if settings.ENABLE_CFO_SCHEDULER:
         setup_scheduler()
         if not scheduler.running:

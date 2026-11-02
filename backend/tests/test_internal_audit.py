@@ -20,6 +20,8 @@ from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.history_models import JEAnomalyReview
 from app.models.internal_audit import (
+    AuditCaroClause,
+    AuditCaroResponse,
     AuditEngagement,
     AuditFinding,
     AuditFindingDueDateRevision,
@@ -74,7 +76,7 @@ def session_factory():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     for model in (
         AuditUniverse, AuditEngagement, AuditFinding, AuditFindingFollowup, AuditFindingDueDateRevision, JEAnomalyReview,
-        AuditWorkpaperProcedure, AuditWorkpaperEvidence,
+        AuditWorkpaperProcedure, AuditWorkpaperEvidence, AuditCaroClause, AuditCaroResponse,
     ):
         model.__table__.create(engine)
     return sessionmaker(bind=engine)
@@ -136,6 +138,8 @@ ROUTES = [
     ("POST", "/api/internal-audit/workpapers/1/evidence"),
     ("GET", "/api/internal-audit/evidence/1/download"),
     ("DELETE", "/api/internal-audit/evidence/1"),
+    ("GET", "/api/internal-audit/engagements/1/caro"),
+    ("PUT", "/api/internal-audit/engagements/1/caro/1"),
 ]
 
 
@@ -740,3 +744,115 @@ def test_missing_stored_file_gives_404_on_download(client, env, bucket):
     ev = _upload(client, p["id"]).json()
     bucket.objects.clear()
     assert client.get(f"/api/internal-audit/evidence/{ev['id']}/download" + q()).status_code == 404
+
+
+# ── CARO 2020 checklist ──────────────────────────────────────────────────────
+
+
+def _caro(client, eid, co=CO_A):
+    res = client.get(f"/api/internal-audit/engagements/{eid}/caro" + q(co))
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _clause(items, clause_no):
+    return next(c for c in items if c["clause_no"] == clause_no)
+
+
+def test_caro_checklist_lists_all_21_clauses_unanswered(client, env):
+    e = _engagement(client)
+    res = _caro(client, e["id"])
+    assert res["engagement"]["id"] == e["id"]
+    items = res["clauses"]
+    expected = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi",
+                "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx", "xxi"]
+    assert [c["clause_no"] for c in items] == [f"3({n})" for n in expected]
+    assert all(c["response"] is None and c["response_id"] is None for c in items)
+    assert "public offer" in _clause(items, "3(x)")["matter"].lower()
+    assert "fraud" in _clause(items, "3(xi)")["matter"].lower()
+    assert not any("remuneration" in c["matter"].lower() for c in items)
+
+
+def test_caro_save_is_partial_upsert_by_signed_in_user(client, env, session_factory):
+    e = _engagement(client)
+    clause = _clause(_caro(client, e["id"])["clauses"], "3(vii)")
+    url = f"/api/internal-audit/engagements/{e['id']}/caro/{clause['clause_id']}" + q()
+
+    first = client.put(url, json={"response": "no"})
+    assert first.status_code == 200, first.text
+    assert first.json()["response"] == "no" and first.json()["updated_by"] == "auditor@example.com"
+
+    second = client.put(url, json={"explanation": "  GST arrears of 4.2L > 6 months  "}).json()
+    assert second["response"] == "no"
+    assert second["explanation"] == "GST arrears of 4.2L > 6 months"
+    assert second["response_id"] == first.json()["response_id"]
+
+    cleared = client.put(url, json={"response": None}).json()
+    assert cleared["response"] is None and cleared["explanation"] == "GST arrears of 4.2L > 6 months"
+
+    db = session_factory()
+    assert db.query(AuditCaroResponse).count() == 1
+    db.close()
+    item = _clause(_caro(client, e["id"])["clauses"], "3(vii)")
+    assert (item["response"], item["explanation"]) == (None, "GST arrears of 4.2L > 6 months")
+
+
+def test_caro_save_validation(client, env):
+    e = _engagement(client)
+    clause_id = _caro(client, e["id"])["clauses"][0]["clause_id"]
+    url = f"/api/internal-audit/engagements/{e['id']}/caro/{clause_id}" + q()
+    for bad in ("Yes", "maybe", "n/a", 1):
+        assert client.put(url, json={"response": bad}).status_code == 422, bad
+    assert client.put(f"/api/internal-audit/engagements/{e['id']}/caro/9999" + q(), json={"response": "yes"}).status_code == 404
+    assert client.put(f"/api/internal-audit/engagements/9999/caro/{clause_id}" + q(), json={"response": "yes"}).status_code == 404
+
+
+def test_caro_answers_are_per_engagement_and_company(client, env):
+    e1, e2 = _engagement(client), _engagement(client)
+    clause_id = _caro(client, e1["id"])["clauses"][0]["clause_id"]
+    client.put(f"/api/internal-audit/engagements/{e1['id']}/caro/{clause_id}" + q(), json={"response": "yes"})
+    assert _caro(client, e2["id"])["clauses"][0]["response"] is None
+
+    for co, status in ((CO_A2, 404), (CO_B, 403)):
+        assert client.get(f"/api/internal-audit/engagements/{e1['id']}/caro" + q(co)).status_code == status
+        res = client.put(f"/api/internal-audit/engagements/{e1['id']}/caro/{clause_id}" + q(co), json={"response": "no"})
+        assert res.status_code == status
+    assert _caro(client, e1["id"])["clauses"][0]["response"] == "yes"
+
+
+def test_caro_viewer_can_read_but_not_answer(client, env):
+    e = _engagement(client)
+    clause_id = _caro(client, e["id"])["clauses"][0]["clause_id"]
+    env.roles[WS_A] = "viewer"
+    assert client.get(f"/api/internal-audit/engagements/{e['id']}/caro" + q()).status_code == 200
+    res = client.put(f"/api/internal-audit/engagements/{e['id']}/caro/{clause_id}" + q(), json={"response": "yes"})
+    assert res.status_code == 403
+
+
+def test_deleting_engagement_removes_caro_answers(client, env, session_factory):
+    env.roles[WS_A] = "owner"
+    e = _engagement(client)
+    clause_id = _caro(client, e["id"])["clauses"][0]["clause_id"]
+    client.put(f"/api/internal-audit/engagements/{e['id']}/caro/{clause_id}" + q(), json={"response": "yes"})
+    assert client.delete(f"/api/internal-audit/engagements/{e['id']}" + q()).status_code == 204
+    db = session_factory()
+    assert db.query(AuditCaroResponse).count() == 0
+    assert db.query(AuditCaroClause).count() == 21
+    db.close()
+
+
+def test_caro_seed_is_idempotent_and_refreshes_wording(session_factory):
+    from app.seed.caro_2020_clauses import CLAUSES, seed_caro_clauses
+
+    db = session_factory()
+    seed_caro_clauses(db)
+    seed_caro_clauses(db)
+    assert db.query(AuditCaroClause).count() == len(CLAUSES) == 21
+    row = db.query(AuditCaroClause).filter_by(clause_no="3(x)").one()
+    original_id = row.id
+    row.matter = "Stale wording"
+    db.commit()
+    seed_caro_clauses(db)
+    db.refresh(row)
+    assert row.id == original_id and row.matter == CLAUSES[9]["matter"]
+    db.close()

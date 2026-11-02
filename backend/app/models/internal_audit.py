@@ -1,6 +1,19 @@
 """Internal Audit — audit universe, engagements and findings (IIA lifecycle)."""
 
-from sqlalchemy import BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -149,4 +162,34 @@ class AuditWorkpaperEvidence(Base):
     content_type = Column(String(100), nullable=True)
     uploaded_by = Column(String(255), nullable=True)
     notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditCaroClause(Base):
+    """CARO 2020 paragraph 3 reporting matters; reference data shared by every workspace."""
+
+    __tablename__ = "audit_caro_clauses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    clause_no = Column(String(16), nullable=False, unique=True)
+    matter = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    sort_order = Column(Integer, nullable=False)
+
+
+class AuditCaroResponse(Base):
+    """The auditor's answer to one CARO clause for one engagement."""
+
+    __tablename__ = "audit_caro_responses"
+    __table_args__ = (UniqueConstraint("engagement_id", "clause_id", name="uq_audit_caro_response"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    engagement_id = Column(Integer, ForeignKey("audit_engagements.id", ondelete="CASCADE"), nullable=False, index=True)
+    clause_id = Column(Integer, ForeignKey("audit_caro_clauses.id"), nullable=False)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    response = Column(String(8), nullable=True)
+    explanation = Column(Text, nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -249,6 +249,29 @@ export const workpapersApi = {
     request<void>(`/evidence/${evidenceId}`, companyId, { method: 'DELETE' }),
 };
 
+export type CaroAnswer = 'yes' | 'no' | 'na';
+
+export type CaroItem = {
+  clause_id: number;
+  clause_no: string;
+  matter: string;
+  description: string;
+  sort_order: number;
+  response_id: number | null;
+  response: CaroAnswer | null;
+  explanation: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
+export const caroApi = {
+  checklist: (companyId: string, engagementId: number) =>
+    request<{ engagement: Engagement; clauses: CaroItem[] }>(`/engagements/${engagementId}/caro`, companyId),
+  /** Only the fields present in `body` are changed. */
+  save: (companyId: string, engagementId: number, clauseId: number, body: { response?: CaroAnswer | null; explanation?: string }) =>
+    request<CaroItem>(`/engagements/${engagementId}/caro/${clauseId}`, companyId, { method: 'PUT', body: JSON.stringify(body) }),
+};
+
 export const followUpApi = {
   overdue: (companyId: string) => request<OverdueFinding[]>('/overdue-findings', companyId),
   history: (companyId: string, findingId: number) =>

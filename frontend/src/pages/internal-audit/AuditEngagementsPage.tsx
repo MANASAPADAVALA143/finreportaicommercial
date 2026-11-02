@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, FileText, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { BookOpen, ClipboardList, FileText, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import {
   ENGAGEMENT_STATUSES,
   RISK_OPTIONS,
@@ -310,6 +310,7 @@ export default function AuditEngagementsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         <Link to={`/internal-audit/engagements/${e.id}/workpapers`} aria-label="Workpapers" title="Workpapers" className="p-1 text-muted-foreground hover:text-blue-600 rounded"><BookOpen className="h-3.5 w-3.5" /></Link>
+                        <Link to={`/internal-audit/engagements/${e.id}/caro`} aria-label="CARO 2020 checklist" title="CARO 2020 checklist" className="p-1 text-muted-foreground hover:text-blue-600 rounded"><ClipboardList className="h-3.5 w-3.5" /></Link>
                         <button onClick={() => setReportFor(e)} aria-label="Download report" title="Download report PDF" className="p-1 text-muted-foreground hover:text-blue-600 rounded"><FileText className="h-3.5 w-3.5" /></button>
                         <button onClick={() => open(e)} aria-label="Edit" className="p-1 text-muted-foreground hover:text-foreground rounded"><Pencil className="h-3.5 w-3.5" /></button>
                         <button onClick={() => void remove(e)} aria-label="Delete" className="p-1 text-muted-foreground hover:text-red-600 rounded"><Trash2 className="h-3.5 w-3.5" /></button>
