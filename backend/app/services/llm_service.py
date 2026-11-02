@@ -119,3 +119,31 @@ def invoke(
             f"ANTHROPIC_API_KEY is invalid or expired: {e}"
         ) from e
     return response.content[0].text
+
+
+def chat(
+    messages: list[dict[str, str]],
+    *,
+    system: str | None = None,
+    max_tokens: int = 1000,
+    model_id: str | None = None,
+) -> str:
+    """Multi-turn variant of invoke(): `messages` alternate user/assistant and end with a user turn."""
+    key = _key()
+    if not key:
+        raise LLMNotConfiguredError(
+            "ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart the API server."
+        )
+    kwargs: dict = {"model": model_id or DEFAULT_CLAUDE_MODEL, "max_tokens": max_tokens, "messages": messages}
+    if system:
+        kwargs["system"] = system
+    try:
+        response = Anthropic(api_key=key).messages.create(**kwargs)
+    except RateLimitError as e:
+        raise LLMRateLimitError(
+            "AI provider rate limit reached (too many tokens or requests per minute). "
+            "Wait about one minute, then try again."
+        ) from e
+    except AuthenticationError as e:
+        raise LLMNotConfiguredError(f"ANTHROPIC_API_KEY is invalid or expired: {e}") from e
+    return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")

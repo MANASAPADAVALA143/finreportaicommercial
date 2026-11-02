@@ -136,7 +136,7 @@ async function send(path: string, companyId: string, init: RequestInit = {}): Pr
   return res;
 }
 
-async function request<T>(path: string, companyId: string, init: RequestInit = {}, root = '/api/internal-audit'): Promise<T> {
+export async function request<T>(path: string, companyId: string, init: RequestInit = {}, root = '/api/internal-audit'): Promise<T> {
   const res = await send(`${root}${path}`, companyId, init);
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
