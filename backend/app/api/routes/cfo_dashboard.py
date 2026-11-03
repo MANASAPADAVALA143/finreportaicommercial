@@ -35,7 +35,7 @@ TRIAL_BALANCE_PATH = "trial_balance.csv"
 
 @router.get("/dashboard")
 async def get_dashboard_data(
-    time_range: str = Query("month", enum=["week", "month", "quarter", "year"])
+    time_range: str = Query("month", json_schema_extra={"enum": ["week", "month", "quarter", "year"]})
 ):
     """
     Get comprehensive CFO dashboard data
@@ -135,7 +135,7 @@ async def get_dashboard_data(
 
 @router.post("/export")
 async def export_dashboard(
-    format: str = Query(..., enum=["pdf", "excel", "csv"]),
+    format: str = Query(..., json_schema_extra={"enum": ["pdf", "excel", "csv"]}),
     time_range: str = Query("month")
 ):
     """
@@ -481,8 +481,8 @@ async def get_ai_insights():
 
 @router.post("/forecast")
 async def generate_forecast(
-    period: str = Query("quarter", enum=["month", "quarter", "year"]),
-    type: str = Query("cash_flow", enum=["cash_flow", "revenue", "expenses"]),
+    period: str = Query("quarter", json_schema_extra={"enum": ["month", "quarter", "year"]}),
+    type: str = Query("cash_flow", json_schema_extra={"enum": ["cash_flow", "revenue", "expenses"]}),
     ctx: WorkspaceContext = Depends(validate_workspace),
     db: Session = Depends(get_db),
 ):
@@ -765,7 +765,7 @@ async def upload_financial_summary(file: UploadFile = File(...)):
 
 @router.post("/connect/accounting-software")
 async def connect_accounting_software(
-    platform: str = Query(..., enum=["quickbooks", "xero"]),
+    platform: str = Query(..., json_schema_extra={"enum": ["quickbooks", "xero"]}),
     access_token: str = Query(...),
     company_id: Optional[str] = Query(None),
     _admin: WorkspaceContext = Depends(platform_admin),
