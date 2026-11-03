@@ -6,14 +6,17 @@ import {
   Landmark, Lock, MessageSquare, Percent, Plug, Receipt, ShoppingCart,
   Shield, Sliders, Table, TrendingUp, Users, ArrowRight, Presentation,
   Banknote, ShieldCheck, ShieldX, Upload, Layers, ChevronLeft, ChevronRight,
-  AlertTriangle, Briefcase, Globe, History, FileSearch,
+  AlertTriangle, Briefcase, Globe, History, FileSearch, FileCheck,
 } from 'lucide-react';
 import { useSuite } from '../context/SuiteContext';
 import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { useMarket } from '../contexts/MarketContext';
 import { SuiteSwitcher } from './SuiteSwitcher';
-import { INDIA_NAV, UAE_NAV, FPA_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, TWO_MARKET_NAV, isSection, type NavEntry, type NavLeaf } from '../config/suiteNavigation';
+import {
+  INDIA_NAV, UAE_NAV, UAE_FINANCE_SUITE_NAV, UAE_SUITE_NAV, CFO_INTELLIGENCE_NAV, CFO_INTELLIGENCE_TWO_MARKET_NAV,
+  isSection, type NavEntry, type NavLeaf,
+} from '../config/suiteNavigation';
 import { withIndustryNavLabels } from '../config/industryNav';
 import { useIndustryConfig } from '../context/IndustryConfigContext';
 import { isUaeFinanceSuiteOnly, isUaeSuite, filterNavByRole } from '../config/productRole';
@@ -45,6 +48,7 @@ const ICONS: Record<string, React.ElementType> = {
   'calendar':        Calendar,
   'clock':           Clock,
   'coins':           Coins,
+  'file-check':      FileCheck,
   'file-search':     FileSearch,
   'file-text':       FileText,
   'git-merge':       GitMerge,
@@ -237,7 +241,7 @@ function NavItem({
   const { setMarket } = useMarket();
   const isActive =
     location.pathname === item.path ||
-    (item.path !== '/' && item.path.length > 1 && location.pathname.startsWith(item.path));
+    (item.path !== '/' && item.path.length > 1 && location.pathname.startsWith(`${item.path.replace(/\/$/, '')}/`));
 
   const Icon = item.icon ? ICONS[item.icon] : null;
   const tooltipLabel = item.badge ? `${item.label} (${item.badge})` : item.label;
@@ -351,21 +355,22 @@ export function SuiteSidebar() {
         ]
       : UAE_NAV;
 
-  // Unrestricted (full_access / admin) accounts see UAE and India as two
-  // permanent sidebar sections instead of a single suite chosen by the
-  // market toggle — no hidden context switch, both markets always visible.
+  // Unrestricted (full_access / admin) accounts see both markets in one hub
+  // instead of a single suite chosen by the market toggle — no hidden
+  // context switch, UAE and India entries always visible.
   const showBothMarkets = productRole === 'full_access';
+  const cfoIntelligence = showBothMarkets || (!uaeOnly && !uaeSuite && activeSuite === 'fpa');
 
   const baseNav = filterNavByRole(
     showBothMarkets
-      ? TWO_MARKET_NAV
+      ? CFO_INTELLIGENCE_TWO_MARKET_NAV
       : uaeOnly || uaeSuite
         ? uaeNav
         : activeSuite === 'india'
           ? INDIA_NAV
           : activeSuite === 'uae'
             ? uaeNav
-            : FPA_NAV,
+            : CFO_INTELLIGENCE_NAV,
     productRole,
     user?.role,
   );
@@ -391,7 +396,9 @@ export function SuiteSidebar() {
         >
           {!collapsed && (
             <div className="min-w-0 flex-1">
-              <div className="text-white font-semibold text-sm">Gnanova Finance OS</div>
+              <div className="text-white font-semibold text-sm">
+                {cfoIntelligence ? 'CFO Intelligence OS' : 'Gnanova Finance OS'}
+              </div>
               <div className="text-gray-500 text-xs mt-0.5">AI-native Finance Platform</div>
             </div>
           )}

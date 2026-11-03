@@ -285,3 +285,94 @@ export const FPA_NAV: NavEntry[] = [
     ],
   },
 ];
+
+// ── CFO Intelligence OS (FP&A suite and full_access accounts) ─────────────────
+// Every module grouped under one hub. Items a product role can't open are
+// dropped by filterNavByRole, so UAE-only sections disappear for India roles.
+export const CFO_INTELLIGENCE_NAV: NavEntry[] = [
+  {
+    section: 'Executive Hub',
+    items: [
+      { label: 'Executive Dashboard',  path: '/cfo-dashboard',           icon: 'layout-dashboard' },
+      { label: 'CFO Morning Brief',    path: '/cfo',                     icon: 'brain',        badge: 'AGENTIC' },
+      { label: 'Board Pack',           path: '/reports/board-pack',      icon: 'presentation', badge: 'AI' },
+      { label: 'Entity Health',        path: '/cfo/entity-health',       icon: 'activity' },
+    ],
+  },
+  {
+    section: 'Cash & Working Capital',
+    items: [
+      { label: 'Cash Flow & Calendar', path: '/cfo/payment-calendar',    icon: 'banknote' },
+      { label: 'AR & Collections',     path: '/cfo/ar-collections',      icon: 'coins' },
+      { label: 'Covenant Tracker',     path: '/cfo/covenant-tracker',    icon: 'shield' },
+    ],
+  },
+  {
+    section: 'FP&A & Forecasting',
+    items: [
+      { label: 'Budget',               path: '/fpa/budget',              icon: 'calculator' },
+      { label: 'Forecasting',          path: '/fpa/forecast',            icon: 'trending-up' },
+      { label: 'Scenario Engine',      path: '/fpa/scenario',            icon: 'sliders' },
+      { label: 'Monte Carlo',          path: '/fpa/monte-carlo',         icon: 'percent' },
+      { label: 'Sensitivity Analysis', path: '/fpa/sensitivity',         icon: 'activity' },
+      { label: 'Variance Analysis',    path: '/fpa/variance',            icon: 'bar-chart-2' },
+      { label: 'PVM Analysis',         path: '/fpa/pvm',                 icon: 'layers' },
+      { label: 'KPI Monitoring',       path: '/fpa/kpi',                 icon: 'activity' },
+      { label: 'Headcount Planning',   path: '/fpa/headcount',           icon: 'users' },
+    ],
+  },
+  {
+    section: 'Financial Reporting',
+    items: [
+      { label: 'Management Accounts',   path: '/fpa/reports',             icon: 'bar-chart-2' },
+      { label: 'Three Statement Model', path: '/fpa/three-statement',     icon: 'file-text' },
+      { label: 'TB Variance',           path: '/tb-variance',             icon: 'table' },
+      { label: 'Close Status',          path: '/accounting/close-status', icon: 'lock',      badge: 'NEW' },
+      { label: 'IFRS Statement Gen',    path: '/ifrs-statement',          icon: 'file-text', badge: 'IFRS' },
+      { label: 'Group Consolidation',   path: '/consolidation',           icon: 'layers',    badge: 'Group' },
+    ],
+  },
+  {
+    section: 'Risk & Controls',
+    items: [
+      { label: 'Audit Intelligence',   path: '/audit',                   icon: 'shield',       badge: 'AI' },
+      { label: 'Command Center',       path: '/audit/command-center',    icon: 'shield-check', badge: 'AI' },
+      { label: 'R2R Pattern Engine',   path: '/r2r/pattern',             icon: 'git-merge',    badge: 'AI' },
+    ],
+  },
+  INTERNAL_AUDIT_NAV,
+  TECHNICAL_ACCOUNTING_NAV,
+  {
+    section: 'UAE Finance & Tax',
+    items: [
+      { label: 'GulfTax Dashboard',    path: '/gulftax',                 icon: 'shield' },
+      { label: 'VAT Return',           path: '/gulftax/vat-return',      icon: 'file-text' },
+      { label: 'Corporate Tax',        path: '/gulftax/corporate-tax',   icon: 'building' },
+      { label: 'E-Invoicing',          path: '/gulftax/e-invoicing',     icon: 'receipt',   badge: 'Peppol' },
+      { label: 'Tax Compliance',       path: '/gulftax/tax-compliance',  icon: 'file-check' },
+    ],
+  },
+  {
+    section: 'Transactions',
+    items: [
+      { label: 'AP InvoiceFlow',       path: '/ap-invoices',             icon: 'shopping-cart', badge: 'AP', pinMarket: 'uae' },
+      { label: 'AR & Sales',           path: '/uae-full/ar',             icon: 'receipt' },
+      { label: 'Journal Entries',      path: '/uae-full/journals',       icon: 'file-text' },
+      { label: 'Bank Reconciliation',  path: '/uae-full/bank-recon',     icon: 'landmark' },
+      { label: 'Period-End Close',     path: '/uae-full/period-close',   icon: 'lock' },
+    ],
+  },
+  {
+    section: 'Data Sources',
+    items: [
+      { label: 'India Suite →',        path: '/india-full',              icon: 'arrow-right' },
+      { label: 'UAE Suite →',          path: '/uae-full',                icon: 'arrow-right' },
+    ],
+  },
+];
+
+// full_access accounts work in both markets, so they also keep the India entries.
+export const CFO_INTELLIGENCE_TWO_MARKET_NAV: NavEntry[] = [
+  ...CFO_INTELLIGENCE_NAV,
+  ...TWO_MARKET_NAV.filter((e) => isSection(e) && e.section === '🇮🇳 India'),
+];
