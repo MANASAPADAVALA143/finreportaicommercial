@@ -12,7 +12,8 @@ export type TaModule = {
   path: string;
   icon: LucideIcon;
   description: string;
-  status: TaModuleStatus;
+  /** Omitted once a module is live. */
+  status?: TaModuleStatus;
   /** Modules elsewhere in FinReportAI that already cover part of this area. */
   related?: { label: string; path: string }[];
 };
@@ -73,7 +74,6 @@ export const TA_MODULES: TaModule[] = [
     path: `${TA_ROOT}/memos`,
     icon: FileText,
     description: 'Generate technical accounting position papers and memos.',
-    status: 'Coming Soon',
   },
 ];
 
@@ -93,7 +93,9 @@ export function ModulePlaceholder({ moduleKey }: { moduleKey: string }) {
       <Icon className="h-12 w-12 text-muted-foreground/40" aria-hidden />
       <div className="flex items-center gap-2">
         <h2 className="text-xl font-semibold text-foreground">{mod.label}</h2>
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${TA_STATUS_BADGE[mod.status]}`}>{mod.status}</span>
+        {mod.status && (
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${TA_STATUS_BADGE[mod.status]}`}>{mod.status}</span>
+        )}
       </div>
       <p className="max-w-lg text-sm text-foreground">{mod.description}</p>
       <p className="text-sm text-muted-foreground">This module is under development. Check back soon.</p>

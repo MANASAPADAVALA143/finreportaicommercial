@@ -52,7 +52,7 @@ export const TECHNICAL_ACCOUNTING_NAV: NavSection = {
     { label: 'Revenue Recognition',     path: '/technical-accounting/revenue',     icon: 'trending-up',    badge: 'Soon' },
     { label: 'Lease Accounting',        path: '/technical-accounting/leases',      icon: 'building-2',     badge: 'Soon' },
     { label: 'Disclosure Intelligence', path: '/technical-accounting/disclosures', icon: 'file-search',    badge: 'Soon' },
-    { label: 'Accounting Memos',        path: '/technical-accounting/memos',       icon: 'file-text',      badge: 'Soon' },
+    { label: 'Accounting Memos',        path: '/technical-accounting/memos',       icon: 'file-text' },
   ],
 };
 

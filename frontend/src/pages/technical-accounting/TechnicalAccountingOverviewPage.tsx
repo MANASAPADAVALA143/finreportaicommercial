@@ -24,7 +24,9 @@ export default function TechnicalAccountingOverviewPage() {
               <div className="h-9 w-9 rounded-lg bg-blue-600/10 flex items-center justify-center">
                 <Icon className="h-4 w-4 text-blue-600" />
               </div>
-              <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${TA_STATUS_BADGE[status]}`}>{status}</span>
+              {status && (
+                <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${TA_STATUS_BADGE[status]}`}>{status}</span>
+              )}
             </div>
             <p className="font-semibold text-foreground">{label}</p>
             <p className="mt-1 text-sm text-muted-foreground">{description}</p>
