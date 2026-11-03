@@ -384,7 +384,7 @@ const TechnicalAccountingIfrsPage = safeLazy(() => import('./pages/technical-acc
 const TechnicalAccountingRevenuePage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingRevenuePage'));
 const TechnicalAccountingLeasesPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingLeasesPage'));
 const TechnicalAccountingDisclosuresPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingDisclosuresPage'));
-const TechnicalAccountingMemosPage = safeLazy(() => import('./pages/technical-accounting/TechnicalAccountingMemosPage'));
+const AccountingMemoPage = safeLazy(() => import('./pages/technical-accounting/AccountingMemoPage'));
 const AuditBaselinePage = safeLazy(() => import('./pages/internal-audit/BaselinePage'));
 const JEReviewPage = safeLazy(() => import('./pages/internal-audit/JEReviewPage'));
 // CA Firm Tools
@@ -849,7 +849,7 @@ function App() {
                   <Route path="revenue" element={<TechnicalAccountingRevenuePage />} />
                   <Route path="leases" element={<TechnicalAccountingLeasesPage />} />
                   <Route path="disclosures" element={<TechnicalAccountingDisclosuresPage />} />
-                  <Route path="memos" element={<TechnicalAccountingMemosPage />} />
+                  <Route path="memos" element={<AccountingMemoPage />} />
                 </Route>
                 <Route path="/ifrs-statement"          element={<IFRSStatementPage />} />
                 <Route path="/ifrs-statement/onboarding" element={<CompanyOnboarding />} />
