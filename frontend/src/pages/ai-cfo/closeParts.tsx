@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, FileSpreadsheet, FileText, Lock, XCircle } from 'lucide-react';
+import {
+  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Download, Eye, FileSpreadsheet, FileText, Lock, X, XCircle,
+} from 'lucide-react';
 import {
   aiCloseApi, refLabel, type CloseRun, type CloseTask, type Deliverable, type JournalProposal, type Kpi, type ProposalStatus,
+  type ReportView,
 } from '../../services/aiClose.service';
 import { errorText } from '../internal-audit/shared';
 import { Card, GOLD, NAVY, SeverityBadge, StatusPill, money } from './parts';
@@ -161,9 +164,21 @@ export function AgentCard({ task, companyId, runId }: { task: CloseTask; company
 
 export function Deliverables({ run, companyId, onError }: { run: CloseRun; companyId: string; onError: (m: string) => void }) {
   const [busy, setBusy] = useState('');
+  const [viewing, setViewing] = useState<ReportView | null>(null);
   const approval = run.status === 'closed'
     ? `Approved by ${run.close_approved_by} on ${fmtTime(run.close_approved_at)}`
     : 'Draft · awaiting close approval';
+
+  const view = async (d: Deliverable) => {
+    setBusy(`${d.key}.view`);
+    try {
+      setViewing(await aiCloseApi.view(companyId, run.id, d.key));
+    } catch (e) {
+      onError(errorText(e, 'Could not open the report'));
+    } finally {
+      setBusy('');
+    }
+  };
 
   const get = async (d: Deliverable, fmt: 'xlsx' | 'pdf') => {
     setBusy(`${d.key}.${fmt}`);
@@ -188,7 +203,14 @@ export function Deliverables({ run, companyId, onError }: { run: CloseRun; compa
           </div>
           <div className="flex items-center gap-2">
             {d.status !== 'ready' && <StatusPill value={d.status} />}
-            {(['xlsx', 'pdf'] as const).map((fmt) => (
+            <button
+              disabled={d.status !== 'ready' || busy !== ''}
+              onClick={() => void view(d)}
+              className="flex items-center gap-1 rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <Eye className="h-3.5 w-3.5" /> {busy === `${d.key}.view` ? '…' : 'View'}
+            </button>
+            {d.formats.map((fmt) => (
               <button
                 key={fmt}
                 disabled={d.status !== 'ready' || busy !== ''}
@@ -203,23 +225,83 @@ export function Deliverables({ run, companyId, onError }: { run: CloseRun; compa
           </div>
         </div>
       ))}
+      {viewing && <ReportViewer report={viewing} onClose={() => setViewing(null)} />}
+    </div>
+  );
+}
+
+function ReportViewer({ report, onClose }: { report: ReportView; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-6" role="dialog" aria-modal="true" aria-label={report.title}>
+      <div className="w-full max-w-6xl rounded-xl bg-white shadow-xl">
+        <header className="flex items-center justify-between rounded-t-xl px-5 py-3" style={{ background: NAVY }}>
+          <h3 className="text-sm font-semibold text-white">{report.title}</h3>
+          <button onClick={onClose} aria-label="Close report" className="rounded p-1 text-slate-200 hover:bg-white/10"><X className="h-4 w-4" /></button>
+        </header>
+        <div className="space-y-5 p-5 text-xs">
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-3">
+            {report.meta.map(([k, v]) => (
+              <div key={k} className="flex gap-2"><dt className="w-32 shrink-0 text-slate-500">{k}</dt><dd className="text-slate-800">{v}</dd></div>
+            ))}
+          </dl>
+          {report.narrative.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+              {report.narrative.map((p, i) => <p key={i}>{p}</p>)}
+            </div>
+          )}
+          <dl className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            {report.summary.map(([k, v]) => (
+              <div key={k} className="rounded border border-slate-200 px-2 py-1.5"><dt className="text-slate-500">{k}</dt><dd className="font-semibold text-slate-900">{v ?? '—'}</dd></div>
+            ))}
+          </dl>
+          {report.sections.map((s) => (
+            <section key={s.title}>
+              <h4 className="mb-1 text-sm font-semibold text-slate-900">{s.title}</h4>
+              {s.rows.length === 0 ? <p className="text-slate-500">None.</p> : (
+                <div className="max-h-72 overflow-auto rounded border border-slate-200">
+                  <table className="w-full text-left">
+                    <thead className="sticky top-0 bg-slate-100 text-slate-600"><tr>{s.columns.map((c) => <th key={c} className="px-2 py-1 font-medium">{c}</th>)}</tr></thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {s.rows.slice(0, 200).map((row, i) => <tr key={i}>{row.map((v, j) => <td key={j} className="px-2 py-1 align-top text-slate-700">{v}</td>)}</tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {s.rows.length > 200 && <p className="mt-1 text-slate-500">Showing 200 of {s.rows.length} rows; download Excel for all.</p>}
+            </section>
+          ))}
+          {report.notes.map((n, i) => <p key={i} className="text-slate-500">{n}</p>)}
+        </div>
+      </div>
     </div>
   );
 }
 
 export function ExceptionsTable({ run, currency }: { run: CloseRun; currency: string }) {
   const [agent, setAgent] = useState('');
+  const [status, setStatus] = useState('open');
   const agents = [...new Set(run.exceptions.map((e) => e.agent))];
-  const rows = run.exceptions.filter((e) => !agent || e.agent === agent);
+  const rows = run.exceptions.filter((e) => (!agent || e.agent === agent) && (!status || e.status === status));
   const names = Object.fromEntries(run.tasks.map((t) => [t.agent, t.agent_name]));
+  const group = run.scope === 'group';
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-        <span>{run.exceptions_total} unique exception(s){run.exceptions_total > run.exceptions.length ? `, showing first ${run.exceptions.length}` : ''}</span>
-        <select value={agent} onChange={(e) => setAgent(e.target.value)} aria-label="Filter by agent" className="rounded border border-slate-300 px-2 py-1">
-          <option value="">All agents</option>
-          {agents.map((a) => <option key={a} value={a}>{names[a] ?? a}</option>)}
-        </select>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+        <span>
+          {run.exceptions_total} unique exception(s), {run.exceptions_open} unresolved
+          {run.exceptions_total > run.exceptions.length ? `; showing first ${run.exceptions.length}` : ''}
+        </span>
+        <div className="flex gap-2">
+          <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status" className="rounded border border-slate-300 px-2 py-1">
+            <option value="open">Unresolved</option>
+            <option value="resolved">Resolved by approved journal</option>
+            <option value="">All</option>
+          </select>
+          <select value={agent} onChange={(e) => setAgent(e.target.value)} aria-label="Filter by agent" className="rounded border border-slate-300 px-2 py-1">
+            <option value="">All agents</option>
+            {agents.map((a) => <option key={a} value={a}>{names[a] ?? a}</option>)}
+          </select>
+        </div>
       </div>
       {rows.length === 0 ? (
         <p className="text-sm text-slate-500">No exceptions.</p>
@@ -227,13 +309,21 @@ export function ExceptionsTable({ run, currency }: { run: CloseRun; currency: st
         <div className="max-h-96 overflow-auto">
           <table className="w-full text-left text-xs">
             <thead className="sticky top-0 bg-white text-slate-500">
-              <tr><th className="py-1.5 pr-2">Severity</th><th className="pr-2">Exception</th><th className="pr-2">Agent</th><th className="pr-2 text-right">Amount</th><th>Source</th></tr>
+              <tr>
+                <th className="py-1.5 pr-2">Severity</th><th className="pr-2">Exception</th>{group && <th className="pr-2">Entity</th>}
+                <th className="pr-2">Agent</th><th className="pr-2 text-right">Amount</th><th>Source</th>
+              </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {rows.map((e) => (
                 <tr key={e.id} className="align-top">
                   <td className="py-1.5 pr-2"><SeverityBadge severity={e.severity} /></td>
-                  <td className="pr-2"><p className="font-medium text-slate-800">{e.title}</p>{e.detail && <p className="text-slate-500">{e.detail}</p>}</td>
+                  <td className="pr-2">
+                    <p className="font-medium text-slate-800">{e.title}</p>
+                    {e.detail && <p className="text-slate-500">{e.detail}</p>}
+                    {e.status !== 'open' && <StatusPill value={e.status} />}
+                  </td>
+                  {group && <td className="pr-2 text-slate-600">{e.entity_name}</td>}
                   <td className="pr-2 text-slate-600">{names[e.agent] ?? e.agent}</td>
                   <td className="pr-2 text-right font-mono">{e.amount != null ? money(e.amount, currency) : '—'}</td>
                   <td className="text-[11px] text-slate-500">{(e.source_refs ?? []).map(refLabel).join(' · ')}</td>
@@ -278,7 +368,7 @@ export function JournalApprovalCentre({
               <p className="text-sm font-semibold text-slate-900">{p.title}</p>
               <p className="text-xs text-slate-600">{p.rationale}</p>
               <p className="mt-0.5 text-[11px] text-slate-500">
-                {p.entry_number} · {p.entry_date} · prepared by {p.agent_name} · source: {(p.source_refs ?? []).map(refLabel).join(', ')}
+                {p.entity_name ? `${p.entity_name} · ` : ''}{p.entry_number} · {p.entry_date} · prepared by {p.agent_name} · source: {(p.source_refs ?? []).map(refLabel).join(', ')}
               </p>
             </div>
             <StatusPill value={p.status} />
@@ -310,7 +400,7 @@ export function JournalApprovalCentre({
           <tbody className="divide-y divide-slate-100">
             {decided.map((p) => (
               <tr key={p.id}>
-                <td className="py-1.5 pr-2">{p.entry_number} · {p.title}</td>
+                <td className="py-1.5 pr-2">{p.entry_number} · {p.title}{p.entity_name ? <span className="block text-slate-500">{p.entity_name}</span> : null}</td>
                 <td className="pr-2"><StatusPill value={p.status} /> <span className="text-slate-500">ledger: {p.journal_status}</span></td>
                 <td className="pr-2 text-slate-600">{p.decided_by} · {fmtTime(p.decided_at)}</td>
                 <td className="pr-2 text-slate-600">{p.decision_note ?? '—'}</td>
@@ -344,6 +434,151 @@ function JournalLines({ p, currency }: { p: JournalProposal; currency: string })
         </tr>
       </tbody>
     </table>
+  );
+}
+
+const RISK_TONE: Record<string, string> = {
+  high: 'bg-red-50 text-red-700 border-red-200',
+  medium: 'bg-amber-50 text-amber-800 border-amber-200',
+  low: 'bg-green-50 text-green-700 border-green-200',
+};
+
+function Delta({ now, prior, currency }: { now: number; prior: number; currency: string }) {
+  const change = now - prior;
+  return (
+    <span className={`text-xs ${change >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+      {change >= 0 ? '▲' : '▼'} {money(Math.abs(change), currency)} vs prior month
+    </span>
+  );
+}
+
+export function CfoSummaryPanel({ run, companyId, currency, onError }: { run: CloseRun; companyId: string; currency: string; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const s = run.cfo_summary;
+  if (!s) return null;
+  const p = s.performance;
+
+  const download = async () => {
+    setBusy(true);
+    try {
+      await aiCloseApi.download(companyId, run, 'cfo_summary', 'pdf');
+    } catch (e) {
+      onError(errorText(e, 'Download failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-5 py-3" style={{ background: NAVY }}>
+        <div>
+          <h3 className="text-sm font-semibold text-white">CFO Executive Summary</h3>
+          <p className="text-xs text-slate-300">{s.entity} · {s.period}</p>
+        </div>
+        <button onClick={() => void download()} disabled={busy}
+          className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-slate-900 disabled:opacity-50" style={{ background: GOLD }}>
+          <FileText className="h-3.5 w-3.5" /> {busy ? 'Preparing…' : 'Download PDF'}
+        </button>
+      </header>
+      <div className="space-y-5 p-5">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            {s.narrative.source === 'ai' ? 'Executive commentary · AI-drafted, every figure verified against agent outputs' : 'Executive commentary · computed from agent outputs'}
+          </p>
+          {s.narrative.text.split('\n').filter(Boolean).map((para, i) => <p key={i} className="mb-2 text-sm leading-relaxed text-slate-800">{para}</p>)}
+          {s.narrative.note && <p className="text-[11px] text-slate-500">{s.narrative.note}</p>}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Revenue {run.scope === 'group' ? '(sum of entities)' : ''}</p>
+            <p className="text-lg font-semibold text-slate-900">{money(p.revenue, currency)}</p>
+            <Delta now={p.revenue} prior={p.prior_revenue} currency={currency} />
+          </div>
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Profit</p>
+            <p className="text-lg font-semibold text-slate-900">{money(p.profit, currency)}</p>
+            <Delta now={p.profit} prior={p.prior_profit} currency={currency} />
+          </div>
+          {s.group ? (
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Consolidated revenue</p>
+              <p className="text-lg font-semibold text-slate-900">{money(s.group.consolidated_revenue, currency)}</p>
+              <span className="text-xs text-slate-500">after {money(s.group.eliminated_revenue, currency)} intercompany eliminated</span>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Open exceptions</p>
+              <p className="text-lg font-semibold text-slate-900">{s.headline.open_exceptions}</p>
+              <span className="text-xs text-slate-500">of {s.headline.exceptions_identified} identified</span>
+            </div>
+          )}
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Decisions required</p>
+            <p className="text-lg font-semibold text-slate-900">{s.headline.pending_approvals} journal(s)</p>
+            <span className="text-xs text-slate-500">{money(s.headline.pending_approval_value, currency)} awaiting approval</span>
+          </div>
+        </div>
+
+        {s.subsidiary_comparison && s.subsidiary_comparison.length > 0 && (
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Subsidiary comparison</p>
+            <table className="w-full text-left text-xs">
+              <thead className="text-slate-500"><tr><th className="py-1">Entity</th><th className="text-right">Revenue</th><th className="text-right">Net profit</th><th className="text-right">Margin</th><th className="text-right">Share of revenue</th><th className="text-right">Cash</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">
+                {s.subsidiary_comparison.map((c) => (
+                  <tr key={c.entity}>
+                    <td className="py-1.5 font-medium text-slate-800">{c.entity}</td>
+                    <td className="text-right font-mono">{money(c.revenue, currency)}</td>
+                    <td className="text-right font-mono">{money(c.net_profit, currency)}</td>
+                    <td className="text-right">{c.net_margin_pct != null ? `${c.net_margin_pct}%` : '—'}</td>
+                    <td className="text-right">{c.share_of_group_revenue_pct != null ? `${c.share_of_group_revenue_pct}%` : '—'}</td>
+                    <td className="text-right font-mono">{money(c.cash, currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Financial risks</p>
+            <ul className="space-y-1.5 text-xs">
+              {s.risks.map((r) => (
+                <li key={r.area} className="flex items-start gap-2">
+                  <span className={`shrink-0 rounded border px-1.5 py-0.5 font-semibold uppercase ${RISK_TONE[r.level]}`}>{r.level}</span>
+                  <span><span className="font-medium text-slate-800">{r.area}:</span> <span className="text-slate-600">{r.detail}</span></span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Root causes and actions</p>
+            <ul className="space-y-1.5 text-xs">
+              {s.root_causes.slice(0, 6).map((c) => (
+                <li key={c.category}>
+                  <span className="font-medium text-slate-800">{c.cause}</span> <span className="text-slate-500">({c.count})</span>
+                  <span className="block text-slate-600">{c.action}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Largest movements vs {p.prior_period}</p>
+            <ul className="space-y-1 text-xs">
+              {s.key_movements.map((m) => (
+                <li key={m.account} className="flex justify-between gap-2">
+                  <span className="truncate text-slate-700">{m.account}</span>
+                  <span className={`font-mono ${m.change >= 0 ? 'text-slate-800' : 'text-slate-500'}`}>{m.change >= 0 ? '+' : ''}{money(m.change, currency)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 

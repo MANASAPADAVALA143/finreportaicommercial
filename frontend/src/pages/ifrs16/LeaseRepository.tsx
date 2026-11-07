@@ -75,7 +75,7 @@ export default function LeaseRepository() {
     try {
       const period = format(new Date(), 'yyyy-MM-dd');
       const res = await postMonthlyJE(lease.id, period, activeCompanyId);
-      toast.success(`3 journal entries posted for ${res.lease_name}`, { duration: 5000 });
+      toast.success(`${res.je_ids.length} journal entries for ${res.lease_name} sent for approval`, { duration: 5000 });
       void load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'JE posting failed');
@@ -90,7 +90,7 @@ export default function LeaseRepository() {
     try {
       const period = format(new Date(), 'yyyy-MM-dd');
       const res = await postAllMonthlyJEs(period, activeCompanyId);
-      toast.success(`Posted JEs for ${res.successful} leases (${res.failed} failed)`);
+      toast.success(`Journals for ${res.successful} leases sent for approval (${res.failed} failed)`);
       void load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Bulk posting failed');

@@ -14,7 +14,9 @@ const ACCRUAL_TYPES = ['rent', 'salary', 'utility', 'professional_fee', 'eosb', 
 const STATUS_STYLE: Record<string, string> = {
   suggested: 'bg-amber-900/40 text-amber-400 border-amber-700',
   approved:  'bg-blue-900/40 text-blue-400 border-blue-700',
+  pending_approval: 'bg-blue-900/40 text-blue-400 border-blue-700',
   posted:    'bg-green-900/40 text-green-400 border-green-700',
+  rejected:  'bg-red-900/40 text-red-400 border-red-700',
   reversed:  'bg-gray-700 text-gray-400 border-gray-600',
 };
 
@@ -97,7 +99,7 @@ export default function Accruals() {
     setPosting(id); setError('');
     try {
       await svc.postAccrualRoute(id);
-      setMsg('Accrual posted — GL journal entry created + reversal scheduled');
+      setMsg('Accrual journal sent for approval — it posts when a finance manager approves it in Journal Entries; reversal scheduled');
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

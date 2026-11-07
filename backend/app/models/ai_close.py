@@ -1,6 +1,8 @@
 """Multi-agent month-end close — runs, agent tasks, de-duplicated exceptions, journal proposals.
 
-A run belongs to one workspace + company (uae_company_profiles.id) + month. Agent outputs
+A run belongs to one workspace + company (uae_company_profiles.id) + month. A group run is
+anchored on the company it was started from and covers the companies in entity_ids; each
+exception and journal proposal records the entity it belongs to. Agent outputs
 are validated snapshots of deterministic service results. Journal proposals point at real
 uae_journal_entries rows created with status 'pending_approval'; they post only when a
 manager approves them.
@@ -19,6 +21,8 @@ class AiCloseRun(Base):
     workspace_id = Column(String(50), nullable=False, index=True)
     company_id = Column(String(50), nullable=False, index=True)
     period = Column(String(7), nullable=False)
+    scope = Column(String(10), nullable=True)  # entity | group (null = entity)
+    entity_ids = Column(JSON, nullable=True)
     agents = Column(JSON, nullable=False)
     status = Column(String(32), nullable=False, default="queued")
     requested_by = Column(String(255), nullable=True)
@@ -70,6 +74,7 @@ class AiCloseException(Base):
     workspace_id = Column(String(50), nullable=False, index=True)
     company_id = Column(String(50), nullable=False, index=True)
     agent = Column(String(40), nullable=False)
+    entity_id = Column(String(50), nullable=True)
     fingerprint = Column(String(200), nullable=False)
     category = Column(String(40), nullable=False)
     severity = Column(String(16), nullable=False)

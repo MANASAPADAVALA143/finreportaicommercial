@@ -10,10 +10,27 @@ from sqlalchemy.orm import Session
 
 from app.services.ai_cfo.ledger import LedgerScope
 
+MATERIALITY_FLOOR = 5000.0
+
 
 def period_bounds(period: str) -> tuple[date, date]:
     year, month = int(period[:4]), int(period[5:7])
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
+
+
+def money(v: Any) -> float:
+    return round(float(v or 0), 2)
+
+
+def severity(amount: float, high_at: float = MATERIALITY_FLOOR) -> str:
+    return "high" if abs(amount) >= high_at else "medium"
+
+
+@dataclass
+class Entity:
+    id: str
+    name: str
+    currency: str = "AED"
 
 
 @dataclass
@@ -25,6 +42,8 @@ class CloseContext:
     run_id: int
     upstream: dict[str, dict[str, Any]] = field(default_factory=dict)
     currency: str = "AED"
+    entities: list[Entity] = field(default_factory=list)
+    scope_kind: str = "entity"
 
     @property
     def scope(self) -> LedgerScope:
@@ -56,6 +75,7 @@ class ExceptionItem:
     detail: str
     amount: float | None = None
     refs: list[dict[str, Any]] = field(default_factory=list)
+    entity_id: str | None = None
 
 
 @dataclass
@@ -66,6 +86,8 @@ class JournalDraft:
     entry_date: date
     lines: list[dict[str, Any]]
     refs: list[dict[str, Any]] = field(default_factory=list)
+    entity_id: str | None = None
+    reference: str | None = None
 
     @property
     def amount(self) -> float:

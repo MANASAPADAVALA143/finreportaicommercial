@@ -11,7 +11,7 @@ from statistics import mean
 from typing import Any, Callable
 
 from app.models.ai_close import AiCloseJournalProposal, AiCloseTask
-from app.models.company_setup import AccountingPeriod
+from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.uae_accounting_full import (
     UAEAccount,
     UAEBankAccount,
@@ -23,25 +23,26 @@ from app.models.uae_accounting_full import (
 )
 from app.services.ai_cfo import ledger
 from app.services.ai_cfo.budget import budget_by_account
-from app.services.ai_close.context import AgentOutcome, Check, CloseContext, ExceptionItem, JournalDraft, period_bounds
+from app.services.ai_close.context import (
+    MATERIALITY_FLOOR,
+    AgentOutcome,
+    Check,
+    CloseContext,
+    ExceptionItem,
+    JournalDraft,
+    period_bounds,
+)
+from app.services.ai_close.context import money as _f
+from app.services.ai_close.context import severity as _sev
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.ar_customer_risk_service import compute_customer_risk
 from app.services.uae_bank_recon_service import run_reconciliation
 
-MATERIALITY_FLOOR = 5000.0
 _CHARGE_RE = re.compile(r"\b(charge|charges|fee|fees|commission|swift)\b", re.I)
 _INTEREST_RE = re.compile(r"\b(interest|profit credit|profit share)\b", re.I)
 BANK_CHARGES = ("7160", "Bank Charges")
 INTEREST_INCOME = ("6021", "Interest Income")
 AR_CONTROL = "1100"
-
-
-def _f(v: Any) -> float:
-    return round(float(v or 0), 2)
-
-
-def _sev(amount: float, high_at: float = MATERIALITY_FLOOR) -> str:
-    return "high" if abs(amount) >= high_at else "medium"
 
 
 # ── Bank reconciliation ──────────────────────────────────────────────────────
@@ -354,7 +355,14 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
         limitations.append("No FP&A budget uploaded for this company and fiscal year; variance analysis skipped.")
     if not ar:
         limitations.append("Receivables ageing not available; the cash forecast has no collections.")
-    limitations.append("Cash outflows use the average monthly expense; supplier payment schedules (AP) are not included yet.")
+    ap_due = (ctx.upstream.get("ap_processing") or {}).get("due_schedule")
+    if ap_due:
+        limitations.append(
+            "Cash outflows use the average monthly expense run-rate. Supplier invoices falling due (from AP) are shown "
+            f"for reference and not added, to avoid double counting: {ap_due['0_30']:,.2f} / {ap_due['31_60']:,.2f} / "
+            f"{ap_due['61_90']:,.2f} in the next 30/60/90 days.")
+    else:
+        limitations.append("Cash outflows use the average monthly expense; supplier payment schedules (AP) were not available.")
 
     checks = [Check("pl_totals_tie", abs(revenue - sum(m["net"] for m in current.values() if m["account_type"] == "Income")) < 0.01,
                     "Revenue equals the sum of income accounts for the period.", blocking=True)]
@@ -370,6 +378,7 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
                                    for p, r, e in zip(prior_periods, prior_rev, prior_exp)],
             "variance": variance, "materiality": materiality, "opening_cash": cash,
             "monthly_cost_assumption": monthly_cost, "cash_forecast": scenarios, "limitations": limitations,
+            "ap_due_schedule": ap_due,
             "accounts": sorted(current.values(), key=lambda m: m["account_code"] or ""),
         },
         checks=checks, exceptions=exceptions,
@@ -381,10 +390,11 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
 
 CHECKLIST = [
     ("bank_reconciled", "Bank accounts reconciled", "bank_reconciliation"),
-    ("ar_reviewed", "Receivables aged and control account reconciled", "ar_intelligence"),
-    ("budget_reviewed", "Budget variance and cash forecast prepared", "fpa"),
     ("ap_reviewed", "Payables processed and matched", "ap_processing"),
+    ("ar_reviewed", "Receivables aged and control account reconciled", "ar_intelligence"),
     ("ifrs_checks", "IFRS accounting checks completed", "ifrs"),
+    ("budget_reviewed", "Budget variance and cash forecast prepared", "fpa"),
+    ("consolidated", "Group consolidated and intercompany agreed", "consolidation"),
     ("ledger_balanced", "Posted journals balance for the period", None),
     ("journals_approved", "No other journals awaiting approval in the period", None),
     ("proposals_decided", "Agent-proposed journals decided", None),
@@ -392,12 +402,60 @@ CHECKLIST = [
 ]
 
 
-def evaluate_checklist(db, run_id: int, workspace_id: str, company_id: str, period: str) -> dict[str, Any]:
+def evaluate_checklist(db, run_id: int, workspace_id: str, company_ids: str | list[str], period: str,
+                       scope_kind: str = "entity") -> dict[str, Any]:
+    """Checklist across every entity in the run: an item is done only when it is done for all of them."""
+    ids = [company_ids] if isinstance(company_ids, str) else list(company_ids)
     tasks = {t.agent: t for t in db.query(AiCloseTask).filter(AiCloseTask.run_id == run_id)}
     start, end = period_bounds(period)
+    names = {p.id: p.company_name for p in db.query(UaeCompanyProfile).filter(UaeCompanyProfile.id.in_(ids))}
+
+    def per_entity(fn) -> tuple[str, str]:
+        results = [(cid, *fn(cid)) for cid in ids]
+        status = "done" if all(ok for _, ok, _ in results) else "open"
+        if len(ids) == 1:
+            return status, results[0][2]
+        return status, " ".join(f"{names.get(cid, cid[:8])}: {ev}" for cid, _, ev in results)
+
+    def balanced(cid: str) -> tuple[bool, str]:
+        totals = (
+            db.query(UAEJournalLine.debit, UAEJournalLine.credit)
+            .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+            .filter(UAEJournalEntry.tenant_id == workspace_id, UAEJournalEntry.company_id == cid,
+                    UAEJournalEntry.status == "posted", UAEJournalEntry.period == period).all()
+        )
+        dr, cr = round(sum(_f(d) for d, _ in totals), 2), round(sum(_f(c) for _, c in totals), 2)
+        if not totals:
+            return False, "No posted journals in the period."
+        return abs(dr - cr) < 0.01, f"Debits {dr:,.2f} / credits {cr:,.2f}."
+
+    def no_other_pending(cid: str) -> tuple[bool, str]:
+        proposed = db.query(AiCloseJournalProposal.journal_entry_id).filter(
+            AiCloseJournalProposal.workspace_id == workspace_id, AiCloseJournalProposal.company_id == cid)
+        pending = db.query(UAEJournalEntry).filter(
+            UAEJournalEntry.tenant_id == workspace_id, UAEJournalEntry.company_id == cid,
+            UAEJournalEntry.status.in_(("pending_approval", "draft")),
+            UAEJournalEntry.entry_date >= start, UAEJournalEntry.entry_date <= end,
+            ~UAEJournalEntry.id.in_(proposed),
+        ).count()
+        return pending == 0, f"{pending} other draft or pending journal(s) dated in the period (agent proposals are tracked separately)."
+
+    def prior_closed(cid: str) -> tuple[bool, str]:
+        prev_start, prev_end = period_bounds(ledger.period_add(period, -1))
+        prev = db.query(AccountingPeriod).filter(
+            AccountingPeriod.workspace_id == workspace_id,
+            (AccountingPeriod.company_id == cid) | (AccountingPeriod.company_id.is_(None)),
+            AccountingPeriod.start_date <= prev_start, AccountingPeriod.end_date >= prev_end,
+        ).first()
+        if prev is None:
+            return False, "No accounting period record for the prior month."
+        return prev.status in ("closed", "locked"), f"Prior period {prev.period_name} is {prev.status}."
+
     items = []
     for key, label, agent in CHECKLIST:
-        if agent:
+        if agent == "consolidation" and scope_kind != "group":
+            status, evidence = "n/a", "Single-entity close."
+        elif agent:
             task = tasks.get(agent)
             if task is None:
                 status, evidence = "not_run", "Agent not part of this run."
@@ -408,43 +466,16 @@ def evaluate_checklist(db, run_id: int, workspace_id: str, company_id: str, peri
             else:
                 status, evidence = "open", f"{task.title}: {task.status.replace('_', ' ')} ({task.exceptions_count or 0} exception(s))."
         elif key == "ledger_balanced":
-            totals = (
-                db.query(UAEJournalLine.debit, UAEJournalLine.credit)
-                .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
-                .filter(UAEJournalEntry.tenant_id == workspace_id, UAEJournalEntry.company_id == company_id,
-                        UAEJournalEntry.status == "posted", UAEJournalEntry.period == period).all()
-            )
-            dr, cr = round(sum(_f(d) for d, _ in totals), 2), round(sum(_f(c) for _, c in totals), 2)
-            status = "done" if abs(dr - cr) < 0.01 and totals else "open"
-            evidence = f"Debits {dr:,.2f} / credits {cr:,.2f}." if totals else "No posted journals in the period."
+            status, evidence = per_entity(balanced)
         elif key == "journals_approved":
-            proposed = db.query(AiCloseJournalProposal.journal_entry_id).filter(
-                AiCloseJournalProposal.workspace_id == workspace_id, AiCloseJournalProposal.company_id == company_id)
-            pending = db.query(UAEJournalEntry).filter(
-                UAEJournalEntry.tenant_id == workspace_id, UAEJournalEntry.company_id == company_id,
-                UAEJournalEntry.status.in_(("pending_approval", "draft")),
-                UAEJournalEntry.entry_date >= start, UAEJournalEntry.entry_date <= end,
-                ~UAEJournalEntry.id.in_(proposed),
-            ).count()
-            status = "done" if pending == 0 else "open"
-            evidence = f"{pending} other draft or pending journal(s) dated in the period (agent proposals are tracked separately)."
+            status, evidence = per_entity(no_other_pending)
         elif key == "proposals_decided":
             open_props = db.query(AiCloseJournalProposal).filter(
                 AiCloseJournalProposal.run_id == run_id, AiCloseJournalProposal.status == "pending_approval").count()
             status = "done" if open_props == 0 else "open"
             evidence = f"{open_props} proposed journal(s) awaiting a decision."
         else:
-            prev_start, prev_end = period_bounds(ledger.period_add(period, -1))
-            prev = db.query(AccountingPeriod).filter(
-                AccountingPeriod.workspace_id == workspace_id,
-                (AccountingPeriod.company_id == company_id) | (AccountingPeriod.company_id.is_(None)),
-                AccountingPeriod.start_date <= prev_start, AccountingPeriod.end_date >= prev_end,
-            ).first()
-            if prev is None:
-                status, evidence = "open", "No accounting period record for the prior month."
-            else:
-                status = "done" if prev.status in ("closed", "locked") else "open"
-                evidence = f"Prior period {prev.period_name} is {prev.status}."
+            status, evidence = per_entity(prior_closed)
         items.append({"key": key, "label": label, "status": status, "evidence": evidence})
     applicable = [i for i in items if i["status"] != "n/a"]
     done = sum(1 for i in applicable if i["status"] == "done")
@@ -456,8 +487,9 @@ def evaluate_checklist(db, run_id: int, workspace_id: str, company_id: str, peri
 
 
 def close_manager(ctx: CloseContext) -> AgentOutcome:
-    checklist = evaluate_checklist(ctx.db, ctx.run_id, ctx.workspace_id, ctx.company_id, ctx.period)
-    open_items = [i for i in checklist["items"] if i["status"] != "done"]
+    ids = [e.id for e in ctx.entities] or [ctx.company_id]
+    checklist = evaluate_checklist(ctx.db, ctx.run_id, ctx.workspace_id, ids, ctx.period, ctx.scope_kind)
+    open_items = [i for i in checklist["items"] if i["status"] not in ("done", "n/a")]
     return AgentOutcome(
         records_processed=len(checklist["items"]),
         output=checklist,
@@ -466,10 +498,20 @@ def close_manager(ctx: CloseContext) -> AgentOutcome:
     )
 
 
+from app.services.ai_close.ap_agent import ap_processing  # noqa: E402
+from app.services.ai_close.cfo_agent import cfo_intelligence  # noqa: E402
+from app.services.ai_close.consolidation_agent import consolidation  # noqa: E402
+from app.services.ai_close.ifrs_agent import ifrs  # noqa: E402
+
 AgentFn = Callable[[CloseContext], AgentOutcome]
 AGENTS: dict[str, tuple[str, AgentFn]] = {
     "bank_reconciliation": ("Bank Reconciliation Agent", bank_reconciliation),
+    "ap_processing": ("AP Processing Agent", ap_processing),
     "ar_intelligence": ("AR Intelligence Agent", ar_intelligence),
+    "ifrs": ("IFRS Accounting Agent", ifrs),
     "fpa": ("FP&A Agent", fpa),
+    "consolidation": ("Consolidation Agent", consolidation),
     "close_manager": ("Close Manager Agent", close_manager),
+    "cfo_intelligence": ("CFO Intelligence Agent", cfo_intelligence),
 }
+ENTITY_AGENTS = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa")

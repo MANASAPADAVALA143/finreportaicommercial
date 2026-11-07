@@ -254,8 +254,18 @@ def suggest_accruals(tenant_id: str, period: str, db: Session) -> list[dict]:
     return sorted(suggestions, key=lambda x: x["ai_confidence"], reverse=True)
 
 
+def accrual_status(accrual: UAEAccrual, db: Session) -> str:
+    """The accrual's status follows its journal once one has been prepared."""
+    if accrual.status != "pending_approval" or not accrual.journal_entry_id:
+        return accrual.status
+    je = db.get(UAEJournalEntry, accrual.journal_entry_id)
+    if je is None:
+        return accrual.status
+    return {"posted": "posted", "rejected": "rejected"}.get(je.status, "pending_approval")
+
+
 def post_accrual(accrual_id: str, tenant_id: str, db: Session) -> dict:
-    """Approve and post an accrual suggestion."""
+    """Prepare the accrual journal for approval; it posts only when a manager approves it."""
     accrual = db.query(UAEAccrual).filter(
         UAEAccrual.id == accrual_id,
         UAEAccrual.tenant_id == tenant_id,
@@ -279,9 +289,9 @@ def post_accrual(accrual_id: str, tenant_id: str, db: Session) -> dict:
         ],
         source="accrual",
         db=db,
-        auto_post=True,
+        initial_status="pending_approval",
     )
-    accrual.status = "posted"
+    accrual.status = "pending_approval"
     accrual.journal_entry_id = je.id
 
     # Schedule reversal
@@ -305,4 +315,4 @@ def post_accrual(accrual_id: str, tenant_id: str, db: Session) -> dict:
 
     db.add(accrual)
     db.commit()
-    return {"je_id": je.id, "accrual_id": accrual.id, "status": "posted"}
+    return {"je_id": je.id, "accrual_id": accrual.id, "status": "pending_approval"}

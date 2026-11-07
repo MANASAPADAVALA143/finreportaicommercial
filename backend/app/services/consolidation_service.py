@@ -165,6 +165,9 @@ def _aggregate_categories(
     period: str,
     mapper,
 ) -> dict[str, float]:
+    """P&L: movements in the period. Balance sheet: balances to period end, with profit to date in
+    retained earnings. Only the company's own journals count; company-less journals are reported
+    separately (see unassigned_journal_lines) instead of being added to every company."""
     account_meta: dict[str, tuple[str | None, str | None]] = {
         a.code: (a.account_type, a.sub_type)
         for a in db.query(UAEAccount).filter(
@@ -172,14 +175,15 @@ def _aggregate_categories(
             (UAEAccount.company_id == company_id) | (UAEAccount.company_id.is_(None)),
         ).all()
     }
+    is_pl = mapper is _pl_category
     rows = (
         db.query(UAEJournalLine, UAEJournalEntry)
         .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
         .filter(
             UAEJournalEntry.tenant_id == workspace_id,
-            UAEJournalEntry.period == period,
+            (UAEJournalEntry.period == period) if is_pl else (UAEJournalEntry.period <= period),
             UAEJournalEntry.status == "posted",
-            (UAEJournalEntry.company_id == company_id) | (UAEJournalEntry.company_id.is_(None)),
+            UAEJournalEntry.company_id == company_id,
         )
         .all()
     )
@@ -187,14 +191,32 @@ def _aggregate_categories(
     for line, _je in rows:
         code = line.account_code or ""
         meta = account_meta.get(code, (None, None))
+        dr = float(line.debit or 0)
+        cr = float(line.credit or 0)
+        if not is_pl and _pl_category(code, meta[0], meta[1]):
+            totals["retained_earnings"] = totals.get("retained_earnings", 0.0) + cr - dr
+            continue
         cat = mapper(code, meta[0], meta[1])
         if not cat:
             continue
-        dr = float(line.debit or 0)
-        cr = float(line.credit or 0)
-        amt = _signed_pl_amount(dr, cr, cat) if mapper is _pl_category else _signed_bs_amount(dr, cr, cat)
+        amt = _signed_pl_amount(dr, cr, cat) if is_pl else _signed_bs_amount(dr, cr, cat)
         totals[cat] = totals.get(cat, 0.0) + amt
     return totals
+
+
+def unassigned_journal_lines(db: Session, workspace_id: str, period: str) -> int:
+    """Posted lines in the period with no company: excluded from every company's figures."""
+    return (
+        db.query(UAEJournalLine.id)
+        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+        .filter(
+            UAEJournalEntry.tenant_id == workspace_id,
+            UAEJournalEntry.period == period,
+            UAEJournalEntry.status == "posted",
+            UAEJournalEntry.company_id.is_(None),
+        )
+        .count()
+    )
 
 
 def _calc_pl_row(key: str, company_totals: dict[str, dict[str, float]]) -> dict[str, float]:
@@ -274,6 +296,7 @@ def get_consolidation_pl(db: Session, workspace_id: str, period_id: str) -> dict
         "period": period_str,
         "companies": companies,
         "rows": rows_out,
+        "unassigned_lines": unassigned_journal_lines(db, workspace_id, period_str),
     }
 
 
@@ -319,6 +342,7 @@ def get_consolidation_bs(db: Session, workspace_id: str, period_id: str) -> dict
         "total_assets": total_assets,
         "total_liabilities_equity": total_le,
         "is_balanced": balanced,
+        "unassigned_lines": unassigned_journal_lines(db, workspace_id, period_str),
     }
 
 

@@ -9,8 +9,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.modules.ifrs16.ifrs16_cpi_remeasure import remeasure_cpi
+from app.modules.ifrs16.ifrs16_je_service import LEASE_LIABILITY
 from app.modules.ifrs16.ifrs16_repository import get_lease, update_lease
 from app.services.uae_journal_service import create_journal_entry
+
+ROU_ASSET = ("2010", "Right-of-Use Asset (IFRS 16)")
 
 
 def _f(v: Any) -> float:
@@ -72,14 +75,14 @@ def remeasure_lease(
     if abs(difference) > 0.01:
         if difference > 0:
             lines = [
-                {"account_code": "1600", "account_name": "ROU Asset", "debit": difference, "credit": 0},
-                {"account_code": "2300", "account_name": "Lease Liability", "debit": 0, "credit": difference},
+                {"account_code": ROU_ASSET[0], "account_name": ROU_ASSET[1], "debit": difference, "credit": 0},
+                {"account_code": LEASE_LIABILITY[0], "account_name": LEASE_LIABILITY[1], "debit": 0, "credit": difference},
             ]
         else:
             adj = abs(difference)
             lines = [
-                {"account_code": "2300", "account_name": "Lease Liability", "debit": adj, "credit": 0},
-                {"account_code": "1600", "account_name": "ROU Asset", "debit": 0, "credit": adj},
+                {"account_code": LEASE_LIABILITY[0], "account_name": LEASE_LIABILITY[1], "debit": adj, "credit": 0},
+                {"account_code": ROU_ASSET[0], "account_name": ROU_ASSET[1], "debit": 0, "credit": adj},
             ]
         je = create_journal_entry(
             tenant_id=workspace_id,
@@ -90,7 +93,7 @@ def remeasure_lease(
             source="IFRS16_REMEASUREMENT",
             lines=lines,
             db=db,
-            auto_post=True,
+            initial_status="pending_approval",
         )
         je_id = je.id
 

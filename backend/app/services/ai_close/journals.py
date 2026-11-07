@@ -12,9 +12,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.ai_close import AiCloseJournalProposal, AiCloseRun, AiCloseTask
+from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseTask
 from app.models.company_setup import AccountingPeriod
 from app.models.uae_accounting_full import UAEJournalEntry
+from app.modules.ifrs16.ifrs16_je_service import apply_approved_lease_journal
 from app.services.ai_close.context import JournalDraft, period_bounds
 from app.services.audit_log_service import log_audit
 from app.services.uae_controls_service import PeriodControlError
@@ -28,23 +29,30 @@ class DecisionError(ValueError):
 
 
 def prepare_proposal(db: Session, run: AiCloseRun, task: AiCloseTask, draft: JournalDraft) -> AiCloseJournalProposal | None:
-    """Create the pending journal, unless the same adjustment is already pending or approved."""
+    """Create the pending journal in the entity it belongs to, unless the same adjustment is
+    already pending or approved there (or, for lease entries, already prepared from the lease register)."""
+    company_id = draft.entity_id or run.company_id
     existing = db.query(AiCloseJournalProposal).filter(
         AiCloseJournalProposal.workspace_id == run.workspace_id,
-        AiCloseJournalProposal.company_id == run.company_id,
+        AiCloseJournalProposal.company_id == company_id,
         AiCloseJournalProposal.fingerprint == draft.fingerprint,
         AiCloseJournalProposal.status.in_(LIVE_STATUSES),
     ).first()
     if existing is not None:
         return None
+    if draft.reference and db.query(UAEJournalEntry.id).filter(
+        UAEJournalEntry.tenant_id == run.workspace_id, UAEJournalEntry.reference == draft.reference,
+        UAEJournalEntry.status.in_(("pending_approval", "posted", "draft")),
+    ).first():
+        return None
     seq = db.query(AiCloseJournalProposal).filter(AiCloseJournalProposal.run_id == run.id).count() + 1
     je = create_journal_entry(
         run.workspace_id, draft.entry_date, draft.title[:500], draft.lines,
-        reference=f"AICLOSE-{run.id}-{seq:03d}", source="manual", company_id=run.company_id,
+        reference=draft.reference or f"AICLOSE-{run.id}-{seq:03d}", source="manual", company_id=company_id,
         db=db, initial_status="pending_approval",
     )
     proposal = AiCloseJournalProposal(
-        run_id=run.id, task_id=task.id, workspace_id=run.workspace_id, company_id=run.company_id,
+        run_id=run.id, task_id=task.id, workspace_id=run.workspace_id, company_id=company_id,
         agent=task.agent, fingerprint=draft.fingerprint, journal_entry_id=je.id, entry_number=je.entry_number,
         title=draft.title[:300], rationale=draft.rationale, amount=draft.amount, source_refs=draft.refs,
         status="pending_approval", prepared_by=f"ai-agent:{task.agent}", requested_by=run.requested_by,
@@ -97,6 +105,10 @@ def decide(
             raise DecisionError(str(exc)) from exc
         je.approved_by = (user_email or "")[:200] or None
         je.approved_at = now.replace(tzinfo=None)
+        _resolve_exceptions(db, proposal)
+        if proposal.fingerprint.startswith("ifrs16:"):
+            _, lease_id, kind, _period = proposal.fingerprint.split(":", 3)
+            apply_approved_lease_journal(db, lease_id, kind, proposal.amount or 0.0, je.entry_date)
     elif decision in ("rejected", "changes_requested"):
         if decision == "changes_requested" and not note:
             raise DecisionError("Say what should change")
@@ -120,17 +132,35 @@ def decide(
     return proposal
 
 
-def _period_row(db: Session, run: AiCloseRun) -> AccountingPeriod:
+def _resolve_exceptions(db: Session, proposal: AiCloseJournalProposal) -> None:
+    """An approved journal clears the exception raised for the same source item in its run."""
+    keys = {proposal.fingerprint, f"{proposal.company_id[:8]}:{proposal.fingerprint}"}
+    if proposal.fingerprint.startswith("ifrs16:"):
+        _, lease_id, _kind, period = proposal.fingerprint.split(":", 3)
+        keys |= {f"ifrs16:{lease_id}:{period}", f"{proposal.company_id[:8]}:ifrs16:{lease_id}:{period}"}
+        siblings = db.query(AiCloseJournalProposal).filter(
+            AiCloseJournalProposal.run_id == proposal.run_id, AiCloseJournalProposal.id != proposal.id,
+            AiCloseJournalProposal.fingerprint.like(f"ifrs16:{lease_id}:%:{period}"),
+            AiCloseJournalProposal.status != "approved").count()
+        if siblings:
+            keys -= {f"ifrs16:{lease_id}:{period}", f"{proposal.company_id[:8]}:ifrs16:{lease_id}:{period}"}
+    db.query(AiCloseException).filter(
+        AiCloseException.run_id == proposal.run_id, AiCloseException.fingerprint.in_(keys),
+        AiCloseException.status == "open",
+    ).update({AiCloseException.status: "resolved"}, synchronize_session=False)
+
+
+def _period_row(db: Session, run: AiCloseRun, company_id: str) -> AccountingPeriod:
     start, end = period_bounds(run.period)
     row = db.query(AccountingPeriod).filter(
         AccountingPeriod.workspace_id == run.workspace_id,
-        AccountingPeriod.company_id == run.company_id,
+        AccountingPeriod.company_id == company_id,
         AccountingPeriod.start_date <= start,
         AccountingPeriod.end_date >= end,
     ).first()
     if row is None:
         row = AccountingPeriod(
-            workspace_id=run.workspace_id, company_id=run.company_id,
+            workspace_id=run.workspace_id, company_id=company_id,
             period_number=int(run.period.replace("-", "")), period_name=run.period,
             start_date=start, end_date=end, status="open",
         )
@@ -141,7 +171,7 @@ def _period_row(db: Session, run: AiCloseRun) -> AccountingPeriod:
 
 def approve_close(
     db: Session, run: AiCloseRun, *, user_email: str | None, user_id: str | None, note: str | None, open_items: int
-) -> AccountingPeriod:
+) -> list[AccountingPeriod]:
     if run.status != "awaiting_approval":
         raise DecisionError(f"The close is {run.status.replace('_', ' ')}, not awaiting approval")
     pending = db.query(AiCloseJournalProposal).filter(
@@ -151,20 +181,23 @@ def approve_close(
     note = (note or "").strip() or None
     if open_items and not note:
         raise DecisionError(f"{open_items} checklist item(s) are open; add a note explaining why the close is approved anyway")
-    period = _period_row(db, run)
-    if period.status != "locked":
-        period.status = "locked"
-        period.locked_by = (user_id or "")[:36] or None
-        period.locked_at = datetime.utcnow()
+    periods = []
+    for company_id in list(run.entity_ids or [run.company_id]):
+        period = _period_row(db, run, company_id)
+        if period.status != "locked":
+            period.status = "locked"
+            period.locked_by = (user_id or "")[:36] or None
+            period.locked_at = datetime.utcnow()
+        periods.append(period)
+        log_audit(
+            db, workspace_id=run.workspace_id, company_id=company_id, action="period_locked",
+            entity_type="accounting_period", entity_id=period.id, user_email=user_email,
+            details={"source": "ai_close", "run_id": run.id, "period": run.period, "open_items": open_items, "note": note},
+        )
     now = datetime.now(timezone.utc)
     run.status = "closed"
     run.close_approved_by = user_email
     run.close_approved_at = now
     run.close_note = note
-    log_audit(
-        db, workspace_id=run.workspace_id, company_id=run.company_id, action="period_locked",
-        entity_type="accounting_period", entity_id=period.id, user_email=user_email,
-        details={"source": "ai_close", "run_id": run.id, "period": run.period, "open_items": open_items, "note": note},
-    )
     db.commit()
-    return period
+    return periods

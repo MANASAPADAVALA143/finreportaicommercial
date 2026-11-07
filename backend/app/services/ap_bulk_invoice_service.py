@@ -914,12 +914,40 @@ def _best_amount_pct(inv_amt: float, other_amt: float, vat: float) -> float:
     return min(_pct_diff_vat_aware(c, other_amt) for c in candidates)
 
 
+def classify_three_way(
+    inv: dict[str, Any], po: dict[str, Any], grn: dict[str, Any] | None, tolerance_pct: float = 5.0
+) -> tuple[str, str, int]:
+    """Match status, note and score for an invoice against its PO and goods receipt (VAT-aware amounts)."""
+    from app.services.vendor_normalize import same_vendor
+
+    po_no = str(po.get("po_number") or "")
+    inv_amt = float(inv.get("total_amount") or 0)
+    vat = float(inv.get("vat_amount") or inv.get("tax_amount") or 0)
+    po_amt = float(po.get("po_amount") or 0)
+    grn_amt = float((grn or {}).get("received_amount") or 0)
+    inv_po_pct = _best_amount_pct(inv_amt, po_amt, vat) if po_amt else 100.0
+    has_receipt = bool(grn) and grn_amt > 0
+    inv_grn_pct = _best_amount_pct(inv_amt, grn_amt, vat) if has_receipt else None
+    within = inv_po_pct <= tolerance_pct and (inv_grn_pct is None or inv_grn_pct <= tolerance_pct)
+    inv_vendor = str(inv.get("vendor_name") or "")
+    po_vendor = str(po.get("vendor_name") or "")
+    if inv_vendor and po_vendor and not same_vendor(inv_vendor, po_vendor):
+        return "mismatch", f'Vendor mismatch: invoice "{inv_vendor}" vs PO {po_no} "{po_vendor}"', 30
+    if has_receipt and within:
+        return "three_way_matched", f"Full 3-way match: PO {po_no} · GRN · within {tolerance_pct:g}%", 95
+    if within:
+        receipt_note = "GRN has no received amount" if grn else "no GRN"
+        return "matched", f"2-way match (PO only): PO {po_no} · {receipt_note} · within {tolerance_pct:g}%", 85
+    if not grn:
+        return "partial", f"PO {po_no} found — waiting for goods receipt", 60
+    return "mismatch", f"Amount variance inv/PO {inv_po_pct:.1f}% (limit {tolerance_pct:g}%)", 45
+
+
 def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0) -> dict[str, Any]:
     """Exact po_number → PO → GRN. Amounts within tolerance (VAT-aware) → three_way_matched."""
     from datetime import datetime, timezone
 
     from app.core.supabase import get_supabase
-    from app.services.vendor_normalize import same_vendor
 
     cid = (company_id or "").strip()
     out = {
@@ -1006,45 +1034,11 @@ def rematch_invoices_by_po_number(*, company_id: str, tolerance_pct: float = 5.0
 
         po_id = str(po["id"])
         grn = grn_by_po.get(po_id)
-        inv_amt = float(inv.get("total_amount") or 0)
-        vat = float(inv.get("vat_amount") or inv.get("tax_amount") or 0)
-        po_amt = float(po.get("po_amount") or 0)
-        grn_amt = float((grn or {}).get("received_amount") or 0)
-        inv_po_pct = _best_amount_pct(inv_amt, po_amt, vat) if po_amt else 100.0
-        has_receipt = bool(grn) and grn_amt > 0
-        inv_grn_pct = _best_amount_pct(inv_amt, grn_amt, vat) if has_receipt else None
-        within = inv_po_pct <= tolerance_pct and (inv_grn_pct is None or inv_grn_pct <= tolerance_pct)
-        inv_vendor = str(inv.get("vendor_name") or "")
-        po_vendor = str(po.get("vendor_name") or "")
-        vendor_ok = not inv_vendor or not po_vendor or same_vendor(inv_vendor, po_vendor)
-
-        if not vendor_ok:
-            status = "mismatch"
-            notes = f'Vendor mismatch: invoice "{inv_vendor}" vs PO {po_no} "{po_vendor}"'
-            score = 30
-            out["mismatch"] += 1
-        elif has_receipt and within:
-            status = "three_way_matched"
-            notes = f"Full 3-way match: PO {po_no} · GRN · within {tolerance_pct:g}%"
-            score = 95
-            out["three_way_matched"] += 1
-        elif within:
-            status = "matched"
-            receipt_note = "GRN has no received amount" if grn else "no GRN"
-            notes = f"2-way match (PO only): PO {po_no} · {receipt_note} · within {tolerance_pct:g}%"
-            score = 85
-            out["matched"] += 1
+        status, notes, score = classify_three_way(inv, {**po, "po_number": po_no}, grn, tolerance_pct)
+        if status in ("three_way_matched", "matched", "mismatch"):
+            out[status] += 1
+        if status in ("matched", "partial"):
             out["no_grn"] += 1
-        elif not grn:
-            status = "partial"
-            notes = f"PO {po_no} found — waiting for goods receipt"
-            score = 60
-            out["no_grn"] += 1
-        else:
-            status = "mismatch"
-            notes = f"Amount variance inv/PO {inv_po_pct:.1f}% (limit {tolerance_pct:g}%)"
-            score = 45
-            out["mismatch"] += 1
 
         payload = {
             "po_id": po_id,

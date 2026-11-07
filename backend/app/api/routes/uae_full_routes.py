@@ -46,7 +46,7 @@ from app.services.audit_log_service import log_audit
 from app.services.uae_controls_service import get_controls, validate_journal_entry
 from app.services.notification_service import get_workspace_role_email, scan_notifications, send_notification
 from app.services.uae_fixed_assets_service import run_monthly_depreciation, get_depreciation_schedule
-from app.services.uae_accruals_service import suggest_accruals, post_accrual, persist_accrual_suggestions
+from app.services.uae_accruals_service import accrual_status, suggest_accruals, post_accrual, persist_accrual_suggestions
 from app.services.uae_bank_recon_service import (
     import_bank_statement, run_reconciliation, get_reconciliation_summary,
 )
@@ -1305,7 +1305,7 @@ def list_accruals(request: Request, period: Optional[str] = None, db: Session = 
              "amount": float(a.amount or 0),
              "account_code": a.debit_account_code or "",
              "accrual_type": a.accrual_type, "is_mandatory": a.mandatory,
-             "status": a.status,
+             "status": accrual_status(a, db),
              "ai_confidence": float(a.ai_confidence or 0) if a.ai_confidence else None,
              "ai_reasoning": a.ai_basis}
             for a in accruals
