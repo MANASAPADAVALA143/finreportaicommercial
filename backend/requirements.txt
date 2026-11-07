@@ -75,3 +75,4 @@ chromadb>=0.5.0
 
 # --- Scheduler ---
 apscheduler>=3.10.4
+tzdata>=2024.1

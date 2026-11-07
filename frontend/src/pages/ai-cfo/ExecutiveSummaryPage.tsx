@@ -8,6 +8,7 @@ import { Card, GOLD, NAVY, StatusPill } from './parts';
 import {
   AgentCard, CfoSummaryPanel, CloseApproval, Deliverables, ExceptionsTable, ExecutionSequence, JournalApprovalCentre, KpiGrid, fmtTime,
 } from './closeParts';
+import { ScheduleCard, SummaryAlerts } from './closeSchedule';
 
 const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] = [
   { value: 'bank_reconciliation', label: 'Bank Reconciliation Agent', note: 'Matches statements to the ledger, proposes fee and interest journals' },
@@ -217,6 +218,13 @@ export default function ExecutiveSummaryPage() {
           </div>
         </Card>
 
+        <ScheduleCard
+          companyId={companyId}
+          selection={{ scope, entityIds: groupIds, agents: selected, names: Object.fromEntries(others.map((c) => [c.id, c.company_name])) }}
+          onOpenRun={(id) => void load(id)}
+          onError={setError}
+        />
+
         {loaded && !run && <p className="text-sm text-slate-500">No close has been run for this company yet.</p>}
 
         {run && (
@@ -226,6 +234,7 @@ export default function ExecutiveSummaryPage() {
                 Close run #{run.id} · {run.period} · {run.scope === 'group' ? `Group of ${run.entities.length}` : run.entities[0]?.name}
               </span>
               <StatusPill value={run.status} />
+              {run.trigger === 'scheduled' && <span className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] text-slate-600">Scheduled</span>}
               <span>Requested by {run.requested_by ?? '—'} · started {fmtTime(run.started_at)} · finished {fmtTime(run.finished_at)}</span>
               {fresh && (
                 <span title={`Captured ${fmtTime(fresh.captured_at)}`}>
@@ -238,6 +247,7 @@ export default function ExecutiveSummaryPage() {
                 </select>
               )}
             </div>
+            <SummaryAlerts run={run} companyId={companyId} onSent={() => void load(run.id)} onError={setError} />
             {run.error && <ErrorBanner message={`Run failed: ${run.error}`} />}
 
             <CfoSummaryPanel run={run} companyId={companyId} currency={currency} onError={setError} />

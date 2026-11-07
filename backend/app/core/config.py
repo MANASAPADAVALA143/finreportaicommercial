@@ -50,6 +50,8 @@ class Settings(BaseSettings):
 
     # CFO Command Center — optional morning briefing (APScheduler)
     ENABLE_CFO_SCHEDULER: bool = False
+    # Scheduled month-end closes (AI close command centre) — checks every 15 minutes
+    ENABLE_CLOSE_SCHEDULER: bool = True
     # SES email intake — poll S3 every N minutes (independent of CFO scheduler)
     ENABLE_SES_EMAIL_INTAKE: bool = True
     SES_EMAIL_INTAKE_INTERVAL_MINUTES: int = 5

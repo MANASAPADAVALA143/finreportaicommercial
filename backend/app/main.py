@@ -143,7 +143,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from app.db import init_db
-from app.scheduler import run_daily_watchdog, scheduler, setup_scheduler, setup_ses_intake_scheduler
+from app.scheduler import run_daily_watchdog, scheduler, setup_close_scheduler, setup_scheduler, setup_ses_intake_scheduler
 from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
 
 _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
@@ -450,6 +450,10 @@ async def lifespan(app: FastAPI):
         setup_ses_intake_scheduler()
     except Exception as exc:
         logger.warning("SES email intake scheduler not started: %s", exc)
+    try:
+        setup_close_scheduler()
+    except Exception as exc:
+        logger.warning("Month-end close scheduler not started: %s", exc)
     yield
 
 

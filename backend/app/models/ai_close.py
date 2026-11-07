@@ -8,7 +8,7 @@ uae_journal_entries rows created with status 'pending_approval'; they post only 
 manager approves them.
 """
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -32,9 +32,44 @@ class AiCloseRun(Base):
     close_approved_by = Column(String(255), nullable=True)
     close_approved_at = Column(DateTime(timezone=True), nullable=True)
     close_note = Column(Text, nullable=True)
+    trigger = Column(String(16), nullable=True)  # manual | scheduled (null = manual)
+    schedule_id = Column(Integer, nullable=True)
+    notified_json = Column(JSON, nullable=True)  # [{at, channel, target, ok, detail}]
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AiCloseSchedule(Base):
+    """Recurring month-end close for one company (or a group anchored on it): on run_day at
+    run_hour in `timezone`, close the previous month and send the summary to the recipients.
+    last_run_period is claimed atomically so several app instances never run the same month twice.
+    The Slack webhook is write-only through the API."""
+
+    __tablename__ = "ai_close_schedules"
+    __table_args__ = (UniqueConstraint("workspace_id", "company_id", name="uq_ai_close_schedule"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    scope = Column(String(10), nullable=False, default="entity")
+    entity_ids = Column(JSON, nullable=True)
+    agents = Column(JSON, nullable=False)
+    run_day = Column(Integer, nullable=False, default=2)
+    run_hour = Column(Integer, nullable=False, default=6)
+    timezone = Column(String(64), nullable=False, default="Asia/Dubai")
+    notify_emails = Column(JSON, nullable=True)
+    slack_webhook_url = Column(String(500), nullable=True)
+    notify_when = Column(String(16), nullable=False, default="always")  # always | issues | never
+    last_run_period = Column(String(7), nullable=True)
+    last_run_id = Column(Integer, nullable=True)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_by = Column(String(255), nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class AiCloseTask(Base):

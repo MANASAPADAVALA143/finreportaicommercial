@@ -164,10 +164,48 @@ export type CfoSummary = {
   narrative: { text: string; source: 'ai' | 'template'; note: string | null };
 };
 
+export type Delivery = { at: string; channel: 'in_app' | 'email' | 'slack'; target: string; ok: boolean; detail: string };
+
+export type CloseSchedule = {
+  id: number;
+  enabled: boolean;
+  scope: 'entity' | 'group';
+  entity_ids: string[];
+  agents: SelectableAgent[];
+  run_day: number;
+  run_hour: number;
+  timezone: string;
+  notify_emails: string[];
+  slack_configured: boolean;
+  notify_when: 'always' | 'issues' | 'never';
+  last_run_period: string | null;
+  last_run_id: number | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  next_run_at: string | null;
+  next_period: string | null;
+  updated_by: string | null;
+};
+
+export type ScheduleInput = {
+  enabled: boolean;
+  scope: 'entity' | 'group';
+  entity_ids?: string[];
+  agents: SelectableAgent[];
+  run_day: number;
+  run_hour: number;
+  timezone: string;
+  notify_emails: string[];
+  slack_webhook_url?: string | null;
+  notify_when: 'always' | 'issues' | 'never';
+};
+
 export type CloseRunSummary = {
   id: number;
   period: string;
   scope: 'entity' | 'group';
+  trigger: 'manual' | 'scheduled' | null;
+  notified_json: Delivery[] | null;
   agents: AgentKey[];
   status: RunStatus;
   requested_by: string | null;
@@ -237,4 +275,9 @@ export const aiCloseApi = {
   download: (companyId: string, run: Pick<CloseRun, 'id' | 'period'>, key: ReportKey, fmt: ReportFormat) =>
     downloadFile(`${ROOT}/runs/${run.id}/reports/${key}.${fmt}`, companyId, `${key}-${run.period}-run${run.id}.${fmt}`),
   seedDemo: (companyId: string) => r<DemoGroupResult>('/demo/seed', companyId, { method: 'POST' }),
+  schedule: (companyId: string) => r<CloseSchedule | null>('/schedule', companyId),
+  saveSchedule: (companyId: string, body: ScheduleInput) => r<CloseSchedule>('/schedule', companyId, json('PUT', body)),
+  deleteSchedule: (companyId: string) => r<void>('/schedule', companyId, { method: 'DELETE' }),
+  notify: (companyId: string, runId: number, emails?: string[]) =>
+    r<{ deliveries: Delivery[] }>(`/runs/${runId}/notify`, companyId, json('POST', { emails: emails?.length ? emails : null })),
 };

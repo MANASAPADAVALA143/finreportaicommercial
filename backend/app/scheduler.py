@@ -58,6 +58,39 @@ def setup_ses_intake_scheduler():
     return scheduler
 
 
+async def run_close_schedules_job():
+    """Start any scheduled month-end closes that are due (each month is claimed once across instances)."""
+    import asyncio
+
+    from app.services.ai_close.scheduling import run_due_schedules
+
+    try:
+        started = await asyncio.to_thread(run_due_schedules, SessionLocal)
+        if started:
+            print(f"[{datetime.now()}] Scheduled month-end closes started: runs {started}")
+    except Exception as exc:
+        print(f"Scheduled close job error: {exc}")
+
+
+def setup_close_scheduler():
+    """Check close schedules every 15 minutes (independent of the CFO scheduler flag)."""
+    if not settings.ENABLE_CLOSE_SCHEDULER:
+        return None
+    if not scheduler.running:
+        scheduler.configure(timezone=settings.CFO_SCHEDULER_TZ)
+        scheduler.start()
+    scheduler.add_job(
+        run_close_schedules_job,
+        IntervalTrigger(minutes=15),
+        id="ai_close_schedules",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    print("Month-end close scheduler started (every 15 min)")
+    return scheduler
+
+
 def _row_to_dict(row: Any) -> dict[str, Any]:
     if row is None:
         return {}

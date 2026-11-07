@@ -22,7 +22,7 @@ from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_cfo import AiCfoApprovalRequest, AiCfoFinding, AiCfoInvestigation, AiCfoToolCall
-from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseTask
+from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask
 from app.models.client_data import ApCompany
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.fpa_master import FpaMasterRow
@@ -33,6 +33,7 @@ from app.models.uae_accounting_full import (
 )
 from app.models.workspace import WorkspaceRole
 from app.models.workspace_audit import WorkspaceAuditLog
+from app.models.workspace_notification import WorkspaceNotification
 from app.routers import ai_close as ai_close_router
 from app.services import llm_service
 from app.services.ai_cfo import ledger
@@ -55,7 +56,8 @@ TABLES = (
     UAEAccount, UAEJournalEntry, UAEJournalLine, UaeCompanyProfile, ApCompany, FpaMasterRow, AccountingPeriod,
     UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice, UAECreditNote, IFRS16Lease,
     AiCfoFinding, AiCfoInvestigation, AiCfoToolCall, AiCfoApprovalRequest,
-    AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal, WorkspaceAuditLog,
+    AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal, AiCloseSchedule, WorkspaceAuditLog,
+    WorkspaceNotification,
 )
 
 

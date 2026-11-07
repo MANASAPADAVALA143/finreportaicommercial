@@ -10,6 +10,7 @@ GET /runs/{id}.
 from __future__ import annotations
 
 from typing import Any, Callable, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
@@ -18,12 +19,12 @@ from sqlalchemy.orm import Session
 from app.core.company_access import require_company_access
 from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
-from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseTask
+from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask
 from app.models.company_setup import UaeCompanyProfile
 from app.routers.internal_audit import Scope, _manage, _read, _row, _write
 from app.services.ai_cfo import ledger
 from app.services.ai_cfo.ledger import LedgerScope
-from app.services.ai_close import orchestrator
+from app.services.ai_close import alerts, orchestrator, scheduling
 from app.services.ai_close.agents import AGENTS
 from app.services.ai_close.demo_group import seed_demo_group
 from app.services.ai_close.journals import DecisionError, approve_close, decide, journal_detail
@@ -243,6 +244,92 @@ def decide_journal(pid: int, body: DecisionIn, scope: Scope = Depends(_manage),
     if run is not None:
         orchestrator.recheck_close(db, run)
     return _proposal_out(db, db.get(AiCloseJournalProposal, pid))
+
+
+class NotifyIn(BaseModel):
+    emails: list[str] | None = Field(default=None, max_length=alerts.MAX_RECIPIENTS)
+
+
+@router.post("/runs/{rid}/notify")
+def notify_run(rid: int, body: NotifyIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    """Send the close summary now: in-app, plus email/Slack to the given addresses or the schedule's recipients."""
+    run = _get(db, AiCloseRun, rid, scope)
+    if run.status in ("queued", "running"):
+        raise HTTPException(status_code=409, detail="The close is still running")
+    schedule = db.query(AiCloseSchedule).filter(
+        AiCloseSchedule.workspace_id == scope.workspace_id, AiCloseSchedule.company_id == scope.company_id).first()
+    try:
+        emails = alerts.clean_emails(body.emails) if body.emails else list((schedule.notify_emails if schedule else None) or [])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not emails and scope.user_email:
+        emails = [scope.user_email]
+    deliveries = alerts.send_close_summary(db, run, emails=emails, slack_webhook=schedule.slack_webhook_url if schedule else None)
+    return {"deliveries": deliveries}
+
+
+class ScheduleIn(BaseModel):
+    enabled: bool = True
+    scope: Literal["entity", "group"] = "entity"
+    entity_ids: list[str] | None = Field(default=None, max_length=MAX_ENTITIES)
+    agents: list[Literal["bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa"]] = Field(min_length=1)
+    run_day: int = Field(ge=1, le=28)
+    run_hour: int = Field(ge=0, le=23)
+    timezone: str = Field(default="Asia/Dubai", max_length=64)
+    notify_emails: list[str] = Field(default_factory=list, max_length=alerts.MAX_RECIPIENTS)
+    slack_webhook_url: str | None = Field(default=None, max_length=500)
+    notify_when: Literal["always", "issues", "never"] = "always"
+
+
+def _schedule(db: Session, scope: Scope) -> AiCloseSchedule | None:
+    return db.query(AiCloseSchedule).filter(
+        AiCloseSchedule.workspace_id == scope.workspace_id, AiCloseSchedule.company_id == scope.company_id).first()
+
+
+@router.get("/schedule")
+def get_schedule(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    schedule = _schedule(db, scope)
+    return scheduling.describe(schedule) if schedule else None
+
+
+@router.put("/schedule")
+def put_schedule(body: ScheduleIn, scope: Scope = Depends(_manage), ctx: WorkspaceContext = Depends(validate_workspace),
+                 db: Session = Depends(get_db)):
+    try:
+        ZoneInfo(body.timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Unknown time zone") from exc
+    try:
+        emails = alerts.clean_emails(body.notify_emails)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    slack = (body.slack_webhook_url or "").strip()
+    if slack and not alerts.valid_slack_url(slack):
+        raise HTTPException(status_code=422, detail="Slack webhook must be an incoming-webhook URL (https://hooks.slack.com/services/…)")
+    ids = _group_entities(db, ctx, scope, body.entity_ids or []) if body.scope == "group" else [scope.company_id]
+    schedule = _schedule(db, scope)
+    if schedule is None:
+        schedule = AiCloseSchedule(workspace_id=scope.workspace_id, company_id=scope.company_id, created_by=scope.user_email,
+                                   agents=list(body.agents))
+        db.add(schedule)
+    schedule.enabled, schedule.scope, schedule.entity_ids = body.enabled, body.scope, ids
+    schedule.agents = [a for a in orchestrator.SELECTABLE if a in body.agents]
+    schedule.run_day, schedule.run_hour, schedule.timezone = body.run_day, body.run_hour, body.timezone
+    schedule.notify_emails, schedule.notify_when, schedule.updated_by = emails, body.notify_when, scope.user_email
+    if body.slack_webhook_url is not None:
+        schedule.slack_webhook_url = slack or None
+    db.commit()
+    db.refresh(schedule)
+    return scheduling.describe(schedule)
+
+
+@router.delete("/schedule", status_code=204)
+def delete_schedule(scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    schedule = _schedule(db, scope)
+    if schedule is not None:
+        db.delete(schedule)
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/demo/seed")

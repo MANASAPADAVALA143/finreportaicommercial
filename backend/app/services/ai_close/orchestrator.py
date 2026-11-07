@@ -60,6 +60,10 @@ def is_group(run: AiCloseRun) -> bool:
     return (run.scope or "entity") == "group"
 
 
+def tasks_of(db: Session, run: AiCloseRun) -> list[AiCloseTask]:
+    return db.query(AiCloseTask).filter(AiCloseTask.run_id == run.id).order_by(AiCloseTask.wave, AiCloseTask.id).all()
+
+
 def create_run(db: Session, *, workspace_id: str, company_id: str, period: str, agents_selected: list[str],
                requested_by: str | None, scope: str = "entity", entities: list[str] | None = None) -> AiCloseRun:
     chosen = [a for a in SELECTABLE if a in agents_selected]
