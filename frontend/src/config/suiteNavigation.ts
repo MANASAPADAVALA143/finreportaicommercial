@@ -283,6 +283,7 @@ export const CFO_INTELLIGENCE_NAV: NavEntry[] = [
   {
     section: 'Executive Hub',
     items: [
+      { label: 'AI CFO Command Centre', path: '/ai-cfo',                  icon: 'bot',          badge: 'AGENTIC' },
       { label: 'Executive Dashboard',  path: '/cfo-dashboard',           icon: 'layout-dashboard' },
       { label: 'CFO Morning Brief',    path: '/cfo',                     icon: 'brain',        badge: 'AGENTIC' },
       { label: 'Board Pack',           path: '/reports/board-pack',      icon: 'presentation', badge: 'AI' },

@@ -111,8 +111,8 @@ def test_requires_login(route):
 
 @pytest.mark.parametrize(
     "route,agent",
-    [(VARIANCE, "fpa_variance"), (FORECAST, "fpa_forecast"), (IFRS, "ifrs_statements")],
-    ids=IDS,
+    [(VARIANCE, "fpa_variance"), (IFRS, "ifrs_statements")],
+    ids=["variance", "ifrs"],
 )
 def test_runs_are_tagged_and_memory_isolated(route, agent, env, memory):
     client = TestClient(_app(env))
@@ -128,6 +128,14 @@ def test_runs_are_tagged_and_memory_isolated(route, agent, env, memory):
     assert memory.runs == [(f"{agent}:{WS_A}", WS_A), (f"{agent}:{WS_B}", WS_B), (f"{agent}:{WS_A}", WS_A)]
     assert len(memory.store[f"{agent}:{WS_A}"]) == 2 and len(memory.store[f"{agent}:{WS_B}"]) == 1
     assert memory.store[agent] == [{"data": "legacy"}]
+
+
+def test_random_forecast_is_labelled_demo_and_not_stored_as_agent_run(env, memory):
+    res = _call(TestClient(_app(env)), FORECAST)
+    assert res.status_code == 200
+    assert res.json()["demo"] is True and "not a forecast" in res.json()["data_notice"]
+    assert memory.runs == [] and memory.seen == []
+    assert memory.store["fpa_forecast"] == [{"data": "legacy"}] and f"fpa_forecast:{WS_A}" not in memory.store
 
 
 @pytest.mark.parametrize("route", ALL, ids=IDS)

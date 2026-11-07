@@ -147,3 +147,46 @@ def chat(
     except AuthenticationError as e:
         raise LLMNotConfiguredError(f"ANTHROPIC_API_KEY is invalid or expired: {e}") from e
     return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+
+
+def chat_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    system: str | None = None,
+    max_tokens: int = 2000,
+    model_id: str | None = None,
+) -> dict:
+    """One model turn with tool definitions available.
+
+    Returns plain data so callers need no SDK types:
+    {"stop_reason": str, "content": [{"type": "text", "text": ...} |
+     {"type": "tool_use", "id": ..., "name": ..., "input": {...}}], "model": str}
+    The caller runs the tools and appends `tool_result` blocks for the next turn.
+    """
+    key = _key()
+    if not key:
+        raise LLMNotConfiguredError(
+            "ANTHROPIC_API_KEY is not set. Add it to backend/.env and restart the API server."
+        )
+    model = model_id or DEFAULT_CLAUDE_MODEL
+    kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": messages, "tools": tools}
+    if system:
+        kwargs["system"] = system
+    try:
+        response = Anthropic(api_key=key).messages.create(**kwargs)
+    except RateLimitError as e:
+        raise LLMRateLimitError(
+            "AI provider rate limit reached (too many tokens or requests per minute). "
+            "Wait about one minute, then try again."
+        ) from e
+    except AuthenticationError as e:
+        raise LLMNotConfiguredError(f"ANTHROPIC_API_KEY is invalid or expired: {e}") from e
+    content: list[dict] = []
+    for block in response.content:
+        kind = getattr(block, "type", "")
+        if kind == "text":
+            content.append({"type": "text", "text": block.text})
+        elif kind == "tool_use":
+            content.append({"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input or {})})
+    return {"stop_reason": response.stop_reason, "content": content, "model": model}

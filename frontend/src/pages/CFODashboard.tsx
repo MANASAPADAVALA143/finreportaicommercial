@@ -1,5 +1,6 @@
 // CFO Dashboard - Strategic Command Center
 import { useState, useEffect } from 'react';
+import { DemoDataBanner } from '../components/DemoDataBanner';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import {
@@ -213,6 +214,9 @@ export const CFODashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-slate-50 pb-12">
+      <div className="px-6 pt-4">
+        <DemoDataBanner what="The dashboard figures and forecasts" />
+      </div>
       {/* HEADER */}
       <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 py-4">

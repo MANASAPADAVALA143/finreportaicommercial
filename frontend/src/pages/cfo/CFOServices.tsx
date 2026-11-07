@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { DemoDataBanner } from '../../components/DemoDataBanner';
 import {
   ArrowLeft,
   Send,
@@ -342,6 +343,9 @@ USER QUESTION: ${userMessage}`;
 
   return (
     <div className="min-h-screen p-6" style={{ backgroundColor: '#F0F4FF' }}>
+      <div className="max-w-[1800px] mx-auto">
+        <DemoDataBanner what="The briefing, insights and KPIs on this page (unless you uploaded your own Excel file)" />
+      </div>
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

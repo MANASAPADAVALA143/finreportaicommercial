@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Brain, ArrowLeft, Upload, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { DemoDataBanner } from '../components/DemoDataBanner';
 import MorningBrief from '../components/cfo-decision/MorningBrief';
 import InvestmentDecision from '../components/cfo-decision/InvestmentDecision';
 import BuildVsBuy from '../components/cfo-decision/BuildVsBuy';
@@ -115,6 +116,7 @@ const CFODecisionIntelligence: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-6">
       <div className="max-w-7xl mx-auto">
+        <DemoDataBanner what="The decisions, scenarios and figures on this page" />
         {/* Header */}
         <div className="bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl shadow-lg p-6 mb-6 text-white">
           <div className="flex items-center justify-between">
