@@ -18,14 +18,16 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
 
 export function StatusPill({ value }: { value: string }) {
   const tone =
-    value === 'completed' || value === 'approved' || value === 'resolved'
+    value === 'completed' || value === 'approved' || value === 'resolved' || value === 'closed' || value === 'done' || value === 'ready'
       ? 'bg-green-50 text-green-700 border-green-200'
       : value === 'failed' || value === 'rejected'
         ? 'bg-red-50 text-red-700 border-red-200'
         : value === 'running' || value === 'queued' || value === 'investigated'
           ? 'bg-blue-50 text-blue-700 border-blue-200'
-          : 'bg-slate-50 text-slate-700 border-slate-200';
-  return <span className={`px-2 py-0.5 rounded border text-xs font-medium ${tone}`}>{value.replace('_', ' ')}</span>;
+          : value === 'completed_with_exceptions' || value === 'awaiting_approval' || value === 'pending_approval' || value === 'changes_requested' || value === 'open'
+            ? 'bg-amber-50 text-amber-800 border-amber-200'
+            : 'bg-slate-50 text-slate-700 border-slate-200';
+  return <span className={`px-2 py-0.5 rounded border text-xs font-medium ${tone}`}>{value.replace(/_/g, ' ')}</span>;
 }
 
 export function money(value: number | null | undefined, currency = 'AED') {

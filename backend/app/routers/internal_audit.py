@@ -50,10 +50,13 @@ CLOSED_STATUSES = ("Implemented", "Verified")
 
 
 class Scope:
-    def __init__(self, workspace_id: str, company_id: str, user_email: str | None = None):
+    def __init__(
+        self, workspace_id: str, company_id: str, user_email: str | None = None, user_id: str | None = None
+    ):
         self.workspace_id = workspace_id
         self.company_id = company_id
         self.user_email = user_email
+        self.user_id = user_id
 
     def filter(self, model: Any) -> tuple[Any, Any]:
         return model.workspace_id == self.workspace_id, model.company_id == self.company_id
@@ -66,7 +69,8 @@ def _scope(level: AccessLevel):
         db: Session = Depends(get_db),
     ) -> Scope:
         cid = require_company_access(db, ctx, company_id, level)
-        return Scope(ctx.workspace_id, cid, getattr(ctx.user, "email", None))
+        user_id = getattr(ctx.user, "id", None)
+        return Scope(ctx.workspace_id, cid, getattr(ctx.user, "email", None), str(user_id) if user_id else None)
 
     return dep
 

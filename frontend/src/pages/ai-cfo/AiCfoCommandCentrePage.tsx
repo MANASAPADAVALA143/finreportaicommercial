@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Activity, Bot, ClipboardCheck, Database, MessageSquare, RefreshCw, Search, Sparkles } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import { aiCfoApi, type Overview } from '../../services/aiCfo.service';
@@ -114,9 +115,12 @@ export default function AiCfoCommandCentrePage() {
               </p>
             </div>
           </div>
-          <button onClick={() => { void load(); setRefreshKey((k) => k + 1); }} aria-label="Refresh" className="rounded-md border border-white/20 p-2 text-slate-200 hover:bg-white/10">
-            <RefreshCw className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <Link to="/ai-cfo/executive-summary" className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10">Month-end close</Link>
+            <button onClick={() => { void load(); setRefreshKey((k) => k + 1); }} aria-label="Refresh" className="rounded-md border border-white/20 p-2 text-slate-200 hover:bg-white/10">
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <nav className="mt-4 flex flex-wrap gap-1" role="tablist">
           {TABS.map(({ value, label, icon: Icon }) => (

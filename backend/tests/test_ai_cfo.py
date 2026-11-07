@@ -19,10 +19,14 @@ from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_cfo import AiCfoApprovalRequest, AiCfoFinding, AiCfoInvestigation, AiCfoToolCall
+from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseTask
 from app.models.client_data import ApCompany
-from app.models.company_setup import UaeCompanyProfile
+from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.fpa_master import FpaMasterRow
-from app.models.uae_accounting_full import UAEAccount, UAEJournalEntry, UAEJournalLine
+from app.models.uae_accounting_full import (
+    UAEAccount, UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAEJournalEntry,
+    UAEJournalLine, UAESalesInvoice,
+)
 from app.models.workspace import WorkspaceRole
 from app.models.workspace_audit import WorkspaceAuditLog
 from app.routers import ai_cfo as ai_cfo_router
@@ -43,6 +47,8 @@ BASE = "/api/ai-cfo"
 TABLES = (
     UAEAccount, UAEJournalEntry, UAEJournalLine, UaeCompanyProfile, ApCompany, FpaMasterRow,
     AiCfoFinding, AiCfoInvestigation, AiCfoToolCall, AiCfoApprovalRequest, WorkspaceAuditLog,
+    AccountingPeriod, UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice,
+    AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal,
 )
 
 
@@ -122,11 +128,11 @@ def test_balances_are_cumulative_and_monthly_movements_are_not(session_factory, 
     rent_total = [b for b in ledger.balances_as_of(db, scope, LAST) if b["account_code"] == "7110"]
     assert rent_month[0]["net"] == pytest.approx(35000 * LAST_FACTOR)
     assert rent_total[0]["balance"] == pytest.approx(35000 * sum([0.97, 1.02, 0.99, 1.03, 0.98, 1.01, 0.97]), abs=0.05)
-    revenue = [b for b in ledger.balances_as_of(db, scope, LAST, account_type="Income")]
-    assert revenue and revenue[0]["balance"] > 0
-    bank = [b for b in ledger.balances_as_of(db, scope, LAST) if b["account_code"] == "1002"][0]
+    balances = {b["account_code"]: b["balance"] for b in ledger.balances_as_of(db, scope, LAST)}
+    revenue = sum(b["balance"] for b in ledger.balances_as_of(db, scope, LAST, account_type="Income"))
     expenses = sum(b["balance"] for b in ledger.balances_as_of(db, scope, LAST, account_type="Expense"))
-    assert bank["balance"] == pytest.approx(revenue[0]["balance"] - expenses, abs=0.05)
+    assert revenue > 0 and balances["1100"] > 0
+    assert balances["1002"] + balances["1100"] == pytest.approx(revenue - expenses, abs=0.05)
     db.close()
 
 
@@ -424,14 +430,18 @@ def test_demo_seed_rebuilds_only_demo_rows(client, env, demo, session_factory):
     real = UaeCompanyProfile(workspace_id=WS_A, company_name="Real Co")
     db.add(real)
     db.flush()
-    db.add(UAEJournalEntry(tenant_id=WS_A, company_id=demo.a, period=LAST, entry_date=date(2026, 10, 1),
-                           status="posted", source="manual", lines=[UAEJournalLine(account_code="7140", debit=5, credit=0)]))
+    real_id = real.id
+    for cid, number in ((real_id, "REAL-1"), (demo.a, "STRAY-1")):
+        db.add(UAEJournalEntry(tenant_id=WS_A, company_id=cid, entry_number=number, period=LAST, entry_date=date(2026, 10, 1),
+                               status="posted", source="manual", lines=[UAEJournalLine(account_code="7140", debit=5, credit=0)]))
     db.commit()
     db.close()
     env.roles[WS_A] = "owner"
     res = client.post(BASE + "/demo/seed" + q(demo.a)).json()
     assert res["company_id"] == demo.a and "synthetic" in res["company_name"]
     db = session_factory()
-    assert db.query(UAEJournalEntry).filter_by(company_id=demo.a, source="manual").count() == 1
+    assert db.query(UAEJournalEntry).filter_by(entry_number="REAL-1", company_id=real_id).count() == 1
+    assert db.query(UAEJournalEntry).filter_by(entry_number="STRAY-1").count() == 0
+    assert db.query(UAEJournalEntry).filter_by(company_id=demo.b).count() > 0
     assert db.query(UaeCompanyProfile).filter_by(workspace_id=WS_A).count() == 2
     db.close()

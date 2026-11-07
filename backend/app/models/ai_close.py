@@ -1,0 +1,106 @@
+"""Multi-agent month-end close — runs, agent tasks, de-duplicated exceptions, journal proposals.
+
+A run belongs to one workspace + company (uae_company_profiles.id) + month. Agent outputs
+are validated snapshots of deterministic service results. Journal proposals point at real
+uae_journal_entries rows created with status 'pending_approval'; they post only when a
+manager approves them.
+"""
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy.sql import func
+
+from app.core.database import Base
+
+
+class AiCloseRun(Base):
+    __tablename__ = "ai_close_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    period = Column(String(7), nullable=False)
+    agents = Column(JSON, nullable=False)
+    status = Column(String(32), nullable=False, default="queued")
+    requested_by = Column(String(255), nullable=True)
+    kpis_json = Column(JSON, nullable=True)
+    freshness_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    close_approved_by = Column(String(255), nullable=True)
+    close_approved_at = Column(DateTime(timezone=True), nullable=True)
+    close_note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AiCloseTask(Base):
+    __tablename__ = "ai_close_tasks"
+    __table_args__ = (UniqueConstraint("run_id", "agent", name="uq_ai_close_task"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("ai_close_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    agent = Column(String(40), nullable=False)
+    title = Column(String(200), nullable=False)
+    depends_on = Column(JSON, nullable=True)
+    wave = Column(Integer, nullable=False, default=0)
+    status = Column(String(32), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    records_processed = Column(Integer, nullable=True)
+    exceptions_count = Column(Integer, nullable=True)
+    output_json = Column(JSON, nullable=True)
+    validation_json = Column(JSON, nullable=True)
+    messages_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+
+class AiCloseException(Base):
+    """One unique issue per run; the fingerprint stops two agents reporting the same item twice."""
+
+    __tablename__ = "ai_close_exceptions"
+    __table_args__ = (UniqueConstraint("run_id", "fingerprint", name="uq_ai_close_exception"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("ai_close_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("ai_close_tasks.id", ondelete="CASCADE"), nullable=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    agent = Column(String(40), nullable=False)
+    fingerprint = Column(String(200), nullable=False)
+    category = Column(String(40), nullable=False)
+    severity = Column(String(16), nullable=False)
+    title = Column(String(300), nullable=False)
+    detail = Column(Text, nullable=True)
+    amount = Column(Float, nullable=True)
+    source_refs = Column(JSON, nullable=True)
+    status = Column(String(16), nullable=False, default="open")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AiCloseJournalProposal(Base):
+    __tablename__ = "ai_close_journal_proposals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, ForeignKey("ai_close_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("ai_close_tasks.id", ondelete="SET NULL"), nullable=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    agent = Column(String(40), nullable=False)
+    fingerprint = Column(String(200), nullable=False, index=True)
+    journal_entry_id = Column(String(36), nullable=False, index=True)
+    entry_number = Column(String(30), nullable=True)
+    title = Column(String(300), nullable=False)
+    rationale = Column(Text, nullable=False)
+    amount = Column(Float, nullable=True)
+    source_refs = Column(JSON, nullable=True)
+    status = Column(String(24), nullable=False, default="pending_approval")
+    prepared_by = Column(String(100), nullable=False)
+    requested_by = Column(String(255), nullable=True)
+    decided_by = Column(String(255), nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    decision_note = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

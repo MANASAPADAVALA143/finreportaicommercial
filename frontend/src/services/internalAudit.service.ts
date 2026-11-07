@@ -171,6 +171,10 @@ async function saveBlob(res: Response, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+export async function downloadFile(path: string, companyId: string, filename: string) {
+  await saveBlob(await send(path, companyId), filename);
+}
+
 export const auditUniverseApi = crud<AuditUnit>('universe');
 export const engagementsApi = {
   ...crud<Engagement>('engagements'),

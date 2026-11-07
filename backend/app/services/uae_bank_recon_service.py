@@ -250,30 +250,34 @@ def _get_unmatched_gl_entries(
     from_date: date,
     to_date: date,
     db: Session,
+    company_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch posted JE lines that move cash (bank accounts)."""
-    je_list = (
-        db.query(UAEJournalEntry)
-        .filter(
-            UAEJournalEntry.tenant_id == tenant_id,
-            UAEJournalEntry.status == "posted",
-            UAEJournalEntry.entry_date >= from_date,
-            UAEJournalEntry.entry_date <= to_date,
-        )
-        .all()
+    """Posted cash/bank JE lines not already matched to any bank statement line."""
+    q = db.query(UAEJournalEntry).filter(
+        UAEJournalEntry.tenant_id == tenant_id,
+        UAEJournalEntry.status == "posted",
+        UAEJournalEntry.entry_date >= from_date,
+        UAEJournalEntry.entry_date <= to_date,
     )
+    if company_id:
+        q = q.filter(UAEJournalEntry.company_id == company_id)
+    already_matched = {
+        lid for (lid,) in db.query(UAEBankStatementLine.matched_journal_line_id)
+        .filter(UAEBankStatementLine.matched_journal_line_id.isnot(None))
+    }
     entries = []
-    for je in je_list:
+    for je in q.all():
         for line in je.lines:
             # Only cash/bank lines (account_code starts with 10)
-            if line.account_code and line.account_code.startswith("10"):
+            if line.account_code and line.account_code.startswith("10") and line.id not in already_matched:
                 entries.append({
                     "je_id":       je.id,
                     "line_id":     line.id,
                     "entry_date":  je.entry_date,
                     "description": je.description,
                     "reference":   je.reference or "",
-                    "amount":      line.debit - line.credit,  # positive = debit (cash in)
+                    # positive = debit (cash in); float so it compares with statement amounts
+                    "amount":      float(line.debit or 0) - float(line.credit or 0),
                 })
     return entries
 
@@ -389,15 +393,22 @@ def run_reconciliation(
     tenant_id: str,
     statement_id: str,
     db: Session,
+    *,
+    company_id: str | None = None,
+    use_ai: bool = True,
 ) -> dict[str, Any]:
     """
     Run three-step matching for all unmatched lines in a statement.
 
+    `company_id` limits candidate ledger lines to that company (defaults to the bank
+    account's company). `use_ai=False` skips the model step so results are repeatable.
     Returns summary: {total, exact, fuzzy, ai, unmatched}
     """
     stmt = db.query(UAEBankStatement).filter_by(id=statement_id, tenant_id=tenant_id).first()
     if not stmt:
         raise ValueError(f"Statement {statement_id} not found")
+    if company_id is None and stmt.bank_account is not None:
+        company_id = stmt.bank_account.company_id
 
     bank_lines = (
         db.query(UAEBankStatementLine)
@@ -412,7 +423,7 @@ def run_reconciliation(
 
     from_date = min(dates) - timedelta(days=7)
     to_date   = max(dates) + timedelta(days=7)
-    gl_entries = _get_unmatched_gl_entries(tenant_id, from_date, to_date, db)
+    gl_entries = _get_unmatched_gl_entries(tenant_id, from_date, to_date, db, company_id)
 
     matched_gl: set[str] = set()
     counts = {"exact": 0, "fuzzy": 0, "ai": 0, "unmatched": 0}
@@ -423,7 +434,7 @@ def run_reconciliation(
         if not match:
             match = _fuzzy_match(bl, gl_entries, matched_gl)
             method = "fuzzy"
-        if not match:
+        if not match and use_ai:
             match = _ai_match(bl, gl_entries, matched_gl)
             method = "ai"
 
