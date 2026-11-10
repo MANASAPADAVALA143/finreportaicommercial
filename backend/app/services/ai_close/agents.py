@@ -292,6 +292,76 @@ def _variance(line_items: list[dict]) -> dict:
     return _calculate(line_items)
 
 
+ROLLING_MONTHS = 12
+TREND_DAMPING = 0.5
+SCENARIOS = {  # name: (revenue factor, cost factor)
+    "base_case": (1.0, 1.0),
+    "best_case": (1.05, 0.97),
+    "worst_case": (0.90, 1.05),
+}
+
+
+def _slope(values: list[float]) -> float:
+    n = len(values)
+    if n < 3:
+        return 0.0
+    xs = range(n)
+    mx, my = (n - 1) / 2, sum(values) / n
+    den = sum((x - mx) ** 2 for x in xs)
+    return sum((x - mx) * (y - my) for x, y in zip(xs, values)) / den if den else 0.0
+
+
+def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
+    """12 months after the period: per-account run rate (median of the last three months) plus a damped
+    linear trend over up to 12 months of history, then best/worst-case factors on revenue and costs."""
+    history_from = ledger.period_add(ctx.period, -(ROLLING_MONTHS - 1))
+    moves = [m for m in ledger.monthly_movements(ctx.db, ctx.scope, history_from, ctx.period)
+             if m["account_type"] in ("Income", "Expense")]
+    periods = ledger.periods_between(history_from, ctx.period)
+    by_account: dict[str, dict[str, Any]] = {}
+    for m in moves:
+        a = by_account.setdefault(m["account_code"], {"account_code": m["account_code"], "account_name": m["account_name"],
+                                                      "type": m["account_type"], "series": {p: 0.0 for p in periods}})
+        a["series"][m["period"]] += m["net"]
+    future = [ledger.period_add(ctx.period, i) for i in range(1, ROLLING_MONTHS + 1)]
+    lines = []
+    for a in by_account.values():
+        series = [a["series"][p] for p in periods]
+        first = next((i for i, v in enumerate(series) if abs(v) > 0.005), None)
+        if first is None:
+            continue
+        active = series[first:]
+        recent = sorted(active[-3:])
+        run_rate = recent[len(recent) // 2] if len(recent) % 2 else (recent[len(recent) // 2 - 1] + recent[len(recent) // 2]) / 2
+        slope = _slope(active) * TREND_DAMPING
+        path = [round(max(run_rate + slope * (h + 1), 0.0), 2) for h in range(ROLLING_MONTHS)]
+        lines.append({"account_code": a["account_code"], "account": f"{a['account_code']} {a['account_name']}", "type": a["type"],
+                      "run_rate": round(run_rate, 2), "monthly_trend": round(slope, 2), "months_of_history": len(active),
+                      "next_12_months": round(sum(path), 2), "path": path})
+    revenue_path = [sum(l["path"][i] for l in lines if l["type"] == "Income") for i in range(ROLLING_MONTHS)]
+    cost_path = [sum(l["path"][i] for l in lines if l["type"] == "Expense") for i in range(ROLLING_MONTHS)]
+    scenarios: dict[str, list[dict[str, Any]]] = {}
+    totals: dict[str, dict[str, float]] = {}
+    for name, (rev_f, cost_f) in SCENARIOS.items():
+        cash, path = opening_cash, []
+        for i, period in enumerate(future):
+            revenue, expenses = round(revenue_path[i] * rev_f, 2), round(cost_path[i] * cost_f, 2)
+            cash = round(cash + revenue - expenses, 2)
+            path.append({"period": period, "revenue": revenue, "expenses": expenses, "profit": round(revenue - expenses, 2),
+                         "indicative_cash": cash})
+        scenarios[name] = path
+        totals[name] = {"revenue": round(sum(p["revenue"] for p in path), 2), "expenses": round(sum(p["expenses"] for p in path), 2),
+                        "profit": round(sum(p["profit"] for p in path), 2), "closing_cash": path[-1]["indicative_cash"]}
+    lines.sort(key=lambda l: (l["type"] != "Income", -l["next_12_months"]))
+    return {
+        "months": future, **scenarios, "totals": totals, "accounts": [{k: v for k, v in l.items() if k != "path"} for l in lines],
+        "history_months": len(periods), "method": (
+            f"Per account: median of the last three months as the run rate plus {TREND_DAMPING:.0%} of the linear trend over up to "
+            f"{ROLLING_MONTHS} months of history. Best case: revenue +5%, costs -3%. Worst case: revenue -10%, costs +5%. "
+            "Indicative cash adds monthly profit to period-end cash (no working-capital timing, capex or financing)."),
+    }
+
+
 def fpa(ctx: CloseContext) -> AgentOutcome:
     db = ctx.db
     lookback = ledger.period_add(ctx.period, -3)
@@ -364,8 +434,17 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
     else:
         limitations.append("Cash outflows use the average monthly expense; supplier payment schedules (AP) were not available.")
 
+    rolling = rolling_forecast(ctx, cash)
+    base_total = rolling["totals"]["base_case"]
+    if rolling["history_months"] and len(rolling["accounts"]) and min(a["months_of_history"] for a in rolling["accounts"]) < 6:
+        limitations.append("Rolling forecast uses fewer than six months of history for some accounts; trends are indicative.")
+    limitations.append("Rolling forecast has no seasonality adjustment.")
     checks = [Check("pl_totals_tie", abs(revenue - sum(m["net"] for m in current.values() if m["account_type"] == "Income")) < 0.01,
-                    "Revenue equals the sum of income accounts for the period.", blocking=True)]
+                    "Revenue equals the sum of income accounts for the period.", blocking=True),
+              Check("rolling_forecast_ties",
+                    abs(base_total["revenue"] - round(sum(p["revenue"] for p in rolling["base_case"]), 2)) < 0.05
+                    and len(rolling["base_case"]) == ROLLING_MONTHS,
+                    f"Rolling forecast covers {ROLLING_MONTHS} months and its totals equal the monthly lines.", blocking=True)]
     if variance:
         sum_actual = round(sum(li["actual"] for li in variance["line_items"]), 2)
         checks.append(Check("variance_totals_tie", abs(sum_actual - variance["total_actual"]) < 0.05,
@@ -378,11 +457,13 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
                                    for p, r, e in zip(prior_periods, prior_rev, prior_exp)],
             "variance": variance, "materiality": materiality, "opening_cash": cash,
             "monthly_cost_assumption": monthly_cost, "cash_forecast": scenarios, "limitations": limitations,
-            "ap_due_schedule": ap_due,
+            "ap_due_schedule": ap_due, "rolling_forecast": rolling,
             "accounts": sorted(current.values(), key=lambda m: m["account_code"] or ""),
         },
         checks=checks, exceptions=exceptions,
-        messages=[f"Compared {len(items)} budgeted account(s); {len(exceptions)} material overrun(s). Forecast 30/60/90 days from {cash:,.2f} cash."],
+        messages=[f"Compared {len(items)} budgeted account(s); {len(exceptions)} material overrun(s). Forecast 30/60/90 days from {cash:,.2f} cash.",
+                  f"Rolling 12 months: base profit {base_total['profit']:,.2f} (best {rolling['totals']['best_case']['profit']:,.2f}, "
+                  f"worst {rolling['totals']['worst_case']['profit']:,.2f})."],
     )
 
 

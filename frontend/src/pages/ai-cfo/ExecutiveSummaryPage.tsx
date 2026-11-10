@@ -15,7 +15,7 @@ const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] =
   { value: 'ap_processing', label: 'AP Processing Agent', note: 'Invoice register, PO/GRN 3-way match, duplicates, payment proposals, uninvoiced receipts' },
   { value: 'ar_intelligence', label: 'AR Intelligence Agent', note: 'Ageing, overdue follow-ups, AR control check' },
   { value: 'ifrs', label: 'IFRS Accounting Agent', note: 'Statement integrity, accruals, end-of-service, expected credit loss, IFRS 16 entries' },
-  { value: 'fpa', label: 'FP&A Agent', note: 'Budget vs actual and a 30/60/90-day cash forecast (uses AR and AP)' },
+  { value: 'fpa', label: 'FP&A Agent', note: 'Budget vs actual, rolling 12-month forecast (base/best/worst) and 30/60/90-day cash (uses AR and AP)' },
   { value: 'investment', label: 'Investment Agent', note: 'Portfolio valuation, returns, concentration limits, IFRS 9 fair value journals' },
 ];
 const POLL_MS = 2000;

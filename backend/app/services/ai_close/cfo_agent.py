@@ -133,6 +133,10 @@ def _template(facts: dict[str, Any]) -> str:
         g = facts["group"]
         parts.append(f"After eliminating {g['eliminated_revenue']:,.2f} of intercompany revenue, consolidated revenue is "
                      f"{g['consolidated_revenue']:,.2f} and consolidated profit {g['consolidated_net_profit']:,.2f}.")
+    o = facts.get("outlook_next_12_months")
+    if o:
+        parts.append(f"Over the next 12 months profit is forecast at {o['base']['profit']:,.2f} in the base case "
+                     f"({o['worst']['profit']:,.2f} worst, {o['best']['profit']:,.2f} best).")
     h = facts["headline"]
     parts.append(f"The close is {h['close_completion_pct']}% complete with {h['open_exceptions']} open exception(s) and "
                  f"{h['pending_approvals']} journal(s) awaiting approval.")
@@ -245,6 +249,10 @@ def cfo_intelligence(ctx: CloseContext) -> AgentOutcome:
         "management_decisions": [{"journal": p.entry_number, "title": p.title, "decision": p.status, "by": p.decided_by,
                                   "note": p.decision_note} for p in decided],
     }
+    outlook = ((up.get("fpa") or {}).get("rolling_forecast") or {}).get("totals")
+    if outlook:
+        facts["outlook_next_12_months"] = {name.replace("_case", ""): {"profit": v["profit"], "revenue": v["revenue"]}
+                                           for name, v in outlook.items()}
     consol = up.get("consolidation")
     if consol:
         facts["group"] = {"consolidated_revenue": consol.get("consolidated_revenue"),

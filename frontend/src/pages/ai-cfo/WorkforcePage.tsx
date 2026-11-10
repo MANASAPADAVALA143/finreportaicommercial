@@ -44,9 +44,9 @@ const WORKFORCE: AgentSpec[] = [
   },
   {
     key: 'fpa', name: 'FP&A Agent', role: 'Performance and forecast', icon: TrendingUp,
-    does: ['Actual vs budget by account', 'Flags material overruns', 'Explains movements against prior months', '30/60/90-day cash forecast with downside and upside'],
+    does: ['Actual vs budget by account', 'Flags material overruns', 'Rolling 12-month forecast: base, best and worst case', '30/60/90-day cash forecast with downside and upside'],
     uses: 'Posted ledger, FP&A budgets, AR and AP schedules', delivers: 'FP&A Variance & Forecast Report', report: 'fpa_intelligence', group: 'optional',
-    prompt: 'Analyse October actual performance against budget. Identify significant revenue and expense variances, explain key movements and prepare the cash forecast with best-case and worst-case scenarios.',
+    prompt: 'Analyse October actual performance against budget. Identify significant revenue and expense variances, explain key movements and prepare a rolling 12-month financial forecast with best-case and worst-case scenarios.',
   },
   {
     key: 'investment', name: 'Investment Agent', role: 'Portfolio and treasury review', icon: PieChart,

@@ -11,8 +11,9 @@ from typing import Any, Callable
 
 from app.services.ai_close.context import AgentOutcome, Check, CloseContext, Entity
 
-COMBINE_BY = {"buckets": "bucket", "prior_three_months": "period"}
-NON_ADDITIVE = {"materiality", "monthly_cost_assumption", "rate_pct"}
+COMBINE_BY = {"buckets": "bucket", "prior_three_months": "period",
+              "base_case": "period", "best_case": "period", "worst_case": "period"}
+NON_ADDITIVE = {"materiality", "monthly_cost_assumption", "rate_pct", "history_months", "months_of_history"}
 
 
 def entity_upstream(upstream: dict[str, dict[str, Any]], entity_id: str) -> dict[str, dict[str, Any]]:

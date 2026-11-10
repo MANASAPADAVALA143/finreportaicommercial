@@ -262,6 +262,7 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
             {"title": "Cash forecast", "columns": ["Scenario", "Day", "Inflows", "Outflows", "Closing cash"],
              "rows": [[name, p["day"], _money(p["inflows"]), _money(p["outflows"]), _money(p["closing_cash"])]
                       for name, path in forecast.items() for p in path]},
+            *_rolling_sections(out.get("rolling_forecast") or {}, t),
             {"title": "Trend", "columns": ["Period", "Revenue", "Expenses"],
              "rows": [[p["period"], _money(p["revenue"]), _money(p["expenses"])] for p in out.get("prior_three_months", [])]
                      + [[out.get("period"), _money(out.get("revenue")), _money(out.get("expenses"))]]},
@@ -269,7 +270,11 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
         ]
         spec["notes"] = out.get("limitations", []) + [
             "Downside = collections -20%, costs +10%; upside = costs -5%; outflows use the average monthly cost.",
-        ]
+        ] + ([out["rolling_forecast"]["method"]] if (out.get("rolling_forecast") or {}).get("method") else [])
+        totals = (out.get("rolling_forecast") or {}).get("totals") or {}
+        if totals:
+            spec["summary"] += [(f"Next 12 months profit ({name.replace('_case', '')})", _money(v.get("profit")))
+                                for name, v in totals.items()]
     elif key == "investment_review":
         led = out.get("ledger") or {}
         fv = out.get("fair_value_by_category") or {}
@@ -361,6 +366,25 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
                        "; ".join(f"{l['account_code']} Dr {_money(l.get('debit') or None)} Cr {_money(l.get('credit') or None)}"
                                  for l in j["lines"]), j["rationale"]]))
     return spec
+
+
+def _rolling_sections(rolling: dict[str, Any], t: _Table) -> list[dict]:
+    if not rolling.get("base_case"):
+        return []
+    best = {p["period"]: p for p in rolling.get("best_case", [])}
+    worst = {p["period"]: p for p in rolling.get("worst_case", [])}
+    return [
+        {"title": "Rolling 12-month forecast", "columns": ["Month", "Revenue (base)", "Costs (base)", "Profit (base)",
+                                                           "Profit (best)", "Profit (worst)", "Indicative cash (base)"],
+         "rows": [[p["period"], _money(p["revenue"]), _money(p["expenses"]), _money(p["profit"]),
+                   _money(best.get(p["period"], {}).get("profit")), _money(worst.get(p["period"], {}).get("profit")),
+                   _money(p["indicative_cash"])] for p in rolling["base_case"]]},
+        t.from_rows("Rolling forecast by account (base case)", ["Account", "Type", "Run rate / month", "Trend / month",
+                                                                "Months of history", "Next 12 months"],
+                    rolling.get("accounts", []),
+                    lambda a: [a["account"], a["type"], _money(a["run_rate"]), _money(a["monthly_trend"]),
+                               a.get("months_of_history"), _money(a["next_12_months"])]),
+    ]
 
 
 def _cfo_spec(out: dict[str, Any], t: _Table) -> dict[str, Any]:
