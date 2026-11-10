@@ -398,7 +398,7 @@ def seed_demo_ap(sb: Any, company_id: str, name: str, slug: str, workspace_id: s
         for k in range(per_month):
             vendor, desc, base, account = AP_VENDORS[k % len(AP_VENDORS)]
             seq += 1
-            net = round(base * (1 + ((seq * 7) % 11) / 100), 2)
+            net = round(base * (1 + ((seq * 7) % 11) / 100) + seq * 0.61, 2)  # distinct per invoice: no false duplicates
             day = start + timedelta(days=(k * 3) % 26)
             po_no = f"{prefix}-PO-{seq:04d}"
             pos.append({"company_id": company_id, "po_number": po_no, "vendor_name": vendor, "po_amount": net, "currency": "AED",
@@ -453,9 +453,16 @@ def seed_demo_ap(sb: Any, company_id: str, name: str, slug: str, workspace_id: s
     return {"invoices": len(invoices), "purchase_orders": len(pos), "goods_receipts": len(grns)}
 
 
-def seed_demo_group(db: Session, workspace_id: str, today: date | None = None) -> dict[str, Any]:
+SCALES = {  # card settlements per month (parent bank), routine supplier invoices per month (parent, each subsidiary)
+    "full": (1000, 250, 30),
+    "compact": (parent_demo.CARD_SETTLEMENTS_PER_MONTH, 40, 6),
+}
+
+
+def seed_demo_group(db: Session, workspace_id: str, today: date | None = None, scale: str = "full") -> dict[str, Any]:
     today = today or date.today()
-    parent = parent_demo.seed_demo_company(db, workspace_id, today=today)
+    cards, parent_ap, sub_ap = SCALES[scale]
+    parent = parent_demo.seed_demo_company(db, workspace_id, today=today, card_settlements=cards)
     months = parent["periods"]
     _extra_accounts(db, workspace_id, parent["company_id"])
     holdings = _seed_portfolio(db, workspace_id, parent["company_id"], months)
@@ -463,8 +470,8 @@ def seed_demo_group(db: Session, workspace_id: str, today: date | None = None) -
     subs = [_seed_subsidiary(db, workspace_id, services, months, logistics["name"]),
             _seed_subsidiary(db, workspace_id, logistics, months, services["name"])]
     db.commit()
-    companies = [(parent["company_id"], parent_demo.DEMO_NAME, parent_demo.DEMO_SLUG, True, 40)] + [
-        (s["company_id"], spec["name"], spec["slug"], False, 6) for s, spec in zip(subs, SUBSIDIARIES)]
+    companies = [(parent["company_id"], parent_demo.DEMO_NAME, parent_demo.DEMO_SLUG, True, parent_ap)] + [
+        (s["company_id"], spec["name"], spec["slug"], False, sub_ap) for s, spec in zip(subs, SUBSIDIARIES)]
     ap: dict[str, Any] = {}
     try:
         from app.core.supabase import get_supabase

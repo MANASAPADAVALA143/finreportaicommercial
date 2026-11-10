@@ -134,7 +134,10 @@ def _card_amount(idx: int, k: int) -> float:
     return round(1800 + ((idx * 7 + k * 13) % 17) * 95.5, 2)
 
 
-def seed_demo_company(db: Session, workspace_id: str, today: date | None = None) -> dict[str, Any]:
+def seed_demo_company(db: Session, workspace_id: str, today: date | None = None,
+                      card_settlements: int = CARD_SETTLEMENTS_PER_MONTH) -> dict[str, Any]:
+    """`card_settlements` sets the monthly number of card-terminal settlements; their amounts scale so
+    monthly card revenue stays the same at any volume."""
     today = today or date.today()
     profile = (
         db.query(UaeCompanyProfile)
@@ -201,9 +204,9 @@ def seed_demo_company(db: Session, workspace_id: str, today: date | None = None)
             if paid:
                 post(f"DEMO-RC-{number[9:]}", paid_on, f"Receipt {number}", BANK, AR, amount, number, amount)
 
-        for k in range(CARD_SETTLEMENTS_PER_MONTH):
+        for k in range(card_settlements):
             day = start + timedelta(days=k % 28)
-            amount = _card_amount(idx, k)
+            amount = round(_card_amount(idx, k) * CARD_SETTLEMENTS_PER_MONTH / card_settlements, 2)
             ref = f"POS-{period}-{k + 1:03d}"
             post(f"DEMO-POS-{period}-{k + 1:03d}", day, "Card terminal settlement", BANK, CARD_SALES, amount, ref, amount)
 

@@ -169,8 +169,8 @@ def session_factory():
 @pytest.fixture()
 def demo(session_factory, sb):
     db = session_factory()
-    a = seed_demo_group(db, WS_A, today=TODAY)
-    b = seed_demo_group(db, WS_B, today=TODAY)
+    a = seed_demo_group(db, WS_A, today=TODAY, scale="compact")
+    b = seed_demo_group(db, WS_B, today=TODAY, scale="compact")
     db.close()
     ids = [e["id"] for e in a["entities"]]
     return SimpleNamespace(a=a["company_id"], b=b["company_id"], services=ids[1], logistics=ids[2], group=ids, info=a)
@@ -651,7 +651,7 @@ def test_demo_seed_endpoint_rebuilds_group_and_ap(client, env, demo, sb):
     assert {i["company_id"] for i in invoices} == set(demo.group) | {demo.b, *(e for e in _ws_b_entities(sb, demo))}
     again = client.post(BASE + "/demo/seed" + q(demo.a)).json()
     assert again["ap"][demo.a] == res["ap"][demo.a]
-    assert sum(1 for i in sb.tables["invoices"] if i["company_id"] == demo.a) == res["ap"][demo.a]["invoices"] == 127
+    assert sum(1 for i in sb.tables["invoices"] if i["company_id"] == demo.a) == res["ap"][demo.a]["invoices"] == 3 * 250 + 7
     assert all(r["workspace_id"] == WS_A for r in sb.tables["companies"] if r["id"] in demo.group)
 
 

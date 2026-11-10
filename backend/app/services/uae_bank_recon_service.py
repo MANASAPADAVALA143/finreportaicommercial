@@ -252,34 +252,52 @@ def _get_unmatched_gl_entries(
     db: Session,
     company_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Posted cash/bank JE lines not already matched to any bank statement line."""
-    q = db.query(UAEJournalEntry).filter(
-        UAEJournalEntry.tenant_id == tenant_id,
-        UAEJournalEntry.status == "posted",
-        UAEJournalEntry.entry_date >= from_date,
-        UAEJournalEntry.entry_date <= to_date,
+    """Posted cash/bank JE lines (account codes 10xx) not already matched to a bank statement line."""
+    q = (
+        db.query(UAEJournalLine.id, UAEJournalLine.debit, UAEJournalLine.credit, UAEJournalEntry.id,
+                 UAEJournalEntry.entry_date, UAEJournalEntry.description, UAEJournalEntry.reference)
+        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+        .filter(
+            UAEJournalEntry.tenant_id == tenant_id,
+            UAEJournalEntry.status == "posted",
+            UAEJournalEntry.entry_date >= from_date,
+            UAEJournalEntry.entry_date <= to_date,
+            UAEJournalLine.account_code.like("10%"),
+        )
+        .order_by(UAEJournalEntry.entry_date, UAEJournalEntry.id, UAEJournalLine.id)
     )
     if company_id:
         q = q.filter(UAEJournalEntry.company_id == company_id)
-    already_matched = {
-        lid for (lid,) in db.query(UAEBankStatementLine.matched_journal_line_id)
-        .filter(UAEBankStatementLine.matched_journal_line_id.isnot(None))
-    }
-    entries = []
-    for je in q.all():
-        for line in je.lines:
-            # Only cash/bank lines (account_code starts with 10)
-            if line.account_code and line.account_code.startswith("10") and line.id not in already_matched:
-                entries.append({
-                    "je_id":       je.id,
-                    "line_id":     line.id,
-                    "entry_date":  je.entry_date,
-                    "description": je.description,
-                    "reference":   je.reference or "",
-                    # positive = debit (cash in); float so it compares with statement amounts
-                    "amount":      float(line.debit or 0) - float(line.credit or 0),
-                })
-    return entries
+    rows = q.all()
+    line_ids = [r[0] for r in rows]
+    already_matched: set[str] = set()
+    for start in range(0, len(line_ids), 500):
+        already_matched |= {lid for (lid,) in db.query(UAEBankStatementLine.matched_journal_line_id).filter(
+            UAEBankStatementLine.matched_journal_line_id.in_(line_ids[start:start + 500]))}
+    return [
+        {
+            "je_id": je_id, "line_id": line_id, "entry_date": entry_date, "description": description,
+            "reference": reference or "",
+            # positive = debit (cash in); float so it compares with statement amounts
+            "amount": float(debit or 0) - float(credit or 0),
+        }
+        for line_id, debit, credit, je_id, entry_date, description, reference in rows
+        if line_id not in already_matched
+    ]
+
+
+def _by_amount(gl_entries: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+    """Candidates keyed by amount in cents (both match steps require the amount to agree to 0.01)."""
+    index: dict[int, list[dict[str, Any]]] = {}
+    for pos, entry in enumerate(gl_entries):
+        entry["_pos"] = pos
+        index.setdefault(round(entry["amount"] * 100), []).append(entry)
+    return index
+
+
+def _candidates(index: dict[int, list[dict[str, Any]]], amount: float) -> list[dict[str, Any]]:
+    cents = round(amount * 100)
+    return index.get(cents, []) + index.get(cents - 1, []) + index.get(cents + 1, [])
 
 
 def _bl_amount(bl: UAEBankStatementLine) -> float:
@@ -424,15 +442,17 @@ def run_reconciliation(
     from_date = min(dates) - timedelta(days=7)
     to_date   = max(dates) + timedelta(days=7)
     gl_entries = _get_unmatched_gl_entries(tenant_id, from_date, to_date, db, company_id)
+    index = _by_amount(gl_entries)
 
     matched_gl: set[str] = set()
     counts = {"exact": 0, "fuzzy": 0, "ai": 0, "unmatched": 0}
 
     for bl in bank_lines:
-        match = _exact_match(bl, gl_entries, matched_gl)
+        candidates = sorted(_candidates(index, _bl_amount(bl)), key=lambda e: e["_pos"])
+        match = _exact_match(bl, candidates, matched_gl)
         method = "exact"
         if not match:
-            match = _fuzzy_match(bl, gl_entries, matched_gl)
+            match = _fuzzy_match(bl, candidates, matched_gl)
             method = "fuzzy"
         if not match and use_ai:
             match = _ai_match(bl, gl_entries, matched_gl)
