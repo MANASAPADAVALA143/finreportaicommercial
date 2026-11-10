@@ -95,7 +95,7 @@ def notify(db: Session, run: AiCloseRun, schedule: AiCloseSchedule) -> list[dict
     s = alerts.summary(db, run)
     external = schedule.notify_when == "always" or (schedule.notify_when == "issues" and s["has_issues"])
     return alerts.send_close_summary(db, run, emails=schedule.notify_emails or [], slack_webhook=schedule.slack_webhook_url,
-                                     external=external)
+                                     external=external, slack_encrypted=True)
 
 
 def run_schedule(session_factory: Callable[[], Session], schedule_id: int, period: str, max_workers: int = 4) -> int | None:

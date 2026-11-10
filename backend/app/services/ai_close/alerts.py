@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core import secrets_box
 from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun
 from app.models.company_setup import UaeCompanyProfile
 from app.services import notification_service
@@ -121,9 +122,16 @@ def _mask(url: str) -> str:
 
 
 def send_close_summary(db: Session, run: AiCloseRun, *, emails: list[str] | None = None, slack_webhook: str | None = None,
-                       external: bool = True) -> list[dict[str, Any]]:
-    """In-app notification always; email and Slack when `external`. Never raises for delivery errors."""
+                       external: bool = True, slack_encrypted: bool = False) -> list[dict[str, Any]]:
+    """In-app notification always; email and Slack when `external`. Never raises for delivery errors.
+    With slack_encrypted the webhook is the stored (encrypted) value and is decrypted here."""
     s = summary(db, run)
+    slack_error = None
+    if slack_webhook and slack_encrypted:
+        try:
+            slack_webhook = secrets_box.decrypt(slack_webhook)
+        except secrets_box.SecretUnreadable as exc:
+            slack_webhook, slack_error = None, str(exc)
     deliveries = []
     severity = "critical" if s["status"] == "failed" else ("warning" if s["has_issues"] else "info")
     notification_service._upsert_notification(
@@ -147,6 +155,8 @@ def send_close_summary(db: Session, run: AiCloseRun, *, emails: list[str] | None
                     to, subject, text, html=html, attachment=attachment,
                     attachment_filename=f"cfo-executive-summary-{run.period}-run{run.id}.pdf")
                 deliveries.append(_record(run, "email", to, ok, "" if ok else "Email not delivered (check RESEND_API_KEY or SMTP settings)"))
+        if slack_error:
+            deliveries.append(_record(run, "slack", "Slack webhook", False, slack_error + "; save the webhook again"))
         if slack_webhook:
             if not valid_slack_url(slack_webhook):
                 deliveries.append(_record(run, "slack", "invalid webhook", False, "Not a Slack incoming-webhook URL"))

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.core import company_access
+from app.core import company_access, secrets_box
 from app.core.company_access import is_super_admin, require_company_access
 from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
@@ -413,7 +413,8 @@ def notify_run(rid: int, body: NotifyIn, scope: Scope = Depends(_write), db: Ses
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not emails and scope.user_email:
         emails = [scope.user_email]
-    deliveries = alerts.send_close_summary(db, run, emails=emails, slack_webhook=schedule.slack_webhook_url if schedule else None)
+    deliveries = alerts.send_close_summary(db, run, emails=emails, slack_webhook=schedule.slack_webhook_url if schedule else None,
+                                           slack_encrypted=True)
     return {"deliveries": deliveries}
 
 
@@ -466,7 +467,9 @@ def put_schedule(body: ScheduleIn, scope: Scope = Depends(_manage), ctx: Workspa
     schedule.run_day, schedule.run_hour, schedule.timezone = body.run_day, body.run_hour, body.timezone
     schedule.notify_emails, schedule.notify_when, schedule.updated_by = emails, body.notify_when, scope.user_email
     if body.slack_webhook_url is not None:
-        schedule.slack_webhook_url = slack or None
+        schedule.slack_webhook_url = secrets_box.encrypt(slack) if slack else None
+    elif schedule.slack_webhook_url and not schedule.slack_webhook_url.startswith(secrets_box.PREFIX):
+        schedule.slack_webhook_url = secrets_box.encrypt(schedule.slack_webhook_url)
     db.commit()
     db.refresh(schedule)
     return scheduling.describe(schedule)

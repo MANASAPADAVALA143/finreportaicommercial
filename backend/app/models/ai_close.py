@@ -45,7 +45,7 @@ class AiCloseSchedule(Base):
     """Recurring month-end close for one company (or a group anchored on it): on run_day at
     run_hour in `timezone`, close the previous month and send the summary to the recipients.
     last_run_period is claimed atomically so several app instances never run the same month twice.
-    The Slack webhook is write-only through the API."""
+    The Slack webhook is stored encrypted (app.core.secrets_box) and is write-only through the API."""
 
     __tablename__ = "ai_close_schedules"
     __table_args__ = (UniqueConstraint("workspace_id", "company_id", name="uq_ai_close_schedule"),)

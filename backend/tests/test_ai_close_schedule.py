@@ -170,6 +170,26 @@ def test_schedule_api_validation_roles_and_secret(client, env, demo):
     assert client.delete(url).status_code == 204 and client.get(url).json() is None
 
 
+def test_slack_webhook_is_encrypted_at_rest(client, env, demo, outbox, session_factory, monkeypatch):
+    env.roles[WS_A] = "owner"
+    body = {"agents": PHASE_A, "run_day": 2, "run_hour": 6, "timezone": "Asia/Dubai", "notify_emails": [],
+            "slack_webhook_url": SLACK}
+    assert client.put(BASE + "/schedule" + q(demo.a), json=body).json()["slack_configured"] is True
+    db = session_factory()
+    stored = db.query(AiCloseSchedule).filter_by(company_id=demo.a).one().slack_webhook_url
+    db.close()
+    assert stored.startswith("enc:v1:") and SLACK not in stored and "hooks.slack.com" not in stored
+
+    run = _start(client, demo.a, agents=PHASE_A)
+    deliveries = client.post(f"{BASE}/runs/{run['id']}/notify" + q(demo.a), json={}).json()["deliveries"]
+    assert deliveries[-1]["channel"] == "slack" and deliveries[-1]["ok"] and outbox["slack"][0]["url"] == SLACK
+
+    monkeypatch.setenv("DATA_ENCRYPTION_KEY", "rotated-key")
+    failed = client.post(f"{BASE}/runs/{run['id']}/notify" + q(demo.a), json={}).json()["deliveries"]
+    assert failed[-1]["channel"] == "slack" and not failed[-1]["ok"] and "cannot be decrypted" in failed[-1]["detail"]
+    assert len(outbox["slack"]) == 1
+
+
 def test_send_summary_now(client, env, demo, outbox):
     run = _start(client, demo.a, agents=PHASE_A)
     res = client.post(f"{BASE}/runs/{run['id']}/notify" + q(demo.a), json={"emails": ["cfo@example.com"]})
