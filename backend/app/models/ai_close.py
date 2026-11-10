@@ -86,6 +86,7 @@ class AiCloseControls(Base):
     company_id = Column(String(50), nullable=False, index=True)
     require_segregation = Column(Boolean, nullable=False, default=False)
     manager_limit = Column(Float, nullable=True)
+    ecl_rates = Column(JSON, nullable=True)  # {current, 1_30, 31_60, 61_90, 90_plus}: loss rates 0–1; null = defaults
     updated_by = Column(String(255), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

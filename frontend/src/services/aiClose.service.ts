@@ -220,7 +220,8 @@ export type CloseRunSummary = {
   freshness_json: Freshness | null;
 };
 
-export type CloseControls = { require_segregation: boolean; manager_limit: number | null; updated_by: string | null };
+export type EclRates = { current: number; '1_30': number; '31_60': number; '61_90': number; '90_plus': number };
+export type CloseControls = { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null; updated_by: string | null };
 
 export type CloseRun = CloseRunSummary & {
   controls: CloseControls;
@@ -302,7 +303,7 @@ export const aiCloseApi = {
     r<AskRun>(`/agents/${agent}/ask`, companyId, json('POST', body)),
   askRun: (companyId: string, runId: number) => r<AskRun>(`/agents/runs/${runId}`, companyId),
   controls: (companyId: string) => r<CloseControls>('/controls', companyId),
-  saveControls: (companyId: string, body: { require_segregation: boolean; manager_limit: number | null }) =>
+  saveControls: (companyId: string, body: { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null }) =>
     r<CloseControls>('/controls', companyId, json('PUT', body)),
   holdings: (companyId: string) => r<Holding[]>('/investments', companyId),
   importPortfolio: (companyId: string, body: { holdings: HoldingInput[]; valuations: ValuationInput[] }) =>

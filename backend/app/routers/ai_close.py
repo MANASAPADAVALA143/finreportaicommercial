@@ -314,9 +314,21 @@ def _role(db: Session, ctx: WorkspaceContext) -> str | None:
     return company_access._workspace_role(db, ctx, ctx.workspace_id)
 
 
+class EclRatesIn(BaseModel):
+    current: float = Field(ge=0, le=1)
+    d1_30: float = Field(ge=0, le=1, alias="1_30")
+    d31_60: float = Field(ge=0, le=1, alias="31_60")
+    d61_90: float = Field(ge=0, le=1, alias="61_90")
+    d90_plus: float = Field(ge=0, le=1, alias="90_plus")
+
+    def rates(self) -> dict[str, float]:
+        return {"current": self.current, "1_30": self.d1_30, "31_60": self.d31_60, "61_90": self.d61_90, "90_plus": self.d90_plus}
+
+
 class ControlsIn(BaseModel):
     require_segregation: bool = False
     manager_limit: float | None = Field(default=None, ge=0)
+    ecl_rates: EclRatesIn | None = None
 
 
 @router.get("/controls")
@@ -333,7 +345,11 @@ def put_controls(body: ControlsIn, scope: Scope = Depends(_manage), ctx: Workspa
     if row is None:
         row = AiCloseControls(workspace_id=scope.workspace_id, company_id=scope.company_id)
         db.add(row)
+    rates = body.ecl_rates.rates() if body.ecl_rates else None
+    if rates and any(b < a for a, b in zip(list(rates.values()), list(rates.values())[1:])):
+        raise HTTPException(status_code=422, detail="Loss rates must not fall as receivables age")
     row.require_segregation, row.manager_limit, row.updated_by = body.require_segregation, body.manager_limit, scope.user_email
+    row.ecl_rates = rates
     db.commit()
     return close_controls.describe(row)
 

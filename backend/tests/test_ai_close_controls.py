@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.test_ai_close import (  # noqa: F401 - pytest fixtures
     BASE, PHASE_A, WS_A, _start, client, demo, env, q, sb, session_factory,
 )
@@ -13,15 +15,38 @@ def _decide(client, cid, pid, decision="approved", note=None):
 
 def test_controls_api_owner_only(client, env, demo):
     url = BASE + "/controls" + q(demo.a)
-    assert client.get(url).json() == {"require_segregation": False, "manager_limit": None, "updated_by": None}
+    assert client.get(url).json() == {"require_segregation": False, "manager_limit": None, "ecl_rates": None, "updated_by": None}
     env.roles[WS_A] = "finance_manager"
     assert client.put(url, json={"require_segregation": True}).status_code == 403
     env.roles[WS_A] = "owner"
     saved = client.put(url, json={"require_segregation": True, "manager_limit": 1000}).json()
-    assert saved == {"require_segregation": True, "manager_limit": 1000, "updated_by": "controller@example.com"}
+    assert saved == {"require_segregation": True, "manager_limit": 1000, "ecl_rates": None, "updated_by": "controller@example.com"}
     assert client.put(url, json={"manager_limit": -5}).status_code == 422
     env.roles[WS_A] = "viewer"
     assert client.get(url).json()["manager_limit"] == 1000
+
+
+RATES = {"current": 0.02, "1_30": 0.05, "31_60": 0.10, "61_90": 0.25, "90_plus": 0.60}
+
+
+def test_company_ecl_rates_drive_the_provision_matrix(client, env, demo):
+    env.roles[WS_A] = "owner"
+    url = BASE + "/controls" + q(demo.a)
+    assert client.put(url, json={"ecl_rates": {**RATES, "61_90": 0.05}}).status_code == 422
+    assert client.put(url, json={"ecl_rates": {**RATES, "90_plus": 1.5}}).status_code == 422
+    assert client.put(url, json={"ecl_rates": RATES}).json()["ecl_rates"] == RATES
+
+    run = _start(client, demo.a, agents=["ar_intelligence", "ifrs"])
+    out = client.get(f"{BASE}/runs/{run['id']}/tasks/ifrs" + q(demo.a)).json()["output_json"]
+    assert [m["rate_pct"] for m in out["ecl_matrix"]] == [2.0, 5.0, 10.0, 25.0, 60.0]
+    assert out["ecl_rates"]["source"] == "company policy" and "company's provision-matrix" in out["limitations"][0]
+    required = round(sum(m["ecl"] for m in out["ecl_matrix"]), 2)
+    ecl = next(p for p in run["proposals"] if p["fingerprint"].startswith("ifrs:ecl:"))
+    assert ecl["amount"] == pytest.approx(required, abs=0.01) and "approved provision-matrix policy" in ecl["rationale"]
+
+    default = _start(client, demo.services, agents=["ar_intelligence", "ifrs"])
+    services = client.get(f"{BASE}/runs/{default['id']}/tasks/ifrs" + q(demo.services)).json()["output_json"]
+    assert services["ecl_rates"]["source"] == "default" and services["ecl_matrix"][0]["rate_pct"] == 1.0
 
 
 def test_segregation_of_duties_blocks_the_preparer(client, env, demo):

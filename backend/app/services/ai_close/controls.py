@@ -21,7 +21,8 @@ def get(db: Session, workspace_id: str, company_id: str) -> AiCloseControls | No
 
 def describe(c: AiCloseControls | None) -> dict[str, Any]:
     return {"require_segregation": bool(c and c.require_segregation),
-            "manager_limit": c.manager_limit if c else None, "updated_by": c.updated_by if c else None}
+            "manager_limit": c.manager_limit if c else None, "ecl_rates": (c.ecl_rates if c else None) or None,
+            "updated_by": c.updated_by if c else None}
 
 
 def _same_person(a: str | None, b: str | None) -> bool:

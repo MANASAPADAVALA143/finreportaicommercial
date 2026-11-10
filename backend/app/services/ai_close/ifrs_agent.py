@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import or_
 
-from app.models.ai_close import AiCloseJournalProposal
+from app.models.ai_close import AiCloseControls, AiCloseJournalProposal
 from app.models.ifrs16_lease import IFRS16Lease
 from app.models.uae_accounting_full import UAEJournalEntry, UAEJournalLine, UAESalesInvoice
 from app.modules.ifrs16.ifrs16_je_service import existing_journals, journal_drafts
@@ -228,9 +228,13 @@ def ifrs(ctx: CloseContext) -> AgentOutcome:
 
     ar = ctx.upstream.get("ar_intelligence") or {}
     matrix = []
+    policy = db.query(AiCloseControls).filter(AiCloseControls.workspace_id == ctx.workspace_id,
+                                              AiCloseControls.company_id == ctx.company_id).first()
+    rates = (policy.ecl_rates if policy and policy.ecl_rates else None) or ECL_RATES
+    rates_source = "company policy" if rates is not ECL_RATES else "default"
     if ar.get("buckets"):
         for b in ar["buckets"]:
-            rate = ECL_RATES.get(b["bucket"], 0.0)
+            rate = rates.get(b["bucket"], 0.0)
             matrix.append({"bucket": b["label"], "gross": money(b["amount"]), "rate_pct": round(rate * 100, 1),
                            "ecl": round(money(b["amount"]) * rate, 2)})
         required = round(sum(m["ecl"] for m in matrix), 2)
@@ -246,8 +250,10 @@ def ifrs(ctx: CloseContext) -> AgentOutcome:
             journals.append(JournalDraft(
                 f"ifrs:ecl:{ctx.period}", f"Increase expected credit loss allowance by {shortfall:,.2f}",
                 f"Applying the simplified provision matrix (IFRS 9.5.5.15) to receivables aged at {ctx.end} gives a "
-                f"lifetime ECL of {required:,.2f} against an allowance of {held_allowance:,.2f}. Loss rates are default "
-                "assumptions and should be calibrated to the entity's own loss history.",
+                f"lifetime ECL of {required:,.2f} against an allowance of {held_allowance:,.2f}. "
+                + ("Loss rates are the company's approved provision-matrix policy."
+                   if rates_source == "company policy" else
+                   "Loss rates are default assumptions and should be calibrated to the entity's own loss history."),
                 ctx.end,
                 [{"account_code": ECL_EXPENSE[0], "account_name": ECL_EXPENSE[1], "debit": shortfall, "credit": 0},
                  {"account_code": ALLOWANCE[0], "account_name": ALLOWANCE[1], "debit": 0, "credit": shortfall}],
@@ -324,8 +330,12 @@ def ifrs(ctx: CloseContext) -> AgentOutcome:
             "balance_sheet": {**{k.lower(): v for k, v in totals.items()}, "profit_to_date": profit_to_date, "difference": bs_diff},
             "missing_accruals": missing, "ecl_matrix": matrix, "leases": lease_rows,
             "lease_maturity": {k: round(v, 2) for k, v in maturity.items()},
+            "ecl_rates": {"source": rates_source, **{k: round(v * 100, 2) for k, v in rates.items()}},
             "limitations": [
-                "Expected credit loss uses default loss rates (1/3/8/20/50%); calibrate to historical loss experience.",
+                ("Expected credit loss uses the company's provision-matrix loss rates (" if rates_source == "company policy"
+                 else "Expected credit loss uses default loss rates (")
+                + "/".join(f"{rates[k] * 100:g}%" for k in ("current", "1_30", "31_60", "61_90", "90_plus"))
+                + (")." if rates_source == "company policy" else "); set the company's own rates under Approval controls."),
                 "End-of-service accrual assumes recorded salaries approximate basic pay.",
             ],
         },
