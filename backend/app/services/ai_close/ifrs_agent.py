@@ -13,6 +13,9 @@ from datetime import date
 from statistics import mean
 from typing import Any
 
+from sqlalchemy import or_
+
+from app.models.ai_close import AiCloseJournalProposal
 from app.models.ifrs16_lease import IFRS16Lease
 from app.models.uae_accounting_full import UAEJournalEntry, UAEJournalLine, UAESalesInvoice
 from app.modules.ifrs16.ifrs16_je_service import existing_journals, journal_drafts
@@ -51,6 +54,41 @@ def _balances(ctx: CloseContext) -> list[dict[str, Any]]:
 
 def _bal(balances: list[dict[str, Any]], code: str) -> float:
     return round(sum(b["balance"] for b in balances if b["account_code"] == code), 2)
+
+
+REVERSING = ("grni:", "ifrs:accrual:")
+
+
+def _accrual_reversals(ctx: CloseContext) -> list[JournalDraft]:
+    """Accruals approved in an earlier close and posted in the previous month reverse on day one of this month."""
+    db = ctx.db
+    prior = ledger.period_add(ctx.period, -1)
+    approved = db.query(AiCloseJournalProposal).filter(
+        AiCloseJournalProposal.workspace_id == ctx.workspace_id, AiCloseJournalProposal.company_id == ctx.company_id,
+        AiCloseJournalProposal.status == "approved",
+        or_(*[AiCloseJournalProposal.fingerprint.startswith(p) for p in REVERSING]),
+    ).all()
+    drafts = []
+    for p in approved:
+        je = db.get(UAEJournalEntry, p.journal_entry_id)
+        if je is None or je.status != "posted" or je.period != prior:
+            continue
+        reference = f"REV-{je.entry_number}"
+        if db.query(UAEJournalEntry.id).filter(
+                UAEJournalEntry.tenant_id == ctx.workspace_id, UAEJournalEntry.reference == reference,
+                UAEJournalEntry.status.in_(("pending_approval", "posted", "draft"))).first():
+            continue
+        lines = [{"account_code": ln.account_code, "account_name": ln.account_name, "description": f"Reversal: {ln.description or ''}".strip(),
+                  "debit": money(ln.credit), "credit": money(ln.debit)} for ln in je.lines]
+        drafts.append(JournalDraft(
+            f"accrual_reversal:{p.id}", f"Reverse {prior} accrual: {p.title}"[:300],
+            f"{je.entry_number} accrued this cost at {je.entry_date} because the invoice had not been received. It reverses on "
+            f"the first day of {ctx.period} so the cost is not counted twice when the supplier invoice is posted.",
+            ctx.start, lines,
+            [{"type": "journal", "id": je.id, "ref": je.entry_number, "date": str(je.entry_date), "amount": p.amount}],
+            reference=reference,
+        ))
+    return drafts
 
 
 def ifrs(ctx: CloseContext) -> AgentOutcome:
@@ -267,6 +305,14 @@ def ifrs(ctx: CloseContext) -> AgentOutcome:
                          "not_applicable" if not leases else ("passed" if not missing_leases else "failed"),
                          "No active leases." if not leases else
                          f"{len(leases)} active lease(s); {missing_leases} without entries for {ctx.period}."))
+
+    reversals = _accrual_reversals(ctx)
+    journals += reversals
+    checks.append(_check("accrual_reversals", "IAS 1", "Last month's accruals reversed",
+                         "not_applicable" if not reversals else "failed",
+                         "No reversing accruals from last month." if not reversals
+                         else f"{len(reversals)} accrual(s) from {ledger.period_add(ctx.period, -1)} to reverse; reversals proposed.",
+                         round(sum(r.amount for r in reversals), 2) if reversals else None))
 
     evaluated = [c for c in checks if c["status"] != "not_applicable"]
     passed = [c for c in evaluated if c["status"] == "passed"]

@@ -38,7 +38,7 @@ const WORKFORCE: AgentSpec[] = [
   },
   {
     key: 'ifrs', name: 'IFRS Agent', role: 'Accounting standards and working papers', icon: Scale,
-    does: ['Statement integrity checks (IAS 1)', 'IFRS 9 expected credit loss (provision matrix)', 'IFRS 16 monthly lease entries', 'Missing accruals and end-of-service benefits (IAS 37, IAS 19)'],
+    does: ['Statement integrity checks (IAS 1)', 'IFRS 9 expected credit loss (provision matrix)', 'IFRS 16 monthly lease entries', 'Missing accruals (reversed next month) and end-of-service benefits'],
     uses: 'Posted ledger, lease register, receivables ageing', delivers: 'IFRS Accounting Pack', report: 'ifrs_pack', group: 'optional',
     prompt: 'Review October lease accounting under IFRS 16 and the expected credit loss under IFRS 9. Identify missing entries, prepare the supporting schedules and flag items requiring review.',
   },
