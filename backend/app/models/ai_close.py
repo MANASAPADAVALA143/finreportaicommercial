@@ -91,6 +91,26 @@ class AiCloseControls(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class AiCloseFxRate(Base):
+    """Rates for translating a foreign-currency entity into the group's reporting currency for one
+    month (IAS 21): closing rate for the balance sheet, average rate for income and expenses.
+    Rates are units of reporting currency per one unit of `currency`."""
+
+    __tablename__ = "ai_close_fx_rates"
+    __table_args__ = (UniqueConstraint("workspace_id", "period", "currency", "reporting_currency", name="uq_ai_close_fx_rate"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    period = Column(String(7), nullable=False)
+    currency = Column(String(3), nullable=False)
+    reporting_currency = Column(String(3), nullable=False, default="AED")
+    closing_rate = Column(Float, nullable=False)
+    average_rate = Column(Float, nullable=False)
+    source = Column(String(120), nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class AiCloseTask(Base):
     __tablename__ = "ai_close_tasks"
     __table_args__ = (UniqueConstraint("run_id", "agent", name="uq_ai_close_task"),)

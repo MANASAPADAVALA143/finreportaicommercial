@@ -8,7 +8,7 @@ import { Card, GOLD, NAVY, StatusPill } from './parts';
 import {
   AgentCard, CfoSummaryPanel, CloseApproval, Deliverables, ExceptionsTable, ExecutionSequence, JournalApprovalCentre, KpiGrid, fmtTime,
 } from './closeParts';
-import { ApprovalControlsCard, ScheduleCard, SummaryAlerts } from './closeSchedule';
+import { ApprovalControlsCard, FxRatesCard, ScheduleCard, SummaryAlerts } from './closeSchedule';
 
 const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] = [
   { value: 'bank_reconciliation', label: 'Bank Reconciliation Agent', note: 'Matches statements to the ledger, proposes fee and interest journals' },
@@ -40,6 +40,8 @@ export default function ExecutiveSummaryPage() {
   const active = run?.status === 'queued' || run?.status === 'running';
   const isDemo = !!activeCompany?.company_name?.includes(DEMO_TAG);
   const others = useMemo(() => companiesList.filter((c) => c.id !== companyId), [companiesList, companyId]);
+  const foreignCurrencies = useMemo(() => [...new Set(others.filter((c) => groupIds.includes(c.id) && c.base_currency && c.base_currency !== currency)
+    .map((c) => c.base_currency as string))], [others, groupIds, currency]);
 
   useEffect(() => {
     const demoSiblings = others.filter((c) => c.company_name?.includes(DEMO_TAG)).map((c) => c.id);
@@ -189,11 +191,15 @@ export default function ExecutiveSummaryPage() {
                     <label key={c.id} className="flex items-center gap-1.5">
                       <input type="checkbox" checked={groupIds.includes(c.id)}
                         onChange={(e) => setGroupIds((ids) => (e.target.checked ? [...ids, c.id] : ids.filter((x) => x !== c.id)))} />
-                      {c.company_name}
+                      {c.company_name}{c.base_currency && c.base_currency !== currency ? ` (${c.base_currency})` : ''}
                     </label>
                   ))}
                 </div>
               </div>
+            )}
+            {scope === 'group' && foreignCurrencies.length > 0 && (
+              <FxRatesCard companyId={companyId} period={period || run?.period || ''} reporting={currency}
+                currencies={foreignCurrencies} onError={setError} />
             )}
             <div className="flex flex-wrap gap-2">
               {AGENT_OPTIONS.map((a) => (

@@ -220,6 +220,10 @@ export type CloseRunSummary = {
   freshness_json: Freshness | null;
 };
 
+export type FxRate = {
+  id: number; period: string; currency: string; reporting_currency: string; closing_rate: number; average_rate: number;
+  source: string | null; updated_by: string | null;
+};
 export type EclRates = { current: number; '1_30': number; '31_60': number; '61_90': number; '90_plus': number };
 export type CloseControls = { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null; updated_by: string | null };
 
@@ -302,6 +306,9 @@ export const aiCloseApi = {
   ask: (companyId: string, agent: AgentKey, body: { prompt: string; period?: string; scope?: 'entity' | 'group'; entity_ids?: string[] }) =>
     r<AskRun>(`/agents/${agent}/ask`, companyId, json('POST', body)),
   askRun: (companyId: string, runId: number) => r<AskRun>(`/agents/runs/${runId}`, companyId),
+  fxRates: (companyId: string, period: string) => r<FxRate[]>(`/fx-rates?period=${period}`, companyId),
+  saveFxRate: (companyId: string, body: { period: string; currency: string; closing_rate: number; average_rate: number; source?: string }) =>
+    r<FxRate>('/fx-rates', companyId, json('PUT', body)),
   controls: (companyId: string) => r<CloseControls>('/controls', companyId),
   saveControls: (companyId: string, body: { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null }) =>
     r<CloseControls>('/controls', companyId, json('PUT', body)),

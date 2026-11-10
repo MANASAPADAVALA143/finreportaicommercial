@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.models.ai_close import AiCloseFxRate
 from app.models.uae_accounting_full import UAEAccount, UAEJournalEntry, UAEJournalLine
 from app.services import consolidation_service as cs
+from app.services.ai_cfo.ledger import period_add
 from app.services.ai_close.context import AgentOutcome, Check, CloseContext, ExceptionItem, money, severity
 
 PL_KEYS = [r["key"] for r in cs.PL_ROWS]
@@ -44,28 +46,63 @@ def _meta(ctx: CloseContext, entity_id: str) -> dict[str, tuple[str | None, str 
         (UAEAccount.company_id == entity_id) | (UAEAccount.company_id.is_(None)))}
 
 
+def _rate(db, workspace_id: str, period: str, currency: str, reporting: str) -> AiCloseFxRate | None:
+    return db.query(AiCloseFxRate).filter(
+        AiCloseFxRate.workspace_id == workspace_id, AiCloseFxRate.period == period,
+        AiCloseFxRate.currency == currency, AiCloseFxRate.reporting_currency == reporting).first()
+
+
 def consolidation(ctx: CloseContext) -> AgentOutcome:
     db = ctx.db
     entities = ctx.entities
     names = {e.id: e.name for e in entities}
     exceptions: list[ExceptionItem] = []
     per_entity = []
+    translation = []
+    pl_rate: dict[str, float] = {}
+    bs_rate: dict[str, float] = {}
+    prior_period = period_add(ctx.period, -1)
     for e in entities:
-        pl = _derive_pl(cs._aggregate_categories(db, ctx.workspace_id, e.id, ctx.period, cs._pl_category))
-        bs = _derive_bs(cs._aggregate_categories(db, ctx.workspace_id, e.id, ctx.period, cs._bs_category))
-        balanced = abs(bs["total_assets"] - bs["total_liabilities_equity"]) < 1
-        per_entity.append({"entity_id": e.id, "entity_name": e.name, "currency": e.currency, "pl": pl, "bs": bs,
-                           "bs_balanced": balanced})
+        pl_local = _derive_pl(cs._aggregate_categories(db, ctx.workspace_id, e.id, ctx.period, cs._pl_category))
+        bs_local = _derive_bs(cs._aggregate_categories(db, ctx.workspace_id, e.id, ctx.period, cs._bs_category))
+        balanced = abs(bs_local["total_assets"] - bs_local["total_liabilities_equity"]) < 1
         if not balanced:
-            diff = round(bs["total_assets"] - bs["total_liabilities_equity"], 2)
+            diff = round(bs_local["total_assets"] - bs_local["total_liabilities_equity"], 2)
             exceptions.append(ExceptionItem(f"consol:bs:{e.id}:{ctx.period}", "consolidation", "high",
                                             f"{e.name}: balance sheet out of balance by {diff:,.2f}",
                                             "Mapped assets differ from liabilities and equity.", diff, entity_id=e.id))
-        if e.currency != ctx.currency:
-            exceptions.append(ExceptionItem(f"consol:fx:{e.id}", "consolidation", "high",
-                                            f"{e.name} reports in {e.currency}; translation to {ctx.currency} not performed",
-                                            "IAS 21 translation is required before these figures can be added to the group.",
-                                            entity_id=e.id))
+        entry = {"entity_id": e.id, "entity_name": e.name, "currency": e.currency, "bs_balanced": balanced, "translated": True}
+        if e.currency == ctx.currency:
+            pl_rate[e.id] = bs_rate[e.id] = 1.0
+            per_entity.append({**entry, "pl": pl_local, "bs": bs_local})
+            continue
+        rate = _rate(db, ctx.workspace_id, ctx.period, e.currency, ctx.currency)
+        if rate is None:
+            exceptions.append(ExceptionItem(
+                f"consol:fx:{e.id}:{ctx.period}", "consolidation", "high",
+                f"{e.name} reports in {e.currency}; no {ctx.period} {e.currency}/{ctx.currency} rates, so it is excluded from group totals",
+                "Enter the closing and average rates for the month (IAS 21) and re-run the consolidation.", entity_id=e.id))
+            zero_pl, zero_bs = {k: 0.0 for k in PL_KEYS}, {k: 0.0 for k in BS_KEYS}
+            per_entity.append({**entry, "translated": False, "pl": zero_pl, "bs": zero_bs, "pl_local": pl_local, "bs_local": bs_local})
+            pl_rate[e.id] = bs_rate[e.id] = 0.0
+            continue
+        prior = _rate(db, ctx.workspace_id, prior_period, e.currency, ctx.currency)
+        pl_rate[e.id], bs_rate[e.id] = rate.average_rate, rate.closing_rate
+        pl_t = _derive_pl({k: pl_local[k] * rate.average_rate for k in PL_KEYS})
+        bs_t = _derive_bs({k: bs_local[k] * rate.closing_rate for k in BS_KEYS})
+        opening = _derive_bs(cs._aggregate_categories(db, ctx.workspace_id, e.id, prior_period, cs._bs_category))
+        opening_net = opening["total_assets"] - (opening["long_term_borrowings"] + opening["trade_payables"] + opening["other_current_liabilities"])
+        closing_net = bs_local["total_assets"] - (bs_local["long_term_borrowings"] + bs_local["trade_payables"] + bs_local["other_current_liabilities"])
+        opening_rate = prior.closing_rate if prior else rate.closing_rate
+        cta = round(closing_net * rate.closing_rate - (opening_net * opening_rate + pl_local["net_profit"] * rate.average_rate), 2)
+        translation.append({"entity": e.name, "currency": e.currency, "average_rate": rate.average_rate,
+                            "closing_rate": rate.closing_rate, "opening_rate": opening_rate,
+                            "opening_rate_source": "prior month closing" if prior else "current closing (prior month rate missing)",
+                            "net_profit_local": pl_local["net_profit"], "net_profit_translated": pl_t["net_profit"],
+                            "net_assets_local": round(closing_net, 2), "net_assets_translated": round(closing_net * rate.closing_rate, 2),
+                            "translation_difference": cta})
+        per_entity.append({**entry, "pl": pl_t, "bs": bs_t, "pl_local": pl_local, "bs_local": bs_local,
+                           "rates": {"average": rate.average_rate, "closing": rate.closing_rate}, "translation_difference": cta})
 
     ic_rows = (
         db.query(UAEJournalLine, UAEJournalEntry)
@@ -78,10 +115,15 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
     metas = {e.id: _meta(ctx, e.id) for e in entities}
     refs: dict[str, dict[str, dict[str, float]]] = {}
     balances = {"receivable": 0.0, "payable": 0.0}
+    excluded = {cid for cid, r in pl_rate.items() if r == 0.0}
+    skipped_refs = {entry.reference for _, entry in ic_rows if entry.company_id in excluded}
     for line, entry in ic_rows:
+        if entry.reference in skipped_refs:
+            continue
         meta = metas[entry.company_id].get(line.account_code or "", (None, None))
-        dr, cr = money(line.debit), money(line.credit)
         pl_cat = cs._pl_category(line.account_code or "", meta[0], meta[1])
+        factor = pl_rate[entry.company_id] if pl_cat else bs_rate[entry.company_id]
+        dr, cr = money(line.debit) * factor, money(line.credit) * factor
         if pl_cat is None:
             bs_cat = cs._bs_category(line.account_code or "", meta[0], meta[1])
             if bs_cat in ("other_current_assets", "trade_receivables") and (line.account_code or "") != "1100":
@@ -158,11 +200,13 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
                  "consolidated": consolidated_bs[r["key"]], "by_entity": {e["entity_name"]: e["bs"][r["key"]] for e in per_entity}}
                 for r in cs.BS_ROWS]
     comparison = [{
-        "entity": e["entity_name"], "revenue": e["pl"]["revenue"], "net_profit": e["pl"]["net_profit"],
+        "entity": e["entity_name"] + ("" if e["translated"] else f" ({e['currency']}, not translated)"),
+        "revenue": e["pl"]["revenue"], "net_profit": e["pl"]["net_profit"],
         "net_margin_pct": round(e["pl"]["net_profit"] / e["pl"]["revenue"] * 100, 1) if e["pl"]["revenue"] else None,
         "total_assets": e["bs"]["total_assets"], "cash": e["bs"]["cash_bank"],
         "share_of_group_revenue_pct": round(e["pl"]["revenue"] / group_pl_raw["revenue"] * 100, 1) if group_pl_raw["revenue"] else None,
     } for e in per_entity]
+    translation_total = round(sum(t["translation_difference"] for t in translation), 2)
     elim_rev = round(elim_pl["revenue"], 2)
     elim_cost = round(sum(v for k, v in elim_pl.items() if k != "revenue"), 2)
     group_balanced = abs(consolidated_bs["total_assets"] - consolidated_bs["total_liabilities_equity"]) < 1
@@ -170,6 +214,14 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
     limitations = []
     if unassigned:
         limitations.append(f"{unassigned} posted line(s) in the period have no company and are excluded from every entity.")
+    if translation:
+        limitations.append(
+            "Foreign-currency entities: income and expenses at the month's average rate, assets, liabilities and equity at "
+            "the closing rate (IAS 21.39). The translation difference for the month is shown separately and belongs in other "
+            "comprehensive income; it also absorbs any non-profit equity movements in the month. Equity is not tracked at "
+            "historical rates.")
+    if excluded:
+        limitations.append(f"{len(excluded)} entity(ies) excluded from group totals for missing exchange rates.")
     return AgentOutcome(
         records_processed=len(entities) + len({e.id for _, e in ic_rows}),
         output={
@@ -179,9 +231,13 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
             "eliminations": eliminations, "eliminated_revenue": elim_rev, "eliminated_costs": elim_cost,
             "intercompany_balances": {"receivable": rec, "payable": pay, "eliminated": bs_elim},
             "comparison": comparison, "unassigned_lines": unassigned, "limitations": limitations,
+            "reporting_currency": ctx.currency, "translation": translation, "translation_difference": translation_total,
+            "excluded_entities": [names[c] for c in excluded],
         },
         checks=[
             Check("entities_consolidated", len(per_entity) >= 2, f"{len(per_entity)} entities consolidated.", blocking=True),
+            Check("all_entities_translated", not excluded,
+                  "Every entity is in the reporting currency or translated at the month's rates."),
             Check("eliminations_balanced", abs(elim_rev - elim_cost) < 0.05,
                   f"Revenue eliminated {elim_rev:,.2f} = costs eliminated {elim_cost:,.2f}.", blocking=True),
             Check("group_balance_sheet_balances", group_balanced, "Consolidated balance sheet balances."),

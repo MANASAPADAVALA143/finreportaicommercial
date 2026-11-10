@@ -23,7 +23,7 @@ from app.core.company_access import is_super_admin, require_company_access
 from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_close import (
-    AiCloseControls, AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
+    AiCloseControls, AiCloseException, AiCloseFxRate, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
 )
 from app.models.company_setup import UaeCompanyProfile
 from app.models.investments import InvestmentHolding, InvestmentValuation
@@ -352,6 +352,45 @@ def put_controls(body: ControlsIn, scope: Scope = Depends(_manage), ctx: Workspa
     row.ecl_rates = rates
     db.commit()
     return close_controls.describe(row)
+
+
+class FxRateIn(BaseModel):
+    period: str = Field(pattern=_PERIOD)
+    currency: str = Field(min_length=3, max_length=3)
+    closing_rate: float = Field(gt=0)
+    average_rate: float = Field(gt=0)
+    source: str | None = Field(default=None, max_length=120)
+
+
+def _reporting_currency(db: Session, scope: Scope) -> str:
+    profile = db.get(UaeCompanyProfile, scope.company_id)
+    return ((profile.base_currency if profile else None) or "AED").upper()
+
+
+@router.get("/fx-rates")
+def list_fx_rates(period: str | None = Query(default=None, pattern=_PERIOD), scope: Scope = Depends(_read),
+                  db: Session = Depends(get_db)):
+    q = db.query(AiCloseFxRate).filter(AiCloseFxRate.workspace_id == scope.workspace_id,
+                                       AiCloseFxRate.reporting_currency == _reporting_currency(db, scope))
+    if period:
+        q = q.filter(AiCloseFxRate.period == period)
+    return [_row(r) for r in q.order_by(AiCloseFxRate.period.desc(), AiCloseFxRate.currency).limit(200)]
+
+
+@router.put("/fx-rates")
+def put_fx_rate(body: FxRateIn, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    reporting, currency = _reporting_currency(db, scope), body.currency.upper()
+    if currency == reporting:
+        raise HTTPException(status_code=422, detail="The currency is already the reporting currency")
+    row = db.query(AiCloseFxRate).filter(
+        AiCloseFxRate.workspace_id == scope.workspace_id, AiCloseFxRate.period == body.period,
+        AiCloseFxRate.currency == currency, AiCloseFxRate.reporting_currency == reporting).first()
+    if row is None:
+        row = AiCloseFxRate(workspace_id=scope.workspace_id, period=body.period, currency=currency, reporting_currency=reporting)
+        db.add(row)
+    row.closing_rate, row.average_rate, row.source, row.updated_by = body.closing_rate, body.average_rate, body.source, scope.user_email
+    db.commit()
+    return _row(row)
 
 
 class NotifyIn(BaseModel):

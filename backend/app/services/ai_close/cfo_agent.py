@@ -51,20 +51,35 @@ ROOT_CAUSES = {
 }
 
 
+def _rates(ctx: CloseContext) -> dict[str, float]:
+    """Average rate per entity from the consolidation (1.0 in the reporting currency, 0.0 if not translated)."""
+    consol = ctx.upstream.get("consolidation") or {}
+    out = {}
+    for e in consol.get("entities", []):
+        out[e["entity_id"]] = 1.0 if e.get("currency") == ctx.currency else (
+            (e.get("rates") or {}).get("average", 0.0) if e.get("translated") else 0.0)
+    return out
+
+
 def _performance(ctx: CloseContext) -> dict[str, Any]:
     prior = ledger.period_add(ctx.period, -1)
     by_account: dict[str, dict[str, Any]] = {}
     totals = {"revenue": 0.0, "expenses": 0.0, "prior_revenue": 0.0, "prior_expenses": 0.0}
     entities = ctx.entities or []
+    rates = _rates(ctx)
     for e in entities:
+        factor = rates.get(e.id, 1.0 if e.currency == ctx.currency else 0.0)
+        if factor == 0.0:
+            continue
         for m in ledger.monthly_movements(ctx.db, LedgerScope(ctx.workspace_id, e.id), prior, ctx.period):
             if m["account_type"] not in ("Income", "Expense"):
                 continue
+            net = m["net"] * factor
             key = "revenue" if m["account_type"] == "Income" else "expenses"
-            totals[key if m["period"] == ctx.period else f"prior_{key}"] += m["net"]
+            totals[key if m["period"] == ctx.period else f"prior_{key}"] += net
             row = by_account.setdefault(m["account_code"], {"account": f"{m['account_code']} {m['account_name']}",
                                                             "type": m["account_type"], "current": 0.0, "prior": 0.0})
-            row["current" if m["period"] == ctx.period else "prior"] += m["net"]
+            row["current" if m["period"] == ctx.period else "prior"] += net
     movements = []
     for row in by_account.values():
         change = round(row["current"] - row["prior"], 2)

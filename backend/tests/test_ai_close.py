@@ -23,7 +23,7 @@ from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_cfo import AiCfoApprovalRequest, AiCfoFinding, AiCfoInvestigation, AiCfoToolCall
 from app.models.ai_close import (
-    AiCloseControls, AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
+    AiCloseControls, AiCloseException, AiCloseFxRate, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
 )
 from app.models.client_data import ApCompany
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
@@ -60,7 +60,7 @@ TABLES = (
     UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice, UAECreditNote, IFRS16Lease,
     AiCfoFinding, AiCfoInvestigation, AiCfoToolCall, AiCfoApprovalRequest,
     AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal, AiCloseSchedule, WorkspaceAuditLog,
-    WorkspaceNotification, InvestmentHolding, InvestmentValuation, AiCloseControls,
+    WorkspaceNotification, InvestmentHolding, InvestmentValuation, AiCloseControls, AiCloseFxRate,
 )
 
 

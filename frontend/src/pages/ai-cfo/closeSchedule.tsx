@@ -276,6 +276,65 @@ export function ApprovalControlsCard({ companyId, currency, onSaved, onError }: 
   );
 }
 
+export function FxRatesCard({ companyId, period, reporting, currencies, onError }: {
+  companyId: string; period: string; reporting: string; currencies: string[]; onError: (m: string) => void;
+}) {
+  const [rates, setRates] = useState<Record<string, { closing: string; average: string; saved: boolean }>>({});
+  const [busy, setBusy] = useState('');
+
+  useEffect(() => {
+    if (!period) return;
+    let cancelled = false;
+    aiCloseApi.fxRates(companyId, period).then((rows) => {
+      if (cancelled) return;
+      setRates(Object.fromEntries(currencies.map((c) => {
+        const row = rows.find((r) => r.currency === c);
+        return [c, { closing: row ? String(row.closing_rate) : '', average: row ? String(row.average_rate) : '', saved: !!row }];
+      })));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [companyId, period, currencies.join(',')]);
+
+  const save = async (c: string) => {
+    const r = rates[c];
+    setBusy(c);
+    try {
+      await aiCloseApi.saveFxRate(companyId, { period, currency: c, closing_rate: Number(r.closing), average_rate: Number(r.average) });
+      setRates((all) => ({ ...all, [c]: { ...r, saved: true } }));
+    } catch (e) {
+      onError(errorText(e, 'Could not save the rate'));
+    } finally {
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 text-sm">
+      <p className="mb-2 text-xs text-slate-700">
+        <b>Exchange rates for {period || 'the period'}</b> — {reporting} per 1 unit. Income and expenses are translated at the average rate,
+        the balance sheet at the closing rate (IAS 21). Companies without rates are left out of group totals.
+      </p>
+      {!period && <p className="text-xs text-amber-800">Choose the period above to enter its rates.</p>}
+      {period && currencies.map((c) => (
+        <div key={c} className="mb-1 flex flex-wrap items-end gap-2 text-xs">
+          <span className="w-12 font-semibold text-slate-800">{c}</span>
+          <label className="text-slate-600">Closing
+            <input inputMode="decimal" value={rates[c]?.closing ?? ''} onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], closing: e.target.value, saved: false } })}
+              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1" />
+          </label>
+          <label className="text-slate-600">Average
+            <input inputMode="decimal" value={rates[c]?.average ?? ''} onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], average: e.target.value, saved: false } })}
+              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1" />
+          </label>
+          <button onClick={() => void save(c)} disabled={busy !== '' || !(Number(rates[c]?.closing) > 0 && Number(rates[c]?.average) > 0)}
+            className="rounded border border-slate-300 bg-white px-2 py-1 disabled:opacity-50">{busy === c ? 'Saving…' : 'Save'}</button>
+          {rates[c]?.saved && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SummaryAlerts({ run, companyId, onSent, onError }: {
   run: CloseRun; companyId: string; onSent: () => void; onError: (m: string) => void;
 }) {

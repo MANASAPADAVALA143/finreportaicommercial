@@ -346,6 +346,14 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
                  "rows": [[r["reference"], r["seller"], r["buyer"], _money(r["seller_revenue"]), _money(r["buyer_expense"]),
                            _money(r["eliminated"]), _money(r["difference"]), r["status"]] for r in c.get("eliminations", [])]},
             ]
+            if c.get("translation"):
+                spec["sections"].append({
+                    "title": f"Currency translation into {c.get('reporting_currency', '')} (IAS 21)",
+                    "columns": ["Entity", "Currency", "Average rate", "Closing rate", "Opening rate", "Net profit (local)",
+                                "Net profit (translated)", "Net assets (translated)", "Translation difference"],
+                    "rows": [[x["entity"], x["currency"], x["average_rate"], x["closing_rate"], x["opening_rate"],
+                              _money(x["net_profit_local"]), _money(x["net_profit_translated"]),
+                              _money(x["net_assets_translated"]), _money(x["translation_difference"])] for x in c["translation"]]})
         spec["sections"] += [
             *t.proposals(db, run, pending_only=True)[:2],
             t.exceptions([e for e in _exceptions(db, run) if e.status == "open"]) | {"title": "Unresolved exceptions"},
