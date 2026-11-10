@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { CalendarClock, CheckCircle2, Send, XCircle } from 'lucide-react';
+import { CalendarClock, CheckCircle2, Send, ShieldCheck, XCircle } from 'lucide-react';
 import {
-  aiCloseApi, type CloseRun, type CloseSchedule, type Delivery, type SelectableAgent,
+  aiCloseApi, type CloseControls, type CloseRun, type CloseSchedule, type Delivery, type SelectableAgent,
 } from '../../services/aiClose.service';
 import { errorText } from '../internal-audit/shared';
 import { Card, GOLD } from './parts';
@@ -166,6 +166,80 @@ export function ScheduleCard({ companyId, selection, onOpenRun, onError }: {
           <p className="text-xs text-slate-500">
             Only owners and finance managers can change the schedule. Scheduled runs prepare journals for approval; nothing is posted automatically.
           </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function ApprovalControlsCard({ companyId, currency, onSaved, onError }: {
+  companyId: string; currency: string; onSaved: () => void; onError: (m: string) => void;
+}) {
+  const [controls, setControls] = useState<CloseControls | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [sod, setSod] = useState(false);
+  const [limit, setLimit] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    aiCloseApi.controls(companyId).then((c) => { if (!cancelled) setControls(c); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  const edit = () => {
+    setSod(controls?.require_segregation ?? false);
+    setLimit(controls?.manager_limit != null ? String(controls.manager_limit) : '');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const saved = await aiCloseApi.saveControls(companyId, {
+        require_segregation: sod, manager_limit: limit.trim() ? Number(limit.replace(/,/g, '')) : null,
+      });
+      setControls(saved);
+      setEditing(false);
+      onSaved();
+    } catch (e) {
+      onError(errorText(e, 'Could not save the approval controls'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card title="Approval controls" actions={!editing && (
+      <button onClick={edit} className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">Edit</button>
+    )}>
+      {!editing ? (
+        <ul className="space-y-1 text-sm text-slate-700">
+          <li className="flex items-center gap-2">
+            <ShieldCheck className={`h-4 w-4 ${controls?.require_segregation ? 'text-green-700' : 'text-slate-400'}`} />
+            Segregation of duties: {controls?.require_segregation ? 'on — whoever starts a close cannot approve its journals or the close' : 'off'}
+          </li>
+          <li className="flex items-center gap-2">
+            <ShieldCheck className={`h-4 w-4 ${controls?.manager_limit != null ? 'text-green-700' : 'text-slate-400'}`} />
+            Finance manager approval limit: {controls?.manager_limit != null ? `${currency} ${controls.manager_limit.toLocaleString()} — larger journals need an owner` : 'none'}
+          </li>
+          {controls?.updated_by && <li className="text-xs text-slate-500">Last changed by {controls.updated_by}</li>}
+        </ul>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={sod} onChange={(e) => setSod(e.target.checked)} />
+            Segregation of duties (recommended for live companies)</label>
+          <label className="block text-xs text-slate-600">Finance manager approval limit ({currency}, blank for no limit)
+            <input inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="e.g. 100000"
+              className="mt-1 block w-48 rounded-md border border-slate-300 px-2 py-1.5 text-sm" />
+          </label>
+          <div className="flex gap-2">
+            <button onClick={() => void save()} disabled={busy} className="rounded-md px-4 py-1.5 text-sm font-semibold text-slate-900 disabled:opacity-50" style={{ background: GOLD }}>
+              {busy ? 'Saving…' : 'Save controls'}
+            </button>
+            <button onClick={() => setEditing(false)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700">Cancel</button>
+          </div>
+          <p className="text-xs text-slate-500">Only an owner can change these controls.</p>
         </div>
       )}
     </Card>

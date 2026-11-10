@@ -73,6 +73,23 @@ class AiCloseSchedule(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class AiCloseControls(Base):
+    """Approval controls for a company's close: segregation of duties (whoever started a close may
+    not approve its journals or the close) and the largest journal a finance manager may approve
+    (larger ones need an owner). Absent row = no segregation, no limit."""
+
+    __tablename__ = "ai_close_controls"
+    __table_args__ = (UniqueConstraint("workspace_id", "company_id", name="uq_ai_close_controls"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(50), nullable=False, index=True)
+    company_id = Column(String(50), nullable=False, index=True)
+    require_segregation = Column(Boolean, nullable=False, default=False)
+    manager_limit = Column(Float, nullable=True)
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class AiCloseTask(Base):
     __tablename__ = "ai_close_tasks"
     __table_args__ = (UniqueConstraint("run_id", "agent", name="uq_ai_close_task"),)

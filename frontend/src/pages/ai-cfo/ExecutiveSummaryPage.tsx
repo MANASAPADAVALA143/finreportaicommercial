@@ -8,7 +8,7 @@ import { Card, GOLD, NAVY, StatusPill } from './parts';
 import {
   AgentCard, CfoSummaryPanel, CloseApproval, Deliverables, ExceptionsTable, ExecutionSequence, JournalApprovalCentre, KpiGrid, fmtTime,
 } from './closeParts';
-import { ScheduleCard, SummaryAlerts } from './closeSchedule';
+import { ApprovalControlsCard, ScheduleCard, SummaryAlerts } from './closeSchedule';
 
 const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] = [
   { value: 'bank_reconciliation', label: 'Bank Reconciliation Agent', note: 'Matches statements to the ledger, proposes fee and interest journals' },
@@ -220,12 +220,15 @@ export default function ExecutiveSummaryPage() {
           </div>
         </Card>
 
-        <ScheduleCard
-          companyId={companyId}
-          selection={{ scope, entityIds: groupIds, agents: selected, names: Object.fromEntries(others.map((c) => [c.id, c.company_name])) }}
-          onOpenRun={(id) => void load(id)}
-          onError={setError}
-        />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <ScheduleCard
+            companyId={companyId}
+            selection={{ scope, entityIds: groupIds, agents: selected, names: Object.fromEntries(others.map((c) => [c.id, c.company_name])) }}
+            onOpenRun={(id) => void load(id)}
+            onError={setError}
+          />
+          <ApprovalControlsCard companyId={companyId} currency={currency} onSaved={() => void load(run?.id)} onError={setError} />
+        </div>
 
         {loaded && !run && <p className="text-sm text-slate-500">No close has been run for this company yet.</p>}
 
@@ -270,6 +273,12 @@ export default function ExecutiveSummaryPage() {
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               <Card title={`Journal Approval Centre (${run.proposals.filter((p) => p.status === 'pending_approval').length} pending)`}>
+                {(run.controls?.require_segregation || run.controls?.manager_limit != null) && (
+                  <p className="mb-2 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                    Controls:{run.controls.require_segregation ? ` ${run.requested_by ?? 'the person who started the close'} cannot approve these journals.` : ''}
+                    {run.controls.manager_limit != null ? ` Journals above ${currency} ${run.controls.manager_limit.toLocaleString()} need an owner.` : ''}
+                  </p>
+                )}
                 <JournalApprovalCentre proposals={run.proposals} companyId={companyId} currency={currency} onChange={() => void load(run.id)} onError={setError} />
               </Card>
               <CloseApproval run={run} companyId={companyId} onChange={() => void load(run.id)} onError={setError} />

@@ -22,7 +22,9 @@ from app.core import company_access
 from app.core.database import get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_cfo import AiCfoApprovalRequest, AiCfoFinding, AiCfoInvestigation, AiCfoToolCall
-from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask
+from app.models.ai_close import (
+    AiCloseControls, AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
+)
 from app.models.client_data import ApCompany
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.fpa_master import FpaMasterRow
@@ -58,7 +60,7 @@ TABLES = (
     UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice, UAECreditNote, IFRS16Lease,
     AiCfoFinding, AiCfoInvestigation, AiCfoToolCall, AiCfoApprovalRequest,
     AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal, AiCloseSchedule, WorkspaceAuditLog,
-    WorkspaceNotification, InvestmentHolding, InvestmentValuation,
+    WorkspaceNotification, InvestmentHolding, InvestmentValuation, AiCloseControls,
 )
 
 
@@ -137,12 +139,13 @@ class _Query:
 class Env:
     def __init__(self):
         self.roles = {WS_A: "accountant"}
+        self.email = "controller@example.com"
 
     def ctx(self) -> WorkspaceContext:
         role = self.roles.get(WS_A)
         return WorkspaceContext(
             workspace_id=WS_A, workspace=SimpleNamespace(id=WS_A),
-            user=SimpleNamespace(id="user-1", email="controller@example.com", role="accountant"),
+            user=SimpleNamespace(id="user-1", email=self.email, role="accountant"),
             role=WorkspaceRole(role) if role else None,
         )
 

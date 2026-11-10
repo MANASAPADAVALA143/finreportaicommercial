@@ -18,10 +18,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.core.company_access import require_company_access
+from app.core import company_access
+from app.core.company_access import is_super_admin, require_company_access
 from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
-from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask
+from app.models.ai_close import (
+    AiCloseControls, AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
+)
 from app.models.company_setup import UaeCompanyProfile
 from app.models.investments import InvestmentHolding, InvestmentValuation
 from app.routers.internal_audit import Scope, _manage, _read, _row, _write
@@ -29,6 +32,7 @@ from app.services.ai_cfo import ledger
 from app.services.ai_cfo.ledger import LedgerScope
 from app.services.ai_close import alerts, orchestrator, scheduling
 from app.services.ai_close import ask as ask_service
+from app.services.ai_close import controls as close_controls
 from app.services.ai_close.agents import AGENTS
 from app.services.ai_close.demo_group import seed_demo_group
 from app.services.ai_close.journals import DecisionError, approve_close, decide, journal_detail
@@ -103,6 +107,7 @@ def _run_out(db: Session, run: AiCloseRun) -> dict[str, Any]:
         "exceptions_open": sum(1 for e in exceptions if e.status == "open"),
         "proposals": [_proposal_out(db, p, names) for p in proposals],
         "deliverables": deliverables,
+        "controls": close_controls.describe(close_controls.get(db, run.workspace_id, run.company_id)),
     }
 
 
@@ -291,6 +296,11 @@ def decide_journal(pid: int, body: DecisionIn, scope: Scope = Depends(_manage),
     if proposal.company_id != scope.company_id:
         require_company_access(db, ctx, proposal.company_id, "manage")
     try:
+        close_controls.check_journal(db, proposal, db.get(AiCloseRun, proposal.run_id), user_email=scope.user_email,
+                                     role=_role(db, ctx), unrestricted=is_super_admin(ctx), decision=body.decision)
+    except close_controls.ControlViolation as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    try:
         decide(db, proposal, body.decision, scope.user_email, body.note)
     except DecisionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -298,6 +308,34 @@ def decide_journal(pid: int, body: DecisionIn, scope: Scope = Depends(_manage),
     if run is not None:
         orchestrator.recheck_close(db, run)
     return _proposal_out(db, db.get(AiCloseJournalProposal, pid))
+
+
+def _role(db: Session, ctx: WorkspaceContext) -> str | None:
+    return company_access._workspace_role(db, ctx, ctx.workspace_id)
+
+
+class ControlsIn(BaseModel):
+    require_segregation: bool = False
+    manager_limit: float | None = Field(default=None, ge=0)
+
+
+@router.get("/controls")
+def get_controls(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    return close_controls.describe(close_controls.get(db, scope.workspace_id, scope.company_id))
+
+
+@router.put("/controls")
+def put_controls(body: ControlsIn, scope: Scope = Depends(_manage), ctx: WorkspaceContext = Depends(validate_workspace),
+                 db: Session = Depends(get_db)):
+    if _role(db, ctx) not in close_controls.OWNER_ROLES and not is_super_admin(ctx):
+        raise HTTPException(status_code=403, detail="Only an owner can change approval controls")
+    row = close_controls.get(db, scope.workspace_id, scope.company_id)
+    if row is None:
+        row = AiCloseControls(workspace_id=scope.workspace_id, company_id=scope.company_id)
+        db.add(row)
+    row.require_segregation, row.manager_limit, row.updated_by = body.require_segregation, body.manager_limit, scope.user_email
+    db.commit()
+    return close_controls.describe(row)
 
 
 class NotifyIn(BaseModel):
@@ -501,6 +539,10 @@ def approve_run_close(rid: int, body: CloseApprovalIn, scope: Scope = Depends(_m
     for cid in orchestrator.entity_ids(run):
         if cid != scope.company_id:
             require_company_access(db, ctx, cid, "manage")
+    try:
+        close_controls.check_close(db, run, user_email=scope.user_email, unrestricted=is_super_admin(ctx))
+    except close_controls.ControlViolation as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     orchestrator.recheck_close(db, run)
     close = db.query(AiCloseTask).filter(AiCloseTask.run_id == run.id, AiCloseTask.agent == "close_manager").first()
     items = (close.output_json or {}).get("items", []) if close else []

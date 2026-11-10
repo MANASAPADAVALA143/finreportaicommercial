@@ -220,7 +220,10 @@ export type CloseRunSummary = {
   freshness_json: Freshness | null;
 };
 
+export type CloseControls = { require_segregation: boolean; manager_limit: number | null; updated_by: string | null };
+
 export type CloseRun = CloseRunSummary & {
+  controls: CloseControls;
   entities: { id: string; name: string }[];
   kpis: Kpi[];
   tasks: CloseTask[];
@@ -298,6 +301,9 @@ export const aiCloseApi = {
   ask: (companyId: string, agent: AgentKey, body: { prompt: string; period?: string; scope?: 'entity' | 'group'; entity_ids?: string[] }) =>
     r<AskRun>(`/agents/${agent}/ask`, companyId, json('POST', body)),
   askRun: (companyId: string, runId: number) => r<AskRun>(`/agents/runs/${runId}`, companyId),
+  controls: (companyId: string) => r<CloseControls>('/controls', companyId),
+  saveControls: (companyId: string, body: { require_segregation: boolean; manager_limit: number | null }) =>
+    r<CloseControls>('/controls', companyId, json('PUT', body)),
   holdings: (companyId: string) => r<Holding[]>('/investments', companyId),
   importPortfolio: (companyId: string, body: { holdings: HoldingInput[]; valuations: ValuationInput[] }) =>
     r<ImportResult>('/investments/import', companyId, json('POST', body)),
