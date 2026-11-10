@@ -135,15 +135,21 @@ def decide(
 def _resolve_exceptions(db: Session, proposal: AiCloseJournalProposal) -> None:
     """An approved journal clears the exception raised for the same source item in its run."""
     keys = {proposal.fingerprint, f"{proposal.company_id[:8]}:{proposal.fingerprint}"}
+    group = None  # (exception fingerprint covering several journals, LIKE pattern for those journals)
     if proposal.fingerprint.startswith("ifrs16:"):
         _, lease_id, _kind, period = proposal.fingerprint.split(":", 3)
-        keys |= {f"ifrs16:{lease_id}:{period}", f"{proposal.company_id[:8]}:ifrs16:{lease_id}:{period}"}
+        group = (f"ifrs16:{lease_id}:{period}", f"ifrs16:{lease_id}:%:{period}")
+    elif proposal.fingerprint.startswith("invest_fv:"):
+        period = proposal.fingerprint.rsplit(":", 1)[1]
+        group = (f"invest_fv:unrecorded:{period}", f"invest_fv:%:{period}")
+    if group:
         siblings = db.query(AiCloseJournalProposal).filter(
             AiCloseJournalProposal.run_id == proposal.run_id, AiCloseJournalProposal.id != proposal.id,
-            AiCloseJournalProposal.fingerprint.like(f"ifrs16:{lease_id}:%:{period}"),
+            AiCloseJournalProposal.company_id == proposal.company_id,
+            AiCloseJournalProposal.fingerprint.like(group[1]),
             AiCloseJournalProposal.status != "approved").count()
-        if siblings:
-            keys -= {f"ifrs16:{lease_id}:{period}", f"{proposal.company_id[:8]}:ifrs16:{lease_id}:{period}"}
+        if not siblings:
+            keys |= {group[0], f"{proposal.company_id[:8]}:{group[0]}"}
     db.query(AiCloseException).filter(
         AiCloseException.run_id == proposal.run_id, AiCloseException.fingerprint.in_(keys),
         AiCloseException.status == "open",

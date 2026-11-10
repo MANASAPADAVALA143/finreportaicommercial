@@ -31,10 +31,10 @@ from app.services.uae_controls_service import PeriodControlError
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2
-SELECTABLE = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa")
+SELECTABLE = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa", "investment")
 DEPENDS_ON = {
     "bank_reconciliation": [], "ap_processing": [], "ar_intelligence": [],
-    "ifrs": ["ar_intelligence"], "fpa": ["ar_intelligence", "ap_processing"],
+    "ifrs": ["ar_intelligence"], "fpa": ["ar_intelligence", "ap_processing"], "investment": [],
 }
 TASK_TITLES = {
     "bank_reconciliation": "Reconcile bank statements to the ledger",
@@ -42,6 +42,7 @@ TASK_TITLES = {
     "ar_intelligence": "Age receivables and prioritise collections",
     "ifrs": "IFRS accounting checks and period-end entries",
     "fpa": "Budget variance and 30/60/90-day cash forecast",
+    "investment": "Value and review the investment portfolio",
     "consolidation": "Consolidate the group and eliminate intercompany",
     "close_manager": "Evaluate the close checklist",
     "cfo_intelligence": "Prepare the CFO executive summary",

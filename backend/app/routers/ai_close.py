@@ -9,6 +9,7 @@ GET /runs/{id}.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -22,6 +23,7 @@ from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_close import AiCloseException, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask
 from app.models.company_setup import UaeCompanyProfile
+from app.models.investments import InvestmentHolding, InvestmentValuation
 from app.routers.internal_audit import Scope, _manage, _read, _row, _write
 from app.services.ai_cfo import ledger
 from app.services.ai_cfo.ledger import LedgerScope
@@ -38,6 +40,7 @@ session_factory: Callable[[], Session] = SessionLocal
 MAX_WORKERS = 4
 MAX_ENTITIES = 20
 _PERIOD = r"^\d{4}-(0[1-9]|1[0-2])$"
+AgentName = Literal["bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa", "investment"]
 _SEVERITY = {"high": 0, "medium": 1, "low": 2}
 
 
@@ -109,7 +112,7 @@ def _execute(run_id: int) -> None:
 
 class StartIn(BaseModel):
     period: str | None = Field(default=None, pattern=_PERIOD)
-    agents: list[Literal["bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa"]] | None = None
+    agents: list[AgentName] | None = None
     scope: Literal["entity", "group"] = "entity"
     entity_ids: list[str] | None = Field(default=None, max_length=MAX_ENTITIES)
 
@@ -325,7 +328,7 @@ class ScheduleIn(BaseModel):
     enabled: bool = True
     scope: Literal["entity", "group"] = "entity"
     entity_ids: list[str] | None = Field(default=None, max_length=MAX_ENTITIES)
-    agents: list[Literal["bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa"]] = Field(min_length=1)
+    agents: list[AgentName] = Field(min_length=1)
     run_day: int = Field(ge=1, le=28)
     run_hour: int = Field(ge=0, le=23)
     timezone: str = Field(default="Asia/Dubai", max_length=64)
@@ -382,6 +385,100 @@ def delete_schedule(scope: Scope = Depends(_manage), db: Session = Depends(get_d
     if schedule is not None:
         db.delete(schedule)
         db.commit()
+    return Response(status_code=204)
+
+
+class HoldingIn(BaseModel):
+    code: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=200)
+    asset_class: Literal["equity", "bond", "sukuk", "fund", "deposit", "other"]
+    ifrs9_category: Literal["fvtpl", "fvoci", "amortised_cost"] = "fvtpl"
+    issuer: str | None = Field(default=None, max_length=200)
+    sector: str | None = Field(default=None, max_length=100)
+    country: str | None = Field(default=None, max_length=60)
+    currency: str = Field(default="AED", min_length=3, max_length=3)
+    quantity: float | None = None
+    cost: float = Field(ge=0)
+    acquired_on: date | None = None
+    maturity_date: date | None = None
+    coupon_rate: float | None = None
+
+
+class ValuationIn(BaseModel):
+    code: str = Field(min_length=1, max_length=60)
+    as_of: date
+    market_value: float
+    local_value: float | None = None
+    price: float | None = None
+    income: float | None = None
+
+
+class PortfolioImportIn(BaseModel):
+    holdings: list[HoldingIn] = Field(default_factory=list, max_length=2000)
+    valuations: list[ValuationIn] = Field(default_factory=list, max_length=20000)
+
+
+def _holdings(db: Session, scope: Scope):
+    return db.query(InvestmentHolding).filter(
+        InvestmentHolding.workspace_id == scope.workspace_id, InvestmentHolding.company_id == scope.company_id)
+
+
+@router.get("/investments")
+def list_investments(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    rows = _holdings(db, scope).order_by(InvestmentHolding.code).all()
+    latest = {}
+    for v in db.query(InvestmentValuation).filter(InvestmentValuation.holding_id.in_([h.id for h in rows])).order_by(InvestmentValuation.as_of):
+        latest[v.holding_id] = v
+    return [{**_row(h), "latest_value": latest[h.id].market_value if h.id in latest else None,
+             "latest_as_of": str(latest[h.id].as_of) if h.id in latest else None} for h in rows]
+
+
+@router.post("/investments/import")
+def import_investments(body: PortfolioImportIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+    """Upsert holdings by code and valuations by (code, as_of) for this company."""
+    by_code = {h.code: h for h in _holdings(db, scope)}
+    created = updated = 0
+    for row in body.holdings:
+        data = row.model_dump()
+        data["currency"] = data["currency"].upper()
+        holding = by_code.get(row.code)
+        if holding is None:
+            holding = InvestmentHolding(workspace_id=scope.workspace_id, company_id=scope.company_id, **data)
+            db.add(holding)
+            by_code[row.code] = holding
+            created += 1
+        else:
+            for k, v in data.items():
+                setattr(holding, k, v)
+            updated += 1
+    db.flush()
+    errors, values = [], 0
+    for i, row in enumerate(body.valuations):
+        holding = by_code.get(row.code)
+        if holding is None:
+            errors.append(f"Valuation row {i + 1}: unknown holding code {row.code}")
+            continue
+        existing = db.query(InvestmentValuation).filter(
+            InvestmentValuation.holding_id == holding.id, InvestmentValuation.as_of == row.as_of).first()
+        fields = row.model_dump(exclude={"code", "as_of"})
+        if existing is None:
+            db.add(InvestmentValuation(holding_id=holding.id, as_of=row.as_of, source="import", **fields))
+        else:
+            for k, v in fields.items():
+                setattr(existing, k, v)
+        values += 1
+    db.commit()
+    return {"holdings_created": created, "holdings_updated": updated, "valuations_saved": values, "errors": errors[:50]}
+
+
+@router.delete("/investments/{hid}", status_code=204)
+def delete_investment(hid: int, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    holding = _holdings(db, scope).filter(InvestmentHolding.id == hid).first()
+    if holding is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.query(InvestmentValuation).filter(InvestmentValuation.holding_id == holding.id).delete(synchronize_session=False)
+    db.delete(holding)
+    db.commit()
     return Response(status_code=204)
 
 

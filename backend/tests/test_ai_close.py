@@ -27,6 +27,7 @@ from app.models.client_data import ApCompany
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.fpa_master import FpaMasterRow
 from app.models.ifrs16_lease import IFRS16Lease
+from app.models.investments import InvestmentHolding, InvestmentValuation
 from app.models.uae_accounting_full import (
     UAEAccount, UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECreditNote, UAECustomer,
     UAEJournalEntry, UAEJournalLine, UAESalesInvoice,
@@ -57,7 +58,7 @@ TABLES = (
     UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice, UAECreditNote, IFRS16Lease,
     AiCfoFinding, AiCfoInvestigation, AiCfoToolCall, AiCfoApprovalRequest,
     AiCloseRun, AiCloseTask, AiCloseException, AiCloseJournalProposal, AiCloseSchedule, WorkspaceAuditLog,
-    WorkspaceNotification,
+    WorkspaceNotification, InvestmentHolding, InvestmentValuation,
 )
 
 
@@ -296,7 +297,7 @@ def test_close_run_executes_agents_and_kpis_reconcile_to_records(client, env, de
     assert checklist["proposals_decided"] == "open" and run["checklist"]["completion_pct"] < 100
     ready = {d["key"]: d["status"] for d in run["deliverables"]}
     assert ready == {"bank_reconciliation": "ready", "ap_processing": "not_run", "ar_collections": "ready", "ifrs_pack": "not_run",
-                     "fpa_intelligence": "ready", "close_pack": "ready", "cfo_summary": "ready"}
+                     "fpa_intelligence": "ready", "investment_review": "not_run", "close_pack": "ready", "cfo_summary": "ready"}
 
 
 def test_journal_approval_controls_resolution_and_rerun(client, env, demo, session_factory):

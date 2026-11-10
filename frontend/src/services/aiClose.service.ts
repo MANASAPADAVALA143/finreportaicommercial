@@ -3,14 +3,15 @@ import { downloadFile, request } from './internalAudit.service';
 const ROOT = '/api/ai-close';
 
 export type AgentKey =
-  | 'bank_reconciliation' | 'ap_processing' | 'ar_intelligence' | 'ifrs' | 'fpa'
+  | 'bank_reconciliation' | 'ap_processing' | 'ar_intelligence' | 'ifrs' | 'fpa' | 'investment'
   | 'consolidation' | 'close_manager' | 'cfo_intelligence';
-export type SelectableAgent = 'bank_reconciliation' | 'ap_processing' | 'ar_intelligence' | 'ifrs' | 'fpa';
+export type SelectableAgent = 'bank_reconciliation' | 'ap_processing' | 'ar_intelligence' | 'ifrs' | 'fpa' | 'investment';
 export type RunStatus = 'queued' | 'running' | 'awaiting_approval' | 'failed' | 'closed';
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'completed_with_exceptions' | 'failed';
 export type ProposalStatus = 'pending_approval' | 'approved' | 'rejected' | 'changes_requested';
 export type ReportKey =
-  | 'bank_reconciliation' | 'ap_processing' | 'ar_collections' | 'ifrs_pack' | 'fpa_intelligence' | 'close_pack' | 'cfo_summary';
+  | 'bank_reconciliation' | 'ap_processing' | 'ar_collections' | 'ifrs_pack' | 'fpa_intelligence' | 'investment_review'
+  | 'close_pack' | 'cfo_summary';
 export type ReportFormat = 'xlsx' | 'pdf';
 
 export type Kpi = {
@@ -232,6 +233,16 @@ export type CloseRun = CloseRunSummary & {
   deliverables: Deliverable[];
 };
 
+export type HoldingInput = {
+  code: string; name: string; asset_class: 'equity' | 'bond' | 'sukuk' | 'fund' | 'deposit' | 'other';
+  ifrs9_category: 'fvtpl' | 'fvoci' | 'amortised_cost'; issuer?: string | null; sector?: string | null; country?: string | null;
+  currency: string; quantity?: number | null; cost: number; acquired_on?: string | null; maturity_date?: string | null;
+  coupon_rate?: number | null;
+};
+export type ValuationInput = { code: string; as_of: string; market_value: number; local_value?: number | null; price?: number | null; income?: number | null };
+export type Holding = HoldingInput & { id: number; latest_value: number | null; latest_as_of: string | null };
+export type ImportResult = { holdings_created: number; holdings_updated: number; valuations_saved: number; errors: string[] };
+
 export type AskAnswer = { text: string; source: 'ai' | 'computed'; note: string | null };
 export type AskRun = CloseRun & { ask: { agent: AgentKey; agent_name: string; prompt: string; answer?: AskAnswer } };
 export type PreviewJournal = {
@@ -287,6 +298,10 @@ export const aiCloseApi = {
   ask: (companyId: string, agent: AgentKey, body: { prompt: string; period?: string; scope?: 'entity' | 'group'; entity_ids?: string[] }) =>
     r<AskRun>(`/agents/${agent}/ask`, companyId, json('POST', body)),
   askRun: (companyId: string, runId: number) => r<AskRun>(`/agents/runs/${runId}`, companyId),
+  holdings: (companyId: string) => r<Holding[]>('/investments', companyId),
+  importPortfolio: (companyId: string, body: { holdings: HoldingInput[]; valuations: ValuationInput[] }) =>
+    r<ImportResult>('/investments/import', companyId, json('POST', body)),
+  deleteHolding: (companyId: string, id: number) => r<void>(`/investments/${id}`, companyId, { method: 'DELETE' }),
   notify: (companyId: string, runId: number, emails?: string[]) =>
     r<{ deliveries: Delivery[] }>(`/runs/${runId}/notify`, companyId, json('POST', { emails: emails?.length ? emails : null })),
 };

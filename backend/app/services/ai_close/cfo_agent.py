@@ -41,6 +41,12 @@ ROOT_CAUSES = {
     "intercompany_mismatch": ("Intercompany charges recorded differently by the two entities", "Agree both sides and correct the entity in error."),
     "consolidation": ("Consolidation data issues", "Resolve before issuing group figures."),
     "data_gap": ("Missing or unavailable source data", "Load the missing data and re-run the affected agent."),
+    "concentration_risk": ("Portfolio concentration above policy limits", "Review exposure with the investment committee."),
+    "valuation_drop": ("Sharp fall in an investment's value", "Confirm the price and whether the position still fits policy."),
+    "stale_price": ("Investments without a period-end price", "Load the month-end valuation."),
+    "fair_value_unrecorded": ("Investment fair value movement not recorded", "Approve the fair value journals."),
+    "investment_ledger_difference": ("Investments ledger does not agree to the portfolio", "Reconcile holdings to account 2040."),
+    "investment_maturity": ("Investments maturing soon", "Decide on reinvestment."),
     "journal_blocked": ("Journals could not be prepared (period controls)", "Review the period status."),
 }
 
@@ -102,6 +108,12 @@ def _risks(up: dict[str, dict[str, Any]], open_items: int) -> list[dict[str, Any
     if ifrs_out.get("checks_evaluated"):
         risks.append({"area": "Reporting", "level": "medium" if ifrs_out.get("checks_failed") else "low",
                       "detail": f"{ifrs_out.get('checks_failed')} of {ifrs_out.get('checks_evaluated')} accounting checks failed."})
+    inv = up.get("investment") or {}
+    if inv.get("applicable"):
+        breaches = [i for i in inv.get("issuers", []) if i.get("pct", 0) > (inv.get("limits") or {}).get("issuer_pct", 100)]
+        risks.append({"area": "Investments", "level": "medium" if breaches else "low",
+                      "detail": f"Portfolio {money(inv.get('portfolio_value')):,.2f}, month return {inv.get('month_return_pct')}%; "
+                                f"{len(breaches)} issuer limit breach(es)."})
     consol = up.get("consolidation") or {}
     mismatched = [r for r in consol.get("eliminations", []) if r.get("status") != "matched"]
     if consol:

@@ -16,6 +16,7 @@ const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] =
   { value: 'ar_intelligence', label: 'AR Intelligence Agent', note: 'Ageing, overdue follow-ups, AR control check' },
   { value: 'ifrs', label: 'IFRS Accounting Agent', note: 'Statement integrity, accruals, end-of-service, expected credit loss, IFRS 16 entries' },
   { value: 'fpa', label: 'FP&A Agent', note: 'Budget vs actual and a 30/60/90-day cash forecast (uses AR and AP)' },
+  { value: 'investment', label: 'Investment Agent', note: 'Portfolio valuation, returns, concentration limits, IFRS 9 fair value journals' },
 ];
 const POLL_MS = 2000;
 const DEMO_TAG = '(synthetic data)';
@@ -196,7 +197,7 @@ export default function ExecutiveSummaryPage() {
             )}
             <div className="flex flex-wrap gap-2">
               {AGENT_OPTIONS.map((a) => (
-                <label key={a.value} className="flex w-full cursor-pointer items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50 sm:w-[calc(50%-0.25rem)] xl:w-[calc(20%-0.4rem)]" title={a.note}>
+                <label key={a.value} className="flex w-full cursor-pointer items-start gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50 sm:w-[calc(50%-0.25rem)] xl:w-[calc(33.333%-0.35rem)]" title={a.note}>
                   <input type="checkbox" className="mt-0.5" checked={selected.includes(a.value)}
                     onChange={(e) => setSelected((s) => (e.target.checked ? [...s, a.value] : s.filter((x) => x !== a.value)))} />
                   <span><span className="font-medium text-slate-800">{a.label}</span><span className="block text-xs text-slate-500">{a.note}</span></span>

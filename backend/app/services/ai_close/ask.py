@@ -22,13 +22,14 @@ from app.services.ai_close.cfo_agent import unverified_numbers
 
 logger = logging.getLogger(__name__)
 
-ASKABLE = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa", "consolidation", "close_manager",
-           "cfo_intelligence")
+ASKABLE = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa", "investment", "consolidation",
+           "close_manager", "cfo_intelligence")
 MONTHS = {m: i for i, m in enumerate(
     ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 _ISO = re.compile(r"\b(20\d{2})-(0[1-9]|1[0-2])\b")
 _NAMED = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+(20\d{2}))?\b", re.I)
-_SKIP_LISTS = {"register", "invoices", "unmatched_items", "accounts", "entities", "customers", "checks", "group_pl", "group_bs"}
+_SKIP_LISTS = {"register", "invoices", "unmatched_items", "accounts", "entities", "customers", "checks", "group_pl", "group_bs",
+               "holdings"}
 
 
 def period_from_prompt(prompt: str, latest: str | None) -> str | None:

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Bot, Briefcase, ChevronRight, Download, Eye, Landmark, ListChecks, Network, Play, Receipt, Scale, ShieldCheck, TrendingUp, Users, X,
+  Bot, Briefcase, ChevronRight, Download, Eye, Landmark, ListChecks, Network, PieChart, Play, Receipt, Scale, ShieldCheck, TrendingUp,
+  Users, X,
 } from 'lucide-react';
 import { useCompany } from '../../context/CompanyContext';
 import {
@@ -13,7 +14,7 @@ import { AgentCard, ReportViewer } from './closeParts';
 
 type AgentSpec = {
   key: AgentKey; name: string; role: string; icon: typeof Bot; does: string[]; uses: string; delivers: string;
-  report?: ReportKey; prompt: string; group?: 'required' | 'optional';
+  report?: ReportKey; prompt: string; group?: 'required' | 'optional'; dataLink?: string;
 };
 
 const WORKFORCE: AgentSpec[] = [
@@ -46,6 +47,13 @@ const WORKFORCE: AgentSpec[] = [
     does: ['Actual vs budget by account', 'Flags material overruns', 'Explains movements against prior months', '30/60/90-day cash forecast with downside and upside'],
     uses: 'Posted ledger, FP&A budgets, AR and AP schedules', delivers: 'FP&A Variance & Forecast Report', report: 'fpa_intelligence', group: 'optional',
     prompt: 'Analyse October actual performance against budget. Identify significant revenue and expense variances, explain key movements and prepare the cash forecast with best-case and worst-case scenarios.',
+  },
+  {
+    key: 'investment', name: 'Investment Agent', role: 'Portfolio and treasury review', icon: PieChart,
+    does: ['Values the portfolio and month returns', 'Fair value movements by IFRS 9 category', 'Issuer, asset-class and currency concentration limits', 'Proposes fair value journals; flags maturities and stale prices'],
+    uses: 'Investment holdings and month-end valuations, investments ledger', delivers: 'Investment Review Report', report: 'investment_review',
+    group: 'optional', dataLink: '/ai-cfo/investments',
+    prompt: "Analyse the company's investment portfolio for October. Evaluate asset allocation, investment returns, valuation changes, concentration risks and portfolio performance, and prepare an investment review report.",
   },
   {
     key: 'consolidation', name: 'Consolidation Agent', role: 'Group results', icon: Network,
@@ -85,7 +93,7 @@ export default function WorkforcePage() {
             <div>
               <h1 className="text-xl font-semibold text-white">AI Finance Workforce</h1>
               <p className="text-xs text-slate-300">
-                Eight specialised agents, coordinated by NEXUS. Each does real work on your ledger and source records.
+                Nine specialised agents, coordinated by NEXUS. Each does real work on your ledger and source records.
               </p>
             </div>
           </div>
@@ -114,7 +122,7 @@ export default function WorkforcePage() {
           <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-green-700" /> Each output passes validation checks before it counts as complete</span>
         </div>
         {!companyId && <p className="text-sm text-slate-500">Select a company in the top banner to ask an agent.</p>}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {WORKFORCE.map((a) => (
             <article key={a.key} className="flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-2 flex items-center gap-2">
@@ -127,6 +135,7 @@ export default function WorkforcePage() {
               <ul className="mb-3 ml-4 list-disc space-y-0.5 text-xs text-slate-700">{a.does.map((d) => <li key={d}>{d}</li>)}</ul>
               <p className="text-[11px] text-slate-500"><span className="font-medium text-slate-600">Works from:</span> {a.uses}</p>
               <p className="mb-3 text-[11px] text-slate-500"><span className="font-medium text-slate-600">Delivers:</span> {a.delivers}</p>
+              {a.dataLink && <Link to={a.dataLink} className="mb-2 text-[11px] font-medium text-slate-600 underline">Manage portfolio data</Link>}
               <button onClick={() => setAsking(a)} disabled={!companyId}
                 className="mt-auto rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50">
                 Ask this agent

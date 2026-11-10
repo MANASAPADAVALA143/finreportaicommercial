@@ -286,6 +286,7 @@ export const CFO_INTELLIGENCE_NAV: NavEntry[] = [
       { label: 'AI Finance Workforce', path: '/ai-cfo/workforce',        icon: 'bot',          badge: 'AGENTIC' },
       { label: 'AI CFO Command Centre', path: '/ai-cfo',                  icon: 'bot',          badge: 'AGENTIC' },
       { label: 'Month-End Close (AI)', path: '/ai-cfo/executive-summary', icon: 'bot',         badge: 'AGENTIC' },
+      { label: 'Investment Portfolio', path: '/ai-cfo/investments',      icon: 'bar-chart-2' },
       { label: 'Executive Dashboard',  path: '/cfo-dashboard',           icon: 'layout-dashboard' },
       { label: 'CFO Morning Brief',    path: '/cfo',                     icon: 'brain',        badge: 'AGENTIC' },
       { label: 'Board Pack',           path: '/reports/board-pack',      icon: 'presentation', badge: 'AI' },

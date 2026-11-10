@@ -284,6 +284,7 @@ def _run_critical_migrations() -> None:
             import app.models.accounting_assistant  # noqa: F401
             import app.models.ai_cfo  # noqa: F401
             import app.models.ai_close  # noqa: F401
+            import app.models.investments  # noqa: F401
             import app.models.accounting_memo  # noqa: F401
             import app.modules.gulftax.ported.models  # noqa: F401 - gulftax_invoices etc.
         except Exception as _ie:

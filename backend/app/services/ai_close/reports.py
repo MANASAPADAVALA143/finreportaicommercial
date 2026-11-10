@@ -25,6 +25,7 @@ REPORTS = {
     "ar_collections": ("AR Ageing & Collection Report", "ar_intelligence"),
     "ifrs_pack": ("IFRS Accounting Pack", "ifrs"),
     "fpa_intelligence": ("FP&A Variance & Forecast Report", "fpa"),
+    "investment_review": ("Investment Review Report", "investment"),
     "close_pack": ("Month-End Close Pack", "close_manager"),
     "cfo_summary": ("CFO Executive Summary", "cfo_intelligence"),
 }
@@ -269,6 +270,39 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
         spec["notes"] = out.get("limitations", []) + [
             "Downside = collections -20%, costs +10%; upside = costs -5%; outflows use the average monthly cost.",
         ]
+    elif key == "investment_review":
+        led = out.get("ledger") or {}
+        fv = out.get("fair_value_by_category") or {}
+        spec["summary"] = [
+            ("Holdings", out.get("holdings_count")), ("Portfolio value", _money(out.get("portfolio_value"))),
+            ("Cost", _money(out.get("cost"))), ("Unrealised gain/(loss)", _money(out.get("unrealised"))),
+            ("Month movement", _money(out.get("month_movement"))), ("Month income", _money(out.get("month_income"))),
+            ("Month return %", out.get("month_return_pct")),
+            ("FVTPL movement (profit or loss)", _money(fv.get("fvtpl"))), ("FVOCI movement (reserve)", _money(fv.get("fvoci"))),
+            ("Ledger 2040 / portfolio", f"{_money(led.get('balance'))} / {_money(led.get('expected'))}"),
+        ]
+        spec["sections"] = [
+            t.from_rows("Holdings", ["Code", "Investment", "Class", "IFRS 9", "Currency", "Cost", "Start value", "Market value",
+                                     "Movement", "Income", "Return %", "Unrealised", "Price date"], out.get("holdings", []),
+                        lambda h: [h["code"], h["name"], h["asset_class"], h["ifrs9_category"].upper(), h["currency"],
+                                   _money(h["cost"]), _money(h["start_value"]), _money(h["market_value"]), _money(h["movement"]),
+                                   _money(h["income"]), h["return_pct"], _money(h["unrealised"]), h["price_date"] or "stale"]),
+            t.from_rows("Asset allocation", ["Asset class", "Market value", "% of portfolio"], out.get("allocation", []),
+                        lambda a: [a["asset_class"], _money(a["market_value"]), a["pct"]]),
+            t.from_rows("Issuer concentration", ["Issuer", "Market value", "% of portfolio"], out.get("issuers", []),
+                        lambda i: [i["issuer"], _money(i["market_value"]), i["pct"]]),
+            t.from_rows("Currency exposure", ["Currency", "Market value", "% of portfolio"], out.get("currencies", []),
+                        lambda c: [c["currency"], _money(c["market_value"]), c["pct"]]),
+            t.from_rows("Maturity ladder", ["Investment", "Maturity", "Market value"], out.get("maturities", []),
+                        lambda m: [m["name"], m["maturity_date"], _money(m["market_value"])]),
+            *t.proposals(db, run, agent),
+            t.exceptions(_exceptions(db, run, agent)),
+        ]
+        limits = out.get("limits") or {}
+        spec["notes"] = out.get("limitations", []) + ([
+            f"Policy limits: single issuer {limits.get('issuer_pct')}%, asset class {limits.get('asset_class_pct')}%, "
+            f"foreign currency {limits.get('foreign_currency_pct')}%; drop alert {limits.get('drop_alert_pct')}% in a month."]
+            if limits else [])
     elif key == "close_pack":
         spec["summary"] = [
             ("Close completion %", out.get("completion_pct")), ("Checklist items done", f"{out.get('done')}/{out.get('applicable')}"),

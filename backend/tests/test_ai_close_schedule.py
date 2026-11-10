@@ -105,7 +105,7 @@ def test_scheduled_group_close_runs_once_and_sends_summary(session_factory, demo
     assert "Month-end close 2026-10" in email["subject"] and "ready for review" in email["subject"]
     assert email["attachment"][:5] == b"%PDF-" and email["filename"].startswith("cfo-executive-summary-2026-10")
     assert f"Journals awaiting approval: {summary['pending_approvals']}" in email["body"]
-    assert summary["pending_approvals"] == 11 and "/ai-cfo/executive-summary" in email["body"]
+    assert summary["pending_approvals"] == 13 and "/ai-cfo/executive-summary" in email["body"]
     assert outbox["slack"][0]["url"] == SLACK and "Top issues:" in outbox["slack"][0]["text"]
 
 

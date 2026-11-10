@@ -394,6 +394,7 @@ CHECKLIST = [
     ("ar_reviewed", "Receivables aged and control account reconciled", "ar_intelligence"),
     ("ifrs_checks", "IFRS accounting checks completed", "ifrs"),
     ("budget_reviewed", "Budget variance and cash forecast prepared", "fpa"),
+    ("investments_reviewed", "Investment portfolio valued and reviewed", "investment"),
     ("consolidated", "Group consolidated and intercompany agreed", "consolidation"),
     ("ledger_balanced", "Posted journals balance for the period", None),
     ("journals_approved", "No other journals awaiting approval in the period", None),
@@ -502,6 +503,7 @@ from app.services.ai_close.ap_agent import ap_processing  # noqa: E402
 from app.services.ai_close.cfo_agent import cfo_intelligence  # noqa: E402
 from app.services.ai_close.consolidation_agent import consolidation  # noqa: E402
 from app.services.ai_close.ifrs_agent import ifrs  # noqa: E402
+from app.services.ai_close.investment_agent import investment  # noqa: E402
 
 AgentFn = Callable[[CloseContext], AgentOutcome]
 AGENTS: dict[str, tuple[str, AgentFn]] = {
@@ -510,8 +512,9 @@ AGENTS: dict[str, tuple[str, AgentFn]] = {
     "ar_intelligence": ("AR Intelligence Agent", ar_intelligence),
     "ifrs": ("IFRS Accounting Agent", ifrs),
     "fpa": ("FP&A Agent", fpa),
+    "investment": ("Investment Agent", investment),
     "consolidation": ("Consolidation Agent", consolidation),
     "close_manager": ("Close Manager Agent", close_manager),
     "cfo_intelligence": ("CFO Intelligence Agent", cfo_intelligence),
 }
-ENTITY_AGENTS = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa")
+ENTITY_AGENTS = ("bank_reconciliation", "ap_processing", "ar_intelligence", "ifrs", "fpa", "investment")

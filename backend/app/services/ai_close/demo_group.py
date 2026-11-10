@@ -29,6 +29,7 @@ from app.models.client_data import ApCompany
 from app.models.company_setup import UaeCompanyProfile
 from app.models.fpa_master import FpaMasterRow
 from app.models.ifrs16_lease import IFRS16Lease
+from app.models.investments import InvestmentHolding, InvestmentValuation
 from app.models.uae_accounting_full import (
     UAEAccount, UAEBankAccount, UAEBankStatement, UAEBankStatementLine, UAECustomer, UAESalesInvoice,
 )
@@ -40,13 +41,33 @@ from app.services.uae_coa_service import seed_uae_chart_of_accounts
 logger = logging.getLogger(__name__)
 
 EXTRA_ACCOUNTS = [("7180", "Repairs & Maintenance", "Expense", "Admin"),
-                  ("7190", "Impairment Loss on Trade Receivables", "Expense", "Other")]
+                  ("7190", "Impairment Loss on Trade Receivables", "Expense", "Other"),
+                  ("2040", "Investments", "Asset", "Non-current Asset"),
+                  ("6030", "Fair Value Gains/(Losses) on Investments", "Income", "Other Income"),
+                  ("5030", "Fair Value Reserve (FVOCI)", "Equity", "Equity")]
+INVESTMENT_ACCOUNT = ("1003", "Cash at Bank - FAB (investment account)")
+# code, name, class, IFRS 9 category, issuer, currency, cost, month-end values (7 months), monthly income, acquired month, maturity
+PORTFOLIO = [
+    ("ENBD", "Emirates NBD shares", "equity", "fvtpl", "Emirates NBD", "AED", 380000,
+     [384000, 390000, 386000, 392000, 395000, 398000, 420000], 0, 0, None),
+    ("FAB", "First Abu Dhabi Bank shares", "equity", "fvoci", "First Abu Dhabi Bank", "AED", 170000,
+     [171000, 173500, 172000, 174000, 175000, 176000, 180000], 0, 0, None),
+    ("ALDAR", "Aldar Properties shares", "equity", "fvtpl", "Aldar Properties", "AED", 145000,
+     [147000, 149500, 152000, 151000, 148500, 150000, 132000], 0, 0, None),
+    ("UAESK29", "UAE Government Sukuk 2029", "sukuk", "amortised_cost", "UAE Federal Government", "AED", 250000,
+     [249000, 249600, 248800, 249200, 248900, 248700, 248500], 1040, 0, (2029, 9, 30)),
+    ("MSQDEP", "Mashreq 6-month deposit", "deposit", "amortised_cost", "Mashreq Bank", "AED", 150000,
+     [None, 150000, 150000, 150000, 150000, 150000, 150000], 625, 1, "6m"),
+    ("GEQF", "Global Equity Fund (USD class)", "fund", "fvtpl", "Global Equity Fund", "USD", 125000,
+     [126500, 128000, 130500, 129000, 133000, 136000, 140000], 0, 0, None),
+]
 BANK = ("1002", "Cash at Bank - ENBD")
 AR = ("1100", "Trade Receivables")
 SERVICE_REVENUE = ("6010", "Service Revenue")
 IC_RECEIVABLE = ("1130", "Other Receivables")
 ACCRUED = ("3020", "Accrued Expenses")
 IC_FEE = 25000.0
+INVESTMENTS_GL = ("2040", "Investments")
 
 SUBSIDIARIES = [
     {
@@ -94,10 +115,71 @@ def _extra_accounts(db: Session, workspace_id: str, company_id: str) -> None:
                               account_type=acct_type, sub_type=sub))
 
 
+def _clear_investments(db: Session, workspace_id: str, company_id: str) -> None:
+    ids = [i for (i,) in db.query(InvestmentHolding.id).filter(
+        InvestmentHolding.workspace_id == workspace_id, InvestmentHolding.company_id == company_id)]
+    if ids:
+        db.query(InvestmentValuation).filter(InvestmentValuation.holding_id.in_(ids)).delete(synchronize_session=False)
+        db.query(InvestmentHolding).filter(InvestmentHolding.id.in_(ids)).delete(synchronize_session=False)
+
+
 def _clear_subsidiary(db: Session, workspace_id: str, company_id: str) -> None:
     parent_demo._clear(db, workspace_id, company_id)
+    _clear_investments(db, workspace_id, company_id)
     db.query(IFRS16Lease).filter(IFRS16Lease.workspace_id == workspace_id, IFRS16Lease.company_id == company_id).delete(
         synchronize_session=False)
+
+
+def _seed_portfolio(db: Session, workspace_id: str, company_id: str, months: list[str]) -> int:
+    """Holdings bought in the first months, valued every month end; the ledger carries them at
+    last month's values, so the final month's fair value movement is left for the agent to find."""
+    _clear_investments(db, workspace_id, company_id)
+    entries = []
+    first = period_bounds(months[0])[0]
+    total_cost = sum(p[6] for p in PORTFOLIO)
+    entries.append(_entry(workspace_id, company_id, "INV-FUND", first + timedelta(days=1), "Funding of investment account",
+                          INVESTMENT_ACCOUNT, ("5001", "Share Capital"), total_cost + 50000, "INV-FUND"))
+    fv_moves = {m: {"fvtpl": 0.0, "fvoci": 0.0} for m in range(len(months))}
+    for code, name, asset_class, category, issuer, currency, cost, values, income, start_idx, maturity in PORTFOLIO:
+        acquired = period_bounds(months[start_idx])[0] + timedelta(days=4 if start_idx == 0 else 19)
+        maturity_date = (date(*maturity) if isinstance(maturity, tuple)
+                         else acquired + timedelta(days=183) if maturity == "6m" else None)
+        holding = InvestmentHolding(workspace_id=workspace_id, company_id=company_id, code=code, name=f"{name} (demo)",
+                                    asset_class=asset_class, ifrs9_category=category, issuer=issuer, currency=currency,
+                                    cost=cost, acquired_on=acquired, maturity_date=maturity_date,
+                                    country="AE" if currency == "AED" else "Global")
+        db.add(holding)
+        db.flush()
+        entries.append(_entry(workspace_id, company_id, f"INV-BUY-{code}", acquired, f"Purchase of {name}",
+                              INVESTMENTS_GL, INVESTMENT_ACCOUNT, cost, f"INV-BUY-{code}"))
+        previous = float(cost)
+        for idx, period in enumerate(months):
+            value = values[idx]
+            if value is None:
+                continue
+            end = period_bounds(period)[1]
+            db.add(InvestmentValuation(holding_id=holding.id, as_of=end, market_value=value,
+                                       local_value=round(value / 3.6725, 2) if currency == "USD" else value,
+                                       income=income or None, source="Synthetic demo price"))
+            if income:
+                entries.append(_entry(workspace_id, company_id, f"INV-INC-{code}-{period}", end, f"Income received: {name}",
+                                      INVESTMENT_ACCOUNT, ("6021", "Interest Income"), income, f"INV-INC-{code}-{period}"))
+            if category in ("fvtpl", "fvoci"):
+                fv_moves[idx][category] += value - previous
+            previous = float(value)
+    for idx, period in enumerate(months[:-1]):
+        end = period_bounds(period)[1]
+        for category, target in (("fvtpl", ("6030", "Fair Value Gains/(Losses) on Investments")),
+                                 ("fvoci", ("5030", "Fair Value Reserve (FVOCI)"))):
+            amount = round(fv_moves[idx][category], 2)
+            if abs(amount) < 0.01:
+                continue
+            debit, credit = (INVESTMENTS_GL, target) if amount > 0 else (target, INVESTMENTS_GL)
+            entries.append(_entry(workspace_id, company_id, f"INV-FV-{category.upper()}-{period}", end,
+                                  f"Fair value movement {category.upper()} {period}", debit, credit, abs(amount),
+                                  f"INV-FV-{category.upper()}-{period}"))
+    db.add_all(entries)
+    return len(PORTFOLIO)
 
 
 def _lease_schedule(principal: float, rate: float, payment: float, months: list[str]) -> list[dict[str, Any]]:
@@ -376,6 +458,7 @@ def seed_demo_group(db: Session, workspace_id: str, today: date | None = None) -
     parent = parent_demo.seed_demo_company(db, workspace_id, today=today)
     months = parent["periods"]
     _extra_accounts(db, workspace_id, parent["company_id"])
+    holdings = _seed_portfolio(db, workspace_id, parent["company_id"], months)
     services, logistics = SUBSIDIARIES
     subs = [_seed_subsidiary(db, workspace_id, services, months, logistics["name"]),
             _seed_subsidiary(db, workspace_id, logistics, months, services["name"])]
@@ -397,11 +480,13 @@ def seed_demo_group(db: Session, workspace_id: str, today: date | None = None) -
         "company_id": parent["company_id"], "company_name": parent_demo.DEMO_NAME, "periods": months,
         "entities": [{"id": cid, "name": name} for cid, name, *_ in companies],
         "journal_entries": parent["journal_entries"] + sum(s["journal_entries"] for s in subs),
-        "ap": ap, "ap_note": ap_note,
+        "ap": ap, "ap_note": ap_note, "investment_holdings": holdings,
         "planted": parent["planted_anomalies"] + [
             "AP: price mismatch, re-keyed duplicate, possible duplicate, invoice before receipt, no-PO invoice, vendor mismatch",
             "AP: HVAC overhaul received but not invoiced (accrue Repairs & Maintenance 50,000)",
             "Services: October lease depreciation and interest not recorded; no end-of-service accrual",
             "Logistics: October rent not recorded; intercompany fee booked at 24,000 vs 25,000",
+            "Investments: October fair value movement unrecorded; Emirates NBD above the 25% issuer limit; "
+            "Aldar down 12%; Mashreq deposit maturing in November",
         ],
     }
