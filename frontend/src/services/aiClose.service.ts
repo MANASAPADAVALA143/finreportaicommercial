@@ -232,6 +232,12 @@ export type CloseRun = CloseRunSummary & {
   deliverables: Deliverable[];
 };
 
+export type AskAnswer = { text: string; source: 'ai' | 'computed'; note: string | null };
+export type AskRun = CloseRun & { ask: { agent: AgentKey; agent_name: string; prompt: string; answer?: AskAnswer } };
+export type PreviewJournal = {
+  title: string; rationale: string; entity: string; entry_date: string; amount: number; lines: JournalLine[]; refs: SourceRef[];
+};
+
 export type ReportSection = { title: string; columns: string[]; rows: (string | number | null)[][] };
 export type ReportView = {
   key: ReportKey;
@@ -278,6 +284,9 @@ export const aiCloseApi = {
   schedule: (companyId: string) => r<CloseSchedule | null>('/schedule', companyId),
   saveSchedule: (companyId: string, body: ScheduleInput) => r<CloseSchedule>('/schedule', companyId, json('PUT', body)),
   deleteSchedule: (companyId: string) => r<void>('/schedule', companyId, { method: 'DELETE' }),
+  ask: (companyId: string, agent: AgentKey, body: { prompt: string; period?: string; scope?: 'entity' | 'group'; entity_ids?: string[] }) =>
+    r<AskRun>(`/agents/${agent}/ask`, companyId, json('POST', body)),
+  askRun: (companyId: string, runId: number) => r<AskRun>(`/agents/runs/${runId}`, companyId),
   notify: (companyId: string, runId: number, emails?: string[]) =>
     r<{ deliveries: Delivery[] }>(`/runs/${runId}/notify`, companyId, json('POST', { emails: emails?.length ? emails : null })),
 };

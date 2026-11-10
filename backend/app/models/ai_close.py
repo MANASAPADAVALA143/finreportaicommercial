@@ -32,8 +32,9 @@ class AiCloseRun(Base):
     close_approved_by = Column(String(255), nullable=True)
     close_approved_at = Column(DateTime(timezone=True), nullable=True)
     close_note = Column(Text, nullable=True)
-    trigger = Column(String(16), nullable=True)  # manual | scheduled (null = manual)
+    trigger = Column(String(16), nullable=True)  # manual | scheduled | ask (null = manual)
     schedule_id = Column(Integer, nullable=True)
+    ask_json = Column(JSON, nullable=True)  # ask runs: {agent, prompt, answer: {text, source, note}}
     notified_json = Column(JSON, nullable=True)  # [{at, channel, target, ok, detail}]
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)

@@ -64,13 +64,26 @@ def tasks_of(db: Session, run: AiCloseRun) -> list[AiCloseTask]:
     return db.query(AiCloseTask).filter(AiCloseTask.run_id == run.id).order_by(AiCloseTask.wave, AiCloseTask.id).all()
 
 
+def with_dependencies(agent_keys: list[str]) -> list[str]:
+    out: set[str] = set()
+    stack = list(agent_keys)
+    while stack:
+        a = stack.pop()
+        if a in DEPENDS_ON and a not in out:
+            out.add(a)
+            stack += DEPENDS_ON[a]
+    return [a for a in SELECTABLE if a in out]
+
+
 def create_run(db: Session, *, workspace_id: str, company_id: str, period: str, agents_selected: list[str],
-               requested_by: str | None, scope: str = "entity", entities: list[str] | None = None) -> AiCloseRun:
+               requested_by: str | None, scope: str = "entity", entities: list[str] | None = None,
+               tail: list[str] | None = None, trigger: str | None = None) -> AiCloseRun:
     chosen = [a for a in SELECTABLE if a in agents_selected]
     ids = list(dict.fromkeys([company_id, *(entities or [])])) if scope == "group" else [company_id]
-    tail = (["consolidation"] if scope == "group" else []) + ["close_manager", "cfo_intelligence"]
+    if tail is None:
+        tail = (["consolidation"] if scope == "group" else []) + ["close_manager", "cfo_intelligence"]
     run = AiCloseRun(workspace_id=workspace_id, company_id=company_id, period=period, scope=scope, entity_ids=ids,
-                     agents=chosen + tail, status="queued", requested_by=requested_by)
+                     agents=chosen + tail, status="queued", requested_by=requested_by, trigger=trigger)
     db.add(run)
     db.flush()
 
@@ -119,6 +132,16 @@ def _persist_outcome(db: Session, run: AiCloseRun, task: AiCloseTask, outcome: a
         ))
     db.commit()
     prepared, skipped = 0, 0
+    if run.trigger == "ask":
+        names = {e.id: e.name for e in _entities(db, run)}
+        outcome.output = {**outcome.output, "proposed_journals": [
+            {"title": d.title, "rationale": d.rationale, "entity": names.get(d.entity_id or run.company_id, ""),
+             "entry_date": str(d.entry_date), "amount": d.amount, "lines": d.lines, "refs": d.refs}
+            for d in outcome.journals]}
+        if outcome.journals:
+            outcome.messages = [*outcome.messages, f"{len(outcome.journals)} journal(s) would be proposed; run the "
+                                "month-end close to send them for approval."]
+        outcome.journals = []
     for draft in outcome.journals:
         try:
             if prepare_proposal(db, run, task, draft) is None:

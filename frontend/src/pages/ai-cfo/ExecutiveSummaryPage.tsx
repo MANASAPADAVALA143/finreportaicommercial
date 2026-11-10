@@ -135,6 +135,7 @@ export default function ExecutiveSummaryPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Link to="/ai-cfo/workforce" className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10">AI Finance Workforce</Link>
             <Link to="/ai-cfo" className="rounded-md border border-white/20 px-3 py-1.5 text-xs text-slate-200 hover:bg-white/10">AI CFO Command Centre</Link>
             <button onClick={() => void load(run?.id)} aria-label="Refresh" className="rounded-md border border-white/20 p-2 text-slate-200 hover:bg-white/10">
               <RefreshCw className="h-4 w-4" />

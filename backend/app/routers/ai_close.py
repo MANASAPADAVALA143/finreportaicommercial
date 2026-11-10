@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.company_access import require_company_access
@@ -25,6 +26,7 @@ from app.routers.internal_audit import Scope, _manage, _read, _row, _write
 from app.services.ai_cfo import ledger
 from app.services.ai_cfo.ledger import LedgerScope
 from app.services.ai_close import alerts, orchestrator, scheduling
+from app.services.ai_close import ask as ask_service
 from app.services.ai_close.agents import AGENTS
 from app.services.ai_close.demo_group import seed_demo_group
 from app.services.ai_close.journals import DecisionError, approve_close, decide, journal_detail
@@ -150,20 +152,69 @@ def start_close(body: StartIn, background: BackgroundTasks, scope: Scope = Depen
     return _run_out(db, run)
 
 
+def _closes(db: Session, scope: Scope):
+    """Close runs for the company; agent previews ('ask' runs) are not closes."""
+    return db.query(AiCloseRun).filter(
+        AiCloseRun.workspace_id == scope.workspace_id, AiCloseRun.company_id == scope.company_id,
+        or_(AiCloseRun.trigger.is_(None), AiCloseRun.trigger != "ask"),
+    )
+
+
 @router.get("/runs")
 def list_runs(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
-    rows = db.query(AiCloseRun).filter(
-        AiCloseRun.workspace_id == scope.workspace_id, AiCloseRun.company_id == scope.company_id
-    ).order_by(AiCloseRun.id.desc()).limit(30).all()
+    rows = _closes(db, scope).order_by(AiCloseRun.id.desc()).limit(30).all()
     return [{**_row(r), "scope": r.scope or "entity"} for r in rows]
 
 
 @router.get("/runs/latest")
 def latest_run(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
-    run = db.query(AiCloseRun).filter(
-        AiCloseRun.workspace_id == scope.workspace_id, AiCloseRun.company_id == scope.company_id
-    ).order_by(AiCloseRun.id.desc()).first()
+    run = _closes(db, scope).order_by(AiCloseRun.id.desc()).first()
     return _run_out(db, run) if run else None
+
+
+class AskIn(BaseModel):
+    prompt: str = Field(min_length=3, max_length=2000)
+    period: str | None = Field(default=None, pattern=_PERIOD)
+    scope: Literal["entity", "group"] = "entity"
+    entity_ids: list[str] | None = Field(default=None, max_length=MAX_ENTITIES)
+
+
+@router.post("/agents/{agent}/ask", status_code=202)
+def ask_agent(agent: str, body: AskIn, background: BackgroundTasks, scope: Scope = Depends(_write),
+              ctx: WorkspaceContext = Depends(validate_workspace), db: Session = Depends(get_db)):
+    """Run one agent (and the agents it depends on) as a preview and answer the request from its results."""
+    if agent not in ask_service.ASKABLE:
+        raise HTTPException(status_code=404, detail="Unknown agent")
+    if agent == "consolidation" and body.scope != "group":
+        raise HTTPException(status_code=422, detail="The Consolidation Agent needs a group: choose the companies to consolidate")
+    ids = _group_entities(db, ctx, scope, body.entity_ids or []) if body.scope == "group" else [scope.company_id]
+    latest = max((p for p in (ledger.latest_period(db, LedgerScope(scope.workspace_id, cid)) for cid in ids) if p), default=None)
+    period = body.period or ask_service.period_from_prompt(body.prompt, latest) or latest
+    if not period:
+        raise HTTPException(status_code=422, detail="No posted ledger data for this company; choose a period")
+    active = db.query(AiCloseRun).filter(
+        AiCloseRun.workspace_id == scope.workspace_id, AiCloseRun.company_id == scope.company_id,
+        AiCloseRun.status.in_(("queued", "running")),
+    ).first()
+    if active:
+        raise HTTPException(status_code=409, detail=f"Run #{active.id} is still running")
+    selected, tail = ask_service.plan(agent, body.scope)
+    run = orchestrator.create_run(
+        db, workspace_id=scope.workspace_id, company_id=scope.company_id, period=period, agents_selected=selected,
+        requested_by=scope.user_email, scope=body.scope, entities=ids, tail=tail, trigger="ask",
+    )
+    run.ask_json = {"agent": agent, "agent_name": AGENTS[agent][0], "prompt": body.prompt.strip()}
+    db.commit()
+    background.add_task(ask_service.finish, session_factory, run.id, MAX_WORKERS)
+    return {**_run_out(db, run), "ask": run.ask_json}
+
+
+@router.get("/agents/runs/{rid}")
+def get_ask(rid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    run = _get(db, AiCloseRun, rid, scope)
+    if run.trigger != "ask":
+        raise HTTPException(status_code=404, detail="Not found")
+    return {**_run_out(db, run), "ask": run.ask_json}
 
 
 @router.get("/runs/{rid}")
@@ -254,6 +305,8 @@ class NotifyIn(BaseModel):
 def notify_run(rid: int, body: NotifyIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
     """Send the close summary now: in-app, plus email/Slack to the given addresses or the schedule's recipients."""
     run = _get(db, AiCloseRun, rid, scope)
+    if run.trigger == "ask":
+        raise HTTPException(status_code=409, detail="Agent previews are not sent as close summaries")
     if run.status in ("queued", "running"):
         raise HTTPException(status_code=409, detail="The close is still running")
     schedule = db.query(AiCloseSchedule).filter(
@@ -346,6 +399,8 @@ class CloseApprovalIn(BaseModel):
 def approve_run_close(rid: int, body: CloseApprovalIn, scope: Scope = Depends(_manage),
                       ctx: WorkspaceContext = Depends(validate_workspace), db: Session = Depends(get_db)):
     run = _get(db, AiCloseRun, rid, scope)
+    if run.trigger == "ask":
+        raise HTTPException(status_code=409, detail="An agent preview cannot close the period; run the month-end close")
     for cid in orchestrator.entity_ids(run):
         if cid != scope.company_id:
             require_company_access(db, ctx, cid, "manage")

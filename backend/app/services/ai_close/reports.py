@@ -133,7 +133,8 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
         "currency": (profile.base_currency if profile else None) or "AED",
         "period": run.period, "agent": AGENTS[agent][0], "agent_status": task.status.replace("_", " "),
         "executed_at": _ts(task.finished_at), "run_id": run.id, "run_status": run.status.replace("_", " "),
-        "approval_status": (f"Close approved by {run.close_approved_by} {_ts(run.close_approved_at)}" if run.status == "closed"
+        "approval_status": ("Agent preview - not part of a month-end close; no journals created" if run.trigger == "ask"
+                            else f"Close approved by {run.close_approved_by} {_ts(run.close_approved_at)}" if run.status == "closed"
                             else "Draft - awaiting close approval"),
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "summary": [], "sections": [], "notes": [], "narrative": [],
@@ -318,6 +319,13 @@ def build_report(db: Session, run: AiCloseRun, key: str) -> dict[str, Any]:
             spec["notes"] = [f"Close approval note: {run.close_note}"]
     else:
         spec.update(_cfo_spec(out, t))
+    preview = out.get("proposed_journals") if run.trigger == "ask" else None
+    if preview:
+        spec["sections"].insert(0, t.from_rows(
+            "Proposed journals (preview - not created)", ["Description", "Date", "Amount", "Lines", "Rationale"], preview,
+            lambda j: [j["title"], j["entry_date"], _money(j["amount"]),
+                       "; ".join(f"{l['account_code']} Dr {_money(l.get('debit') or None)} Cr {_money(l.get('credit') or None)}"
+                                 for l in j["lines"]), j["rationale"]]))
     return spec
 
 

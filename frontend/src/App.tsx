@@ -327,6 +327,7 @@ const BoardPack = safeLazy(() => import('./pages/reports/BoardPack'));
 const CFOServices = safeLazy(() => import('./pages/cfo/CFOServices.tsx'));
 const AiCfoCommandCentrePage = safeLazy(() => import('./pages/ai-cfo/AiCfoCommandCentrePage'));
 const AiCloseExecutiveSummaryPage = safeLazy(() => import('./pages/ai-cfo/ExecutiveSummaryPage'));
+const AiFinanceWorkforcePage = safeLazy(() => import('./pages/ai-cfo/WorkforcePage'));
 const EntityHealth = safeLazy(() => import('./pages/cfo/EntityHealth'));
 const PaymentCalendar = safeLazy(() => import('./pages/cfo/PaymentCalendar'));
 const CovenantTracker = safeLazy(() => import('./pages/cfo/CovenantTracker'));
@@ -805,6 +806,7 @@ function App() {
                 {/* CFO Suite */}
                 <Route path="/ai-cfo"                  element={<AiCfoCommandCentrePage />} />
                 <Route path="/ai-cfo/executive-summary" element={<AiCloseExecutiveSummaryPage />} />
+                <Route path="/ai-cfo/workforce"       element={<AiFinanceWorkforcePage />} />
                 <Route path="/cfo"                     element={<CFOServices />} />
                 <Route path="/cfo/assistant"           element={<CFOServices defaultTab="assistant" />} />
                 <Route path="/cfo/insights"            element={<CFOServices defaultTab="insights" />} />
