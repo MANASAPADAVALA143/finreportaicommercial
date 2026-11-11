@@ -36,7 +36,7 @@ def investment(ctx: CloseContext) -> AgentOutcome:
     holdings = db.query(InvestmentHolding).filter(
         InvestmentHolding.workspace_id == ctx.workspace_id, InvestmentHolding.company_id == ctx.company_id).all()
     holdings = [h for h in holdings if not h.acquired_on or h.acquired_on <= ctx.end]
-    holdings = [h for h in holdings if not h.maturity_date or h.maturity_date >= ctx.start]
+    holdings = [h for h in holdings if not h.maturity_date or h.maturity_date >= ctx.end]  # matured ones are no longer held
     if not holdings:
         return AgentOutcome(
             records_processed=0,
@@ -72,7 +72,7 @@ def investment(ctx: CloseContext) -> AgentOutcome:
             "market_value": end_value, "movement": movement, "income": income, "return_pct": ret,
             "unrealised": round(end_value - money(h.cost), 2), "maturity_date": str(h.maturity_date) if h.maturity_date else None,
             "price_date": str(current.as_of) if current else None, "stale_price": stale,
-            "fair_value_movement": movement if h.ifrs9_category in FAIR_VALUE and (prior or acquired_in_period) else 0.0,
+            "fair_value_movement": movement if h.ifrs9_category in FAIR_VALUE else 0.0,
         })
         if stale:
             exceptions.append(ExceptionItem(

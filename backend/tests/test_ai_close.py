@@ -114,6 +114,10 @@ class _Query:
         self.n = n
         return self
 
+    def range(self, start, end):
+        self.offset, self.n = start, end - start + 1
+        return self
+
     def order(self, *_a, **_k):
         return self
 
@@ -132,7 +136,8 @@ class _Query:
             self.sb.tables[self.name] = [r for r in rows if r not in hit]
             data = hit
         else:
-            data = [dict(r) for r in hit][: self.n or None]
+            start = getattr(self, "offset", 0)
+            data = [dict(r) for r in hit][start: start + self.n if self.n else None]
         return SimpleNamespace(data=data)
 
 

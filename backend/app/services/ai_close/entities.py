@@ -2,8 +2,9 @@
 
 Counts and amounts add up; ageing buckets, forecast days and trend periods are combined
 by key; lists are concatenated with each row tagged with its entity; percentages and other
-non-additive figures are recomputed or dropped rather than summed. A single-entity run
-returns the agent's output unchanged.
+non-additive figures are kept when every entity agrees (e.g. a policy limit) and otherwise
+dropped rather than summed; flags are true if any entity's is. A single-entity run returns the
+agent's output unchanged.
 """
 from __future__ import annotations
 
@@ -54,9 +55,11 @@ def _combine(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
 
 def _merge_value(key: str, values: list[tuple[Entity, Any]]) -> Any:
     xs = [v for _, v in values]
+    if xs and all(isinstance(v, bool) for v in xs):
+        return any(xs)
     if all(_is_num(v) for v in xs):
         if key in NON_ADDITIVE or key.endswith("_pct") or key.endswith("pct"):
-            return None
+            return xs[0] if xs and all(v == xs[0] for v in xs) else None
         return round(sum(xs), 2)
     if all(isinstance(v, list) for v in xs):
         flat = [(e, item) for e, v in values for item in v]

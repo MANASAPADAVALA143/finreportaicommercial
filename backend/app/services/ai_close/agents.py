@@ -294,6 +294,7 @@ def _variance(line_items: list[dict]) -> dict:
 
 ROLLING_MONTHS = 12
 TREND_DAMPING = 0.5
+NOT_RUN_RATE = {"6030": "fair value gains/losses", "7202": "foreign exchange", "7190": "credit loss charges"}
 SCENARIOS = {  # name: (revenue factor, cost factor)
     "base_case": (1.0, 1.0),
     "best_case": (1.05, 0.97),
@@ -316,7 +317,7 @@ def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
     linear trend over up to 12 months of history, then best/worst-case factors on revenue and costs."""
     history_from = ledger.period_add(ctx.period, -(ROLLING_MONTHS - 1))
     moves = [m for m in ledger.monthly_movements(ctx.db, ctx.scope, history_from, ctx.period)
-             if m["account_type"] in ("Income", "Expense")]
+             if m["account_type"] in ("Income", "Expense") and m["account_code"] not in NOT_RUN_RATE]
     periods = ledger.periods_between(history_from, ctx.period)
     by_account: dict[str, dict[str, Any]] = {}
     for m in moves:
@@ -357,7 +358,8 @@ def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
         "months": future, **scenarios, "totals": totals, "accounts": [{k: v for k, v in l.items() if k != "path"} for l in lines],
         "history_months": len(periods), "method": (
             f"Per account: median of the last three months as the run rate plus {TREND_DAMPING:.0%} of the linear trend over up to "
-            f"{ROLLING_MONTHS} months of history. Best case: revenue +5%, costs -3%. Worst case: revenue -10%, costs +5%. "
+            f"{ROLLING_MONTHS} months of history; {', '.join(NOT_RUN_RATE.values())} are not projected. "
+            "Best case: revenue +5%, costs -3%. Worst case: revenue -10%, costs +5%. "
             "Indicative cash adds monthly profit to period-end cash (no working-capital timing, capex or financing)."),
     }
 

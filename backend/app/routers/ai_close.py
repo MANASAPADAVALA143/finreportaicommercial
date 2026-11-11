@@ -175,9 +175,10 @@ def list_runs(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
 
 
 @router.get("/runs/latest")
-def latest_run(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+def latest_run(scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace),
+               db: Session = Depends(get_db)):
     run = _closes(db, scope).order_by(AiCloseRun.id.desc()).first()
-    return _run_out(db, run) if run else None
+    return _run_out(db, _readable(db, ctx, run)) if run else None
 
 
 class AskIn(BaseModel):
@@ -217,22 +218,44 @@ def ask_agent(agent: str, body: AskIn, background: BackgroundTasks, scope: Scope
     return {**_run_out(db, run), "ask": run.ask_json}
 
 
+def _readable(db: Session, ctx: WorkspaceContext, run: AiCloseRun) -> AiCloseRun:
+    """A group run shows every entity's figures, so the caller must be able to read each of them."""
+    for cid in orchestrator.entity_ids(run):
+        if cid != run.company_id:
+            require_company_access(db, ctx, cid, "read")
+    return run
+
+
+def _readable_companies(db: Session, ctx: WorkspaceContext, ids: set[str]) -> set[str]:
+    ok = set()
+    for cid in ids:
+        try:
+            require_company_access(db, ctx, cid, "read")
+            ok.add(cid)
+        except HTTPException:
+            pass
+    return ok
+
+
 @router.get("/agents/runs/{rid}")
-def get_ask(rid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
-    run = _get(db, AiCloseRun, rid, scope)
+def get_ask(rid: int, scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace),
+            db: Session = Depends(get_db)):
+    run = _readable(db, ctx, _get(db, AiCloseRun, rid, scope))
     if run.trigger != "ask":
         raise HTTPException(status_code=404, detail="Not found")
     return {**_run_out(db, run), "ask": run.ask_json}
 
 
 @router.get("/runs/{rid}")
-def get_run(rid: int, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
-    return _run_out(db, _get(db, AiCloseRun, rid, scope))
+def get_run(rid: int, scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace),
+            db: Session = Depends(get_db)):
+    return _run_out(db, _readable(db, ctx, _get(db, AiCloseRun, rid, scope)))
 
 
 @router.get("/runs/{rid}/tasks/{agent}")
-def get_task(rid: int, agent: str, scope: Scope = Depends(_read), db: Session = Depends(get_db)):
-    run = _get(db, AiCloseRun, rid, scope)
+def get_task(rid: int, agent: str, scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace),
+             db: Session = Depends(get_db)):
+    run = _readable(db, ctx, _get(db, AiCloseRun, rid, scope))
     task = db.query(AiCloseTask).filter(AiCloseTask.run_id == run.id, AiCloseTask.agent == agent).first()
     if task is None:
         raise HTTPException(status_code=404, detail="Not found")
@@ -241,8 +264,8 @@ def get_task(rid: int, agent: str, scope: Scope = Depends(_read), db: Session = 
 
 @router.get("/runs/{rid}/reports/{key}.{fmt}")
 def download_report(rid: int, key: str, fmt: Literal["xlsx", "pdf", "json"], scope: Scope = Depends(_read),
-                    db: Session = Depends(get_db)):
-    run = _get(db, AiCloseRun, rid, scope)
+                    ctx: WorkspaceContext = Depends(validate_workspace), db: Session = Depends(get_db)):
+    run = _readable(db, ctx, _get(db, AiCloseRun, rid, scope))
     if key in FORMATS and fmt != "json" and fmt not in FORMATS[key]:
         raise HTTPException(status_code=404, detail=f"{REPORTS[key][0]} is available as {', '.join(FORMATS[key]).upper()}")
     try:
@@ -272,12 +295,14 @@ def _visible_proposals(db: Session, scope: Scope):
 @router.get("/journals")
 def list_journals(
     status: Literal["pending_approval", "approved", "rejected", "changes_requested"] | None = Query(default=None),
-    scope: Scope = Depends(_read), db: Session = Depends(get_db),
+    scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace), db: Session = Depends(get_db),
 ):
     q = _visible_proposals(db, scope)
     if status:
         q = q.filter(AiCloseJournalProposal.status == status)
     rows = q.order_by(AiCloseJournalProposal.id.desc()).limit(200).all()
+    readable = _readable_companies(db, ctx, {p.company_id for p in rows})
+    rows = [p for p in rows if p.company_id in readable]
     names = _names(db, list({p.company_id for p in rows}))
     return [_proposal_out(db, p, names) for p in rows]
 
@@ -398,9 +423,10 @@ class NotifyIn(BaseModel):
 
 
 @router.post("/runs/{rid}/notify")
-def notify_run(rid: int, body: NotifyIn, scope: Scope = Depends(_write), db: Session = Depends(get_db)):
+def notify_run(rid: int, body: NotifyIn, scope: Scope = Depends(_write), ctx: WorkspaceContext = Depends(validate_workspace),
+               db: Session = Depends(get_db)):
     """Send the close summary now: in-app, plus email/Slack to the given addresses or the schedule's recipients."""
-    run = _get(db, AiCloseRun, rid, scope)
+    run = _readable(db, ctx, _get(db, AiCloseRun, rid, scope))
     if run.trigger == "ask":
         raise HTTPException(status_code=409, detail="Agent previews are not sent as close summaries")
     if run.status in ("queued", "running"):

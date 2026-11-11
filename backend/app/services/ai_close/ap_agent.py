@@ -33,15 +33,31 @@ _CLOSED = {"paid", "rejected"}
 _CLOSED_PAYMENT = {"paid", "cancelled"}
 
 
-def fetch_ap(company_id: str) -> dict[str, list[dict[str, Any]]]:
+PAGE_SIZE = 1000
+MAX_ROWS = 50000
+
+
+def fetch_ap(company_id: str) -> dict[str, Any]:
+    """All of the company's AP rows, paged; tables larger than MAX_ROWS are cut off and reported."""
     from app.core.supabase import get_supabase
 
     sb = get_supabase()
+    truncated: list[str] = []
 
     def rows(table: str) -> list[dict[str, Any]]:
-        return list(sb.table(table).select("*").eq("company_id", company_id).limit(5000).execute().data or [])
+        out: list[dict[str, Any]] = []
+        while len(out) < MAX_ROWS:
+            page = list(sb.table(table).select("*").eq("company_id", company_id).order("id")
+                        .range(len(out), len(out) + PAGE_SIZE - 1).execute().data or [])
+            out += page
+            if len(page) < PAGE_SIZE:
+                return out
+        truncated.append(table)
+        return out
 
-    return {"invoices": rows("invoices"), "purchase_orders": rows("purchase_orders"), "goods_receipts": rows("goods_receipts")}
+    data: dict[str, Any] = {t: rows(t) for t in ("invoices", "purchase_orders", "goods_receipts")}
+    data["truncated"] = truncated
+    return data
 
 
 def _d(value: Any) -> date | None:
@@ -310,7 +326,7 @@ def _finish(ctx: CloseContext, data: dict[str, list[dict[str, Any]]], invoices: 
                 "Supplier invoices are read from AP InvoiceFlow; they reach the ledger (3001) only once approved and posted, "
                 "so a payables control reconciliation is not performed.",
                 "Payment proposals are for review only; no payment has been made.",
-            ],
+            ] + [f"Only the first {MAX_ROWS:,} {t.replace('_', ' ')} were read." for t in data.get("truncated", [])],
         },
         checks=checks, exceptions=exceptions, journals=journals,
         messages=[f"Processed {len(in_period)} supplier invoice(s): {summary['three_way_matched']} three-way matched, "
