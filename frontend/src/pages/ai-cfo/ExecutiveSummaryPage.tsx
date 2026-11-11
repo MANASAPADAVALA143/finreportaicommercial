@@ -8,7 +8,7 @@ import { Card, GOLD, NAVY, StatusPill } from './parts';
 import {
   AgentCard, CfoSummaryPanel, CloseApproval, Deliverables, ExceptionsTable, ExecutionSequence, JournalApprovalCentre, KpiGrid, fmtTime,
 } from './closeParts';
-import { ApprovalControlsCard, FxRatesCard, ScheduleCard, SummaryAlerts } from './closeSchedule';
+import { ApprovalControlsCard, FxRatesCard, ScheduleCard, SeasonalityCard, SummaryAlerts } from './closeSchedule';
 
 const AGENT_OPTIONS: { value: SelectableAgent; label: string; note: string }[] = [
   { value: 'bank_reconciliation', label: 'Bank Reconciliation Agent', note: 'Matches statements to the ledger, proposes fee and interest journals' },
@@ -43,11 +43,13 @@ export default function ExecutiveSummaryPage() {
   const foreignCurrencies = useMemo(() => [...new Set(others.filter((c) => groupIds.includes(c.id) && c.base_currency && c.base_currency !== currency)
     .map((c) => c.base_currency as string))], [others, groupIds, currency]);
 
+  const othersKey = others.map((c) => `${c.id}:${c.company_name}`).join(',');
   useEffect(() => {
     const demoSiblings = others.filter((c) => c.company_name?.includes(DEMO_TAG)).map((c) => c.id);
     setGroupIds(isDemo ? demoSiblings : []);
     setScope(isDemo && demoSiblings.length ? 'group' : 'entity');
-  }, [companyId, isDemo, others]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the company or the set of companies changes
+  }, [companyId, isDemo, othersKey]);
 
   const load = useCallback(async (id?: number) => {
     if (!companyId) return;
@@ -234,6 +236,7 @@ export default function ExecutiveSummaryPage() {
             onError={setError}
           />
           <ApprovalControlsCard companyId={companyId} currency={currency} onSaved={() => void load(run?.id)} onError={setError} />
+          <SeasonalityCard companyId={companyId} onError={setError} />
         </div>
 
         {loaded && !run && <p className="text-sm text-slate-500">No close has been run for this company yet.</p>}

@@ -71,7 +71,8 @@ export default function Login() {
           Password
           <div className="mt-1 relative">
             <input className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-white pr-10" value={password} onChange={(e) => setPassword(e.target.value)} type={showPwd ? 'text' : 'password'} required />
-            <button type="button" className="absolute right-2 top-2 text-slate-400" onClick={() => setShowPwd((x) => !x)}>
+            <button type="button" className="absolute right-2 top-2 text-slate-400" onClick={() => setShowPwd((x) => !x)}
+              aria-label={showPwd ? 'Hide password' : 'Show password'} aria-pressed={showPwd}>
               {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>

@@ -15,10 +15,13 @@ from app.models.ai_close import AiCloseFxRate
 from app.models.uae_accounting_full import UAEAccount, UAEJournalEntry, UAEJournalLine
 from app.services import consolidation_service as cs
 from app.services.ai_cfo.ledger import period_add
+from app.services.ai_close import fx
 from app.services.ai_close.context import AgentOutcome, Check, CloseContext, ExceptionItem, money, severity
 
+BS_ROWS = [*cs.BS_ROWS[:-1], {"key": "translation_reserve", "label": "Translation reserve (OCI)", "section": "equity"},
+           cs.BS_ROWS[-1]]
 PL_KEYS = [r["key"] for r in cs.PL_ROWS]
-BS_KEYS = [r["key"] for r in cs.BS_ROWS]
+BS_KEYS = [r["key"] for r in BS_ROWS]
 IC_PREFIX = "IC-"
 
 
@@ -36,8 +39,50 @@ def _derive_bs(c: dict[str, float]) -> dict[str, float]:
     c = {k: round(c.get(k, 0.0), 2) for k in BS_KEYS}
     c["total_assets"] = round(sum(c[k] for k in ("fixed_assets_net", "inventory", "trade_receivables", "cash_bank", "other_current_assets")), 2)
     c["total_liabilities_equity"] = round(sum(c[k] for k in ("long_term_borrowings", "trade_payables", "other_current_liabilities",
-                                                             "share_capital", "retained_earnings")), 2)
+                                                             "share_capital", "retained_earnings", "translation_reserve")), 2)
     return c
+
+
+def _months(period: str) -> int:
+    return int(period[:4]) * 12 + int(period[5:7])
+
+
+def _historical(ctx: CloseContext, e, periods: tuple[str, str], meta) -> tuple[dict[str, tuple[float, float]], list[str]]:
+    """Share capital and retained earnings translated at historical rates (each posting at its month's
+    average rate) to the end of each of `periods`, plus the months whose rate had to be estimated from
+    the nearest month entered."""
+    rates = {r.period: r.average_rate for r in ctx.db.query(AiCloseFxRate).filter(
+        AiCloseFxRate.workspace_id == ctx.workspace_id, AiCloseFxRate.currency == e.currency,
+        AiCloseFxRate.reporting_currency == ctx.currency)}
+    estimated: set[str] = set()
+
+    def hist(period: str) -> float:
+        if period not in rates:
+            estimated.add(period)
+            return rates[min(rates, key=lambda p: (abs(_months(p) - _months(period)), p))]
+        return rates[period]
+
+    out = {p: [0.0, 0.0] for p in periods}
+    for line, entry in (
+        ctx.db.query(UAEJournalLine, UAEJournalEntry)
+        .join(UAEJournalEntry, UAEJournalLine.journal_entry_id == UAEJournalEntry.id)
+        .filter(UAEJournalEntry.tenant_id == ctx.workspace_id, UAEJournalEntry.company_id == e.id,
+                UAEJournalEntry.status == "posted", UAEJournalEntry.period <= max(periods))
+    ):
+        code = line.account_code or ""
+        account_type, sub_type = meta.get(code, (None, None))
+        if cs._pl_category(code, account_type, sub_type):
+            slot = 1
+        else:
+            cat = cs._bs_category(code, account_type, sub_type)
+            if cat not in ("share_capital", "retained_earnings"):
+                continue
+            slot = 0 if cat == "share_capital" else 1
+        amount = (money(line.credit) - money(line.debit)) * hist(entry.period)
+        for p in periods:
+            if entry.period <= p:
+                out[p][slot] += amount
+    return {p: (round(v[0], 2), round(v[1], 2)) for p, v in out.items()}, sorted(estimated)
 
 
 def _meta(ctx: CloseContext, entity_id: str) -> dict[str, tuple[str | None, str | None]]:
@@ -46,10 +91,7 @@ def _meta(ctx: CloseContext, entity_id: str) -> dict[str, tuple[str | None, str 
         (UAEAccount.company_id == entity_id) | (UAEAccount.company_id.is_(None)))}
 
 
-def _rate(db, workspace_id: str, period: str, currency: str, reporting: str) -> AiCloseFxRate | None:
-    return db.query(AiCloseFxRate).filter(
-        AiCloseFxRate.workspace_id == workspace_id, AiCloseFxRate.period == period,
-        AiCloseFxRate.currency == currency, AiCloseFxRate.reporting_currency == reporting).first()
+_rate = fx.rate
 
 
 def consolidation(ctx: CloseContext) -> AgentOutcome:
@@ -59,6 +101,7 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
     exceptions: list[ExceptionItem] = []
     per_entity = []
     translation = []
+    historical_note: list[str] = []
     pl_rate: dict[str, float] = {}
     bs_rate: dict[str, float] = {}
     prior_period = period_add(ctx.period, -1)
@@ -89,18 +132,28 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
         prior = _rate(db, ctx.workspace_id, prior_period, e.currency, ctx.currency)
         pl_rate[e.id], bs_rate[e.id] = rate.average_rate, rate.closing_rate
         pl_t = _derive_pl({k: pl_local[k] * rate.average_rate for k in PL_KEYS})
-        bs_t = _derive_bs({k: bs_local[k] * rate.closing_rate for k in BS_KEYS})
         opening = _derive_bs(cs._aggregate_categories(db, ctx.workspace_id, e.id, prior_period, cs._bs_category))
         opening_net = opening["total_assets"] - (opening["long_term_borrowings"] + opening["trade_payables"] + opening["other_current_liabilities"])
         closing_net = bs_local["total_assets"] - (bs_local["long_term_borrowings"] + bs_local["trade_payables"] + bs_local["other_current_liabilities"])
         opening_rate = prior.closing_rate if prior else rate.closing_rate
-        cta = round(closing_net * rate.closing_rate - (opening_net * opening_rate + pl_local["net_profit"] * rate.average_rate), 2)
+        equity, estimated = _historical(ctx, e, (prior_period, ctx.period), _meta(ctx, e.id))
+        capital, retained = equity[ctx.period]
+        reserve = round(closing_net * rate.closing_rate - capital - retained, 2)
+        opening_reserve = round(opening_net * opening_rate - sum(equity[prior_period]), 2)
+        cta = round(reserve - opening_reserve, 2)
+        bs_t = _derive_bs({**{k: bs_local[k] * rate.closing_rate for k in BS_KEYS},
+                           "share_capital": capital, "retained_earnings": retained, "translation_reserve": reserve})
+        if estimated:
+            historical_note.append(f"{e.name}: no {e.currency} rate entered for {', '.join(estimated)}; equity postings in "
+                                   "those months use the nearest month's average rate.")
         translation.append({"entity": e.name, "currency": e.currency, "average_rate": rate.average_rate,
                             "closing_rate": rate.closing_rate, "opening_rate": opening_rate,
                             "opening_rate_source": "prior month closing" if prior else "current closing (prior month rate missing)",
                             "net_profit_local": pl_local["net_profit"], "net_profit_translated": pl_t["net_profit"],
                             "net_assets_local": round(closing_net, 2), "net_assets_translated": round(closing_net * rate.closing_rate, 2),
-                            "translation_difference": cta})
+                            "share_capital_historical": capital, "retained_earnings_historical": retained,
+                            "translation_reserve": reserve, "opening_translation_reserve": opening_reserve,
+                            "estimated_rate_months": estimated, "translation_difference": cta})
         per_entity.append({**entry, "pl": pl_t, "bs": bs_t, "pl_local": pl_local, "bs_local": bs_local,
                            "rates": {"average": rate.average_rate, "closing": rate.closing_rate}, "translation_difference": cta})
 
@@ -198,7 +251,7 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
     group_bs = [{"key": r["key"], "label": r["label"], "aggregate": _derive_bs(group_bs_raw)[r["key"]],
                  "eliminations": round(elim_bs.get(r["key"], 0.0), 2) if not r.get("calculated") else None,
                  "consolidated": consolidated_bs[r["key"]], "by_entity": {e["entity_name"]: e["bs"][r["key"]] for e in per_entity}}
-                for r in cs.BS_ROWS]
+                for r in BS_ROWS]
     comparison = [{
         "entity": e["entity_name"] + ("" if e["translated"] else f" ({e['currency']}, not translated)"),
         "revenue": e["pl"]["revenue"], "net_profit": e["pl"]["net_profit"],
@@ -216,10 +269,11 @@ def consolidation(ctx: CloseContext) -> AgentOutcome:
         limitations.append(f"{unassigned} posted line(s) in the period have no company and are excluded from every entity.")
     if translation:
         limitations.append(
-            "Foreign-currency entities: income and expenses at the month's average rate, assets, liabilities and equity at "
-            "the closing rate (IAS 21.39). The translation difference for the month is shown separately and belongs in other "
-            "comprehensive income; it also absorbs any non-profit equity movements in the month. Equity is not tracked at "
-            "historical rates.")
+            "Foreign-currency entities: income and expenses at the month's average rate, assets and liabilities at the "
+            "closing rate (IAS 21.39); share capital and retained earnings at historical rates (each posting at the average "
+            "rate of its month). The cumulative difference is the translation reserve in equity; the month's movement is the "
+            "translation difference in other comprehensive income.")
+        limitations += historical_note
     if excluded:
         limitations.append(f"{len(excluded)} entity(ies) excluded from group totals for missing exchange rates.")
     return AgentOutcome(

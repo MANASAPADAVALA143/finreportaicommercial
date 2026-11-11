@@ -87,6 +87,7 @@ class AiCloseControls(Base):
     require_segregation = Column(Boolean, nullable=False, default=False)
     manager_limit = Column(Float, nullable=True)
     ecl_rates = Column(JSON, nullable=True)  # {current, 1_30, 31_60, 61_90, 90_plus}: loss rates 0–1; null = defaults
+    seasonality = Column(JSON, nullable=True)  # {revenue: [12], expenses: [12]}: index per calendar month Jan..Dec, mean 1
     updated_by = Column(String(255), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -107,6 +108,20 @@ class AiCloseFxRate(Base):
     closing_rate = Column(Float, nullable=False)
     average_rate = Column(Float, nullable=False)
     source = Column(String(120), nullable=True)
+    history = Column(JSON, nullable=True)  # superseded values: [{closing_rate, average_rate, source, by, replaced_by, at}]
+    updated_by = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AiCloseFxSettings(Base):
+    """Who may maintain a workspace's exchange rates: owners always, plus the designated treasury /
+    finance administrators listed here (by email). Absent row = owners only."""
+
+    __tablename__ = "ai_close_fx_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    workspace_id = Column(String(50), nullable=False, unique=True, index=True)
+    maintainers = Column(JSON, nullable=True)
     updated_by = Column(String(255), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

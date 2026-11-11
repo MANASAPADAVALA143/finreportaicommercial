@@ -55,6 +55,49 @@ def test_rolling_forecast_per_account_and_scenarios(client, env, demo, session_f
     assert len(next(s for s in view["sections"] if s["title"] == "Rolling 12-month forecast")["rows"]) == 12
 
 
+def test_seasonality_index_deseasonalises_history_and_shapes_the_forecast(client, env, demo, session_factory):
+    url = BASE + "/forecast-settings" + q(demo.a)
+    assert client.get(url).json()["applied"] is False
+    revenue_index = [0.8, 0.8, 0.9, 1.0, 1.0, 0.9, 0.8, 0.8, 1.0, 1.2, 1.4, 1.4]
+    env.roles[WS_A] = "accountant"
+    assert client.put(url, json={"revenue": revenue_index}).status_code == 403
+    env.roles[WS_A] = "finance_manager"
+    assert client.put(url, json={"revenue": [1.0] * 11}).status_code == 422
+    assert client.put(url, json={"revenue": [0.0] + [1.0] * 11}).status_code == 422
+    saved = client.put(url, json={"revenue": [v * 2 for v in revenue_index]}).json()
+    assert saved["applied"] and saved["revenue"] == pytest.approx([v / (sum(revenue_index) / 12) for v in revenue_index], abs=1e-4)
+    assert saved["expenses"] == [1.0] * 12
+    idx = saved["revenue"]
+
+    run = _start(client, demo.a, agents=["ar_intelligence", "ap_processing", "fpa"])
+    fpa = _task(client, run, "fpa", demo.a)["output_json"]
+    rolling = fpa["rolling_forecast"]
+    assert rolling["seasonality"]["applied"] and rolling["seasonality"]["index"][10]["revenue_index"] == idx[10]
+    assert "deseasonalised" in rolling["method"]
+    assert not any("no seasonality" in n for n in fpa["limitations"])
+
+    db = session_factory()
+    start = ledger.period_add(LAST, -(ROLLING_MONTHS - 1))
+    series = {p: 0.0 for p in ledger.periods_between(start, LAST)}
+    for m in ledger.monthly_movements(db, LedgerScope(WS_A, demo.a), start, LAST, account_codes=["6010"]):
+        series[m["period"]] += m["net"]
+    db.close()
+    adjusted = [v / idx[int(p[5:7]) - 1] for p, v in series.items()]
+    active = adjusted[next(i for i, v in enumerate(adjusted) if abs(v) > 0.005):]
+    run_rate = median(active[-3:])
+    slope = linear_regression(range(len(active)), active).slope * TREND_DAMPING
+    expected = sum(max(run_rate + slope * (h + 1), 0.0) * idx[int(p[5:7]) - 1] for h, p in enumerate(rolling["months"]))
+    sales = next(a for a in rolling["accounts"] if a["account_code"] == "6010")
+    assert sales["run_rate"] == pytest.approx(run_rate, abs=0.01)
+    assert sales["next_12_months"] == pytest.approx(expected, abs=1)
+    nov, feb = rolling["base_case"][0], rolling["base_case"][3]
+    assert nov["period"] == "2026-11" and feb["period"] == "2027-02" and nov["revenue"] > feb["revenue"]
+
+    assert client.put(url, json={}).json()["applied"] is False
+    fpa = _task(client, _start(client, demo.a, agents=["fpa"]), "fpa", demo.a)["output_json"]
+    assert fpa["rolling_forecast"]["seasonality"] == {"applied": False, "index": []}
+
+
 def test_group_rolling_forecast_combines_entities_by_month(client, env, demo):
     run = _group(client, demo, agents=["ar_intelligence", "ap_processing", "fpa"])
     fpa = _task(client, run, "fpa", demo.a)["output_json"]

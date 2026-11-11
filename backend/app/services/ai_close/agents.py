@@ -10,7 +10,7 @@ import re
 from statistics import mean
 from typing import Any, Callable
 
-from app.models.ai_close import AiCloseJournalProposal, AiCloseTask
+from app.models.ai_close import AiCloseControls, AiCloseJournalProposal, AiCloseTask
 from app.models.company_setup import AccountingPeriod, UaeCompanyProfile
 from app.models.uae_accounting_full import (
     UAEAccount,
@@ -312,13 +312,30 @@ def _slope(values: list[float]) -> float:
     return sum((x - mx) * (y - my) for x, y in zip(xs, values)) / den if den else 0.0
 
 
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def company_seasonality(ctx: CloseContext) -> dict[str, list[float]] | None:
+    row = ctx.db.query(AiCloseControls).filter(AiCloseControls.workspace_id == ctx.workspace_id,
+                                               AiCloseControls.company_id == ctx.company_id).first()
+    return (row.seasonality if row else None) or None
+
+
+def _season(seasonality: dict[str, list[float]] | None, account_type: str, period: str) -> float:
+    index = (seasonality or {}).get("revenue" if account_type == "Income" else "expenses")
+    return index[int(period[5:7]) - 1] if index else 1.0
+
+
 def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
     """12 months after the period: per-account run rate (median of the last three months) plus a damped
-    linear trend over up to 12 months of history, then best/worst-case factors on revenue and costs."""
+    linear trend over up to 12 months of history, then best/worst-case factors on revenue and costs.
+    With a company seasonality index, history is deseasonalised before the run rate and trend are taken
+    and each forecast month is multiplied by its calendar month's index."""
     history_from = ledger.period_add(ctx.period, -(ROLLING_MONTHS - 1))
     moves = [m for m in ledger.monthly_movements(ctx.db, ctx.scope, history_from, ctx.period)
              if m["account_type"] in ("Income", "Expense") and m["account_code"] not in NOT_RUN_RATE]
     periods = ledger.periods_between(history_from, ctx.period)
+    seasonality = company_seasonality(ctx)
     by_account: dict[str, dict[str, Any]] = {}
     for m in moves:
         a = by_account.setdefault(m["account_code"], {"account_code": m["account_code"], "account_name": m["account_name"],
@@ -327,7 +344,7 @@ def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
     future = [ledger.period_add(ctx.period, i) for i in range(1, ROLLING_MONTHS + 1)]
     lines = []
     for a in by_account.values():
-        series = [a["series"][p] for p in periods]
+        series = [a["series"][p] / _season(seasonality, a["type"], p) for p in periods]
         first = next((i for i, v in enumerate(series) if abs(v) > 0.005), None)
         if first is None:
             continue
@@ -335,7 +352,8 @@ def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
         recent = sorted(active[-3:])
         run_rate = recent[len(recent) // 2] if len(recent) % 2 else (recent[len(recent) // 2 - 1] + recent[len(recent) // 2]) / 2
         slope = _slope(active) * TREND_DAMPING
-        path = [round(max(run_rate + slope * (h + 1), 0.0), 2) for h in range(ROLLING_MONTHS)]
+        path = [round(max(run_rate + slope * (h + 1), 0.0) * _season(seasonality, a["type"], future[h]), 2)
+                for h in range(ROLLING_MONTHS)]
         lines.append({"account_code": a["account_code"], "account": f"{a['account_code']} {a['account_name']}", "type": a["type"],
                       "run_rate": round(run_rate, 2), "monthly_trend": round(slope, 2), "months_of_history": len(active),
                       "next_12_months": round(sum(path), 2), "path": path})
@@ -354,11 +372,18 @@ def rolling_forecast(ctx: CloseContext, opening_cash: float) -> dict[str, Any]:
         totals[name] = {"revenue": round(sum(p["revenue"] for p in path), 2), "expenses": round(sum(p["expenses"] for p in path), 2),
                         "profit": round(sum(p["profit"] for p in path), 2), "closing_cash": path[-1]["indicative_cash"]}
     lines.sort(key=lambda l: (l["type"] != "Income", -l["next_12_months"]))
+    season_note = ("History is deseasonalised with the company's monthly seasonality index and each forecast month is "
+                   "multiplied by its month's index (run rates are shown deseasonalised). " if seasonality else
+                   "No seasonality index is set, so every month is treated alike. ")
     return {
         "months": future, **scenarios, "totals": totals, "accounts": [{k: v for k, v in l.items() if k != "path"} for l in lines],
-        "history_months": len(periods), "method": (
+        "history_months": len(periods),
+        "seasonality": {"applied": bool(seasonality), "index": [
+            {"month": MONTHS[i], "revenue_index": _season(seasonality, "Income", f"2000-{i + 1:02d}"),
+             "expenses_index": _season(seasonality, "Expense", f"2000-{i + 1:02d}")} for i in range(12)] if seasonality else []},
+        "method": (
             f"Per account: median of the last three months as the run rate plus {TREND_DAMPING:.0%} of the linear trend over up to "
-            f"{ROLLING_MONTHS} months of history; {', '.join(NOT_RUN_RATE.values())} are not projected. "
+            f"{ROLLING_MONTHS} months of history; {', '.join(NOT_RUN_RATE.values())} are not projected. " + season_note +
             "Best case: revenue +5%, costs -3%. Worst case: revenue -10%, costs +5%. "
             "Indicative cash adds monthly profit to period-end cash (no working-capital timing, capex or financing)."),
     }
@@ -440,7 +465,9 @@ def fpa(ctx: CloseContext) -> AgentOutcome:
     base_total = rolling["totals"]["base_case"]
     if rolling["history_months"] and len(rolling["accounts"]) and min(a["months_of_history"] for a in rolling["accounts"]) < 6:
         limitations.append("Rolling forecast uses fewer than six months of history for some accounts; trends are indicative.")
-    limitations.append("Rolling forecast has no seasonality adjustment.")
+    if not rolling["seasonality"]["applied"]:
+        limitations.append("Rolling forecast has no seasonality adjustment; set the company's monthly seasonality index "
+                           "if revenue or costs are seasonal.")
     checks = [Check("pl_totals_tie", abs(revenue - sum(m["net"] for m in current.values() if m["account_type"] == "Income")) < 0.01,
                     "Revenue equals the sum of income accounts for the period.", blocking=True),
               Check("rolling_forecast_ties",

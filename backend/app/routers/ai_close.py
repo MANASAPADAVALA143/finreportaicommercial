@@ -9,7 +9,7 @@ GET /runs/{id}.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -23,8 +23,10 @@ from app.core.company_access import is_super_admin, require_company_access
 from app.core.database import SessionLocal, get_db
 from app.middleware.workspace import WorkspaceContext, validate_workspace
 from app.models.ai_close import (
-    AiCloseControls, AiCloseException, AiCloseFxRate, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule, AiCloseTask,
+    AiCloseControls, AiCloseException, AiCloseFxRate, AiCloseFxSettings, AiCloseJournalProposal, AiCloseRun, AiCloseSchedule,
+    AiCloseTask,
 )
+from app.exceptions.period_control import PeriodControlError
 from app.models.company_setup import UaeCompanyProfile
 from app.models.investments import InvestmentHolding, InvestmentValuation
 from app.routers.internal_audit import Scope, _manage, _read, _row, _write
@@ -33,10 +35,13 @@ from app.services.ai_cfo.ledger import LedgerScope
 from app.services.ai_close import alerts, orchestrator, scheduling
 from app.services.ai_close import ask as ask_service
 from app.services.ai_close import controls as close_controls
+from app.services.ai_close import agents as agents_module
 from app.services.ai_close.agents import AGENTS
+from app.services.ai_close.context import period_bounds
 from app.services.ai_close.demo_group import seed_demo_group
 from app.services.ai_close.journals import DecisionError, approve_close, decide, journal_detail
 from app.services.ai_close.reports import FORMATS, REPORTS, ReportUnavailable, build_report, render_json, render_pdf, render_xlsx
+from app.services.uae_controls_service import assert_period_open
 
 router = APIRouter(prefix="/api/ai-close", tags=["ai-close"])
 
@@ -379,6 +384,49 @@ def put_controls(body: ControlsIn, scope: Scope = Depends(_manage), ctx: Workspa
     return close_controls.describe(row)
 
 
+class SeasonalityIn(BaseModel):
+    revenue: list[float] | None = Field(default=None, min_length=12, max_length=12)
+    expenses: list[float] | None = Field(default=None, min_length=12, max_length=12)
+
+
+def _normalised(index: list[float] | None) -> list[float]:
+    if not index:
+        return [1.0] * 12
+    if any(not 0.1 <= v <= 5 for v in index):
+        raise HTTPException(status_code=422, detail="Each monthly index must be between 0.1 and 5")
+    mean = sum(index) / 12
+    return [round(v / mean, 4) for v in index]
+
+
+def _seasonality_out(row: AiCloseControls | None) -> dict[str, Any]:
+    s = (row.seasonality if row else None) or None
+    return {"applied": bool(s), "months": list(agents_module.MONTHS),
+            "revenue": (s or {}).get("revenue") or [1.0] * 12, "expenses": (s or {}).get("expenses") or [1.0] * 12,
+            "updated_by": row.updated_by if row and s else None,
+            "rule": "Index per calendar month; 1.00 is an average month. Values are rescaled to average 1, so seasonality "
+                    "moves revenue and costs between months without changing the annual run rate."}
+
+
+@router.get("/forecast-settings")
+def get_forecast_settings(scope: Scope = Depends(_read), db: Session = Depends(get_db)):
+    return _seasonality_out(close_controls.get(db, scope.workspace_id, scope.company_id))
+
+
+@router.put("/forecast-settings")
+def put_forecast_settings(body: SeasonalityIn, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+    row = close_controls.get(db, scope.workspace_id, scope.company_id)
+    if row is None:
+        row = AiCloseControls(workspace_id=scope.workspace_id, company_id=scope.company_id)
+        db.add(row)
+    if body.revenue is None and body.expenses is None:
+        row.seasonality = None
+    else:
+        row.seasonality = {"revenue": _normalised(body.revenue), "expenses": _normalised(body.expenses)}
+    row.updated_by = scope.user_email
+    db.commit()
+    return _seasonality_out(row)
+
+
 class FxRateIn(BaseModel):
     period: str = Field(pattern=_PERIOD)
     currency: str = Field(min_length=3, max_length=3)
@@ -402,17 +450,71 @@ def list_fx_rates(period: str | None = Query(default=None, pattern=_PERIOD), sco
     return [_row(r) for r in q.order_by(AiCloseFxRate.period.desc(), AiCloseFxRate.currency).limit(200)]
 
 
+def _fx_maintainers(db: Session, workspace_id: str) -> list[str]:
+    row = db.query(AiCloseFxSettings).filter(AiCloseFxSettings.workspace_id == workspace_id).first()
+    return list(row.maintainers or []) if row else []
+
+
+def _may_edit_fx(db: Session, ctx: WorkspaceContext, scope: Scope) -> bool:
+    if is_super_admin(ctx) or _role(db, ctx) in close_controls.OWNER_ROLES:
+        return True
+    email = (scope.user_email or "").strip().lower()
+    return bool(email) and email in _fx_maintainers(db, scope.workspace_id)
+
+
+@router.get("/fx-rates/settings")
+def get_fx_settings(scope: Scope = Depends(_read), ctx: WorkspaceContext = Depends(validate_workspace),
+                    db: Session = Depends(get_db)):
+    return {"maintainers": _fx_maintainers(db, scope.workspace_id), "can_edit": _may_edit_fx(db, ctx, scope),
+            "is_owner": is_super_admin(ctx) or _role(db, ctx) in close_controls.OWNER_ROLES,
+            "rule": "Owners and the designated treasury / finance administrators may maintain exchange rates. "
+                    "Rates for a closed or locked month cannot be changed."}
+
+
+class FxSettingsIn(BaseModel):
+    maintainers: list[str] = Field(default_factory=list, max_length=20)
+
+
+@router.put("/fx-rates/settings")
+def put_fx_settings(body: FxSettingsIn, scope: Scope = Depends(_manage), ctx: WorkspaceContext = Depends(validate_workspace),
+                    db: Session = Depends(get_db)):
+    if _role(db, ctx) not in close_controls.OWNER_ROLES and not is_super_admin(ctx):
+        raise HTTPException(status_code=403, detail="Only an owner can designate who maintains exchange rates")
+    emails = list(dict.fromkeys(e.strip().lower() for e in body.maintainers if e.strip()))
+    if any(not alerts.EMAIL_RE.match(e) for e in emails):
+        raise HTTPException(status_code=422, detail="Enter valid email addresses")
+    row = db.query(AiCloseFxSettings).filter(AiCloseFxSettings.workspace_id == scope.workspace_id).first()
+    if row is None:
+        row = AiCloseFxSettings(workspace_id=scope.workspace_id)
+        db.add(row)
+    row.maintainers, row.updated_by = emails, scope.user_email
+    db.commit()
+    return get_fx_settings(scope, ctx, db)
+
+
 @router.put("/fx-rates")
-def put_fx_rate(body: FxRateIn, scope: Scope = Depends(_manage), db: Session = Depends(get_db)):
+def put_fx_rate(body: FxRateIn, scope: Scope = Depends(_manage), ctx: WorkspaceContext = Depends(validate_workspace),
+                db: Session = Depends(get_db)):
+    if not _may_edit_fx(db, ctx, scope):
+        raise HTTPException(status_code=403, detail="Exchange rates are maintained by an owner or a designated treasury administrator")
     reporting, currency = _reporting_currency(db, scope), body.currency.upper()
     if currency == reporting:
         raise HTTPException(status_code=422, detail="The currency is already the reporting currency")
+    try:
+        assert_period_open(entry_date=period_bounds(body.period)[1], workspace_id=scope.workspace_id,
+                           company_id=scope.company_id, source="fx_rate", db=db)
+    except PeriodControlError as exc:
+        raise HTTPException(status_code=409, detail=f"{body.period} is closed for this company; its exchange rates are locked") from exc
     row = db.query(AiCloseFxRate).filter(
         AiCloseFxRate.workspace_id == scope.workspace_id, AiCloseFxRate.period == body.period,
         AiCloseFxRate.currency == currency, AiCloseFxRate.reporting_currency == reporting).first()
     if row is None:
         row = AiCloseFxRate(workspace_id=scope.workspace_id, period=body.period, currency=currency, reporting_currency=reporting)
         db.add(row)
+    elif (row.closing_rate, row.average_rate, row.source) != (body.closing_rate, body.average_rate, body.source):
+        row.history = [*(row.history or []), {"closing_rate": row.closing_rate, "average_rate": row.average_rate,
+                                              "source": row.source, "by": row.updated_by, "replaced_by": scope.user_email,
+                                              "at": datetime.now(timezone.utc).isoformat()}][-20:]
     row.closing_rate, row.average_rate, row.source, row.updated_by = body.closing_rate, body.average_rate, body.source, scope.user_email
     db.commit()
     return _row(row)

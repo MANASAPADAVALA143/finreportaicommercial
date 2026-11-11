@@ -223,7 +223,10 @@ export type CloseRunSummary = {
 export type FxRate = {
   id: number; period: string; currency: string; reporting_currency: string; closing_rate: number; average_rate: number;
   source: string | null; updated_by: string | null;
+  history: { closing_rate: number; average_rate: number; source: string | null; by: string | null; replaced_by: string | null; at: string }[] | null;
 };
+export type FxSettings = { maintainers: string[]; can_edit: boolean; is_owner: boolean; rule: string };
+export type Seasonality = { applied: boolean; months: string[]; revenue: number[]; expenses: number[]; updated_by: string | null; rule: string };
 export type EclRates = { current: number; '1_30': number; '31_60': number; '61_90': number; '90_plus': number };
 export type CloseControls = { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null; updated_by: string | null };
 
@@ -309,6 +312,12 @@ export const aiCloseApi = {
   fxRates: (companyId: string, period: string) => r<FxRate[]>(`/fx-rates?period=${period}`, companyId),
   saveFxRate: (companyId: string, body: { period: string; currency: string; closing_rate: number; average_rate: number; source?: string }) =>
     r<FxRate>('/fx-rates', companyId, json('PUT', body)),
+  fxSettings: (companyId: string) => r<FxSettings>('/fx-rates/settings', companyId),
+  saveFxSettings: (companyId: string, maintainers: string[]) =>
+    r<FxSettings>('/fx-rates/settings', companyId, json('PUT', { maintainers })),
+  seasonality: (companyId: string) => r<Seasonality>('/forecast-settings', companyId),
+  saveSeasonality: (companyId: string, body: { revenue: number[] | null; expenses: number[] | null }) =>
+    r<Seasonality>('/forecast-settings', companyId, json('PUT', body)),
   controls: (companyId: string) => r<CloseControls>('/controls', companyId),
   saveControls: (companyId: string, body: { require_segregation: boolean; manager_limit: number | null; ecl_rates: EclRates | null }) =>
     r<CloseControls>('/controls', companyId, json('PUT', body)),

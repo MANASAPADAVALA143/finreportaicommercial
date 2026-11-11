@@ -26,6 +26,8 @@ screenshot for each row.
 | 0.5 | On every screen: refresh (F5) | Same run, same figures (data persists server-side) | R |
 | 0.6 | On every screen: DevTools device toolbar 390 px wide | No horizontal page scroll except inside tables; buttons reachable | R |
 | 0.7 | Sidebar: Executive Hub → AI Finance Workforce, AI CFO Command Centre, Month-End Close (AI), Investment Portfolio | Each opens its page; active item highlighted; back button works | R |
+| 0.8 | Login page: Tab to the eye icon | Screen reader / accessibility tree names it "Show password" / "Hide password" | R |
+| 0.9 | Month-End Close: untick a subsidiary, then wait for / trigger a company-list refresh (switch tab and back) | Your group selection is kept | R |
 
 ## 1. Investment Portfolio and Investment Agent (priority)
 
@@ -51,6 +53,9 @@ screenshot for each row.
 | 2.4 | **Rolling forecast by account** | No 6030 (fair value), 7202 (FX) or 7190 (credit loss) lines; method note says they are not projected | R |
 | 2.5 | Budget vs actual | Professional Fees **674%** over (67,240), Travel **217%** over (15,940) | R |
 | 2.6 | Indicative cash column | Starts from period-end cash and moves by monthly profit | R |
+| 2.7 | Month-End Close (AI) → **Forecast seasonality** card | Shows "No seasonality set" and twelve 1.00 values for revenue and expenses (demo default) — record it | R |
+| 2.8 | Group close → FP&A task → 30/60/90-day cash forecast | Days read **30 / 60 / 90** (not 90 / 180 / 270) | R |
+| 2.9 | Edit seasonality on the demo parent: revenue Nov 1.4, Feb 0.8 (others 1.0) → Save; re-run FP&A | Saved values rescaled to average 1; method note says "deseasonalised"; Nov revenue above Feb; restore with **Remove seasonality** | P |
 
 ## 3. Month-end close — group of three (priority: consolidated CFO dashboard)
 
@@ -106,7 +111,11 @@ screenshot for each row.
 |---|---|---|---|
 | 8.1 | Requires a company with base currency ≠ AED in the workspace (none in the demo) | If none: **BLOCKED** | P |
 | 8.2 | Include it in a group close **without** rates | Exception "no 2026-10 USD/AED rates, so it is excluded from group totals"; comparison shows "(USD, not translated)" | P |
-| 8.3 | Enter October closing/average (and September closing) in the Exchange rates card; re-run | Close Pack → "Currency translation into AED (IAS 21)" table; revenue at average rate, net assets at closing; consolidated BS balances | P |
+| 8.3 | Enter October closing/average (and September closing) in the Exchange rates card; re-run | Close Pack → "Currency translation into AED (IAS 21)" table; revenue at average rate, net assets at closing; share capital and retained earnings at historical rates; translation reserve column; consolidated BS balances | P |
+| 8.4 | Same run → FP&A and AR task outputs | Group totals in AED: the USD company's figures × rate; its own entry still in USD; limitation names the rates used | P |
+| 8.5 | Exchange rates card as a **finance manager** (not designated) | Inputs read-only: "rates are maintained by an owner or a designated treasury administrator"; API PUT → 403 | R |
+| 8.6 | As owner: designate a treasury administrator email; as that user save a rate, then change it | Save succeeds; card shows "by …" and "1 earlier value(s) kept" | P |
+| 8.7 | Try saving a rate for a closed/locked month | 409 "…its exchange rates are locked" | P |
 
 ## 9. Bank reconciliation
 

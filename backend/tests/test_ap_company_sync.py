@@ -58,7 +58,7 @@ def test_link_orphan_helper_prefers_my_company_slug():
         {"id": "b", "name": "My Company", "slug": "my-company", "workspace_id": None, "market": "uae"},
     ]
     sb.table.return_value.select.return_value.is_.return_value.execute.return_value = SimpleNamespace(data=rows)
-    sb.table.return_value.update.return_value.eq.return_value.select.return_value.maybe_single.return_value.execute.return_value = SimpleNamespace(
+    sb.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = SimpleNamespace(
         data={**rows[1], "workspace_id": "ws-1"}
     )
     sb.table.return_value.upsert.return_value.execute.return_value = SimpleNamespace(data=None)

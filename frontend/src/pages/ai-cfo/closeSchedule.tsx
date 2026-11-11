@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { CalendarClock, CheckCircle2, Send, ShieldCheck, XCircle } from 'lucide-react';
 import {
-  aiCloseApi, type CloseControls, type CloseRun, type CloseSchedule, type Delivery, type EclRates, type SelectableAgent,
+  aiCloseApi, type CloseControls, type CloseRun, type CloseSchedule, type Delivery, type EclRates, type FxSettings,
+  type Seasonality, type SelectableAgent,
 } from '../../services/aiClose.service';
 
 const ECL_BUCKETS: [keyof EclRates, string][] = [
@@ -276,11 +277,95 @@ export function ApprovalControlsCard({ companyId, currency, onSaved, onError }: 
   );
 }
 
+export function SeasonalityCard({ companyId, onError }: { companyId: string; onError: (m: string) => void }) {
+  const [s, setS] = useState<Seasonality | null>(null);
+  const [draft, setDraft] = useState<{ revenue: string[]; expenses: string[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    aiCloseApi.seasonality(companyId).then((x) => { if (!cancelled) setS(x); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  const save = async (clear: boolean) => {
+    if (!clear && draft && [...draft.revenue, ...draft.expenses].some((v) => !(Number(v) >= 0.1 && Number(v) <= 5))) {
+      onError('Each monthly index must be between 0.1 and 5');
+      return;
+    }
+    setBusy(true);
+    try {
+      setS(await aiCloseApi.saveSeasonality(companyId, clear || !draft ? { revenue: null, expenses: null }
+        : { revenue: draft.revenue.map(Number), expenses: draft.expenses.map(Number) }));
+      setDraft(null);
+    } catch (e) {
+      onError(errorText(e, 'Could not save the seasonality index'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!s) return null;
+  const fmt = (v: number) => v.toFixed(2);
+  return (
+    <Card title="Forecast seasonality" actions={!draft && (
+      <button onClick={() => setDraft({ revenue: s.revenue.map(fmt), expenses: s.expenses.map(fmt) })}
+        className="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">Edit</button>
+    )}>
+      <p className="mb-2 text-xs text-slate-600">
+        {s.applied ? 'The rolling 12-month forecast applies this monthly index.' : 'No seasonality set: the rolling forecast treats every month alike.'}{' '}
+        {s.rule}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="text-xs">
+          <thead>
+            <tr className="text-slate-500"><th className="pr-2 text-left font-medium" />{s.months.map((m) => <th key={m} className="px-1 font-medium">{m}</th>)}</tr>
+          </thead>
+          <tbody>
+            {(['revenue', 'expenses'] as const).map((kind) => (
+              <tr key={kind}>
+                <td className="pr-2 font-medium capitalize text-slate-700">{kind}</td>
+                {s.months.map((m, i) => (
+                  <td key={m} className="px-1 py-0.5">
+                    {draft ? (
+                      <input inputMode="decimal" aria-label={`${kind} index ${m}`} value={draft[kind][i]}
+                        onChange={(e) => setDraft({ ...draft, [kind]: draft[kind].map((v, j) => (j === i ? e.target.value : v)) })}
+                        className="w-12 rounded border border-slate-300 px-1 py-0.5 text-right" />
+                    ) : <span className="tabular-nums text-slate-800">{fmt(s[kind][i])}</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {draft && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button onClick={() => void save(false)} disabled={busy} className="rounded-md px-4 py-1.5 text-sm font-semibold text-slate-900 disabled:opacity-50" style={{ background: GOLD }}>
+            {busy ? 'Saving…' : 'Save index'}
+          </button>
+          <button onClick={() => void save(true)} disabled={busy} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700">Remove seasonality</button>
+          <button onClick={() => setDraft(null)} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700">Cancel</button>
+        </div>
+      )}
+      {s.updated_by && !draft && <p className="mt-1 text-xs text-slate-500">Last changed by {s.updated_by}. Owners and finance managers can change it.</p>}
+    </Card>
+  );
+}
+
 export function FxRatesCard({ companyId, period, reporting, currencies, onError }: {
   companyId: string; period: string; reporting: string; currencies: string[]; onError: (m: string) => void;
 }) {
-  const [rates, setRates] = useState<Record<string, { closing: string; average: string; saved: boolean }>>({});
+  const [rates, setRates] = useState<Record<string, { closing: string; average: string; saved: boolean; by?: string | null; changes?: number }>>({});
   const [busy, setBusy] = useState('');
+  const [settings, setSettings] = useState<FxSettings | null>(null);
+  const [maintainers, setMaintainers] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    aiCloseApi.fxSettings(companyId).then((s) => { if (!cancelled) setSettings(s); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   useEffect(() => {
     if (!period) return;
@@ -289,18 +374,34 @@ export function FxRatesCard({ companyId, period, reporting, currencies, onError 
       if (cancelled) return;
       setRates(Object.fromEntries(currencies.map((c) => {
         const row = rows.find((r) => r.currency === c);
-        return [c, { closing: row ? String(row.closing_rate) : '', average: row ? String(row.average_rate) : '', saved: !!row }];
+        return [c, { closing: row ? String(row.closing_rate) : '', average: row ? String(row.average_rate) : '', saved: !!row,
+          by: row?.updated_by, changes: row?.history?.length ?? 0 }];
       })));
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [companyId, period, currencies.join(',')]);
 
+  const saveMaintainers = async () => {
+    if (maintainers === null) return;
+    setBusy('maintainers');
+    try {
+      const list = maintainers.split(/[,;\s]+/).map((e) => e.trim()).filter(Boolean);
+      setSettings(await aiCloseApi.saveFxSettings(companyId, list));
+      setMaintainers(null);
+    } catch (e) {
+      onError(errorText(e, 'Could not save the rate maintainers'));
+    } finally {
+      setBusy('');
+    }
+  };
+  const canEdit = settings?.can_edit ?? false;
+
   const save = async (c: string) => {
     const r = rates[c];
     setBusy(c);
     try {
-      await aiCloseApi.saveFxRate(companyId, { period, currency: c, closing_rate: Number(r.closing), average_rate: Number(r.average) });
-      setRates((all) => ({ ...all, [c]: { ...r, saved: true } }));
+      const row = await aiCloseApi.saveFxRate(companyId, { period, currency: c, closing_rate: Number(r.closing), average_rate: Number(r.average) });
+      setRates((all) => ({ ...all, [c]: { ...r, saved: true, by: row.updated_by, changes: row.history?.length ?? 0 } }));
     } catch (e) {
       onError(errorText(e, 'Could not save the rate'));
     } finally {
@@ -312,25 +413,57 @@ export function FxRatesCard({ companyId, period, reporting, currencies, onError 
     <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 text-sm">
       <p className="mb-2 text-xs text-slate-700">
         <b>Exchange rates for {period || 'the period'}</b> — {reporting} per 1 unit. Income and expenses are translated at the average rate,
-        the balance sheet at the closing rate (IAS 21). Companies without rates are left out of group totals.
+        the balance sheet at the closing rate and equity at historical rates (IAS 21). Companies without rates are left out of group totals.
       </p>
+      {settings && !canEdit && (
+        <p className="mb-2 text-xs text-slate-600">Read only: rates are maintained by an owner or a designated treasury administrator.</p>
+      )}
       {!period && <p className="text-xs text-amber-800">Choose the period above to enter its rates.</p>}
       {period && currencies.map((c) => (
         <div key={c} className="mb-1 flex flex-wrap items-end gap-2 text-xs">
           <span className="w-12 font-semibold text-slate-800">{c}</span>
           <label className="text-slate-600">Closing
-            <input inputMode="decimal" value={rates[c]?.closing ?? ''} onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], closing: e.target.value, saved: false } })}
-              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1" />
+            <input inputMode="decimal" value={rates[c]?.closing ?? ''} disabled={!canEdit}
+              onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], closing: e.target.value, saved: false } })}
+              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-100" />
           </label>
           <label className="text-slate-600">Average
-            <input inputMode="decimal" value={rates[c]?.average ?? ''} onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], average: e.target.value, saved: false } })}
-              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1" />
+            <input inputMode="decimal" value={rates[c]?.average ?? ''} disabled={!canEdit}
+              onChange={(e) => setRates({ ...rates, [c]: { ...rates[c], average: e.target.value, saved: false } })}
+              className="mt-0.5 block w-24 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-100" />
           </label>
-          <button onClick={() => void save(c)} disabled={busy !== '' || !(Number(rates[c]?.closing) > 0 && Number(rates[c]?.average) > 0)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 disabled:opacity-50">{busy === c ? 'Saving…' : 'Save'}</button>
+          {canEdit && (
+            <button onClick={() => void save(c)} disabled={busy !== '' || !(Number(rates[c]?.closing) > 0 && Number(rates[c]?.average) > 0)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 disabled:opacity-50">{busy === c ? 'Saving…' : 'Save'}</button>
+          )}
           {rates[c]?.saved && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+          {rates[c]?.by && (
+            <span className="text-slate-500">
+              by {rates[c].by}{rates[c].changes ? ` · ${rates[c].changes} earlier value(s) kept` : ''}
+            </span>
+          )}
         </div>
       ))}
+      {settings?.is_owner && (
+        <div className="mt-2 border-t border-amber-200 pt-2 text-xs text-slate-700">
+          {maintainers === null ? (
+            <p>
+              Treasury administrators who may maintain rates: {settings.maintainers.length ? settings.maintainers.join(', ') : 'none (owners only)'}{' '}
+              <button onClick={() => setMaintainers(settings.maintainers.join(', '))} className="ml-1 underline">Change</button>
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex-1 text-slate-600">Treasury administrators (emails, comma separated)
+                <input value={maintainers} onChange={(e) => setMaintainers(e.target.value)} placeholder="treasury@company.com"
+                  className="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <button onClick={() => void saveMaintainers()} disabled={busy !== ''}
+                className="rounded border border-slate-300 bg-white px-2 py-1 disabled:opacity-50">{busy === 'maintainers' ? 'Saving…' : 'Save'}</button>
+              <button onClick={() => setMaintainers(null)} className="rounded border border-slate-300 bg-white px-2 py-1">Cancel</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

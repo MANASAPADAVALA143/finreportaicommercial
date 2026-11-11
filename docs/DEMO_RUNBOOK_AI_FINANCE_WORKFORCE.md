@@ -240,9 +240,9 @@ Offer next step: a pilot on one entity's October data.
 | "Can the person who runs the close approve it?" | Not if segregation of duties is on. Approval limits route large journals to an owner. Every decision is in the audit log. |
 | "What if an agent fails?" | It's retried once, then shown as Failed; other agents carry on and report what they couldn't use. The close can't be approved with a failed agent. |
 | "Which ERP does it connect to?" | It works on the platform's ledger (UAE ledger), bank statements, AR invoices, AP InvoiceFlow and the investment register (CSV import). Data can be imported from ERPs/CSV; deep connectors are scoped per client. |
-| "Can it do group consolidation?" | Yes — per-entity results, intercompany elimination using a shared IC reference, subsidiary comparison, and IAS 21 translation of foreign-currency entities using the month's rates you enter. |
+| "Can it do group consolidation?" | Yes — per-entity results, intercompany elimination using a shared IC reference, subsidiary comparison, and IAS 21 translation of foreign-currency entities using the month's rates you enter: income and expenses at the average rate, assets and liabilities at closing, equity at historical rates, with a translation reserve. Group receivables, payables and forecasts are in the reporting currency too. Only owners or designated treasury administrators maintain rates, and closed months' rates are locked. |
 | "Investment / treasury?" | Yes — the Investment Agent values the portfolio from recorded month-end prices, applies IFRS 9 categories, checks concentration limits and proposes fair value journals. It doesn't fetch live market prices. |
-| "Rolling 12-month forecast?" | Yes — the FP&A agent projects 12 months per account (run rate plus damped trend) in base, best and worst case. No seasonality adjustment yet. |
+| "Rolling 12-month forecast?" | Yes — the FP&A agent projects 12 months per account (run rate plus damped trend) in base, best and worst case. Seasonal businesses set a monthly seasonality index for revenue and costs; history is deseasonalised before the trend is taken. |
 | "India / GST?" | This demo is on the UAE ledger (VAT). |
 | "Who can see and do what?" | Workspace roles: viewers read, accountants run, finance managers and owners approve; only owners change controls. |
 
@@ -259,5 +259,5 @@ Offer next step: a pilot on one entity's October data.
 | Numbers differ from this runbook | The demo was used before the meeting — rebuild it (Load the synthetic demo group) and rerun. |
 | Journal approval fails with a period message | The period was locked in a rehearsal — rebuild the demo. |
 
-**Do not claim** in the meeting: GST validation, live market-data feeds, seasonality in forecasts,
-automatic posting, or ERP connectors that aren't set up for the prospect.
+**Do not claim** in the meeting: GST validation, live market-data feeds, seasonality learned
+automatically from history (the index is entered), automatic posting, or ERP connectors that aren't set up for the prospect.

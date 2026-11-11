@@ -204,7 +204,7 @@ def _execute_task(session_factory: Callable[[], Session], task_id: int) -> None:
                 ctx = CloseContext(db=db, workspace_id=run.workspace_id, company_id=run.company_id, period=run.period,
                                    run_id=run.id, upstream=upstream, currency=entities[0].currency if entities else "AED",
                                    entities=entities, scope_kind=run.scope or "entity")
-                outcome = run_per_entity(fn, ctx) if task.agent in agents.ENTITY_AGENTS else fn(ctx)
+                outcome = run_per_entity(fn, ctx, task.agent) if task.agent in agents.ENTITY_AGENTS else fn(ctx)
                 _persist_outcome(db, run, task, outcome)
                 break
             except Exception as exc:  # noqa: BLE001 - recorded on the task

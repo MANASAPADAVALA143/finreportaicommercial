@@ -3,13 +3,15 @@
 Counts and amounts add up; ageing buckets, forecast days and trend periods are combined
 by key; lists are concatenated with each row tagged with its entity; percentages and other
 non-additive figures are kept when every entity agrees (e.g. a policy limit) and otherwise
-dropped rather than summed; flags are true if any entity's is. A single-entity run returns the
-agent's output unchanged.
+dropped rather than summed; flags are true if any entity's is. Group totals are in the
+reporting currency (see fx.py); each entity's own figures stay in its currency. A
+single-entity run returns the agent's output unchanged.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from app.services.ai_close import fx
 from app.services.ai_close.context import AgentOutcome, Check, CloseContext, Entity
 
 COMBINE_BY = {"buckets": "bucket", "prior_three_months": "period",
@@ -40,6 +42,9 @@ def _combine(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
         target = merged.setdefault(row.get(key), {})
         for k, v in row.items():
             if k == "entity":
+                continue
+            if k == key:
+                target[k] = v
                 continue
             if _is_num(v) and k not in NON_ADDITIVE and not k.endswith("pct"):
                 target[k] = round(target.get(k, 0) + v, 2)
@@ -93,7 +98,38 @@ def merge_outputs(parts: list[tuple[Entity, dict[str, Any]]]) -> dict[str, Any]:
     return merged
 
 
-def run_per_entity(fn: Callable[[CloseContext], AgentOutcome], ctx: CloseContext) -> AgentOutcome:
+def _group_output(agent: str | None, ctx: CloseContext, parts: list[tuple[Entity, dict[str, Any]]]) -> dict[str, Any]:
+    """Merge entity outputs in the reporting currency: foreign entities are translated at the period's
+    rates, and left out of group totals (but still listed) when no rates are entered."""
+    included, translation, excluded = [], [], []
+    for e, out in parts:
+        if e.currency == ctx.currency:
+            included.append((e, out))
+            continue
+        r = fx.rate(ctx.db, ctx.workspace_id, ctx.period, e.currency, ctx.currency)
+        if r is None:
+            excluded.append(e.name)
+            continue
+        included.append((e, fx.translate_output(agent, out, r.average_rate, r.closing_rate)))
+        translation.append({"entity": e.name, "currency": e.currency, "closing_rate": r.closing_rate, "average_rate": r.average_rate})
+    merged = merge_outputs(included) if included else {}
+    merged["entities"] = [{"entity_id": e.id, "entity_name": e.name, "currency": e.currency, **out} for e, out in parts]
+    merged["reporting_currency"] = ctx.currency
+    if translation or excluded:
+        notes = list(merged.get("limitations") or [])
+        for t in translation:
+            notes.append(f"Group totals are in {ctx.currency}: {t['entity']} translated from {t['currency']} at the closing "
+                         f"rate {t['closing_rate']} (balances and forecasts) and the average rate {t['average_rate']} "
+                         "(the period's income, expenses and invoices). Entity figures are shown in their own currency.")
+        if excluded:
+            notes.append(f"Excluded from group totals for missing {ctx.period} exchange rates: {', '.join(excluded)}.")
+        merged["limitations"] = notes
+        merged["translation"] = translation
+        merged["excluded_entities"] = excluded
+    return merged
+
+
+def run_per_entity(fn: Callable[[CloseContext], AgentOutcome], ctx: CloseContext, agent: str | None = None) -> AgentOutcome:
     entities = ctx.entities or [Entity(ctx.company_id, ctx.company_id, ctx.currency)]
     multi = len(entities) > 1
     parts: list[tuple[Entity, dict[str, Any]]] = []
@@ -113,5 +149,5 @@ def run_per_entity(fn: Callable[[CloseContext], AgentOutcome], ctx: CloseContext
                                f"{e.name}: {c.detail}" if multi else c.detail, c.blocking) for c in res.checks]
         total.messages += [f"{e.name}: {m}" if multi else m for m in res.messages]
         parts.append((e, res.output))
-    total.output = parts[0][1] if not multi else merge_outputs(parts)
+    total.output = parts[0][1] if not multi else _group_output(agent, ctx, parts)
     return total
