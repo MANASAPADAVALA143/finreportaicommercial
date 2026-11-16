@@ -377,14 +377,14 @@ export const Dashboard: React.FC = () => {
                 key={a.id}
                 to={a.route}
                 onClick={() => markActive(a.id)}
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
                   activeAgents.has(a.id)
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/40 hover:bg-green-500/30'
-                    : 'bg-slate-700/50 text-slate-400 border border-slate-600 hover:bg-slate-700'
+                    ? 'bg-green-500/20 text-green-300 border border-green-500/50 hover:bg-green-500/30'
+                    : 'bg-slate-800 text-slate-100 border border-slate-500 hover:bg-slate-700 hover:border-slate-400'
                 }`}
               >
-                <span className={`w-2 h-2 rounded-full ${activeAgents.has(a.id) ? 'bg-green-500' : 'bg-slate-500'}`} />
-                {a.name.replace(' Agent', '')} ✓
+                <span className={`w-2 h-2 rounded-full ${activeAgents.has(a.id) ? 'bg-green-400' : 'bg-slate-300'}`} aria-hidden />
+                {a.name.replace(' Agent', '')}
               </Link>
             ))}
           </div>

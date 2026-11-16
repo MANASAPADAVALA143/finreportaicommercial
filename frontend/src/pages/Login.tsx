@@ -93,7 +93,7 @@ export default function Login() {
           <button
             type="button"
             onClick={() => nav('/register')}
-            className="w-full rounded border border-blue-500 py-2 text-sm font-medium text-blue-400 hover:bg-blue-500 hover:text-white transition-colors"
+            className="w-full rounded bg-slate-100 py-2 text-sm font-semibold text-slate-900 hover:bg-white transition-colors"
           >
             Create a free account
           </button>
