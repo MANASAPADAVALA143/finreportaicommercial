@@ -409,6 +409,8 @@ const CostCentersSettingsPage  = safeLazy(() => import('./pages/settings/CostCen
 const CoaMappingSettingsPage = safeLazy(() => import('./pages/ap-invoices/settings/CoaMappingSettingsPage'));
 const IndustrySelectorPage     = safeLazy(() => import('./pages/settings/IndustrySelector'));
 const ConsolidationPage        = safeLazy(() => import('./pages/consolidation/ConsolidationPage'));
+const GroupCommandCentre      = safeLazy(() => import('./pages/cfo/group/CommandCentre'));
+const GroupEntityPerformance   = safeLazy(() => import('./pages/cfo/group/EntityPerformance'));
 const UAEChartOfAccounts     = safeLazy(() => import('./pages/uae-accounting/ChartOfAccounts'));
 const UAEJournalEntries      = safeLazy(() => import('./pages/uae-accounting/JournalEntries'));
 const UAESalesInvoices       = safeLazy(() => import('./pages/uae-accounting/SalesInvoices'));
@@ -809,6 +811,8 @@ function App() {
                 <Route path="/ai-cfo/executive-summary" element={<AiCloseExecutiveSummaryPage />} />
                 <Route path="/ai-cfo/workforce"       element={<AiFinanceWorkforcePage />} />
                 <Route path="/ai-cfo/investments"     element={<AiInvestmentsPage />} />
+                <Route path="/cfo/group"               element={<GroupCommandCentre />} />
+                <Route path="/cfo/group/entities"      element={<GroupEntityPerformance />} />
                 <Route path="/cfo"                     element={<CFOServices />} />
                 <Route path="/cfo/assistant"           element={<CFOServices defaultTab="assistant" />} />
                 <Route path="/cfo/insights"            element={<CFOServices defaultTab="insights" />} />

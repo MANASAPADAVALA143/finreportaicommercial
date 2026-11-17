@@ -31,6 +31,7 @@ from app.middleware.product_role_middleware import ProductRoleMiddleware
 from app.core.database import get_db
 from app.core.tenant_scope import platform_admin, workspace_reader
 from app.routers import consolidation as consolidation_router
+from app.routers import group_intelligence as group_intelligence_router
 from app.routers import month_end_close as month_end_close_router
 from app.routers import earnings_review as earnings_review_router
 from app.routers import gl_reconciliation as gl_reconciliation_router
@@ -271,6 +272,7 @@ def _run_critical_migrations() -> None:
             import app.models.workspace  # noqa: F401
             import app.models.uae_ap  # noqa: F401
             import app.models.company_setup  # noqa: F401
+            import app.models.group_finance  # noqa: F401
             import app.models.workspace_notification  # noqa: F401
             import app.models.workspace_audit  # noqa: F401
             import app.models.ifrs16_lease  # noqa: F401
@@ -644,6 +646,7 @@ app.include_router(uae_journals_routes.router)
 app.include_router(journal_entries.router)
 app.include_router(analytics.router)
 app.include_router(consolidation_router.router)
+app.include_router(group_intelligence_router.router)
 app.include_router(ifrs9_router)
 app.include_router(ifrs15_router)
 app.include_router(rera_router)

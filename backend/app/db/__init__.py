@@ -30,6 +30,7 @@ def init_db():
     import app.models.workspace  # noqa: F401 - Multi-tenant workspaces
     import app.models.uae_ap  # noqa: F401 - UAE AP vendors & purchase invoices
     import app.models.company_setup  # noqa: F401 - Company onboarding wizard
+    import app.models.group_finance  # noqa: F401 - Group CFO intelligence snapshots
     import app.models.workspace_notification  # noqa: F401 - In-app notifications
     import app.models.workspace_audit  # noqa: F401 - Workspace audit log
     import app.models.ifrs16_lease  # noqa: F401 - IFRS 16 lease register
@@ -181,6 +182,14 @@ def init_db():
                 except Exception:
                     pass
         # UAE fixed assets — dashboard/_apply_company filters company_id; column missing on some RDS DBs
+        if insp.has_table("uae_company_profiles"):
+            profile_cols = {c["name"] for c in insp.get_columns("uae_company_profiles")}
+            if "parent_company_id" not in profile_cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE uae_company_profiles ADD COLUMN parent_company_id VARCHAR(36)"))
+                except Exception:
+                    pass
         if insp.has_table("uae_fixed_assets"):
             fa_cols = {c["name"] for c in insp.get_columns("uae_fixed_assets")}
             if "company_id" not in fa_cols:

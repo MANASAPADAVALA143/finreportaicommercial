@@ -283,6 +283,8 @@ export const CFO_INTELLIGENCE_NAV: NavEntry[] = [
   {
     section: 'Executive Hub',
     items: [
+      { label: 'Group Command Centre', path: '/cfo/group',              icon: 'layout-dashboard', badge: 'Group' },
+      { label: 'Entity Performance',   path: '/cfo/group/entities',    icon: 'building-2',       badge: 'Group' },
       { label: 'AI Finance Workforce', path: '/ai-cfo/workforce',        icon: 'bot',          badge: 'AGENTIC' },
       { label: 'AI CFO Command Centre', path: '/ai-cfo',                  icon: 'bot',          badge: 'AGENTIC' },
       { label: 'Month-End Close (AI)', path: '/ai-cfo/executive-summary', icon: 'bot',         badge: 'AGENTIC' },

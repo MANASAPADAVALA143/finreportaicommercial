@@ -26,6 +26,7 @@ class UaeCompanyProfile(Base):
     license_number = Column(String(64), nullable=True)
     license_authority = Column(String(128), nullable=True)
     base_currency = Column(String(3), nullable=False, default="AED")
+    parent_company_id = Column(String(36), ForeignKey("uae_company_profiles.id"), nullable=True, index=True)
     reporting_standard = Column(String(32), nullable=False, default="IFRS")
     financial_year_start = Column(Integer, nullable=False, default=1)  # month 1-12
     industry = Column(String(64), nullable=True)
