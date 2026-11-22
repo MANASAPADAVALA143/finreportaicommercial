@@ -42,6 +42,12 @@ import { VAT_TREATMENT_OPTIONS } from '@/lib/ap-invoice/marketConfig';
 import { formatCurrency } from '@/utils/currency';
 import { useMarket } from '@/contexts/MarketContext';
 import { CameraCapture } from './CameraCapture';
+import {
+  classifyInvoice,
+  getCategoriesForIndustry,
+  getCategoryForIndustry,
+  type InvoiceCategoryKey,
+} from '@/lib/ap-invoice/invoiceCategories';
 
 export type ScanLineItem = {
   id: string;
@@ -198,6 +204,11 @@ type Props = {
   vatTreatment: string;
   isUAE: boolean;
   initialFile?: File | null;
+  /** Industry key: 'manufacturing' | 'construction' | 'general' */
+  industry?: string;
+  /** Override for AI-auto-classified category — controlled by parent */
+  invoiceCategory?: InvoiceCategoryKey | null;
+  onInvoiceCategoryChange?: (key: InvoiceCategoryKey) => void;
   onFileSelected: (file: File) => void;
   onCameraOpen: () => void;
   cameraOpen: boolean;
@@ -223,6 +234,9 @@ export function AIDocumentScanner({
   vatTreatment,
   isUAE,
   initialFile,
+  industry = 'general',
+  invoiceCategory: invoiceCategoryProp,
+  onInvoiceCategoryChange,
   onFileSelected,
   onCameraOpen,
   cameraOpen,
@@ -249,6 +263,31 @@ export function AIDocumentScanner({
   const [isDragging, setIsDragging] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Industry classification state
+  const [localCategory, setLocalCategory] = useState<InvoiceCategoryKey | null>(null);
+  const activeCategory = invoiceCategoryProp !== undefined ? invoiceCategoryProp : localCategory;
+  const industryCategories = getCategoriesForIndustry(industry);
+  const hasIndustry = industry !== 'general';
+
+  // Auto-classify when data arrives
+  useEffect(() => {
+    if (!extractedData || !hasIndustry) return;
+    const descriptions = lineItems.map(l => l.description);
+    const classified = classifyInvoice(
+      industry,
+      extractedData.vendor_name ?? '',
+      descriptions,
+      (extractedData as any).invoice_number ?? '',
+    );
+    if (classified) {
+      setLocalCategory(classified);
+      onInvoiceCategoryChange?.(classified);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extractedData, industry]);
+
+  const activeCategoryObj = activeCategory ? getCategoryForIndustry(industry, activeCategory) : undefined;
 
   // Computed totals
   const lineSubtotal = lineItems.reduce((s, li) => s + li.total, 0);
@@ -624,6 +663,53 @@ export function AIDocumentScanner({
               ))}
             </div>
           </div>
+
+          {/* Industry classification card — shown for manufacturing / construction */}
+          {hasIndustry && (
+            <div className="rounded-xl border border-gray-200 bg-white shadow-sm px-4 py-3">
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: industry === 'construction' ? '#B45309' : '#1E40AF' }}>
+                  {industry === 'manufacturing' ? '🏭 Manufacturing' : '🏗️ Construction'}
+                </span>
+                <span className="text-xs text-gray-500">Industry detected</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <label className="text-xs text-gray-500 font-medium block mb-1">Invoice Category</label>
+                  <select
+                    value={activeCategory ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value as InvoiceCategoryKey;
+                      setLocalCategory(v);
+                      onInvoiceCategoryChange?.(v);
+                    }}
+                    className="w-full text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-gray-800"
+                  >
+                    <option value="">— Select category —</option>
+                    {industryCategories.map(cat => (
+                      <option key={cat.key} value={cat.key}>{cat.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {activeCategoryObj && (
+                  <div className="shrink-0 mt-5">
+                    {!invoiceCategoryProp && activeCategory && (
+                      <span className="text-[10px] text-[#00D4AA] font-semibold">AI classified</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              {activeCategoryObj && (
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 rounded px-2 py-1.5">
+                  <CheckCircle2 className="h-3 w-3 text-[#00D4AA] shrink-0" />
+                  <span>Workflow: <strong>{activeCategoryObj.workflowLabel}</strong></span>
+                  {activeCategoryObj.isCapEx && (
+                    <span className="ml-2 px-1.5 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-700 rounded">CapEx</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Stage 1 — Document received */}
           <StageCard

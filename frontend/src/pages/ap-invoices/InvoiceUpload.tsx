@@ -53,6 +53,8 @@ import { AIDocumentScanner, type ScanLineItem } from '@/components/invoices/AIDo
 import { storeInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 import { normalizeExtractedInvoice, type NormalizedExtractedInvoice } from '../../lib/ap-invoice/cameraService';
 import { useToast } from '../../hooks/use-toast';
+import { useIndustryConfig } from '../../context/IndustryConfigContext';
+import { classifyInvoice, type InvoiceCategoryKey } from '../../lib/ap-invoice/invoiceCategories';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import * as XLSX from 'xlsx';
 import type { Invoice } from '../../lib/ap-invoice/supabase';
@@ -112,6 +114,8 @@ export function InvoiceUpload() {
   const { baseCurrency } = useCompanySettings();
   const { isUAE, config } = useMarket();
   const marketCurrency = isUAE ? 'AED' : (config.currency || 'INR');
+  const { industry } = useIndustryConfig();
+  const [scannerInvoiceCategory, setScannerInvoiceCategory] = useState<InvoiceCategoryKey | null>(null);
 
   const resolveApCompanyId = async (): Promise<string> => {
     return resolveApSupabaseCompanyId(accessToken);
@@ -3085,8 +3089,14 @@ export function InvoiceUpload() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Upload Invoice</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-gray-500 flex items-center gap-2">
             Upload invoice files or enter invoice details manually
+            {(industry === 'manufacturing' || industry === 'construction') && (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full text-white"
+                style={{ background: industry === 'construction' ? '#B45309' : '#1E40AF' }}>
+                {industry === 'manufacturing' ? '🏭 Manufacturing AP' : '🏗️ Construction AP'}
+              </span>
+            )}
           </p>
         </div>
         {/* Period selector — stamps all invoices in this batch with the correct accounting period */}
@@ -3160,6 +3170,9 @@ export function InvoiceUpload() {
             saving={savingFromScan}
             vatTreatment={scanVatTreatment}
             isUAE={isUAE}
+            industry={industry}
+            invoiceCategory={scannerInvoiceCategory}
+            onInvoiceCategoryChange={setScannerInvoiceCategory}
             onFileSelected={(f) => handleNewFiles([f])}
             onCameraOpen={() => setCameraOpen(true)}
             cameraOpen={cameraOpen}
@@ -4180,6 +4193,11 @@ export function InvoiceUpload() {
                       vatTreatment={selItem.extractedData?.vat_treatment ?? (isUAE ? 'standard' : '')}
                       isUAE={isUAE}
                       initialFile={selItem.file}
+                      industry={industry}
+                      onInvoiceCategoryChange={(cat) => {
+                        // persist category on queue item for later use
+                        setQueueScannerLines(prev => prev); // no-op — category lives in scanner
+                      }}
                       onFileSelected={(file) => addPdfsToQueue([file])}
                       onCameraOpen={() => {}}
                       cameraOpen={false}
