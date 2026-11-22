@@ -109,8 +109,13 @@ function RawMaterialWorkflow({ invoice }: { invoice: Invoice }) {
   const invoiceAmt = Number(invoice.total_amount ?? 0);
   const poAmt = Number(invoice.po_amount ?? 0);
   const grnAmt = Number(invoice.grn_amount ?? 0);
-  const varianceAmt = poAmt > 0 ? Math.abs(invoiceAmt - poAmt) : 0;
-  const variancePct = poAmt > 0 ? ((varianceAmt / poAmt) * 100).toFixed(1) : null;
+  // Prefer engine-persisted values (VAT-aware); fall back to raw computation only when not set
+  const varianceAmt = invoice.match_difference != null
+    ? Math.abs(Number(invoice.match_difference))
+    : poAmt > 0 ? Math.abs(invoiceAmt - poAmt) : 0;
+  const variancePct = invoice.match_percentage != null
+    ? String(Number(invoice.match_percentage).toFixed(1))
+    : poAmt > 0 ? ((Math.abs(invoiceAmt - poAmt) / poAmt) * 100).toFixed(1) : null;
   const matchStatus = invoice.match_status;
   const hasVariance = variancePct != null && parseFloat(variancePct) > 3;
   const exceptions = invoice.match_notes
@@ -171,7 +176,14 @@ function RawMaterialWorkflow({ invoice }: { invoice: Invoice }) {
       )}
 
       {/* Approval routing */}
-      <ApprovalRoutingBox status={matchStatus} autoApproved={invoice.auto_matched && (matchStatus === 'three_way_matched' || matchStatus === 'matched')} />
+      <ApprovalRoutingBox
+        status={matchStatus}
+        autoApproved={
+          invoice.approval_status === 'approved' &&
+          invoice.approved_at != null &&
+          (matchStatus === 'three_way_matched' || matchStatus === 'matched')
+        }
+      />
     </div>
   );
 }
