@@ -46,9 +46,10 @@ import {
   TableHeader,
   TableRow,
 } from '../../components/ui/table';
-import { Upload, X, Plus, Trash2, FileText, CheckCircle, Download, FileSpreadsheet, Camera, AlertTriangle } from 'lucide-react';
+import { Upload, X, Plus, Trash2, FileText, CheckCircle, Download, FileSpreadsheet, AlertTriangle } from 'lucide-react';
 import { CameraCapture } from '@/components/invoices/CameraCapture';
 import { InvoiceExtractionPreviewModal, type PreviewLineItem } from '@/components/invoices/InvoiceExtractionPreviewModal';
+import { AIDocumentScanner, type ScanLineItem } from '@/components/invoices/AIDocumentScanner';
 import { storeInvoiceFile } from '../../lib/ap-invoice/invoiceStorageService';
 import { normalizeExtractedInvoice, type NormalizedExtractedInvoice } from '../../lib/ap-invoice/cameraService';
 import { useToast } from '../../hooks/use-toast';
@@ -209,6 +210,13 @@ export function InvoiceUpload() {
   const [scanPreviewFile, setScanPreviewFile] = useState<File | null>(null);
   const [scanVatTreatment, setScanVatTreatment] = useState('review_required');
   const [savingFromScan, setSavingFromScan] = useState(false);
+
+  // Split-screen AI scanner: editable copy of extracted fields
+  const [scannerData, setScannerData] = useState<NormalizedExtractedInvoice | null>(null);
+  const [scannerLineItems, setScannerLineItems] = useState<ScanLineItem[]>([
+    { id: '1', description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 },
+  ]);
+  const [scannerFlagged, setScannerFlagged] = useState(false);
 
   // Bulk upload state
   const [bulkFile, setBulkFile] = useState<File | null>(null);
@@ -655,6 +663,14 @@ export function InvoiceUpload() {
       setScanPreviewConfidence(rawConfidence != null ? Number(rawConfidence) : undefined);
       setScanPreviewLineItems(extractedLines);
       setScanPreviewFile(file);
+
+      // Populate the split-screen scanner panel
+      setScannerData({ ...normalized });
+      setScannerLineItems(
+        extractedLines.length > 0
+          ? extractedLines.map((li, idx) => ({ id: String(idx + 1), ...li, tax: 0 }))
+          : [{ id: '1', description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 }]
+      );
 
       let ocrVatTreatment = 'review_required';
       if (isUAE) {
@@ -3117,57 +3133,83 @@ export function InvoiceUpload() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="scan" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Scan Invoice</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-sm text-gray-600">
-                Take a photo, upload an image, or select a PDF — Claude AI will extract all invoice fields automatically.
-              </p>
-              <div className="flex flex-col items-center gap-4 py-6">
-                <Button
-                  type="button"
-                  size="lg"
-                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-6 sm:py-4 text-base rounded-xl"
-                  disabled={extracting}
-                  onClick={() => setCameraOpen(true)}
-                >
-                  <Camera className="mr-2 h-6 w-6" />
-                  {extracting ? 'Extracting invoice…' : 'Open Camera / Upload Image'}
-                </Button>
-                <p className="text-xs text-gray-400 text-center max-w-sm">
-                  Supports JPG, PNG, PDF — works from phone camera, desktop file picker, or webcam
-                </p>
-              </div>
-              <CameraCapture
-                open={cameraOpen}
-                onOpenChange={setCameraOpen}
-                onConfirm={(f) => handleNewFiles([f])}
-              />
-              {extracting && (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-                    <p className="text-sm font-medium text-blue-900">Reading invoice… Claude AI is extracting all fields</p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Review dialog shown after successful extraction */}
-          <InvoiceExtractionPreviewModal
-            open={scanPreviewOpen}
-            onOpenChange={setScanPreviewOpen}
-            initial={scanPreviewData}
-            confidence={scanPreviewConfidence}
+        <TabsContent value="scan" className="space-y-0">
+          <AIDocumentScanner
+            extracting={extracting}
+            extractedData={scannerData}
+            fieldConfidences={
+              (extractedData?.ocr_confidence_fields as Record<string, number> | undefined) ?? {}
+            }
+            overallConfidence={
+              scanPreviewConfidence ??
+              (extractedData?.ocr_confidence != null ? Number(extractedData.ocr_confidence) * 100 : undefined)
+            }
+            lineItems={scannerLineItems}
             saving={savingFromScan}
-            lineItems={scanPreviewLineItems}
             vatTreatment={scanVatTreatment}
+            isUAE={isUAE}
+            onFileSelected={(f) => handleNewFiles([f])}
+            onCameraOpen={() => setCameraOpen(true)}
+            cameraOpen={cameraOpen}
+            onCameraOpenChange={setCameraOpen}
+            onFieldChange={(field, value) =>
+              setScannerData((prev) => prev ? { ...prev, [field]: value } : prev)
+            }
             onVatTreatmentChange={setScanVatTreatment}
-            onSave={(values, vat) => void handleSaveFromScanPreview(values, vat)}
+            onLineItemAdd={() => {
+              setScannerLineItems((prev) => [
+                ...prev,
+                { id: String(prev.length + 1), description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 },
+              ]);
+            }}
+            onLineItemRemove={(id) =>
+              setScannerLineItems((prev) => prev.length > 1 ? prev.filter((li) => li.id !== id) : prev)
+            }
+            onLineItemUpdate={(id, field, value) =>
+              setScannerLineItems((prev) =>
+                prev.map((li) => {
+                  if (li.id !== id) return li;
+                  const updated = { ...li, [field]: value };
+                  if (field === 'quantity' || field === 'unit_price') {
+                    updated.total = Number(updated.quantity) * Number(updated.unit_price);
+                  }
+                  return updated;
+                })
+              )
+            }
+            onSaveDraft={() => {
+              if (scannerData) {
+                const merged: NormalizedExtractedInvoice = {
+                  ...scannerData,
+                };
+                void handleSaveFromScanPreview(merged, scanVatTreatment);
+              }
+            }}
+            onFlagForReview={() => {
+              setScannerFlagged(true);
+              if (scannerData) {
+                const merged: NormalizedExtractedInvoice = {
+                  ...scannerData,
+                  vat_treatment: 'review_required',
+                };
+                void handleSaveFromScanPreview(merged, 'review_required');
+              }
+            }}
+            onContinueToMatching={() => {
+              if (scannerData) {
+                const merged: NormalizedExtractedInvoice = {
+                  ...scannerData,
+                };
+                void handleSaveFromScanPreview(merged, scanVatTreatment);
+              }
+            }}
+            onRetry={() => {
+              if (scanPreviewFile) {
+                setScannerData(null);
+                setScannerLineItems([{ id: '1', description: '', quantity: 1, unit_price: 0, total: 0 }]);
+                void extractInvoiceFromFile(scanPreviewFile);
+              }
+            }}
           />
         </TabsContent>
 
