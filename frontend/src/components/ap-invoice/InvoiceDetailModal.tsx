@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef, type ReactNode } from 'react';
+import { ManufacturingWorkflowPanel } from './ManufacturingWorkflowPanel';
 import { useMarket } from '@/contexts/MarketContext';
 import { CostCenterSelect } from '@/components/industry/CostCenterSelect';
 import { PropertyCombobox } from '@/components/ap-invoice/PropertyCombobox';
@@ -2503,6 +2504,8 @@ export function InvoiceDetailModal({
             <TabsContent value="matching" className="mt-0 focus-visible:ring-0 focus-visible:ring-offset-0">
               <div className="grid gap-4 xl:grid-cols-3">
                 <div className="min-w-0 space-y-4 xl:col-span-2">
+                  {/* Manufacturing / Construction Workflow Panel */}
+                  <ManufacturingWorkflowPanel invoice={invoice} />
                   {/* 3-Way Match */}
                   <Card
                     className={
