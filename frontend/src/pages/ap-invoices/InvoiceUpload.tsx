@@ -248,6 +248,8 @@ export function InvoiceUpload() {
     failed: number;
     errors: Array<{ fileName: string; error: string }>;
   } | null>(null);
+  const [selectedQueueItemId, setSelectedQueueItemId] = useState<string | null>(null);
+  const [queueScannerLines, setQueueScannerLines] = useState<Record<string, ScanLineItem[]>>({});
 
   // Ref to pass extracted data to submit (avoids React state timing issues)
   const extractedFormDataRef = useRef<{
@@ -2182,6 +2184,16 @@ export function InvoiceUpload() {
           }
           return updated;
         });
+        // Auto-select the first item that becomes ready
+        setSelectedQueueItemId((prev) => prev ?? item.id);
+        setQueueScannerLines((prev) => {
+          if (prev[item.id]) return prev;
+          const li = Array.isArray(first?.line_items) ? first.line_items : [];
+          const lines: ScanLineItem[] = li.length > 0
+            ? li.map((l: any, i: number) => ({ id: String(i + 1), description: l.description || '', quantity: Number(l.quantity) || 1, unit_price: Number(l.unit_price) || 0, tax: 0, total: Number(l.total) || 0 }))
+            : [{ id: '1', description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 }];
+          return { ...prev, [item.id]: lines };
+        });
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : 'Extraction failed';
         setPdfQueue((prev) =>
@@ -4045,306 +4057,157 @@ export function InvoiceUpload() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="multi-pdf" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Multiple PDFs Upload</CardTitle>
-              <p className="text-sm text-gray-500 mt-2">
-                Upload multiple PDF files (one invoice per PDF). Each will be processed sequentially.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* File Upload Area */}
-              <div
-                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                  pdfQueue.length > 0
-                    ? 'border-blue-300 bg-blue-50'
-                    : 'border-gray-300 bg-gray-50 hover:border-gray-400'
-                }`}
-              >
-                <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-gray-700">
-                    {pdfQueue.length > 0 
-                      ? `${pdfQueue.length} PDF(s) in queue` 
-                      : 'Upload multiple PDF files'}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Select multiple PDF files (one invoice per PDF)
-                  </p>
+        <TabsContent value="multi-pdf" className="space-y-0">
+          {pdfQueue.length === 0 ? (
+            /* ── Empty state: drop-zone ── */
+            <div
+              className="border-2 border-dashed rounded-xl p-16 text-center bg-gray-50 hover:border-blue-400 transition-colors"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+                if (files.length) addPdfsToQueue(files);
+              }}
+            >
+              <Upload className="h-14 w-14 mx-auto text-gray-300 mb-4" />
+              <p className="text-lg font-semibold text-gray-700 mb-1">Drop multiple PDFs here</p>
+              <p className="text-sm text-gray-500 mb-6">One invoice per PDF — all processed sequentially with AI extraction</p>
+              <input type="file" accept=".pdf" multiple onChange={(e) => { if (e.target.files) addPdfsToQueue(Array.from(e.target.files)); }} className="hidden" id="multi-pdf-input" />
+              <label htmlFor="multi-pdf-input">
+                <Button type="button" variant="outline" asChild><span className="cursor-pointer">Select PDF Files</span></Button>
+              </label>
+            </div>
+          ) : (
+            /* ── Master-detail: sidebar + AIDocumentScanner ── */
+            <div className="flex gap-0 min-h-[680px] rounded-xl overflow-hidden border border-gray-200">
+              {/* Left sidebar — queue list */}
+              <div className="w-64 shrink-0 bg-[#0A1628] flex flex-col">
+                <div className="p-3 border-b border-white/10">
+                  <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">PDF Queue ({pdfQueue.length})</p>
+                  <div className="flex gap-1.5">
+                    <label htmlFor="multi-pdf-add" className="flex-1">
+                      <Button type="button" size="sm" variant="outline" className="w-full text-xs border-white/20 text-white/70 hover:text-white hover:bg-white/10" asChild>
+                        <span className="cursor-pointer"><Plus className="h-3 w-3 mr-1" />Add PDFs</span>
+                      </Button>
+                    </label>
+                    <input type="file" accept=".pdf" multiple onChange={(e) => { if (e.target.files) addPdfsToQueue(Array.from(e.target.files)); }} className="hidden" id="multi-pdf-add" />
+                    <Button type="button" size="sm" variant="outline" className="text-xs border-white/20 text-white/70 hover:text-white hover:bg-white/10"
+                      onClick={() => { const p = pdfQueue.filter(i => i.status === 'pending'); if (p.length) void processPdfQueue(); }}
+                      disabled={processingQueue || pdfQueue.filter(i => i.status === 'pending').length === 0}
+                    >
+                      {processingQueue ? '…' : 'Run'}
+                    </Button>
+                  </div>
                 </div>
-                <input
-                  type="file"
-                  accept=".pdf"
-                  multiple
-                  onChange={(e) => {
-                    if (e.target.files) {
-                      addPdfsToQueue(Array.from(e.target.files));
-                    }
-                  }}
-                  className="hidden"
-                  id="multi-pdf-input"
-                />
-                <label htmlFor="multi-pdf-input">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="mt-4"
-                    asChild
-                  >
-                    <span className="cursor-pointer">
-                      {pdfQueue.length > 0 ? 'Add More PDFs' : 'Select PDF Files'}
-                    </span>
-                  </Button>
-                </label>
-              </div>
-
-              {/* Queue List */}
-              {pdfQueue.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold">
-                      Processing Queue ({pdfQueue.length} file{pdfQueue.length > 1 ? 's' : ''})
-                    </h3>
-                    <div className="flex gap-2">
-                      <Button
+                <div className="flex-1 overflow-y-auto py-2">
+                  {pdfQueue.map((item) => {
+                    const isSelected = item.id === selectedQueueItemId;
+                    const statusColor = item.status === 'ready' ? 'bg-[#00D4AA]' : item.status === 'failed' ? 'bg-red-500' : item.status === 'extracting' ? 'bg-blue-400 animate-pulse' : 'bg-gray-500';
+                    return (
+                      <button
+                        key={item.id}
                         type="button"
-                        variant="outline"
-                        size="sm"
                         onClick={() => {
-                          const pendingItems = pdfQueue.filter(item => item.status === 'pending');
-                          if (pendingItems.length > 0) {
-                            void processPdfQueue();
+                          setSelectedQueueItemId(item.id);
+                          if (!queueScannerLines[item.id]) {
+                            const li = Array.isArray(item.extractedData?.line_items) ? item.extractedData.line_items : [];
+                            const lines: ScanLineItem[] = li.length > 0
+                              ? li.map((l: any, i: number) => ({ id: String(i + 1), description: l.description || '', quantity: Number(l.quantity) || 1, unit_price: Number(l.unit_price) || 0, tax: 0, total: Number(l.total) || 0 }))
+                              : [{ id: '1', description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 }];
+                            setQueueScannerLines(prev => ({ ...prev, [item.id]: lines }));
                           }
                         }}
-                        disabled={processingQueue || pdfQueue.filter(item => item.status === 'pending').length === 0}
+                        className={`w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors ${isSelected ? 'bg-white/15' : 'hover:bg-white/8'}`}
                       >
-                        {processingQueue ? 'Processing...' : 'Start Processing'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setPdfQueue([]);
-                          setMultiPdfResults(null);
-                        }}
-                      >
-                        Clear All
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    {pdfQueue.map((item) => {
-                      const isDemoFallback = item.status === 'ready' && !!item.extractedData?._demo_mode;
-                      return (
-                      <Card
-                        key={item.id}
-                        className={`${
-                          isDemoFallback
-                            ? 'border-amber-300 bg-amber-50'
-                            : item.status === 'ready'
-                            ? 'border-green-300 bg-green-50'
-                            : item.status === 'failed'
-                            ? 'border-red-300 bg-red-50'
-                            : item.status === 'extracting'
-                            ? 'border-blue-300 bg-blue-50'
-                            : 'border-gray-200'
-                        }`}
-                      >
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between gap-4">
-                            <div className="flex-1 space-y-3">
-                              {/* File Info */}
-                              <div className="flex items-center gap-3">
-                                <FileText className="h-5 w-5 text-gray-500" />
-                                <div className="flex-1">
-                                  <p className="text-sm font-medium text-gray-900">{item.file.name}</p>
-                                  <p className="text-xs text-gray-500">
-                                    {(item.file.size / 1024).toFixed(1)} KB
-                                  </p>
-                                </div>
-                                <Badge
-                                  variant={
-                                    isDemoFallback
-                                      ? 'outline'
-                                      : item.status === 'ready'
-                                      ? 'default'
-                                      : item.status === 'failed'
-                                      ? 'destructive'
-                                      : item.status === 'extracting'
-                                      ? 'secondary'
-                                      : 'outline'
-                                  }
-                                  className={isDemoFallback ? 'capitalize border-amber-400 text-amber-700 bg-amber-100' : 'capitalize'}
-                                >
-                                  {isDemoFallback ? 'Not extracted — check fields' : item.status}
-                                </Badge>
-                              </div>
-
-                              {isDemoFallback && (
-                                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-100 p-2 text-sm text-amber-800">
-                                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                                  <div>
-                                    <p className="font-medium">
-                                      AI extraction didn't run for this file — the fields below are placeholder values, not read from your PDF.
-                                    </p>
-                                    <p className="text-xs mt-1 text-amber-700">
-                                      {item.extractedData?._fallback_reason
-                                        ? `Reason: ${item.extractedData._fallback_reason}`
-                                        : item.extractedData?._note || 'The extraction service is not configured.'}{' '}
-                                      Please fill in the invoice details manually before submitting.
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Status Messages */}
-                              {item.status === 'extracting' && (
-                                <div className="flex items-center gap-2 text-sm text-blue-600">
-                                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
-                                  Extracting invoice data...
-                                </div>
-                              )}
-
-                              {item.status === 'failed' && (
-                                <div className="text-sm text-red-600">
-                                  <p className="font-medium">Error:</p>
-                                  <p>{item.error || 'Extraction failed'}</p>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="mt-2"
-                                    onClick={() => retryQueueItem(item.id)}
-                                  >
-                                    Retry
-                                  </Button>
-                                </div>
-                              )}
-
-                              {/* Extracted Data Preview */}
-                              {item.status === 'ready' && item.extractedData && (
-                                <div className="mt-4 space-y-3 border-t pt-3">
-                                  <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div>
-                                      <span className="text-gray-500">Invoice #:</span>
-                                      <Input
-                                        value={item.extractedData.invoice_number || ''}
-                                        onChange={(e) => updateQueueItemData(item.id, 'invoice_number', e.target.value)}
-                                        className="mt-1 h-8"
-                                        placeholder="INV-001"
-                                      />
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Vendor:</span>
-                                      <Input
-                                        value={item.extractedData.vendor_name || ''}
-                                        onChange={(e) => updateQueueItemData(item.id, 'vendor_name', e.target.value)}
-                                        className="mt-1 h-8"
-                                        placeholder="Vendor Name"
-                                      />
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Date:</span>
-                                      <Input
-                                        type="date"
-                                        value={item.extractedData.invoice_date || ''}
-                                        onChange={(e) => updateQueueItemData(item.id, 'invoice_date', e.target.value)}
-                                        className="mt-1 h-8"
-                                      />
-                                    </div>
-                                    <div>
-                                      <span className="text-gray-500">Amount:</span>
-                                      <Input
-                                        type="number"
-                                        value={item.extractedData.total_amount || ''}
-                                        onChange={(e) => updateQueueItemData(item.id, 'total_amount', Number(e.target.value))}
-                                        className="mt-1 h-8"
-                                        placeholder="0.00"
-                                      />
-                                    </div>
-                                  </div>
-                                  {item.extractedData._saved && (
-                                    <p className="text-xs text-green-600">Saved successfully</p>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Actions */}
-                            <div className="flex flex-col gap-2">
-                              {item.status !== 'extracting' && (
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => removeQueueItem(item.id)}
-                                >
-                                  <X className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      );
-                    })}
-                  </div>
-
-                  {/* Submit All Button */}
-                  {pdfQueue.filter(item => item.status === 'ready').length > 0 && (
-                    <div className="flex justify-end pt-4 border-t">
-                      <Button
-                        type="button"
-                        onClick={submitAllReadyInvoices}
-                        disabled={uploading || pdfQueue.filter(item => item.status === 'ready').length === 0}
-                        className="bg-[#0A4B8F] hover:bg-[#0D6EFD]"
-                      >
-                        {uploading 
-                          ? 'Submitting...' 
-                          : `Submit All (${pdfQueue.filter(item => item.status === 'ready').length} ready)`}
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* Results Summary */}
-                  {multiPdfResults && (
-                    <Card className="border-blue-200 bg-blue-50">
-                      <CardHeader>
-                        <CardTitle className="text-lg">Import Results</CardTitle>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <p className="text-sm text-gray-600">Successfully Imported</p>
-                            <p className="text-2xl font-bold text-green-600">{multiPdfResults.success}</p>
-                          </div>
-                          <div>
-                            <p className="text-sm text-gray-600">Failed</p>
-                            <p className="text-2xl font-bold text-red-600">{multiPdfResults.failed}</p>
-                          </div>
+                        <span className={`mt-1.5 h-2 w-2 rounded-full shrink-0 ${statusColor}`} />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-white truncate">{item.file.name}</p>
+                          <p className="text-[10px] text-white/40 mt-0.5 capitalize">{item.status === 'extracting' ? 'AI processing…' : item.status}</p>
                         </div>
-                        {multiPdfResults.errors.length > 0 && (
-                          <div className="space-y-2">
-                            <p className="text-sm font-semibold text-gray-700">Errors:</p>
-                            <div className="max-h-40 overflow-y-auto space-y-1">
-                              {multiPdfResults.errors.map((error, idx) => (
-                                <div key={idx} className="text-xs text-red-600 bg-red-50 p-2 rounded">
-                                  {error.fileName}: {error.error}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
+                        {item.status !== 'extracting' && (
+                          <button type="button" className="ml-auto text-white/30 hover:text-white/70 shrink-0" onClick={(e) => { e.stopPropagation(); removeQueueItem(item.id); if (selectedQueueItemId === item.id) setSelectedQueueItemId(null); }}>
+                            <X className="h-3 w-3" />
+                          </button>
                         )}
-                      </CardContent>
-                    </Card>
-                  )}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
-            </CardContent>
-          </Card>
+                {/* Submit all */}
+                {pdfQueue.filter(i => i.status === 'ready').length > 0 && (
+                  <div className="p-3 border-t border-white/10">
+                    <Button type="button" size="sm" className="w-full bg-[#00D4AA] hover:bg-[#00bfa0] text-[#0A1628] text-xs font-bold"
+                      onClick={submitAllReadyInvoices} disabled={uploading}
+                    >
+                      {uploading ? 'Saving…' : `Submit All (${pdfQueue.filter(i => i.status === 'ready').length})`}
+                    </Button>
+                    {multiPdfResults && (
+                      <p className="text-[10px] text-center mt-1.5 text-white/50">
+                        ✓ {multiPdfResults.success} saved · {multiPdfResults.failed} failed
+                      </p>
+                    )}
+                  </div>
+                )}
+                <div className="p-3 border-t border-white/10">
+                  <Button type="button" size="sm" variant="ghost" className="w-full text-xs text-white/40 hover:text-white/70" onClick={() => { setPdfQueue([]); setMultiPdfResults(null); setSelectedQueueItemId(null); setQueueScannerLines({}); }}>
+                    Clear All
+                  </Button>
+                </div>
+              </div>
+
+              {/* Right: AIDocumentScanner for selected item */}
+              <div className="flex-1 min-w-0">
+                {(() => {
+                  const selItem = pdfQueue.find(i => i.id === selectedQueueItemId);
+                  if (!selItem) {
+                    return (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+                        <FileText className="h-12 w-12 opacity-30" />
+                        <p className="text-sm">Select a PDF from the queue to review</p>
+                      </div>
+                    );
+                  }
+                  const qLines = queueScannerLines[selItem.id] ?? [{ id: '1', description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 }];
+                  return (
+                    <AIDocumentScanner
+                      key={selItem.id}
+                      extracting={selItem.status === 'extracting'}
+                      extractedData={selItem.extractedData as NormalizedExtractedInvoice | null}
+                      lineItems={qLines}
+                      saving={uploading}
+                      vatTreatment={selItem.extractedData?.vat_treatment ?? (isUAE ? 'standard' : '')}
+                      isUAE={isUAE}
+                      initialFile={selItem.file}
+                      onFileSelected={(file) => addPdfsToQueue([file])}
+                      onCameraOpen={() => {}}
+                      cameraOpen={false}
+                      onCameraOpenChange={() => {}}
+                      onFieldChange={(field, value) => updateQueueItemData(selItem.id, field as string, value)}
+                      onVatTreatmentChange={(val) => updateQueueItemData(selItem.id, 'vat_treatment', val)}
+                      onLineItemAdd={() => setQueueScannerLines(prev => {
+                        const existing = prev[selItem.id] ?? [];
+                        return { ...prev, [selItem.id]: [...existing, { id: String(Date.now()), description: '', quantity: 1, unit_price: 0, tax: 0, total: 0 }] };
+                      })}
+                      onLineItemRemove={(lineId) => setQueueScannerLines(prev => ({ ...prev, [selItem.id]: (prev[selItem.id] ?? []).filter(l => l.id !== lineId) }))}
+                      onLineItemUpdate={(lineId, field, value) => setQueueScannerLines(prev => {
+                        const lines = (prev[selItem.id] ?? []).map(l => {
+                          if (l.id !== lineId) return l;
+                          const updated = { ...l, [field]: value };
+                          if (field === 'quantity' || field === 'unit_price') updated.total = Number(updated.quantity) * Number(updated.unit_price);
+                          return updated;
+                        });
+                        return { ...prev, [selItem.id]: lines };
+                      })}
+                      onSaveDraft={submitAllReadyInvoices}
+                      onFlagForReview={submitAllReadyInvoices}
+                      onContinueToMatching={submitAllReadyInvoices}
+                      onRetry={() => retryQueueItem(selItem.id)}
+                    />
+                  );
+                })()}
+              </div>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </div>

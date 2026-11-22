@@ -197,6 +197,7 @@ type Props = {
   saving: boolean;
   vatTreatment: string;
   isUAE: boolean;
+  initialFile?: File | null;
   onFileSelected: (file: File) => void;
   onCameraOpen: () => void;
   cameraOpen: boolean;
@@ -221,6 +222,7 @@ export function AIDocumentScanner({
   saving,
   vatTreatment,
   isUAE,
+  initialFile,
   onFileSelected,
   onCameraOpen,
   cameraOpen,
@@ -272,6 +274,19 @@ export function AIDocumentScanner({
   useEffect(() => {
     return () => { if (docUrl) URL.revokeObjectURL(docUrl); };
   }, [docUrl]);
+
+  // Load a pre-existing file (e.g. from the multi-pdf queue)
+  useEffect(() => {
+    if (initialFile && initialFile !== docFile) {
+      const url = URL.createObjectURL(initialFile);
+      setDocUrl(url);
+      setDocFile(initialFile);
+      setZoom(1);
+      setRotation(0);
+      setCurrentPage(1);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile]);
 
   const handleFile = (file: File) => {
     if (docUrl) URL.revokeObjectURL(docUrl);
