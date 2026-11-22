@@ -254,6 +254,7 @@ export function InvoiceUpload() {
   } | null>(null);
   const [selectedQueueItemId, setSelectedQueueItemId] = useState<string | null>(null);
   const [queueScannerLines, setQueueScannerLines] = useState<Record<string, ScanLineItem[]>>({});
+  const [queueItemCategories, setQueueItemCategories] = useState<Record<string, string | null>>({});
 
   // Ref to pass extracted data to submit (avoids React state timing issues)
   const extractedFormDataRef = useRef<{
@@ -2412,6 +2413,7 @@ export function InvoiceUpload() {
             approved_at: approvalLevel === 'none' ? new Date().toISOString() : null,
             po_number: invoiceData.po_number || null,
             updated_at: new Date().toISOString(),
+            ...(queueItemCategories[item.id] ? { expense_category: queueItemCategories[item.id] } : {}),
           };
 
           // Use backend service role to bypass browser-side RLS (anon key has no Supabase session)
@@ -4164,7 +4166,7 @@ export function InvoiceUpload() {
                 )}
                 <div className="p-3 border-t border-white/10">
                   <button type="button" style={{ width: '100%', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: 12, padding: '6px', cursor: 'pointer', borderRadius: 6 }}
-                    onClick={() => { setPdfQueue([]); setMultiPdfResults(null); setSelectedQueueItemId(null); setQueueScannerLines({}); }}
+                    onClick={() => { setPdfQueue([]); setMultiPdfResults(null); setSelectedQueueItemId(null); setQueueScannerLines({}); setQueueItemCategories({}); }}
                   >
                     Clear All
                   </button>
@@ -4196,8 +4198,7 @@ export function InvoiceUpload() {
                       initialFile={selItem.file}
                       industry={industry}
                       onInvoiceCategoryChange={(cat) => {
-                        // persist category on queue item for later use
-                        setQueueScannerLines(prev => prev); // no-op — category lives in scanner
+                        setQueueItemCategories(prev => ({ ...prev, [selItem.id]: cat }));
                       }}
                       onFileSelected={(file) => addPdfsToQueue([file])}
                       onCameraOpen={() => {}}
