@@ -4085,18 +4085,18 @@ export function InvoiceUpload() {
                 <div className="p-3 border-b border-white/10">
                   <p className="text-xs font-semibold text-white/60 uppercase tracking-wider mb-2">PDF Queue ({pdfQueue.length})</p>
                   <div className="flex gap-1.5">
-                    <label htmlFor="multi-pdf-add" className="flex-1">
-                      <Button type="button" size="sm" variant="outline" className="w-full text-xs border-white/20 text-white/70 hover:text-white hover:bg-white/10" asChild>
-                        <span className="cursor-pointer"><Plus className="h-3 w-3 mr-1" />Add PDFs</span>
-                      </Button>
+                    <label htmlFor="multi-pdf-add" className="flex-1 cursor-pointer">
+                      <span className="flex items-center justify-center gap-1 w-full text-xs px-2 py-1.5 rounded border border-white/25 text-white bg-white/10 hover:bg-white/20 transition-colors cursor-pointer">
+                        <Plus className="h-3 w-3" />Add PDFs
+                      </span>
                     </label>
                     <input type="file" accept=".pdf" multiple onChange={(e) => { if (e.target.files) addPdfsToQueue(Array.from(e.target.files)); }} className="hidden" id="multi-pdf-add" />
-                    <Button type="button" size="sm" variant="outline" className="text-xs border-white/20 text-white/70 hover:text-white hover:bg-white/10"
+                    <button type="button" style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
                       onClick={() => { const p = pdfQueue.filter(i => i.status === 'pending'); if (p.length) void processPdfQueue(); }}
                       disabled={processingQueue || pdfQueue.filter(i => i.status === 'pending').length === 0}
                     >
-                      {processingQueue ? '…' : 'Run'}
-                    </Button>
+                      {processingQueue ? '…' : 'Run AI'}
+                    </button>
                   </div>
                 </div>
                 <div className="flex-1 overflow-y-auto py-2">
@@ -4136,11 +4136,11 @@ export function InvoiceUpload() {
                 {/* Submit all */}
                 {pdfQueue.filter(i => i.status === 'ready').length > 0 && (
                   <div className="p-3 border-t border-white/10">
-                    <Button type="button" size="sm" className="w-full bg-[#00D4AA] hover:bg-[#00bfa0] text-[#0A1628] text-xs font-bold"
+                    <button type="button" style={{ width: '100%', background: '#00D4AA', color: '#0A1628', border: 'none', borderRadius: 6, padding: '7px 10px', fontSize: 12, fontWeight: 700, cursor: uploading ? 'not-allowed' : 'pointer', opacity: uploading ? 0.7 : 1 }}
                       onClick={submitAllReadyInvoices} disabled={uploading}
                     >
                       {uploading ? 'Saving…' : `Submit All (${pdfQueue.filter(i => i.status === 'ready').length})`}
-                    </Button>
+                    </button>
                     {multiPdfResults && (
                       <p className="text-[10px] text-center mt-1.5 text-white/50">
                         ✓ {multiPdfResults.success} saved · {multiPdfResults.failed} failed
@@ -4149,9 +4149,11 @@ export function InvoiceUpload() {
                   </div>
                 )}
                 <div className="p-3 border-t border-white/10">
-                  <Button type="button" size="sm" variant="ghost" className="w-full text-xs text-white/40 hover:text-white/70" onClick={() => { setPdfQueue([]); setMultiPdfResults(null); setSelectedQueueItemId(null); setQueueScannerLines({}); }}>
+                  <button type="button" style={{ width: '100%', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontSize: 12, padding: '6px', cursor: 'pointer', borderRadius: 6 }}
+                    onClick={() => { setPdfQueue([]); setMultiPdfResults(null); setSelectedQueueItemId(null); setQueueScannerLines({}); }}
+                  >
                     Clear All
-                  </Button>
+                  </button>
                 </div>
               </div>
 
