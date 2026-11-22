@@ -754,6 +754,7 @@ export function InvoiceUpload() {
         file_url: await storeInvoiceFile(scanPreviewFile, companyId, 'scan'),
         file_type: scanPreviewFile?.type || null,
         updated_at: new Date().toISOString(),
+        ...(scannerInvoiceCategory ? { expense_category: scannerInvoiceCategory } : {}),
       };
       // Check for duplicate before inserting
       const invoiceNum = row.invoice_number;

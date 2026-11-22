@@ -266,13 +266,16 @@ export function AIDocumentScanner({
 
   // Industry classification state
   const [localCategory, setLocalCategory] = useState<InvoiceCategoryKey | null>(null);
+  // Track whether the user has manually overridden classification so auto-classify never overwrites it
+  const [userOverrode, setUserOverrode] = useState(false);
   const activeCategory = invoiceCategoryProp !== undefined ? invoiceCategoryProp : localCategory;
   const industryCategories = getCategoriesForIndustry(industry);
   const hasIndustry = industry !== 'general';
 
-  // Auto-classify when data arrives
+  // Auto-classify once when extraction data first arrives; skip if user already overrode
   useEffect(() => {
-    if (!extractedData || !hasIndustry) return;
+    if (!extractedData || !hasIndustry || userOverrode) return;
+    // Only auto-classify when extractedData is new (vendor_name is a stable proxy)
     const descriptions = lineItems.map(l => l.description);
     const classified = classifyInvoice(
       industry,
@@ -285,7 +288,7 @@ export function AIDocumentScanner({
       onInvoiceCategoryChange?.(classified);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extractedData, industry]);
+  }, [extractedData?.vendor_name, industry]);
 
   const activeCategoryObj = activeCategory ? getCategoryForIndustry(industry, activeCategory) : undefined;
 
@@ -680,6 +683,7 @@ export function AIDocumentScanner({
                     value={activeCategory ?? ''}
                     onChange={(e) => {
                       const v = e.target.value as InvoiceCategoryKey;
+                      setUserOverrode(true);
                       setLocalCategory(v);
                       onInvoiceCategoryChange?.(v);
                     }}
@@ -693,8 +697,8 @@ export function AIDocumentScanner({
                 </div>
                 {activeCategoryObj && (
                   <div className="shrink-0 mt-5">
-                    {!invoiceCategoryProp && activeCategory && (
-                      <span className="text-[10px] text-[#00D4AA] font-semibold">AI classified</span>
+                    {!userOverrode && activeCategory && (
+                      <span className="text-[10px] text-[#00D4AA] font-semibold">Auto-classified</span>
                     )}
                   </div>
                 )}

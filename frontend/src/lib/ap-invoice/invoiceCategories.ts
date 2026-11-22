@@ -213,7 +213,8 @@ export function classifyInvoice(
     }
   }
 
-  return bestMatch?.key ?? cfg.categories[0]?.key ?? null;
+  if (bestScore === 0) return null;
+  return bestMatch?.key ?? null;
 }
 
 export function getCategoryForIndustry(industryKey: string, categoryKey: string): InvoiceCategory | undefined {
