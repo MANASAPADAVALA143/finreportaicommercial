@@ -10,6 +10,7 @@ income, liabilities and equity are credit minus debit.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func
@@ -43,8 +44,19 @@ def periods_between(start: str, end: str) -> list[str]:
     return out
 
 
+_ZERO = Decimal("0")
+_CENT = Decimal("0.01")
+
+
 def _money(v: Any) -> float:
-    return round(float(v or 0), 2)
+    """Convert a database numeric value to float using Decimal to avoid binary float errors."""
+    if v is None:
+        return 0.0
+    try:
+        return float(Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError, OverflowError):
+        return 0.0
+
 
 
 def _normalise_type(raw: str | None) -> str | None:
@@ -62,7 +74,12 @@ def _normalise_type(raw: str | None) -> str | None:
 
 
 def natural(account_type: str, debit: float, credit: float) -> float:
-    return round(debit - credit, 2) if account_type in _DEBIT_NATURAL else round(credit - debit, 2)
+    """Return the natural-sign balance using Decimal arithmetic for precision."""
+    d = Decimal(str(debit))
+    c = Decimal(str(credit))
+    if account_type in _DEBIT_NATURAL:
+        return float((d - c).quantize(_CENT, rounding=ROUND_HALF_UP))
+    return float((c - d).quantize(_CENT, rounding=ROUND_HALF_UP))
 
 
 def _posted_lines(db: Session, scope: LedgerScope):

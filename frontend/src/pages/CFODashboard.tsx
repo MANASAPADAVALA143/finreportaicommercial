@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { DemoDataBanner } from '../components/DemoDataBanner';
 import { motion } from 'framer-motion';
 import axios from 'axios';
+import { joinApiUrl, isBackendConfigured } from '../utils/backendOrigin';
 import {
   TrendingUp, TrendingDown, DollarSign, AlertCircle, Download,
   RefreshCw, ArrowLeft, Target, BarChart3,
@@ -81,77 +82,13 @@ interface DashboardData {
   };
 }
 
-// Mock Data
-const mockCFOData: DashboardData = {
-  healthScore: {
-    overall: 69,
-    trend: 2.5,
-    breakdown: {
-      liquidity: 66,
-      profitability: 68,
-      efficiency: 62,
-      stability: 71
-    }
-  },
-  cash: {
-    current: 562000,
-    trend: 6.8,
-    runway: 18.5,
-    history: [520000, 535000, 548000, 562000, 575000, 580000, 562000]
-  },
-  revenue: {
-    monthly: 328000,
-    arr: 3936000,
-    growth: 25,
-    history: [245000, 268000, 291000, 308000, 315000, 328000]
-  },
-  expenses: {
-    monthly: 234000,
-    trend: 8.2,
-    categories: [
-      { name: 'Operations', value: 105000, percentage: 45 },
-      { name: 'Marketing', value: 58000, percentage: 25 },
-      { name: 'Sales', value: 47000, percentage: 20 },
-      { name: 'R&D', value: 24000, percentage: 10 }
-    ]
-  },
-  insights: [
-    { icon: '💰', text: 'Cash runway trending down - consider cost optimization', severity: 'warning' },
-    { icon: '📊', text: 'AR aging increased 8 days - follow up with top 3 customers', severity: 'medium' },
-    { icon: '📈', text: 'Marketing ROI at 340% - recommend budget increase', severity: 'info' },
-    { icon: '📦', text: 'Inventory turnover slowing - review stock levels', severity: 'medium' }
-  ],
-  alerts: [
-    { severity: 'critical', message: 'Cash forecast shows potential shortfall in Week 11', time: '2 hours ago', action: 'Review' },
-    { severity: 'warning', message: 'Customer XYZ payment overdue by 15 days', time: '5 hours ago', action: 'Follow up' },
-    { severity: 'info', message: 'Monthly financial close completed', time: '1 day ago', action: 'View' }
-  ],
-  recentActivity: [
-    { icon: '📄', action: 'Board report generated', time: '2 hours ago' },
-    { icon: '💰', action: 'Cash flow forecast updated', time: '5 hours ago' },
-    { icon: '📊', action: 'P&L analysis completed', time: '1 day ago' },
-    { icon: '🔍', action: 'Fraud detection scan finished', time: '1 day ago' },
-    { icon: '📈', action: 'Q4 variance report created', time: '2 days ago' }
-  ],
-  recommendations: [
-    { priority: 'high', text: 'Reduce marketing spend by 15% to extend runway', impact: '+2.5 months runway' },
-    { priority: 'medium', text: 'Negotiate payment terms with top 3 vendors', impact: '$50K cash flow improvement' },
-    { priority: 'low', text: 'Review SaaS subscriptions for optimization', impact: '$5K/month savings' }
-  ],
-  ratios: {
-    currentRatio: 2.4,
-    quickRatio: 1.8,
-    debtToEquity: 0.3,
-    roe: 18,
-    operatingMargin: 28.7
-  }
-};
 
 export const CFODashboard = () => {
   const navigate = useNavigate();
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'quarter' | 'year'>('month');
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<DashboardData>(mockCFOData);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [showChatBot, setShowChatBot] = useState(false);
   const [apKPIs, setApKPIs] = useState<APKPIs>(emptyAPKPIs);
 
@@ -162,16 +99,22 @@ export const CFODashboard = () => {
   }, [timeRange]);
 
   const fetchDashboardData = async () => {
+    if (!isBackendConfigured()) {
+      setFetchError('Backend API not configured. Set VITE_API_URL and redeploy.');
+      return;
+    }
     setLoading(true);
+    setFetchError(null);
     try {
       const response = await axios.get(
-        `http://localhost:8000/api/cfo/dashboard?time_range=${timeRange}`
+        joinApiUrl(`/api/cfo/dashboard?time_range=${timeRange}`)
       );
       setData(response.data);
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error);
-      // Use mock data as fallback
-      setData(mockCFOData);
+    } catch (err: unknown) {
+      console.error('Failed to fetch dashboard data:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setFetchError(`Dashboard data unavailable: ${msg}`);
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -181,7 +124,7 @@ export const CFODashboard = () => {
     try {
       // Use query parameters instead of request body
       const response = await axios.post(
-        `http://localhost:8000/api/cfo/export?format=${format}&time_range=${timeRange}`,
+        joinApiUrl(`/api/cfo/export?format=${format}&time_range=${timeRange}`),
         {},
         { responseType: 'blob' }
       );
@@ -208,7 +151,7 @@ export const CFODashboard = () => {
     }
   };
 
-  if (loading && !data) {
+  if (loading) {
     return <LoadingSkeleton />;
   }
 
@@ -217,6 +160,21 @@ export const CFODashboard = () => {
       <div className="px-6 pt-4">
         <DemoDataBanner what="The dashboard figures and forecasts" />
       </div>
+      {fetchError && (
+        <div className="max-w-7xl mx-auto px-6 pt-4">
+          <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-300 rounded-xl text-sm text-amber-900">
+            <AlertTriangle className="w-5 h-5 mt-0.5 flex-shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold">CFO Dashboard data unavailable</p>
+              <p className="mt-1 text-amber-800">{fetchError}</p>
+              <p className="mt-1 text-amber-700 text-xs">
+                The <code>/api/cfo/dashboard</code> endpoint is not yet wired to a live data source.
+                Financial KPIs, charts and insights below are not shown to avoid displaying fabricated figures.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
       {/* HEADER */}
       <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -300,7 +258,14 @@ export const CFODashboard = () => {
 
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* KPI CARDS */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {!data && !loading && (
+          <div className="mb-8 p-8 bg-white rounded-2xl shadow border border-gray-100 text-center text-gray-500">
+            <BarChart3 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="font-medium text-gray-700">Financial KPIs not available</p>
+            <p className="text-sm mt-1">Connect the <code className="text-xs bg-gray-100 px-1 rounded">/api/cfo/dashboard</code> endpoint to display live financial metrics.</p>
+          </div>
+        )}
+        {data && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           {/* Card 1: Financial Health Score */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -452,8 +417,9 @@ export const CFODashboard = () => {
               </LineChart>
             </ResponsiveContainer>
           </motion.div>
-        </div>
+        </div>}
 
+        {data && <>
         {/* THREE COLUMN LAYOUT */}
         <div className="grid grid-cols-1 lg:grid-cols-10 gap-6 mb-8">
           {/* LEFT COLUMN (40%) */}
@@ -635,49 +601,18 @@ export const CFODashboard = () => {
         <div className="space-y-6 mb-8">
           {/* Row 1: 2 Charts */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Revenue vs Expenses */}
-            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">Revenue vs Expenses</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={[
-                  { month: 'Jan', revenue: 245000, expenses: 180000 },
-                  { month: 'Feb', revenue: 268000, expenses: 195000 },
-                  { month: 'Mar', revenue: 291000, expenses: 210000 },
-                  { month: 'Apr', revenue: 308000, expenses: 220000 },
-                  { month: 'May', revenue: 315000, expenses: 225000 },
-                  { month: 'Jun', revenue: 328000, expenses: 234000 }
-                ]}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="revenue" fill="#3B82F6" name="Revenue" />
-                  <Bar dataKey="expenses" fill="#EF4444" name="Expenses" />
-                </BarChart>
-              </ResponsiveContainer>
+            {/* Revenue vs Expenses — requires live data from /api/cfo/dashboard */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 flex flex-col items-center justify-center min-h-[300px]">
+              <BarChart3 className="w-10 h-10 text-gray-200 mb-3" />
+              <p className="font-medium text-gray-500">Revenue vs Expenses</p>
+              <p className="text-xs text-gray-400 mt-1 text-center">Chart data unavailable — connect <code>/api/cfo/dashboard</code></p>
             </div>
 
-            {/* Cash Flow Trend */}
-            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">Cash Flow Trend (13 Weeks)</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={Array.from({length: 13}, (_, i) => ({
-                  week: `W${i+1}`,
-                  operating: 30000 + Math.random() * 20000,
-                  investing: -10000 - Math.random() * 5000,
-                  financing: 5000 + Math.random() * 3000
-                }))}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="week" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Area type="monotone" dataKey="operating" stackId="1" stroke="#10B981" fill="#10B981" fillOpacity={0.6} name="Operating" />
-                  <Area type="monotone" dataKey="investing" stackId="1" stroke="#EF4444" fill="#EF4444" fillOpacity={0.6} name="Investing" />
-                  <Area type="monotone" dataKey="financing" stackId="1" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.6} name="Financing" />
-                </AreaChart>
-              </ResponsiveContainer>
+            {/* Cash Flow Trend — requires live data from /api/cfo/dashboard */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 flex flex-col items-center justify-center min-h-[300px]">
+              <Activity className="w-10 h-10 text-gray-200 mb-3" />
+              <p className="font-medium text-gray-500">Cash Flow Trend (13 Weeks)</p>
+              <p className="text-xs text-gray-400 mt-1 text-center">Chart data unavailable — connect <code>/api/cfo/dashboard</code></p>
             </div>
           </div>
 
@@ -707,48 +642,18 @@ export const CFODashboard = () => {
               </ResponsiveContainer>
             </div>
 
-            {/* Department Budget */}
-            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">Budget Utilization</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart
-                  data={[
-                    { dept: 'Finance', spent: 85, budget: 100 },
-                    { dept: 'Marketing', spent: 92, budget: 100 },
-                    { dept: 'Sales', spent: 78, budget: 100 },
-                    { dept: 'Operations', spent: 105, budget: 100 },
-                    { dept: 'IT', spent: 88, budget: 100 }
-                  ]}
-                  layout="vertical"
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis type="number" />
-                  <YAxis dataKey="dept" type="category" />
-                  <Tooltip />
-                  <Bar dataKey="spent" fill="#3B82F6" name="Spent %" />
-                </BarChart>
-              </ResponsiveContainer>
+            {/* Budget Utilization — requires FP&A budget data */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 flex flex-col items-center justify-center min-h-[250px]">
+              <Target className="w-10 h-10 text-gray-200 mb-3" />
+              <p className="font-medium text-gray-500">Budget Utilization</p>
+              <p className="text-xs text-gray-400 mt-1 text-center">Requires FP&amp;A budget upload</p>
             </div>
 
-            {/* Performance Radar */}
-            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">Performance Dimensions</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <RadarChart data={[
-                  { dimension: 'Revenue', current: 85, target: 90 },
-                  { dimension: 'Profit', current: 78, target: 85 },
-                  { dimension: 'Cash', current: 92, target: 95 },
-                  { dimension: 'Customer', current: 88, target: 90 },
-                  { dimension: 'Team', current: 82, target: 85 },
-                  { dimension: 'Market', current: 75, target: 80 }
-                ]}>
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="dimension" />
-                  <Radar name="Current" dataKey="current" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.6} />
-                  <Radar name="Target" dataKey="target" stroke="#10B981" fill="#10B981" fillOpacity={0.3} />
-                  <Legend />
-                </RadarChart>
-              </ResponsiveContainer>
+            {/* Performance Radar — requires live data */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 flex flex-col items-center justify-center min-h-[250px]">
+              <Activity className="w-10 h-10 text-gray-200 mb-3" />
+              <p className="font-medium text-gray-500">Performance Dimensions</p>
+              <p className="text-xs text-gray-400 mt-1 text-center">Chart data unavailable — connect <code>/api/cfo/dashboard</code></p>
             </div>
           </div>
         </div>
@@ -814,6 +719,7 @@ export const CFODashboard = () => {
             </div>
           </div>
         </div>
+        </>}
       </div>
 
       {/* AP OVERVIEW SECTION */}

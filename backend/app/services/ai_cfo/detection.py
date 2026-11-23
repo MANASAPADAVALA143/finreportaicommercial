@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from decimal import Decimal, ROUND_HALF_UP
 from statistics import mean, pstdev
 from typing import Any
 
@@ -34,8 +35,23 @@ DUPLICATE_MIN_AMOUNT = 1000.0
 EVIDENCE_LINES = 5
 
 
+_CENT = Decimal("0.01")
+
+
+def _r2(v: float) -> float:
+    """Round a float to 2 decimal places using Decimal for exactness."""
+    return float(Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP))
+
+
+def _r4(v: float) -> float:
+    """Round a float to 4 decimal places using Decimal for exactness."""
+    return float(Decimal(str(v)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
 def _materiality(expense_total: float) -> float:
-    return round(max(MATERIALITY_FLOOR, MATERIALITY_SHARE_OF_OPEX * expense_total), 2)
+    floor = Decimal(str(MATERIALITY_FLOOR))
+    share = Decimal(str(MATERIALITY_SHARE_OF_OPEX)) * Decimal(str(expense_total))
+    return float(max(floor, share).quantize(_CENT, rounding=ROUND_HALF_UP))
 
 
 def _refs(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -76,12 +92,12 @@ def _expense_spikes(
                 + f"). Materiality threshold {materiality:,.2f}."
             ),
             "severity": severity,
-            "amount": round(delta, 2),
+            "amount": _r2(delta),
             "metrics": {
-                "current": round(current, 2), "baseline_mean": round(base, 2), "baseline_std": round(spread, 2),
-                "increase": round(delta, 2), "increase_pct": round(pct, 4) if pct is not None else None,
-                "z_score": round(z, 2) if z is not None else None, "materiality": materiality,
-                "history": {p: round(info["series"].get(p, 0.0), 2) for p in history_periods},
+                "current": _r2(current), "baseline_mean": _r2(base), "baseline_std": _r2(spread),
+                "increase": _r2(delta), "increase_pct": _r4(pct) if pct is not None else None,
+                "z_score": _r2(z) if z is not None else None, "materiality": materiality,
+                "history": {p: _r2(info["series"].get(p, 0.0)) for p in history_periods},
             },
             "evidence": _refs(ledger.transactions(db, scope, code, period, limit=EVIDENCE_LINES)),
         })
@@ -114,9 +130,9 @@ def _budget_overruns(
                 f"{budget:,.2f} ({b['fiscal_year']} FP&A upload), {over:,.2f} over."
             ),
             "severity": "high" if pct >= 0.5 else "medium",
-            "amount": round(over, 2),
-            "metrics": {"actual": round(actual, 2), "budget": budget, "over": round(over, 2),
-                        "over_pct": round(pct, 4), "materiality": materiality, "fiscal_year": b["fiscal_year"]},
+            "amount": _r2(over),
+            "metrics": {"actual": _r2(actual), "budget": budget, "over": _r2(over),
+                        "over_pct": _r4(pct), "materiality": materiality, "fiscal_year": b["fiscal_year"]},
             "evidence": _refs(ledger.transactions(db, scope, code, period, limit=EVIDENCE_LINES)),
         })
     return out
@@ -148,8 +164,8 @@ def _duplicates(db: Session, scope: LedgerScope, period: str, expense_codes: set
                 f"({amount:,.2f}) and description \"{rows[0]['description'] or '(none)'}\"."
             ),
             "severity": "high" if abs(amount) >= materiality else "medium",
-            "amount": round(amount * (len(entries) - 1), 2),
-            "metrics": {"entries": len(entries), "amount_each": amount, "potential_overstatement": round(amount * (len(entries) - 1), 2)},
+            "amount": _r2(amount * (len(entries) - 1)),
+            "metrics": {"entries": len(entries), "amount_each": amount, "potential_overstatement": _r2(amount * (len(entries) - 1))},
             "evidence": _refs(rows),
         })
     return out
