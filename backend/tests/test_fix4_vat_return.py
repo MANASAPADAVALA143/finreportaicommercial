@@ -10,7 +10,8 @@ def test_fta_box_zero_rated_output_is_box4():
     from app.services.gulftax_sync_service import _fta_box
 
     assert _fta_box("zero", "output") == "box4"
-    assert _fta_box("reverse_charge", "output") == "box3"
+    # reverse_charge on the output/sales side is left off the UAE VAT return (not box3)
+    assert _fta_box("reverse_charge", "output") == ""
     assert _fta_box("standard", "output") == "box1"
     assert _fta_box("standard", "input") == "box9"
 

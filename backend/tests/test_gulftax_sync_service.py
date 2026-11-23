@@ -59,7 +59,7 @@ class TestSyncPeriodDualStore(unittest.TestCase):
         parse_period.return_value = (__import__("datetime").date(2026, 4, 1), __import__("datetime").date(2026, 6, 30))
         sb = MagicMock()
         get_supabase.return_value = sb
-        sb.table.return_value.select.return_value.eq.return_value.eq.return_value.gte.return_value.lte.return_value.execute.return_value = MagicMock(
+        sb.table.return_value.select.return_value.eq.return_value.gte.return_value.lte.return_value.execute.return_value = MagicMock(
             data=[{"id": "inv-1", "status": "Approved", "company_id": "co-1"}]
         )
 

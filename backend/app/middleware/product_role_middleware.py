@@ -61,6 +61,13 @@ AUTH_ANY_ROLE_PREFIXES = (
     "/api/company-setup",
 )
 
+# Paths that are explicitly excluded from a role's allowed prefixes.
+# A path blocked here takes precedence over ROLE_API_PREFIXES matches.
+ROLE_API_EXCLUSIONS: dict[str, tuple[str, ...]] = {
+    # uae_client covers /api/uae but must NOT access AR routes (uae_suite / uae_full only).
+    "uae_client": ("/api/uae/ar", "/api/ar-collections"),
+}
+
 ROLE_API_PREFIXES: dict[str, tuple[str, ...] | None] = {
     "uae_client": (
         "/api/gulftax",
@@ -165,6 +172,9 @@ def _path_allowed(product_role: str, internal_role: str, path: str) -> bool:
         return internal_role == "super_admin"
     if _auth_any_role(path):
         return True
+    exclusions = ROLE_API_EXCLUSIONS.get(product_role, ())
+    if any(path == p or path.startswith(f"{p}/") for p in exclusions):
+        return False
     prefixes = ROLE_API_PREFIXES.get(product_role)
     if prefixes is None:
         return True
