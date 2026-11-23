@@ -1,9 +1,12 @@
 ﻿/**
  * Parse CFO Services Context from Excel sheet rows.
  * Used by UploadData (central upload) and CFOServices (in-page upload).
+ *
+ * Never invents health scores or KPI figures when the sheet omits them.
  */
 import * as XLSX from 'xlsx';
 import type { CFOServicesContext } from '../types/cfoServicesContext';
+import type { FinancialHealthScore } from '../types/cfo';
 
 export function parseCFOServicesContextFromRows(rows: any[], fileName: string): CFOServicesContext | null {
   if (!rows?.length) return null;
@@ -25,18 +28,19 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
   };
   const getNum = (row: any, ...keys: string[]) => {
     const v = get(row, ...keys);
-    const n = parseFloat(String(v).replace(/[â‚¹,%\s]/g, ''));
-    return Number.isFinite(n) ? n : 0;
+    if (!v) return NaN;
+    const n = parseFloat(String(v).replace(/[^\d.-]/g, ''));
+    return Number.isFinite(n) ? n : NaN;
   };
   const getNumByKeyword = (row: any, ...keywords: string[]) => {
     const key = Object.keys(row).find((k) =>
       keywords.some((kw) => k.toLowerCase().includes(kw.toLowerCase()))
     );
-    if (!key) return 0;
+    if (!key) return NaN;
     const v = row[key];
-    if (v === undefined || v === null || v === '') return 0;
-    const n = parseFloat(String(v).replace(/[â‚¹,%\s]/g, ''));
-    return Number.isFinite(n) ? n : 0;
+    if (v === undefined || v === null || v === '') return NaN;
+    const n = parseFloat(String(v).replace(/[^\d.-]/g, ''));
+    return Number.isFinite(n) ? n : NaN;
   };
   const section = (name: string) => (row: any) =>
     get(row, 'Section', 'Category', 'Type').toLowerCase().includes(name.toLowerCase().replace(/\s+/g, ' ').slice(0, 15));
@@ -49,7 +53,7 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
   if (kpiRows.length === 0) {
     kpiRows = rows.filter((r) => {
       const hasLabel = get(r, 'KPI', 'kpi', 'Metric', 'Name', 'Company Name', 'Label') || getByKeyword(r, 'kpi', 'metric', 'name', 'label');
-      const hasNum = getNumByKeyword(r, 'current', 'actual', 'value', 'score', 'threshold', 'target', 'amount') !== 0 || getNum(r, 'Current', 'Value', 'Actual', 'Threshold', 'Target') !== 0;
+      const hasNum = Number.isFinite(getNumByKeyword(r, 'current', 'actual', 'value', 'score', 'threshold', 'target', 'amount')) || Number.isFinite(getNum(r, 'Current', 'Value', 'Actual', 'Threshold', 'Target'));
       return !!hasLabel && (hasNum || hasKey(r, 'Current', 'Value', 'Actual', 'Threshold', 'Target'));
     });
   }
@@ -81,16 +85,18 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
 
   const kpiAlerts = kpiRows.map((r, i) => {
     const kpi = get(r, 'KPI', 'kpi', 'Metric', 'Name', 'Company Name', 'Label', 'KPI Name') || getByKeyword(r, 'kpi', 'metric', 'name', 'label');
-    const current = getNum(r, 'Current', 'Value', 'Actual', 'Actual Value', 'Current Value', 'Score', 'Amount')
-      || getNumByKeyword(r, 'current', 'actual', 'value', 'score', 'amount');
-    const threshold = getNum(r, 'Threshold', 'Target', 'Critical', 'Warning', 'Limit', 'Budget', 'Goal', 'Max', 'Min')
-      || getNumByKeyword(r, 'threshold', 'target', 'critical', 'warning', 'limit', 'budget', 'goal');
+    const currentRaw = getNum(r, 'Current', 'Value', 'Actual', 'Actual Value', 'Current Value', 'Score', 'Amount');
+    const currentKw = getNumByKeyword(r, 'current', 'actual', 'value', 'score', 'amount');
+    const current = Number.isFinite(currentRaw) ? currentRaw : (Number.isFinite(currentKw) ? currentKw : 0);
+    const thresholdRaw = getNum(r, 'Threshold', 'Target', 'Critical', 'Warning', 'Limit', 'Budget', 'Goal', 'Max', 'Min');
+    const thresholdKw = getNumByKeyword(r, 'threshold', 'target', 'critical', 'warning', 'limit', 'budget', 'goal');
+    const threshold = Number.isFinite(thresholdRaw) ? thresholdRaw : (Number.isFinite(thresholdKw) ? thresholdKw : current);
     const severity = (get(r, 'Severity', 'Alert', 'Status').toLowerCase().includes('critical') ? 'critical' : 'warning') as 'critical' | 'warning' | 'info';
     return {
       id: `cfo-alert-${i + 1}`,
       kpi: kpi || `KPI ${i + 1}`,
       current,
-      threshold: threshold || current || 0,
+      threshold,
       severity,
       message: get(r, 'Message', 'Description') || `${kpi}: ${current} vs threshold ${threshold}`,
       recommendation: get(r, 'Recommendation', 'Action') || 'Review and take action.',
@@ -98,32 +104,36 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
     };
   });
 
-  let healthScore: CFOServicesContext['healthScore'] = {
-    overall: 72,
-    grade: 'B',
-    components: { profitability: 72, liquidity: 81, efficiency: 68, growth: 74, stability: 55 },
-    trend: 'stable',
-    benchmarkVsIndustry: 70,
-    aiSummary: 'Financial health from CFO Services Context upload.',
-  };
+  let healthScore: FinancialHealthScore | null = null;
   if (healthRows.length) {
     const first = healthRows[0];
     const overall = getNum(first, 'Overall', 'Score', 'Total');
-    const grade = get(first, 'Grade', 'grade') || 'B';
-    healthScore = {
-      overall: overall || 72,
-      grade: (grade.toUpperCase().slice(0, 1) as 'A' | 'B' | 'C' | 'D' | 'F') || 'B',
-      components: {
-        profitability: getNum(first, 'Profitability', 'profitability') || 72,
-        liquidity: getNum(first, 'Liquidity', 'liquidity') || 81,
-        efficiency: getNum(first, 'Efficiency', 'efficiency') || 68,
-        growth: getNum(first, 'Growth', 'growth') || 74,
-        stability: getNum(first, 'Risk', 'Stability', 'stability', 'risk') || 55,
-      },
-      trend: (get(first, 'Trend', 'trend') || 'stable').toLowerCase() as 'improving' | 'stable' | 'declining',
-      benchmarkVsIndustry: getNum(first, 'Benchmark', 'benchmarkVsIndustry') || 70,
-      aiSummary: get(first, 'AI Summary', 'aiSummary', 'Summary') || healthScore.aiSummary,
-    };
+    const profitability = getNum(first, 'Profitability', 'profitability');
+    const liquidity = getNum(first, 'Liquidity', 'liquidity');
+    const efficiency = getNum(first, 'Efficiency', 'efficiency');
+    const growth = getNum(first, 'Growth', 'growth');
+    const stability = getNum(first, 'Risk', 'Stability', 'stability', 'risk');
+    // Only accept a health score when overall is present — never fill with synthetic 72/81/…
+    if (Number.isFinite(overall) && overall > 0) {
+      const gradeRaw = get(first, 'Grade', 'grade');
+      healthScore = {
+        overall,
+        grade: ((gradeRaw.toUpperCase().slice(0, 1) || 'C') as 'A' | 'B' | 'C' | 'D' | 'F'),
+        components: {
+          profitability: Number.isFinite(profitability) ? profitability : 0,
+          liquidity: Number.isFinite(liquidity) ? liquidity : 0,
+          efficiency: Number.isFinite(efficiency) ? efficiency : 0,
+          growth: Number.isFinite(growth) ? growth : 0,
+          stability: Number.isFinite(stability) ? stability : 0,
+        },
+        trend: (get(first, 'Trend', 'trend') || 'stable').toLowerCase() as 'improving' | 'stable' | 'declining',
+        benchmarkVsIndustry: (() => {
+          const b = getNum(first, 'Benchmark', 'benchmarkVsIndustry');
+          return Number.isFinite(b) ? b : 0;
+        })(),
+        aiSummary: get(first, 'AI Summary', 'aiSummary', 'Summary') || 'Financial health from uploaded CFO Services Context.',
+      };
+    }
   }
 
   const strategicInsightsSeeds = insightRows.slice(0, 6).map((r, i) => ({
@@ -135,9 +145,14 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
     urgency: get(r, 'Urgency', 'urgency'),
   }));
 
+  // Refuse to invent a placeholder context string when nothing was parsed.
+  if (!aiAssistantContext && !kpiAlerts.length && !healthScore && !strategicInsightsSeeds.length) {
+    return null;
+  }
+
   return {
-    aiAssistantContext: aiAssistantContext || 'Company financial context from upload.',
-    kpiAlerts: kpiAlerts.length ? kpiAlerts : [],
+    aiAssistantContext,
+    kpiAlerts,
     healthScore,
     strategicInsightsSeeds,
     fileName,
@@ -157,4 +172,3 @@ export async function parseCFOServicesContextFromFile(file: File): Promise<CFOSe
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName]);
   return parseCFOServicesContextFromRows(rows as any[], file.name);
 }
-

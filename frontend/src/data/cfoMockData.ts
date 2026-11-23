@@ -1,21 +1,17 @@
 import { ChatMessage, StrategicInsight, KPIAlert, FinancialHealthScore } from '../types/cfo';
 
+/** Explicit demo pack only — never used as an operational default. */
 export const initialChatMessages: ChatMessage[] = [
   {
-    id: "welcome",
+    id: "welcome-demo",
     role: "assistant",
-    content: `Hello MANASA! 👋 I'm your CFO AI Assistant powered by Amazon Nova.
+    content: `Demo mode loaded. These figures are illustrative sample data for a fictional company ("MANASA"), not your live books.
 
-I have full access to your October 2025 financial data including:
-• **P&L actuals** vs budget (Revenue ₹33Cr, Net Profit ₹5.1Cr)
-• **Variance analysis** (Net profit -37% vs budget 🔴)
-• **Cash position** (₹2.5Cr, DSO 46 days)
-• **KPI dashboard** (Health Score: 62/100)
-• **Forecasts** (FY2026: ₹42Cr target)
-
-Ask me anything about your financials! What would you like to know?`,
+Sample October 2025 pack includes illustrative P&L, cash, KPIs and forecasts.
+Ask questions to explore the demo — or clear demo / upload your own file.`,
     timestamp: new Date().toISOString(),
-    sources: ["KPI Dashboard", "Variance Analysis"],
+    sources: ["Demo data"],
+    dataSource: "demo",
   }
 ];
 
@@ -176,8 +172,8 @@ export const mockHealthScore: FinancialHealthScore = {
 };
 
 export const financialContext = `
-COMPANY FINANCIAL DATA — October 2025:
-Company: FinReport AI
+DEMO / ILLUSTRATIVE SAMPLE — October 2025 (not live ledger):
+Company: MANASA (fictional demo identity)
 
 P&L ACTUALS vs BUDGET:
 Revenue: ₹33.0Cr actual vs ₹35.0Cr budget (-5.7% unfavorable)

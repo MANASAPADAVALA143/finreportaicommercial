@@ -3,13 +3,16 @@ import type { KPIAlert, FinancialHealthScore } from './cfo';
 /** Parsed from CFO_Services_Context sheet (central upload). */
 
 export interface CFOServicesContext {
-  /** 22 financial metrics for AI Assistant */
+  /** Financial metrics block for AI Assistant (from upload sheet) */
   aiAssistantContext: string;
-  /** KPI Monitor: thresholds and current alerts (12 KPIs, 3 in alert state) */
+  /** KPI Monitor alerts — empty when the sheet has none */
   kpiAlerts: KPIAlert[];
-  /** Financial Health Score: 5 components (Profitability, Liquidity, Efficiency, Growth, Risk) + overall + grade */
-  healthScore: FinancialHealthScore;
-  /** 6 strategic insight seeds (P1/P2/P3) — AI expands into full insights */
+  /**
+   * Financial Health Score from the upload sheet.
+   * Null/undefined when the sheet has no health section — callers must not invent a score.
+   */
+  healthScore?: FinancialHealthScore | null;
+  /** Strategic insight seeds — empty when the sheet has none */
   strategicInsightsSeeds: Array<{
     id: string;
     priority: 'P1' | 'P2' | 'P3';

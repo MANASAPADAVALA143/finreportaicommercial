@@ -1,25 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { DemoDataBanner } from '../../components/DemoDataBanner';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft,
   Send,
   Sparkles,
   TrendingUp,
   TrendingDown,
-  AlertCircle,
-  CheckCircle,
   Bell,
   Activity,
   MessageSquare,
   Upload,
   Mic,
-  Square
+  Square,
+  Info
 } from 'lucide-react';
 import { CFOTab, ChatMessage, StrategicInsight, KPIAlert, FinancialHealthScore } from '../../types/cfo';
 import {
   initialChatMessages,
-  suggestedQuestions,
   mockInsights,
   mockKPIAlerts,
   mockHealthScore,
@@ -30,32 +27,70 @@ import { useAgentActivity } from '../../context/AgentActivityContext';
 import { loadCFOServicesContext, saveCFOServicesContext } from '../../types/cfoServicesContext';
 import { parseCFOServicesContextFromFile } from '../../utils/cfoContextParser';
 import type { CFOServicesContext } from '../../types/cfoServicesContext';
+import { joinApiUrl, isBackendConfigured } from '../../utils/backendOrigin';
+import {
+  type CFODataSource,
+  SAFE_SUGGESTED_QUESTIONS,
+  SOURCE_LABELS,
+  applyUploadContext,
+  assistantSourcesFor,
+  buildChatPrompt,
+  canClaimLedger,
+  chatAllowed,
+  emptyOperationalState,
+  sourceLabel,
+} from '../../lib/cfoServicesIntegrity';
 
 interface CFOServicesProps {
   defaultTab?: CFOTab;
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const VOICE_SUGGESTED_QUESTIONS = [
-  'What is our cash runway?',
-  'Why did costs increase this month?',
-  'Which department is over budget?',
-  'Should we hire or automate?',
-  'What is our financial health score?',
-];
+const VOICE_SUGGESTED_QUESTIONS = SAFE_SUGGESTED_QUESTIONS;
 type VoiceState = 'idle' | 'recording' | 'processing' | 'speaking' | 'error';
+
+function SourceIndicator({ source, warning }: { source: CFODataSource; warning?: string | null }) {
+  const styles: Record<CFODataSource, string> = {
+    demo: 'border-amber-300 bg-amber-50 text-amber-950',
+    upload: 'border-blue-300 bg-blue-50 text-blue-950',
+    ledger: 'border-emerald-300 bg-emerald-50 text-emerald-950',
+    unavailable: 'border-slate-300 bg-slate-50 text-slate-800',
+  };
+  return (
+    <div role="status" className={`mb-4 flex items-start gap-2 rounded-lg border px-4 py-2.5 text-sm ${styles[source]}`}>
+      <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <div>
+        <p>
+          <span className="font-semibold">Data source: {sourceLabel(source)}.</span>{' '}
+          {source === 'demo' && 'Illustrative sample only — not your company books.'}
+          {source === 'upload' && 'Figures come from a spreadsheet you uploaded — not the posted ledger.'}
+          {source === 'ledger' && 'Figures come from posted ledger data.'}
+          {source === 'unavailable' && 'No financial figures are loaded. Upload a file or load the labelled demo sample.'}
+          {' '}For posted-ledger analysis use the{' '}
+          <Link to="/ai-cfo" className="font-medium underline underline-offset-2">AI CFO Command Centre</Link>.
+        </p>
+        {warning && <p className="mt-1 text-xs opacity-90">{warning}</p>}
+        {canClaimLedger(source) ? null : source === 'ledger' ? null : (
+          <p className="mt-1 text-xs opacity-80">This page never claims live ledger status without a ledger feed.</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) => {
   const navigate = useNavigate();
   const { pushAction, markActive } = useAgentActivity();
+  const empty = emptyOperationalState();
   const [activeTab, setActiveTab] = useState<CFOTab>(defaultTab);
-  const [messages, setMessages] = useState<ChatMessage[]>(initialChatMessages);
+  const [dataSource, setDataSource] = useState<CFODataSource>(empty.source);
+  const [messages, setMessages] = useState<ChatMessage[]>(empty.messages);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [insights, setInsights] = useState<StrategicInsight[]>(mockInsights);
-  const [alerts, setAlerts] = useState<KPIAlert[]>(mockKPIAlerts);
-  const [healthScore, setHealthScore] = useState<FinancialHealthScore>(mockHealthScore);
-  const [effectiveContext, setEffectiveContext] = useState<string>(financialContext);
+  const [insights, setInsights] = useState<StrategicInsight[]>(empty.insights);
+  const [alerts, setAlerts] = useState<KPIAlert[]>(empty.alerts);
+  const [healthScore, setHealthScore] = useState<FinancialHealthScore | null>(empty.healthScore);
+  const [effectiveContext, setEffectiveContext] = useState<string>(empty.effectiveContext);
+  const [uploadWarning, setUploadWarning] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -64,21 +99,46 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
   const [uploadFileName, setUploadFileName] = useState<string | null>(null);
 
   const applyContext = (ctx: CFOServicesContext) => {
-    if (ctx.aiAssistantContext) setEffectiveContext(`COMPANY FINANCIAL DATA (from upload):\n${ctx.aiAssistantContext}`);
-    setAlerts(ctx.kpiAlerts ?? []);
-    if (ctx.healthScore) setHealthScore(ctx.healthScore as FinancialHealthScore);
-    const fromSeeds: StrategicInsight[] = (ctx.strategicInsightsSeeds ?? []).map((s, i) => ({
-      id: `ctx-ins-${i + 1}`,
-      category: (s.category?.toLowerCase().slice(0, 5) === 'revenu' ? 'revenue' : s.category?.toLowerCase().slice(0, 4) === 'cost' ? 'cost' : s.category?.toLowerCase().slice(0, 4) === 'cash' ? 'cash' : s.category?.toLowerCase().slice(0, 4) === 'risk' ? 'risk' : 'opportunity') as StrategicInsight['category'],
-      title: s.trigger?.slice(0, 60) || s.category || 'Insight',
-      summary: s.trigger || '',
-      detail: s.trigger || '',
-      impact: (s.impact?.toLowerCase().includes('high') ? 'high' : s.impact?.toLowerCase().includes('medium') ? 'medium' : 'low') as StrategicInsight['impact'],
-      urgency: (s.urgency?.toLowerCase().includes('immediate') ? 'immediate' : s.urgency?.toLowerCase().includes('week') ? 'this_week' : 'this_month') as StrategicInsight['urgency'],
-      action: 'Review and act per priority.',
-      generatedAt: new Date().toISOString(),
-    }));
-    setInsights(fromSeeds);
+    const applied = applyUploadContext(ctx);
+    setDataSource(applied.source);
+    setInsights(applied.insights);
+    setAlerts(applied.alerts);
+    setHealthScore(applied.healthScore);
+    setEffectiveContext(applied.effectiveContext);
+    setMessages(applied.messages);
+    setUploadWarning(applied.warning);
+    setUploadFileName(ctx.fileName || null);
+  };
+
+  const loadDemoSample = () => {
+    setDataSource('demo');
+    setInsights(mockInsights);
+    setAlerts(mockKPIAlerts);
+    setHealthScore(mockHealthScore);
+    setEffectiveContext(`DEMO / ILLUSTRATIVE SAMPLE (not posted ledger):\n${financialContext}`);
+    setMessages(initialChatMessages.map((m) => ({ ...m, dataSource: 'demo' as const, timestamp: new Date().toISOString() })));
+    setUploadWarning(null);
+    setUploadError(null);
+    setUploadFileName(null);
+  };
+
+  const clearToUnavailable = () => {
+    const next = emptyOperationalState();
+    setDataSource(next.source);
+    setInsights(next.insights);
+    setAlerts(next.alerts);
+    setHealthScore(next.healthScore);
+    setEffectiveContext(next.effectiveContext);
+    setMessages(next.messages);
+    setUploadWarning(null);
+    setUploadError(null);
+    setUploadFileName(null);
+    try {
+      localStorage.removeItem('finreport_cfo_context');
+      localStorage.removeItem('cfo_services_context');
+    } catch {
+      /* ignore */
+    }
   };
 
   const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -90,12 +150,12 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
     try {
       const ctx = await parseCFOServicesContextFromFile(file);
       if (ctx) {
-        localStorage.setItem('finreport_cfo_context', JSON.stringify(ctx));
-        saveCFOServicesContext(ctx);
-        applyContext(ctx);
-        setUploadFileName(file.name);
+        const withName = { ...ctx, fileName: file.name };
+        localStorage.setItem('finreport_cfo_context', JSON.stringify(withName));
+        saveCFOServicesContext(withName);
+        applyContext(withName);
       } else {
-        setUploadError('No CFO Services Context sheet found. Use Excel with a sheet named CFO_Services_Context (or containing "cfo", "context", "services").');
+        setUploadError('No usable CFO Services Context found. Incomplete or empty sheets are not filled with demo figures.');
       }
     } catch (err: any) {
       setUploadError(err?.message || 'Upload failed.');
@@ -134,9 +194,27 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
       role: 'user',
       content: userMessage,
       timestamp: new Date().toISOString(),
+      dataSource,
     };
     setMessages(prev => [...prev, newUserMsg]);
     setInputMessage('');
+
+    if (!chatAllowed(dataSource, !!effectiveContext.trim())) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: 'assistant',
+          content:
+            'No financial data source is loaded. Upload a CFO Services Context file or load the labelled demo sample before asking for figures. Demo data is never used silently.',
+          timestamp: new Date().toISOString(),
+          sources: [SOURCE_LABELS.unavailable],
+          dataSource: 'unavailable',
+        },
+      ]);
+      return;
+    }
+
     setIsLoading(true);
 
     const loadingMsg: ChatMessage = {
@@ -145,21 +223,12 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
       content: '',
       timestamp: new Date().toISOString(),
       isLoading: true,
+      dataSource,
     };
     setMessages(prev => [...prev, loadingMsg]);
 
     try {
-      const prompt = `You are a CFO AI Assistant with deep financial expertise.
-Answer the CFO's question based on the financial data provided.
-Be specific with numbers. Use ₹ for amounts.
-Format with bullet points for lists.
-Keep response under 200 words unless detailed analysis is requested.
-End with 1 recommended action if relevant.
-
-${effectiveContext}
-
-USER QUESTION: ${userMessage}`;
-
+      const prompt = buildChatPrompt(userMessage, effectiveContext, dataSource);
       const response = await callAI(prompt);
 
       setMessages(prev => prev.map(m =>
@@ -169,7 +238,8 @@ USER QUESTION: ${userMessage}`;
               id: Date.now().toString(),
               content: response,
               isLoading: false,
-              sources: ['Variance Analysis', 'KPI Dashboard', 'Cash Flow']
+              sources: assistantSourcesFor(dataSource),
+              dataSource,
             }
           : m
       ));
@@ -179,8 +249,10 @@ USER QUESTION: ${userMessage}`;
           ? {
               ...m,
               id: Date.now().toString(),
-              content: `❌ Sorry, I encountered an error: ${error.message}. Please try again.`,
-              isLoading: false
+              content: `Request failed: ${error.message}. No demo or synthetic figures were substituted.`,
+              isLoading: false,
+              sources: [SOURCE_LABELS[dataSource], 'Error'],
+              dataSource,
             }
           : m
       ));
@@ -203,11 +275,21 @@ USER QUESTION: ${userMessage}`;
     } else {
       formData.append('audio', transcriptOrAudio, 'recording.webm');
     }
+    if (!chatAllowed(dataSource, !!effectiveContext.trim())) {
+      setVoiceError('Load uploaded data or the labelled demo sample before using voice questions.');
+      setVoiceState('error');
+      return;
+    }
+    if (!isBackendConfigured()) {
+      setVoiceError('Backend API not configured. Set VITE_API_URL and redeploy.');
+      setVoiceState('error');
+      return;
+    }
     const token = localStorage.getItem('access_token');
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
-      const res = await fetch(`${API_BASE}/api/ai/voice`, {
+      const res = await fetch(joinApiUrl('/api/ai/voice'), {
         method: 'POST',
         headers,
         body: formData,
@@ -230,13 +312,15 @@ USER QUESTION: ${userMessage}`;
         role: 'user',
         content: data.transcript || String(transcriptOrAudio),
         timestamp: new Date().toISOString(),
+        dataSource,
       };
       const newAssistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.text_response,
         timestamp: new Date().toISOString(),
-        sources: ['Voice AI · CFO Assistant'],
+        sources: [...assistantSourcesFor(dataSource), 'Voice AI'],
+        dataSource,
       };
       setMessages((prev) => [...prev, newUserMsg, newAssistantMsg]);
       markActive('voice');
@@ -244,7 +328,7 @@ USER QUESTION: ${userMessage}`;
       pushAction('voice', `CFO asked: ${(data.transcript || '').slice(0, 40)} → ${shortReply}`);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Voice request failed';
-      setVoiceError(msg);
+      setVoiceError(`${msg} (no demo figures substituted)`);
       setVoiceState('error');
     }
   };
@@ -344,7 +428,7 @@ USER QUESTION: ${userMessage}`;
   return (
     <div className="min-h-screen p-6" style={{ backgroundColor: '#F0F4FF' }}>
       <div className="max-w-[1800px] mx-auto">
-        <DemoDataBanner what="The briefing, insights and KPIs on this page (unless you uploaded your own Excel file)" />
+        <SourceIndicator source={dataSource} warning={uploadWarning} />
       </div>
       {/* Header */}
       <div className="max-w-[1800px] mx-auto mb-6">
@@ -361,14 +445,14 @@ USER QUESTION: ${userMessage}`;
                 <div className="flex items-center gap-3">
                   <Sparkles size={32} className="text-purple-600" />
                   <div>
-                    <h1 className="text-3xl font-bold text-gray-900">🤖 CFO Services</h1>
-                    <p className="text-gray-600 mt-1">AI Assistant · Strategic Insights · KPI Monitor</p>
+                    <h1 className="text-3xl font-bold text-gray-900">CFO Services</h1>
+                    <p className="text-gray-600 mt-1">AI Assistant · Strategic Insights · KPI Monitor · Source: {sourceLabel(dataSource)}</p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -386,13 +470,27 @@ USER QUESTION: ${userMessage}`;
                 <Upload className="w-4 h-4" />
                 <span>{uploading ? 'Uploading…' : 'Upload Data'}</span>
               </button>
+              {dataSource !== 'demo' && (
+                <button
+                  type="button"
+                  onClick={loadDemoSample}
+                  className="px-3 py-2 text-sm border border-amber-400 text-amber-900 bg-amber-50 rounded-lg hover:bg-amber-100"
+                >
+                  Load demo sample
+                </button>
+              )}
+              {dataSource !== 'unavailable' && (
+                <button
+                  type="button"
+                  onClick={clearToUnavailable}
+                  className="px-3 py-2 text-sm border border-slate-300 text-slate-700 bg-white rounded-lg hover:bg-slate-50"
+                >
+                  Clear data
+                </button>
+              )}
               {uploadFileName && <span className="text-sm text-gray-600">✓ {uploadFileName}</span>}
               {uploadError && <span className="text-sm text-red-600 max-w-xs">{uploadError}</span>}
-              <span className="text-xs text-gray-500">Excel/CSV with sheet: CFO_Services_Context</span>
-              <div className="text-right">
-                <div className="text-sm text-gray-600">Powered by</div>
-                <div className="font-semibold text-purple-600">AI Assistant</div>
-              </div>
+              <span className="text-xs text-gray-500">Excel/CSV sheet: CFO_Services_Context</span>
             </div>
           </div>
         </div>
@@ -484,9 +582,10 @@ USER QUESTION: ${userMessage}`;
                     ) : (
                       <>
                         <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</div>
-                        {message.sources && message.role === 'assistant' && (
+                        {message.role === 'assistant' && (
                           <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
-                            Sources: {message.sources.join(', ')}
+                            {message.sources && <>Sources: {message.sources.join(', ')} · </>}
+                            Data source: {sourceLabel(message.dataSource || dataSource)}
                           </div>
                         )}
                       </>
@@ -498,11 +597,11 @@ USER QUESTION: ${userMessage}`;
             </div>
 
             {/* Suggested Questions */}
-            {messages.length <= 2 && (
+            {messages.length <= 2 && dataSource !== 'unavailable' && (
               <div className="border-t border-gray-200 p-4 bg-gray-50">
                 <div className="text-xs text-gray-600 mb-2">Suggested questions:</div>
                 <div className="flex flex-wrap gap-2">
-                  {suggestedQuestions.slice(0, 4).map((q, idx) => (
+                  {SAFE_SUGGESTED_QUESTIONS.map((q, idx) => (
                     <button
                       key={idx}
                       onClick={() => handleSuggestedQuestion(q)}
@@ -650,18 +749,21 @@ USER QUESTION: ${userMessage}`;
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">💡 Strategic Insights</h2>
-                <p className="text-gray-600 mt-1">AI-generated analysis of your financial position · Last updated: Today 8:00 AM</p>
+                <h2 className="text-2xl font-bold text-gray-900">Strategic Insights</h2>
+                <p className="text-gray-600 mt-1">Source: {sourceLabel(dataSource)}</p>
               </div>
-              <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
-                <Sparkles size={18} />
-                Refresh Insights
-              </button>
             </div>
 
+            {insights.length === 0 && (
+              <div className="bg-white border border-dashed border-gray-300 rounded-xl p-8 text-center text-gray-600">
+                No insights loaded. Upload a CFO Services Context file or load the labelled demo sample.
+              </div>
+            )}
+
             {/* Immediate Action Required */}
+            {insights.some(i => i.urgency === 'immediate') && (
             <div>
-              <h3 className="text-lg font-bold text-red-600 mb-3">🔴 IMMEDIATE ACTION REQUIRED</h3>
+              <h3 className="text-lg font-bold text-red-600 mb-3">IMMEDIATE ACTION REQUIRED</h3>
               <div className="space-y-4">
                 {insights.filter(i => i.urgency === 'immediate').map(insight => (
                   <div key={insight.id} className={`border-2 rounded-xl p-6 ${getUrgencyColor(insight.urgency)}`}>
@@ -713,10 +815,12 @@ USER QUESTION: ${userMessage}`;
                 ))}
               </div>
             </div>
+            )}
 
             {/* Review This Week */}
+            {insights.some(i => i.urgency === 'this_week') && (
             <div>
-              <h3 className="text-lg font-bold text-amber-600 mb-3">⚠️ REVIEW THIS WEEK</h3>
+              <h3 className="text-lg font-bold text-amber-600 mb-3">REVIEW THIS WEEK</h3>
               <div className="space-y-4">
                 {insights.filter(i => i.urgency === 'this_week').map(insight => (
                   <div key={insight.id} className={`border-2 rounded-xl p-6 ${getUrgencyColor(insight.urgency)}`}>
@@ -768,10 +872,12 @@ USER QUESTION: ${userMessage}`;
                 ))}
               </div>
             </div>
+            )}
 
             {/* Positive Highlights */}
+            {insights.some(i => i.urgency === 'this_month') && (
             <div>
-              <h3 className="text-lg font-bold text-green-600 mb-3">✅ POSITIVE HIGHLIGHTS</h3>
+              <h3 className="text-lg font-bold text-green-600 mb-3">POSITIVE HIGHLIGHTS</h3>
               <div className="space-y-4">
                 {insights.filter(i => i.urgency === 'this_month').map(insight => (
                   <div key={insight.id} className={`border-2 rounded-xl p-6 ${getUrgencyColor(insight.urgency)}`}>
@@ -812,6 +918,7 @@ USER QUESTION: ${userMessage}`;
                 ))}
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -820,13 +927,16 @@ USER QUESTION: ${userMessage}`;
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">🔔 KPI Monitor</h2>
-                <p className="text-gray-600 mt-1">Automated alerts when KPIs breach thresholds · {alerts.length} active alerts</p>
+                <h2 className="text-2xl font-bold text-gray-900">KPI Monitor</h2>
+                <p className="text-gray-600 mt-1">Source: {sourceLabel(dataSource)} · {alerts.length} active alerts</p>
               </div>
-              <button className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">
-                Set Thresholds
-              </button>
             </div>
+
+            {alerts.length === 0 && (
+              <div className="bg-white border border-dashed border-gray-300 rounded-xl p-8 text-center text-gray-600">
+                No KPI alerts loaded. Upload a complete context file or load the labelled demo sample.
+              </div>
+            )}
 
             {/* Critical Alerts */}
             {criticalAlerts.length > 0 && (
@@ -952,38 +1062,44 @@ USER QUESTION: ${userMessage}`;
         {activeTab === 'health' && (
           <div className="space-y-6">
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">🏥 Financial Health Score</h2>
-              <p className="text-gray-600 mt-1">Overall company financial fitness rating</p>
+              <h2 className="text-2xl font-bold text-gray-900">Financial Health Score</h2>
+              <p className="text-gray-600 mt-1">Source: {sourceLabel(dataSource)}</p>
             </div>
 
+            {!healthScore && (
+              <div className="bg-white border border-dashed border-gray-300 rounded-xl p-8 text-center text-gray-600">
+                No health score available. Partial uploads do not invent a score. Include a Health Score section in your spreadsheet, or load the labelled demo sample.
+              </div>
+            )}
+
+            {healthScore && (
+            <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Overall Score */}
               <div className="bg-white rounded-xl shadow-sm border-2 border-gray-200 p-8">
                 <div className="text-center mb-6">
                   <div className="text-6xl font-bold mb-2" style={{ color: healthScore.overall >= 70 ? '#10B981' : healthScore.overall >= 60 ? '#3B82F6' : '#F59E0B' }}>
                     {healthScore.overall}
                     <span className="text-3xl text-gray-400">/100</span>
                   </div>
-                  <div className="text-2xl font-bold text-gray-700 mb-1">Grade: {healthScore.grade}{healthScore.grade === 'B' ? '-' : ''}</div>
-                  <div className="flex items-center justify-center gap-2 text-red-600">
-                    <TrendingDown size={20} />
+                  <div className="text-2xl font-bold text-gray-700 mb-1">Grade: {healthScore.grade}</div>
+                  <div className={`flex items-center justify-center gap-2 ${healthScore.trend === 'improving' ? 'text-green-600' : healthScore.trend === 'declining' ? 'text-red-600' : 'text-slate-600'}`}>
+                    {healthScore.trend === 'improving' ? <TrendingUp size={20} /> : healthScore.trend === 'declining' ? <TrendingDown size={20} /> : <Activity size={20} />}
                     <span className="font-semibold capitalize">{healthScore.trend}</span>
                   </div>
                 </div>
 
+                {healthScore.benchmarkVsIndustry > 0 && (
                 <div className="border-t border-gray-200 pt-6 mb-6">
                   <div className="text-center text-sm text-gray-600 mb-2">Industry Benchmark: {healthScore.benchmarkVsIndustry}/100</div>
-                  <div className="text-center font-semibold text-red-600">
-                    You are {healthScore.benchmarkVsIndustry - healthScore.overall} points below industry average
+                  <div className="text-center font-semibold text-slate-700">
+                    {healthScore.overall >= healthScore.benchmarkVsIndustry
+                      ? `${healthScore.overall - healthScore.benchmarkVsIndustry} points above benchmark`
+                      : `${healthScore.benchmarkVsIndustry - healthScore.overall} points below benchmark`}
                   </div>
                 </div>
-
-                <button className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold">
-                  Generate Full Diagnosis
-                </button>
+                )}
               </div>
 
-              {/* Component Scores */}
               <div className="bg-white rounded-xl shadow-sm border-2 border-gray-200 p-8">
                 <h3 className="text-lg font-bold text-gray-900 mb-6">COMPONENT SCORES</h3>
                 <div className="space-y-4">
@@ -992,13 +1108,13 @@ USER QUESTION: ${userMessage}`;
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-gray-700 capitalize">{key}</span>
                         <span className={`text-sm font-bold ${getHealthColor(score)}`}>
-                          {score}/100 {score >= 70 ? '🟢' : score >= 50 ? '🟡' : '🔴'}
+                          {score}/100
                         </span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-3">
                         <div
                           className={`h-3 rounded-full transition-all ${getHealthBarColor(score)}`}
-                          style={{ width: `${score}%` }}
+                          style={{ width: `${Math.min(100, Math.max(0, score))}%` }}
                         ></div>
                       </div>
                     </div>
@@ -1007,63 +1123,16 @@ USER QUESTION: ${userMessage}`;
               </div>
             </div>
 
-            {/* AI Diagnosis */}
             <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl border-2 border-purple-200 p-6">
               <div className="flex items-center gap-3 mb-4">
                 <Sparkles className="text-purple-600" size={24} />
                 <h3 className="text-lg font-bold text-gray-900">AI DIAGNOSIS</h3>
+                <span className="text-xs text-purple-800 bg-purple-100 px-2 py-0.5 rounded-full">{sourceLabel(dataSource)}</span>
               </div>
               <p className="text-gray-700 leading-relaxed mb-4">{healthScore.aiSummary}</p>
             </div>
-
-            {/* Improvement Actions */}
-            <div className="bg-white rounded-xl shadow-sm border-2 border-gray-200 p-6">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">IMPROVEMENT ACTIONS</h3>
-              <div className="space-y-3">
-                <div className="flex items-start gap-3 p-4 bg-blue-50 rounded-lg">
-                  <span className="text-xl">🎯</span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-gray-900">Reduce DSO from 46 to 36 days</span>
-                      <span className="text-sm font-bold text-green-600">+8 points</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-4 bg-blue-50 rounded-lg">
-                  <span className="text-xl">🎯</span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-gray-900">Fix COGS overrun (restore margin to 51%)</span>
-                      <span className="text-sm font-bold text-green-600">+5 points</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 p-4 bg-blue-50 rounded-lg">
-                  <span className="text-xl">🎯</span>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-gray-900">Resolve admin cost overrun</span>
-                      <span className="text-sm font-bold text-green-600">+3 points</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-6 p-4 bg-green-50 rounded-lg border border-green-200">
-                <div className="flex items-center justify-between">
-                  <span className="font-semibold text-gray-900">Potential score after improvements:</span>
-                  <div className="text-right">
-                    <span className="text-2xl font-bold text-green-600">78/100</span>
-                    <span className="text-sm text-gray-600 ml-2">(Grade A-)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-4">
-              <button className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold">
-                Export Health Report
-              </button>
-            </div>
+            </>
+            )}
           </div>
         )}
       </div>

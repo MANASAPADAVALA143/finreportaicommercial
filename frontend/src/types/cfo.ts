@@ -6,6 +6,8 @@ export interface ChatMessage {
   isLoading?: boolean;
   sources?: string[];        // which modules data was used from
   charts?: ChartData[];      // inline charts in response
+  /** Provenance of numbers behind this message — never invent this as "ledger" without a live ledger feed. */
+  dataSource?: "demo" | "upload" | "ledger" | "unavailable";
 }
 
 export interface ChartData {
