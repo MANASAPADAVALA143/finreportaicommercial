@@ -11,8 +11,6 @@ import { CompanyProvider } from './context/CompanyContext';
 import { SuiteProvider } from './context/SuiteContext';
 import { MarketProvider } from './contexts/MarketContext';
 import { MarketToggle } from './components/MarketToggle';
-import { WorkspaceSelector } from './components/WorkspaceSelector';
-import { CompanySelector } from './components/CompanySelector';
 import PrivateRoute from './components/PrivateRoute';
 import WorkspaceGuard from './components/WorkspaceGuard';
 import RoleRoute from './components/RoleRoute';
@@ -69,14 +67,8 @@ function GnanovaBanner() {
       }}
     >
       <span style={{ fontWeight: 600, letterSpacing: '0.02em' }}>Gnanova Finance OS</span>
-      {showWorkspaceControls && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <MarketToggle compact />
-          <CompanySelector />
-        </div>
-      )}
+      {showWorkspaceControls && <MarketToggle compact />}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        {showWorkspaceControls && <WorkspaceSelector />}
       {showAp && (
       <a
         href="/ap-invoices"
