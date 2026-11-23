@@ -168,7 +168,7 @@ export const CFODashboard = () => {
               <p className="font-semibold">CFO Dashboard data unavailable</p>
               <p className="mt-1 text-amber-800">{fetchError}</p>
               <p className="mt-1 text-amber-700 text-xs">
-                The <code>/api/cfo/dashboard</code> endpoint is not yet wired to a live data source.
+                <code>/api/cfo/dashboard</code> has no live ledger source (HTTP 501 when unavailable).
                 Financial KPIs, charts and insights below are not shown to avoid displaying fabricated figures.
               </p>
             </div>

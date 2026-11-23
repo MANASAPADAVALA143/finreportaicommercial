@@ -29,149 +29,65 @@ def _private_copy(content: bytes, filename: str | None) -> str:
         tmp.write(content)
         return tmp.name
 
-# Path to financial data files
+# Path to financial data files (legacy sample-file path — not the posted UAE ledger)
 JOURNAL_ENTRIES_PATH = "sample_journal_entries.csv"
 TRIAL_BALANCE_PATH = "trial_balance.csv"
+
+_NO_LIVE_DATA_DETAIL = (
+    "CFO dashboard has no live data source. "
+    "Upload a trial balance or journal file, or connect the posted ledger. "
+    "Fabricated metrics are never returned."
+)
+
+
+def _load_dashboard_data(time_range: str) -> Dict[str, Any]:
+    """Load dashboard metrics from an on-disk sample file, or raise 501.
+
+    Never returns hard-coded financial figures. Sample CSV/XLS paths are a legacy
+    bridge only; the posted UAE ledger is the intended future authority.
+    """
+    try:
+        if os.path.exists(TRIAL_BALANCE_PATH):
+            parser = TrialBalanceParser(TRIAL_BALANCE_PATH)
+            return parser.calculate_dashboard_metrics()
+        if os.path.exists(JOURNAL_ENTRIES_PATH):
+            calculator = CFOMetricsCalculator(JOURNAL_ENTRIES_PATH)
+            return calculator.calculate_all_metrics(time_range)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"CFO dashboard data source failed: {e}",
+        ) from e
+    raise HTTPException(status_code=501, detail=_NO_LIVE_DATA_DETAIL)
+
 
 @router.get("/dashboard")
 async def get_dashboard_data(
     time_range: str = Query("month", json_schema_extra={"enum": ["week", "month", "quarter", "year"]})
 ):
-    """
-    Get comprehensive CFO dashboard data
-    
-    Priority:
-    1. Trial Balance (if exists)
-    2. Journal Entries (if exists)
-    3. Mock data (fallback)
-    """
-    
-    try:
-        # Priority 1: Try Trial Balance (most direct for CFO dashboard)
-        if os.path.exists(TRIAL_BALANCE_PATH):
-            parser = TrialBalanceParser(TRIAL_BALANCE_PATH)
-            data = parser.calculate_dashboard_metrics()
-            print(f"✅ Using Trial Balance data")
-            return data
-        
-        # Priority 2: Try Journal Entries
-        if os.path.exists(JOURNAL_ENTRIES_PATH):
-            calculator = CFOMetricsCalculator(JOURNAL_ENTRIES_PATH)
-            data = calculator.calculate_all_metrics(time_range)
-            print(f"✅ Using Journal Entries data")
-            return data
-    except Exception as e:
-        print(f"Error calculating metrics: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    # Fallback to mock data
-    data = {
-        "healthScore": {
-            "overall": 69,
-            "trend": 2.5,
-            "breakdown": {
-                "liquidity": 66,
-                "profitability": 68,
-                "efficiency": 62,
-                "stability": 71
-            }
-        },
-        "cash": {
-            "current": 562000,
-            "trend": 6.8,
-            "runway": 18.5,
-            "history": [520000, 535000, 548000, 562000, 575000, 580000, 562000]
-        },
-        "revenue": {
-            "monthly": 328000,
-            "arr": 3936000,
-            "growth": 25,
-            "history": [245000, 268000, 291000, 308000, 315000, 328000]
-        },
-        "expenses": {
-            "monthly": 234000,
-            "trend": 8.2,
-            "categories": [
-                {"name": "Operations", "value": 105000, "percentage": 45},
-                {"name": "Marketing", "value": 58000, "percentage": 25},
-                {"name": "Sales", "value": 47000, "percentage": 20},
-                {"name": "R&D", "value": 24000, "percentage": 10}
-            ]
-        },
-        "insights": [
-            {"icon": "💰", "text": "Cash runway trending down - consider cost optimization", "severity": "warning"},
-            {"icon": "📊", "text": "AR aging increased 8 days - follow up with top 3 customers", "severity": "medium"},
-            {"icon": "📈", "text": "Marketing ROI at 340% - recommend budget increase", "severity": "info"},
-            {"icon": "📦", "text": "Inventory turnover slowing - review stock levels", "severity": "medium"}
-        ],
-        "alerts": [
-            {"severity": "critical", "message": "Cash forecast shows potential shortfall in Week 11", "time": "2 hours ago", "action": "Review"},
-            {"severity": "warning", "message": "Customer XYZ payment overdue by 15 days", "time": "5 hours ago", "action": "Follow up"},
-            {"severity": "info", "message": "Monthly financial close completed", "time": "1 day ago", "action": "View"}
-        ],
-        "recentActivity": [
-            {"icon": "📄", "action": "Board report generated", "time": "2 hours ago"},
-            {"icon": "💰", "action": "Cash flow forecast updated", "time": "5 hours ago"},
-            {"icon": "📊", "action": "P&L analysis completed", "time": "1 day ago"},
-            {"icon": "🔍", "action": "Fraud detection scan finished", "time": "1 day ago"},
-            {"icon": "📈", "action": "Q4 variance report created", "time": "2 days ago"}
-        ],
-        "recommendations": [
-            {"priority": "high", "text": "Reduce marketing spend by 15% to extend runway", "impact": "+2.5 months runway"},
-            {"priority": "medium", "text": "Negotiate payment terms with top 3 vendors", "impact": "$50K cash flow improvement"},
-            {"priority": "low", "text": "Review SaaS subscriptions for optimization", "impact": "$5K/month savings"}
-        ],
-        "ratios": {
-            "currentRatio": 2.4,
-            "quickRatio": 1.8,
-            "debtToEquity": 0.3,
-            "roe": 18,
-            "operatingMargin": 28.7
-        }
-    }
-    
-    return data
+    """Get CFO dashboard data from a configured file source, or 501 if none."""
+    return _load_dashboard_data(time_range)
 
 @router.post("/export")
 async def export_dashboard(
     format: str = Query(..., json_schema_extra={"enum": ["pdf", "excel", "csv"]}),
     time_range: str = Query("month")
 ):
-    """
-    Export dashboard data in specified format
-    """
-    
+    """Export dashboard data in specified format. Fails closed when no live source exists."""
+    dashboard_data = _load_dashboard_data(time_range)
+    filename = f"cfo-dashboard-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     try:
-        # Get dashboard data
-        try:
-            if os.path.exists(JOURNAL_ENTRIES_PATH):
-                calculator = CFOMetricsCalculator(JOURNAL_ENTRIES_PATH)
-                dashboard_data = calculator.calculate_all_metrics(time_range)
-            else:
-                # Use mock data
-                dashboard_data = _get_mock_data()
-        except Exception as e:
-            print(f"Error getting data: {e}")
-            dashboard_data = _get_mock_data()
-        
-        # Generate filename
-        filename = f"cfo-dashboard-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        
         if format == "csv":
-            # Generate CSV
             return _export_csv(dashboard_data, filename)
-        
-        elif format == "excel":
-            # Generate Excel
+        if format == "excel":
             return _export_excel(dashboard_data, filename)
-        
-        elif format == "pdf":
-            # Generate PDF (simplified - just text for now)
+        if format == "pdf":
             return _export_pdf(dashboard_data, filename)
-        
+        raise HTTPException(status_code=400, detail=f"Unsupported export format: {format}")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}") from e
 
 def _export_csv(data: Dict[str, Any], filename: str):
     """Export dashboard data as CSV"""
@@ -381,103 +297,10 @@ FINANCIAL RATIOS
         headers={"Content-Disposition": f"attachment; filename={filename}.txt"}
     )
 
-def _get_mock_data():
-    """Get mock dashboard data"""
-    return {
-        "healthScore": {
-            "overall": 69,
-            "trend": 2.5,
-            "breakdown": {
-                "liquidity": 66,
-                "profitability": 68,
-                "efficiency": 62,
-                "stability": 71
-            }
-        },
-        "cash": {
-            "current": 562000,
-            "trend": 6.8,
-            "runway": 18.5,
-            "history": [520000, 535000, 548000, 562000, 575000, 580000, 562000]
-        },
-        "revenue": {
-            "monthly": 328000,
-            "arr": 3936000,
-            "growth": 25,
-            "history": [245000, 268000, 291000, 308000, 315000, 328000]
-        },
-        "expenses": {
-            "monthly": 234000,
-            "trend": 8.2,
-            "categories": [
-                {"name": "Operations", "value": 105000, "percentage": 45},
-                {"name": "Marketing", "value": 58000, "percentage": 25},
-                {"name": "Sales", "value": 47000, "percentage": 20},
-                {"name": "R&D", "value": 24000, "percentage": 10}
-            ]
-        },
-        "insights": [],
-        "alerts": [],
-        "recentActivity": [],
-        "recommendations": [],
-        "ratios": {
-            "currentRatio": 2.4,
-            "quickRatio": 1.8,
-            "debtToEquity": 0.3,
-            "roe": 18,
-            "operatingMargin": 28.7
-        }
-    }
-
 @router.get("/insights")
 async def get_ai_insights():
-    """
-    Get AI-generated insights using Amazon Nova
-    
-    This endpoint would integrate with the existing nova_service
-    to generate personalized financial insights
-    """
-    
-    insights = [
-        {
-            "category": "cash_flow",
-            "severity": "warning",
-            "title": "Cash Runway Concern",
-            "description": "Current burn rate of $234K/month gives 18.5 months runway. Consider cost optimization.",
-            "recommendations": [
-                "Reduce marketing spend by 15%",
-                "Negotiate better payment terms with vendors",
-                "Review and cancel unused SaaS subscriptions"
-            ],
-            "impact": "+2.5 months runway extension"
-        },
-        {
-            "category": "revenue",
-            "severity": "info",
-            "title": "Strong Growth Trajectory",
-            "description": "Revenue growing at 25% YoY. Marketing ROI is 340%.",
-            "recommendations": [
-                "Consider increasing marketing budget",
-                "Expand to new customer segments",
-                "Launch referral program"
-            ],
-            "impact": "Potential +15% revenue increase"
-        },
-        {
-            "category": "efficiency",
-            "severity": "medium",
-            "title": "AR Collection Slowing",
-            "description": "Accounts receivable aging increased by 8 days.",
-            "recommendations": [
-                "Follow up with top 3 customers",
-                "Implement automated payment reminders",
-                "Review payment terms for new contracts"
-            ],
-            "impact": "$75K cash flow improvement"
-        }
-    ]
-    
-    return {"insights": insights, "generated_at": datetime.now().isoformat()}
+    """AI insights require a live ledger-backed source — never return fabricated figures."""
+    raise HTTPException(status_code=501, detail=_NO_LIVE_DATA_DETAIL)
 
 @router.post("/forecast")
 async def generate_forecast(
@@ -537,62 +360,13 @@ async def generate_forecast(
 
 @router.get("/metrics")
 async def get_key_metrics():
-    """
-    Get real-time key financial metrics
-    """
-    
-    return {
-        "cash": {
-            "balance": 562000,
-            "change_24h": 12500,
-            "change_percent": 2.3
-        },
-        "revenue": {
-            "mtd": 185000,
-            "target": 328000,
-            "progress": 56.4
-        },
-        "expenses": {
-            "mtd": 142000,
-            "budget": 234000,
-            "utilization": 60.7
-        },
-        "runway": {
-            "months": 18.5,
-            "status": "warning",
-            "trend": "declining"
-        }
-    }
+    """Key metrics require a live data source — never return fabricated figures."""
+    raise HTTPException(status_code=501, detail=_NO_LIVE_DATA_DETAIL)
 
 @router.post("/chat")
 async def cfo_ai_chat(query: str):
-    """
-    Chat with CFO AI assistant powered by Amazon Nova
-    
-    This would integrate with the existing Nova service
-    for conversational financial insights
-    """
-    
-    # Mock response - replace with actual Nova integration
-    responses = {
-        "cash": "Based on current data, your cash position is $562K with an 18.5 month runway. I recommend focusing on extending this by optimizing marketing spend.",
-        "revenue": "Your revenue is growing at 25% YoY, which is strong. Marketing ROI is 340%, suggesting potential for increased investment.",
-        "default": "I'm here to help with financial insights. You can ask about cash flow, revenue, expenses, forecasts, or strategic recommendations."
-    }
-    
-    # Simple keyword matching - replace with Nova
-    response_text = responses.get("default")
-    if "cash" in query.lower():
-        response_text = responses["cash"]
-    elif "revenue" in query.lower() or "sales" in query.lower():
-        response_text = responses["revenue"]
-    
-    return {
-        "response": response_text,
-        "confidence": 0.92,
-        "sources": ["Cash Flow Analysis", "Revenue Report", "AI Insights"],
-        "timestamp": datetime.now().isoformat()
-    }
+    """CFO chat requires a ledger-backed assistant — never invent monetary answers."""
+    raise HTTPException(status_code=501, detail=_NO_LIVE_DATA_DETAIL)
 
 @router.post("/upload/trial-balance")
 async def upload_trial_balance(file: UploadFile = File(...)):
@@ -808,17 +582,14 @@ async def get_available_data_sources():
             "tenant_id": os.getenv("XERO_TENANT_ID")
         })
     
-    if not sources:
-        sources.append({
-            "type": "mock",
-            "name": "Mock Data",
-            "status": "active",
-            "description": "Using sample data for demonstration"
-        })
-    
     return {
         "sources": sources,
-        "primary_source": sources[0]["type"] if sources else "mock"
+        "primary_source": sources[0]["type"] if sources else None,
+        "data_notice": (
+            None
+            if sources
+            else "No connected data source. Fabricated demo metrics are disabled."
+        ),
     }
 
 def _convert_summary_to_dashboard(df: pd.DataFrame) -> Dict[str, Any]:
@@ -828,7 +599,7 @@ def _convert_summary_to_dashboard(df: pd.DataFrame) -> Dict[str, Any]:
     # Expected columns: metric, value, date (optional)
     
     dashboard_data = {
-        "healthScore": {"overall": 69, "trend": 2.5, "breakdown": {}},
+        "healthScore": {"overall": 0, "trend": 0, "breakdown": {}},
         "cash": {"current": 0, "trend": 0, "runway": 0, "history": []},
         "revenue": {"monthly": 0, "arr": 0, "growth": 0, "history": []},
         "expenses": {"monthly": 0, "trend": 0, "categories": []},
