@@ -147,4 +147,39 @@ describe('parser — no synthetic health fill', () => {
     expect(ctx!.healthScore).toBeNull();
     expect(ctx!.aiAssistantContext).toMatch(/Revenue/);
   });
+
+  it('keeps missing health components as null, not zero', async () => {
+    const { parseCFOServicesContextFromRows } = await import('../utils/cfoContextParser');
+    const ctx = parseCFOServicesContextFromRows(
+      [
+        { Section: 'Financial Health', Overall: 70, Grade: 'B', Profitability: 65 },
+      ],
+      'partial-health.xlsx'
+    );
+    expect(ctx!.healthScore?.overall).toBe(70);
+    expect(ctx!.healthScore?.components.profitability).toBe(65);
+    expect(ctx!.healthScore?.components.liquidity).toBeNull();
+    expect(ctx!.healthScore?.components.efficiency).toBeNull();
+    expect(ctx!.healthScore?.benchmarkVsIndustry).toBeNull();
+  });
+});
+
+describe('localStorage schema versioning', () => {
+  it('rejects unversioned legacy contexts', async () => {
+    const { isCurrentCFOServicesContext, CFO_SERVICES_CONTEXT_VERSION } = await import(
+      '../types/cfoServicesContext'
+    );
+    expect(CFO_SERVICES_CONTEXT_VERSION).toBe(2);
+    expect(isCurrentCFOServicesContext({ aiAssistantContext: 'x'.repeat(30), kpiAlerts: [], strategicInsightsSeeds: [] })).toBe(
+      false
+    );
+    expect(
+      isCurrentCFOServicesContext({
+        aiAssistantContext: 'x'.repeat(30),
+        kpiAlerts: [],
+        strategicInsightsSeeds: [],
+        _schemaVersion: 2,
+      })
+    ).toBe(true);
+  });
 });

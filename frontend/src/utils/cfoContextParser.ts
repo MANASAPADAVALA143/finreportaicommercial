@@ -116,20 +116,21 @@ export function parseCFOServicesContextFromRows(rows: any[], fileName: string): 
     // Only accept a health score when overall is present — never fill with synthetic 72/81/…
     if (Number.isFinite(overall) && overall > 0) {
       const gradeRaw = get(first, 'Grade', 'grade');
+      const toComp = (n: number): number | null => (Number.isFinite(n) ? n : null);
       healthScore = {
         overall,
         grade: ((gradeRaw.toUpperCase().slice(0, 1) || 'C') as 'A' | 'B' | 'C' | 'D' | 'F'),
         components: {
-          profitability: Number.isFinite(profitability) ? profitability : 0,
-          liquidity: Number.isFinite(liquidity) ? liquidity : 0,
-          efficiency: Number.isFinite(efficiency) ? efficiency : 0,
-          growth: Number.isFinite(growth) ? growth : 0,
-          stability: Number.isFinite(stability) ? stability : 0,
+          profitability: toComp(profitability),
+          liquidity: toComp(liquidity),
+          efficiency: toComp(efficiency),
+          growth: toComp(growth),
+          stability: toComp(stability),
         },
         trend: (get(first, 'Trend', 'trend') || 'stable').toLowerCase() as 'improving' | 'stable' | 'declining',
         benchmarkVsIndustry: (() => {
           const b = getNum(first, 'Benchmark', 'benchmarkVsIndustry');
-          return Number.isFinite(b) ? b : 0;
+          return Number.isFinite(b) ? b : null;
         })(),
         aiSummary: get(first, 'AI Summary', 'aiSummary', 'Summary') || 'Financial health from uploaded CFO Services Context.',
       };

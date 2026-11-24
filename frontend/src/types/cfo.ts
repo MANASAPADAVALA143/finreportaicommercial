@@ -43,15 +43,17 @@ export interface KPIAlert {
 export interface FinancialHealthScore {
   overall: number;           // 0-100
   grade: "A" | "B" | "C" | "D" | "F";
+  /** Null means the component was not provided — never coerce missing scores to 0. */
   components: {
-    profitability: number;
-    liquidity: number;
-    efficiency: number;
-    growth: number;
-    stability: number;
+    profitability: number | null;
+    liquidity: number | null;
+    efficiency: number | null;
+    growth: number | null;
+    stability: number | null;
   };
   trend: "improving" | "stable" | "declining";
-  benchmarkVsIndustry: number;
+  /** Null when benchmark was not provided. */
+  benchmarkVsIndustry: number | null;
   aiSummary: string;
 }
 

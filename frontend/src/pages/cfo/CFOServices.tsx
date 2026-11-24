@@ -1088,7 +1088,7 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
                   </div>
                 </div>
 
-                {healthScore.benchmarkVsIndustry > 0 && (
+                {healthScore.benchmarkVsIndustry != null && healthScore.benchmarkVsIndustry > 0 && (
                 <div className="border-t border-gray-200 pt-6 mb-6">
                   <div className="text-center text-sm text-gray-600 mb-2">Industry Benchmark: {healthScore.benchmarkVsIndustry}/100</div>
                   <div className="text-center font-semibold text-slate-700">
@@ -1107,14 +1107,14 @@ const CFOServices: React.FC<CFOServicesProps> = ({ defaultTab = 'assistant' }) =
                     <div key={key}>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-gray-700 capitalize">{key}</span>
-                        <span className={`text-sm font-bold ${getHealthColor(score)}`}>
-                          {score}/100
+                        <span className={`text-sm font-bold ${score == null ? 'text-slate-400' : getHealthColor(score)}`}>
+                          {score == null ? 'Unavailable' : `${score}/100`}
                         </span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-3">
                         <div
-                          className={`h-3 rounded-full transition-all ${getHealthBarColor(score)}`}
-                          style={{ width: `${Math.min(100, Math.max(0, score))}%` }}
+                          className={`h-3 rounded-full transition-all ${score == null ? 'bg-slate-300' : getHealthBarColor(score)}`}
+                          style={{ width: score == null ? '0%' : `${Math.min(100, Math.max(0, score))}%` }}
                         ></div>
                       </div>
                     </div>

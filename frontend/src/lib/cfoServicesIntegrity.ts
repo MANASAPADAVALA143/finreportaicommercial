@@ -55,7 +55,8 @@ export function assessUploadCompleteness(ctx: Partial<CFOServicesContext> | null
     Number.isFinite(hs.overall) &&
     hs.overall > 0 &&
     hs.components &&
-    typeof hs.components.profitability === 'number'
+    // At least one component must be an explicit number — null/missing stays unavailable.
+    Object.values(hs.components).some((v) => typeof v === 'number' && Number.isFinite(v))
   );
   const hasInsights = Array.isArray(ctx?.strategicInsightsSeeds) && ctx!.strategicInsightsSeeds!.length > 0;
   const hasAlerts = Array.isArray(ctx?.kpiAlerts) && ctx!.kpiAlerts!.length > 0;
