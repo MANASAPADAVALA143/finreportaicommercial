@@ -79,11 +79,15 @@ def create_journal_entry(
     db: Session,
     auto_post: bool = False,
     initial_status: str = "draft",
+    commit: bool = True,
 ) -> UAEJournalEntry:
     """
     Create a journal entry with lines.
     lines: [{"account_code": str, "account_name": str, "debit": float, "credit": float, "description": str}]
     Validates debits == credits before posting.
+
+    commit=True (default): persist immediately — preserves existing callers.
+    commit=False: flush only so the caller can include this JE in a wider atomic unit.
     """
     assert_period_open(
         entry_date=entry_date,
@@ -120,17 +124,29 @@ def create_journal_entry(
             currency=ld.get("currency", "AED"),
         )
         db.add(line)
+    db.flush()
 
     if auto_post and initial_status != "pending_approval":
-        post_journal_entry(je, db)
-    else:
+        post_journal_entry(je, db, commit=commit)
+    elif commit:
         db.commit()
+    else:
+        db.flush()
 
     return je
 
 
-def post_journal_entry(je: UAEJournalEntry, db: Session) -> UAEJournalEntry:
-    """Post a draft JE after validating it balances."""
+def post_journal_entry(
+    je: UAEJournalEntry,
+    db: Session,
+    *,
+    commit: bool = True,
+) -> UAEJournalEntry:
+    """Post a draft JE after validating it balances.
+
+    commit=True (default): persist immediately.
+    commit=False: flush posted status only — caller owns the transaction boundary.
+    """
     assert_period_open(
         entry_date=je.entry_date,
         workspace_id=je.tenant_id,
@@ -138,6 +154,7 @@ def post_journal_entry(je: UAEJournalEntry, db: Session) -> UAEJournalEntry:
         source=je.source or "manual",
         db=db,
     )
+    # Ensure lines are loaded after a prior flush in the same transaction.
     total_dr = sum(float(l.debit or 0) for l in je.lines)
     total_cr = sum(float(l.credit or 0) for l in je.lines)
     if abs(total_dr - total_cr) > 0.01:
@@ -148,7 +165,10 @@ def post_journal_entry(je: UAEJournalEntry, db: Session) -> UAEJournalEntry:
     je.status = "posted"
     je.posted_at = datetime.utcnow()
     db.add(je)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return je
 
 

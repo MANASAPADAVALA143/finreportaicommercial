@@ -5,21 +5,24 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.exceptions.period_control import PeriodControlError
-from app.models.uae_accounting_full import UAECreditNote, UAESalesInvoice
+from app.models.uae_accounting_full import (
+    UAECreditNote,
+    UAEJournalEntry,
+    UAESalesInvoice,
+)
 from app.services.ap_company_resolver import resolve_ap_company_id
 from app.services.ar_gulftax_sync_service import sync_ar_credit_note_to_gulftax
 from app.services.ar_invoice_post_service import (
+    AR_INCOME_CODES,
     AR_RECEIVABLE_CODE,
     AR_RECEIVABLE_NAME,
-    AR_REVENUE_CODE,
-    AR_REVENUE_NAME,
     AR_VAT_PAYABLE_CODE,
-    AR_VAT_PAYABLE_NAME,
 )
 from app.services.uae_journal_service import create_journal_entry
 
@@ -28,6 +31,10 @@ logger = logging.getLogger(__name__)
 CN_JE_SOURCE = "AR_CREDIT_NOTE"
 CN_VOID_JE_SOURCE = "AR_CREDIT_NOTE_VOID"
 _POSTED_STATUSES = frozenset({"posted", "sent", "partial", "overdue", "paid"})
+_TWOPLACES = Decimal("0.01")
+# Historical AR control / VAT codes that may appear on pre-Group-A sales JEs.
+_AR_CONTROL_CODES = frozenset({AR_RECEIVABLE_CODE, "1200"})
+_VAT_CODES = frozenset({AR_VAT_PAYABLE_CODE, "2200"})
 
 
 def _f(v: Any) -> float:
@@ -35,6 +42,10 @@ def _f(v: Any) -> float:
         return float(v or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _aed(v: Any) -> Decimal:
+    return Decimal(str(v or 0)).quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
 
 
 def _split_gross(amount: float, inv: UAESalesInvoice) -> tuple[float, float]:
@@ -55,6 +66,195 @@ def _split_gross(amount: float, inv: UAESalesInvoice) -> tuple[float, float]:
         net = round(gross / (1 + rate), 2)
         return net, round(gross - net, 2)
     return gross, 0.0
+
+
+def _load_sales_je(db: Session, inv: UAESalesInvoice) -> UAEJournalEntry | None:
+    if not inv.journal_entry_id:
+        return None
+    return (
+        db.query(UAEJournalEntry)
+        .options(joinedload(UAEJournalEntry.lines))
+        .filter(UAEJournalEntry.id == inv.journal_entry_id)
+        .first()
+    )
+
+
+def _classify_sales_je_lines(
+    je: UAEJournalEntry,
+) -> dict[str, Any]:
+    """Identify AR / revenue / VAT credits on the original sales JE."""
+    ar_lines = []
+    revenue_lines = []
+    vat_lines = []
+    for ln in je.lines or []:
+        code = (ln.account_code or "").strip()
+        debit = _f(ln.debit)
+        credit = _f(ln.credit)
+        if debit > 0 and code in _AR_CONTROL_CODES:
+            ar_lines.append(ln)
+        elif credit > 0 and (code in _VAT_CODES):
+            vat_lines.append(ln)
+        elif credit > 0 and (code in AR_INCOME_CODES or code.startswith("6") or code == "4100"):
+            # 4100 = legacy AR revenue mis-map; 6xxx = seeded Income.
+            revenue_lines.append(ln)
+    return {
+        "ar_lines": ar_lines,
+        "revenue_lines": revenue_lines,
+        "vat_lines": vat_lines,
+        "ar_total": round(sum(_f(l.debit) for l in ar_lines), 2),
+        "revenue_total": round(sum(_f(l.credit) for l in revenue_lines), 2),
+        "vat_total": round(sum(_f(l.credit) for l in vat_lines), 2),
+    }
+
+
+def _allocate_proportional(
+    parts: list[tuple[str, str, float]],
+    target: Decimal,
+) -> list[tuple[str, str, float]]:
+    """Allocate `target` across (code, name, weight) with remainder on last line."""
+    if not parts:
+        return []
+    total_w = sum(Decimal(str(w)) for _, _, w in parts)
+    if total_w <= 0:
+        return []
+    out: list[tuple[str, str, float]] = []
+    allocated = Decimal("0.00")
+    for i, (code, name, weight) in enumerate(parts):
+        if i == len(parts) - 1:
+            amt = (target - allocated).quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+        else:
+            amt = (target * Decimal(str(weight)) / total_w).quantize(
+                _TWOPLACES, rounding=ROUND_HALF_UP
+            )
+            allocated += amt
+        if amt > 0:
+            out.append((code, name, float(amt)))
+    return out
+
+
+def build_credit_note_reversal_lines(
+    db: Session,
+    inv: UAESalesInvoice,
+    *,
+    gross: float,
+    cn_number: str,
+    cust_name: str,
+) -> dict[str, Any]:
+    """Build CN JE lines that reverse the original sales JE accounts proportionally.
+
+    Fail-closed if the original sales JE cannot supply revenue (and VAT when needed).
+    """
+    je = _load_sales_je(db, inv)
+    if not je:
+        return {"ok": False, "error": "original_sales_je_not_found"}
+
+    classified = _classify_sales_je_lines(je)
+    if not classified["revenue_lines"]:
+        return {
+            "ok": False,
+            "error": "original_sales_je_missing_revenue",
+            "message": "Original sales journal has no identifiable revenue credit lines.",
+        }
+
+    gross_d = _aed(gross)
+    ar_total = _aed(classified["ar_total"] or inv.total_amount)
+    if ar_total <= 0:
+        return {"ok": False, "error": "original_sales_je_invalid_ar"}
+
+    # Proportional net / VAT from original JE weights (falls back to invoice split).
+    orig_rev = _aed(classified["revenue_total"])
+    orig_vat = _aed(classified["vat_total"])
+    if orig_rev + orig_vat <= 0:
+        return {"ok": False, "error": "original_sales_je_invalid_credits"}
+
+    if orig_vat > 0:
+        vat_part = (gross_d * orig_vat / (orig_rev + orig_vat)).quantize(
+            _TWOPLACES, rounding=ROUND_HALF_UP
+        )
+        net = (gross_d - vat_part).quantize(_TWOPLACES, rounding=ROUND_HALF_UP)
+    else:
+        vat_part = Decimal("0.00")
+        net = gross_d
+
+    # AR control: prefer original AR code (supports historical 1200).
+    ar_code = AR_RECEIVABLE_CODE
+    ar_name = AR_RECEIVABLE_NAME
+    if classified["ar_lines"]:
+        ar_code = (classified["ar_lines"][0].account_code or AR_RECEIVABLE_CODE).strip()
+        ar_name = classified["ar_lines"][0].account_name or AR_RECEIVABLE_NAME
+
+    rev_parts = [
+        (
+            (ln.account_code or "").strip(),
+            ln.account_name or "Revenue",
+            _f(ln.credit),
+        )
+        for ln in classified["revenue_lines"]
+    ]
+    rev_alloc = _allocate_proportional(rev_parts, net)
+    if not rev_alloc:
+        return {"ok": False, "error": "revenue_allocation_failed"}
+
+    je_lines: list[dict[str, Any]] = [
+        {
+            "account_code": ar_code,
+            "account_name": ar_name,
+            "debit": 0.0,
+            "credit": float(gross_d),
+            "description": f"CN {cn_number} — {inv.invoice_number}",
+        },
+    ]
+    for code, name, amt in rev_alloc:
+        je_lines.append({
+            "account_code": code,
+            "account_name": name,
+            "debit": amt,
+            "credit": 0.0,
+            "description": f"Credit {cust_name}",
+        })
+
+    if vat_part > 0:
+        if not classified["vat_lines"]:
+            return {
+                "ok": False,
+                "error": "original_sales_je_missing_vat",
+                "message": "Credit includes VAT but original sales JE has no VAT credit line.",
+            }
+        vat_parts = [
+            (
+                (ln.account_code or "").strip(),
+                ln.account_name or "VAT Payable",
+                _f(ln.credit),
+            )
+            for ln in classified["vat_lines"]
+        ]
+        for code, name, amt in _allocate_proportional(vat_parts, vat_part):
+            je_lines.append({
+                "account_code": code,
+                "account_name": name,
+                "debit": amt,
+                "credit": 0.0,
+                "description": f"Output VAT reversal {cn_number}",
+            })
+
+    # Balance check
+    total_dr = round(sum(_f(l["debit"]) for l in je_lines), 2)
+    total_cr = round(sum(_f(l["credit"]) for l in je_lines), 2)
+    if abs(total_dr - total_cr) > 0.01:
+        return {
+            "ok": False,
+            "error": "cn_je_imbalance",
+            "message": f"CN JE does not balance: Dr {total_dr} ≠ Cr {total_cr}",
+        }
+
+    return {
+        "ok": True,
+        "lines": je_lines,
+        "net": float(net),
+        "vat_part": float(vat_part),
+        "ar_code": ar_code,
+        "revenue_codes": [c for c, _, _ in rev_alloc],
+    }
 
 
 def _next_credit_note_number(db: Session, tenant_id: str, company_id: str | None) -> str:
@@ -129,8 +329,20 @@ def issue_credit_note(
     cid = resolve_ap_company_id(db, tenant_id, company_id or inv.company_id)
     issue_dt = issued_date or date.today()
     cn_number = _next_credit_note_number(db, tenant_id, cid)
-    net, vat_part = _split_gross(gross, inv)
     cust_name = inv.customer.name if inv.customer else "Customer"
+
+    reversal = build_credit_note_reversal_lines(
+        db, inv, gross=gross, cn_number=cn_number, cust_name=cust_name,
+    )
+    if not reversal.get("ok"):
+        return {
+            "ok": False,
+            "error": reversal.get("error", "cn_reversal_failed"),
+            "message": reversal.get("message"),
+        }
+    net = float(reversal["net"])
+    vat_part = float(reversal["vat_part"])
+    je_lines = reversal["lines"]
 
     cn = UAECreditNote(
         id=str(uuid.uuid4()),
@@ -146,31 +358,6 @@ def issue_credit_note(
     )
     db.add(cn)
     db.flush()
-
-    je_lines = [
-        {
-            "account_code": AR_RECEIVABLE_CODE,
-            "account_name": AR_RECEIVABLE_NAME,
-            "debit": 0.0,
-            "credit": gross,
-            "description": f"CN {cn_number} — {inv.invoice_number}",
-        },
-        {
-            "account_code": AR_REVENUE_CODE,
-            "account_name": AR_REVENUE_NAME,
-            "debit": net,
-            "credit": 0.0,
-            "description": f"Credit {cust_name}",
-        },
-    ]
-    if vat_part > 0:
-        je_lines.append({
-            "account_code": AR_VAT_PAYABLE_CODE,
-            "account_name": AR_VAT_PAYABLE_NAME,
-            "debit": vat_part,
-            "credit": 0.0,
-            "description": f"Output VAT reversal {cn_number}",
-        })
 
     try:
         je = create_journal_entry(
@@ -277,35 +464,66 @@ def void_credit_note(
         }
 
     gross = _f(cn.amount)
-    net, vat_part = _split_gross(gross, inv)
     cust_name = inv.customer.name if inv.customer else "Customer"
     void_date = date.today()
     cid = cn.company_id or inv.company_id
 
-    je_lines = [
-        {
-            "account_code": AR_RECEIVABLE_CODE,
-            "account_name": AR_RECEIVABLE_NAME,
-            "debit": gross,
-            "credit": 0.0,
-            "description": f"Void CN {cn.credit_note_number}",
-        },
-        {
-            "account_code": AR_REVENUE_CODE,
-            "account_name": AR_REVENUE_NAME,
-            "debit": 0.0,
-            "credit": net,
-            "description": f"Void credit {cust_name}",
-        },
-    ]
-    if vat_part > 0:
-        je_lines.append({
-            "account_code": AR_VAT_PAYABLE_CODE,
-            "account_name": AR_VAT_PAYABLE_NAME,
-            "debit": 0.0,
-            "credit": vat_part,
-            "description": f"Void VAT {cn.credit_note_number}",
-        })
+    # Prefer reversing the original CN JE lines (accounts already match sales JE).
+    cn_je = (
+        db.query(UAEJournalEntry)
+        .options(joinedload(UAEJournalEntry.lines))
+        .filter(
+            UAEJournalEntry.tenant_id == tenant_id,
+            UAEJournalEntry.reference == cn.id,
+            UAEJournalEntry.source == CN_JE_SOURCE,
+        )
+        .order_by(UAEJournalEntry.created_at.desc())
+        .first()
+    )
+    if cn_je and cn_je.lines:
+        je_lines = [
+            {
+                "account_code": (ln.account_code or "").strip(),
+                "account_name": ln.account_name or "",
+                "debit": _f(ln.credit),
+                "credit": _f(ln.debit),
+                "description": f"Void CN {cn.credit_note_number}",
+            }
+            for ln in cn_je.lines
+        ]
+        # Reconstruct net/vat for GulfTax from swapped lines.
+        net = round(sum(_f(l["credit"]) for l in je_lines
+                        if (l["account_code"] in AR_INCOME_CODES
+                            or (l["account_code"] or "").startswith("6")
+                            or l["account_code"] == "4100")), 2)
+        vat_part = round(sum(_f(l["credit"]) for l in je_lines
+                             if l["account_code"] in _VAT_CODES), 2)
+        if net <= 0 and vat_part <= 0:
+            net, vat_part = _split_gross(gross, inv)
+    else:
+        # Fail closed: rebuild from original sales JE rather than hardcoded CoA.
+        reversal = build_credit_note_reversal_lines(
+            db, inv, gross=gross, cn_number=cn.credit_note_number, cust_name=cust_name,
+        )
+        if not reversal.get("ok"):
+            return {
+                "ok": False,
+                "error": reversal.get("error", "cn_void_reversal_failed"),
+                "message": reversal.get("message"),
+            }
+        net = float(reversal["net"])
+        vat_part = float(reversal["vat_part"])
+        # Swap the issue lines to void.
+        je_lines = [
+            {
+                "account_code": ln["account_code"],
+                "account_name": ln["account_name"],
+                "debit": _f(ln["credit"]),
+                "credit": _f(ln["debit"]),
+                "description": f"Void CN {cn.credit_note_number}",
+            }
+            for ln in reversal["lines"]
+        ]
 
     try:
         je = create_journal_entry(

@@ -11,7 +11,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models.uae_accounting_full import UAECreditNote, UAECustomer, UAESalesInvoice
+from app.models.uae_accounting_full import (
+    UAECreditNote,
+    UAECustomer,
+    UAEJournalEntry,
+    UAEJournalLine,
+    UAESalesInvoice,
+)
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.credit_note_service import issue_credit_note, void_credit_note
 
@@ -33,6 +39,8 @@ class CreditNoteServiceTests(unittest.TestCase):
                 UAECustomer.__table__,
                 UAESalesInvoice.__table__,
                 UAECreditNote.__table__,
+                UAEJournalEntry.__table__,
+                UAEJournalLine.__table__,
             ],
         )
         cls.Session = sessionmaker(bind=cls.engine)
@@ -48,6 +56,37 @@ class CreditNoteServiceTests(unittest.TestCase):
         )
         self.db.add(self.cust)
         self.db.flush()
+
+        sales_je = UAEJournalEntry(
+            id=str(uuid.uuid4()),
+            tenant_id=self.tenant,
+            company_id=self.company,
+            entry_number="JE-SALES-001",
+            entry_date=date.today(),
+            period=date.today().strftime("%Y-%m"),
+            description="Sales",
+            reference="INV-TEST-001",
+            source="ar_sales_invoice",
+            status="posted",
+        )
+        self.db.add(sales_je)
+        self.db.flush()
+        for code, name, dr, cr in [
+            ("1100", "Trade Receivables", 1050, 0),
+            ("6001", "Sales - Standard Rated (5% VAT)", 0, 1000),
+            ("3010", "VAT Payable (Output Tax)", 0, 50),
+        ]:
+            self.db.add(
+                UAEJournalLine(
+                    id=str(uuid.uuid4()),
+                    journal_entry_id=sales_je.id,
+                    account_code=code,
+                    account_name=name,
+                    debit=dr,
+                    credit=cr,
+                )
+            )
+
         self.inv = UAESalesInvoice(
             id=str(uuid.uuid4()),
             tenant_id=self.tenant,
@@ -62,7 +101,9 @@ class CreditNoteServiceTests(unittest.TestCase):
             paid_amount=0,
             outstanding=1050,
             status="sent",
-            journal_entry_id=str(uuid.uuid4()),
+            journal_entry_id=sales_je.id,
+            vat_treatment="standard_rated",
+            supply_type="standard",
         )
         self.db.add(self.inv)
         self.db.commit()
@@ -87,12 +128,22 @@ class CreditNoteServiceTests(unittest.TestCase):
             tenant_id=self.tenant,
             company_id=self.company,
         )
-        self.assertTrue(result["ok"])
+        self.assertTrue(result["ok"], result)
         self.assertEqual(result["outstanding_after"], 550.0)
 
         aging = compute_ar_aging(self.db, self.tenant, self.company)
         self.assertEqual(aging["total_outstanding"], 550.0)
         self.assertEqual(len(aging["invoices"]), 1)
+
+        # Ensure CN JE lines reverse original revenue/VAT accounts
+        kwargs = mock_je.call_args.kwargs
+        lines = kwargs.get("lines") or mock_je.call_args[1].get("lines")
+        if lines is None and mock_je.call_args.args:
+            # keyword-only API
+            lines = mock_je.call_args.kwargs["lines"]
+        codes_dr = {l["account_code"] for l in lines if l.get("debit")}
+        self.assertIn("6001", codes_dr)
+        self.assertIn("3010", codes_dr)
 
     @patch("app.services.credit_note_service.resolve_ap_company_id")
     @patch("app.services.credit_note_service.sync_ar_credit_note_to_gulftax")

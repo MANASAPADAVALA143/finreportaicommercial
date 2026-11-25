@@ -113,7 +113,9 @@ def build_gl_summary(
             equity += cr
         if _in_range(code, 1010, 1099) and dr > 0:
             cash += dr
-        if code == "1200" and dr > 0:
+        # Canonical AR control is 1100 (seeded UAE CoA). Historical misposts to 1200
+        # are left in JE history but are not treated as Trade Receivables here.
+        if code == "1100" and dr > 0:
             trade_receivables += dr
         if code == "2100" and cr > 0:
             trade_payables += cr

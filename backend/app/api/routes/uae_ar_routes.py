@@ -40,7 +40,7 @@ from app.services.ar_sales_invoice_service import (
     get_or_create_customer,
     next_invoice_number,
 )
-from app.services.uae_journal_service import create_journal_entry
+from app.services.ar_receipt_service import ReceiptValidationError, record_ar_receipt
 from app.services.ar_aging_service import compute_ar_aging
 from app.services.ar_customer_risk_service import compute_customer_risk, filter_by_risk_tier
 from app.services.dunning_service import get_dunning_history, get_dunning_templates, run_dunning as run_dunning_service
@@ -340,6 +340,7 @@ class RecordPaymentIn(BaseModel):
     bank_account_code: str
     amount_received: float
     reference: Optional[str] = None
+    idempotency_key: Optional[str] = None
     company_id: str
     workspace_id: Optional[str] = None
 
@@ -488,7 +489,7 @@ def ar_classify_invoice(body: ARClassifyRequest) -> dict[str, Any]:
 
 @router.post("/approve-and-post", summary="Post AR sales invoice to UAE GL and GulfTax output VAT")
 def approve_and_post_ar(body: ApproveAndPostIn, request: Request, db: Session = Depends(get_db)):
-    """Approve draft/pending AR invoice → JE (1200/4100/2200) + GulfTax output + VAT Classifier."""
+    """Approve draft/pending AR invoice → JE (1100 / classification revenue / 3010) + GulfTax."""
     ws = _ws(request, body.workspace_id)
     poster = request_user_email(request) or "system"
     result = post_sales_invoice_to_gl_and_tax(
@@ -805,53 +806,36 @@ def send_invoice(body: SendInvoiceIn, request: Request, db: Session = Depends(ge
 @router.post("/record-payment")
 def record_payment(body: RecordPaymentIn, request: Request, db: Session = Depends(get_db)):
     ws = _ws(request, body.workspace_id)
-    inv = db.query(UAESalesInvoice).filter_by(
-        id=body.invoice_id, tenant_id=ws, company_id=body.company_id,
-    ).first()
-    if not inv:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-
-    amount = _f(body.amount_received)
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="amount_received must be positive")
-
-    pay_date = date.fromisoformat(body.payment_date)
-    cust_name = inv.customer.name if inv.customer else "Customer"
-    je_lines = [
-        {"account_code": body.bank_account_code, "account_name": "Bank",
-         "debit": amount, "credit": 0, "description": f"Receipt {inv.invoice_number}"},
-        {"account_code": "1200", "account_name": "Trade Receivables",
-         "debit": 0, "credit": amount, "description": f"AR {inv.invoice_number}"},
-    ]
     try:
-        je = create_journal_entry(
+        pay_date = date.fromisoformat(body.payment_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid payment_date") from exc
+
+    try:
+        result = record_ar_receipt(
+            db,
             tenant_id=ws,
-            entry_date=pay_date,
-            description=f"Receipt: {cust_name} - {inv.invoice_number}",
-            lines=je_lines,
-            reference=body.reference or inv.invoice_number,
-            source="AR_RECEIPT",
             company_id=body.company_id,
-            db=db,
-            auto_post=True,
+            invoice_id=body.invoice_id,
+            amount_received=body.amount_received,
+            payment_date=pay_date,
+            bank_account_code=body.bank_account_code,
+            reference=body.reference,
+            idempotency_key=body.idempotency_key,
         )
+    except ReceiptValidationError as exc:
+        status = 404 if exc.code == "invoice_not_found" else 400
+        raise HTTPException(status_code=status, detail=exc.message) from exc
     except PeriodControlError as exc:
-        db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    inv.paid_amount = _f(inv.paid_amount) + amount
-    inv.outstanding = max(0.0, _f(inv.total_amount) - _f(inv.paid_amount))
-    inv.payment_reference = body.reference
-    inv.paid_date = pay_date
-    if inv.outstanding <= 0.01:
-        inv.status = "paid"
-        inv.outstanding = 0
-    else:
-        inv.status = "partial"
-    db.add(inv)
-    db.commit()
-
-    return {"success": True, "receipt_je_id": je.id, "status": inv.status}
+    return {
+        "success": True,
+        "receipt_je_id": result["receipt_je_id"],
+        "status": result.get("status"),
+        "outstanding_after": result.get("outstanding_after"),
+        "idempotent_replay": result.get("idempotent_replay", False),
+    }
 
 
 @router.get("/dso-metrics")
