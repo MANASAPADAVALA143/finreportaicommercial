@@ -11,10 +11,12 @@ Phase 9.7 accounting integrity:
 from __future__ import annotations
 
 import math
+import threading
 import uuid
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import exc as sa_exc
 from sqlalchemy.orm import Session
 
 from app.models.company_setup import (
@@ -554,31 +556,51 @@ def _elim_dict(r: ConsolidationElimination) -> dict[str, Any]:
     }
 
 
+# Per-(workspace_id, period) threading locks for in-process serialization.
+# PostgreSQL's SELECT...FOR UPDATE provides DB-level serialization across
+# multiple processes; this lock handles concurrent threads within one process
+# (and is the primary serialization mechanism for SQLite, which ignores FOR UPDATE).
+_ic_seq_locks: dict[tuple[str, str], threading.Lock] = {}
+_ic_seq_locks_meta = threading.Lock()
+
+
+def _ic_seq_lock(workspace_id: str, period: str) -> threading.Lock:
+    key = (workspace_id, period)
+    with _ic_seq_locks_meta:
+        if key not in _ic_seq_locks:
+            _ic_seq_locks[key] = threading.Lock()
+        return _ic_seq_locks[key]
+
+
 def next_ic_reference(db: Session, workspace_id: str, period: str) -> str:
     """SVC-1: collision-resistant IC reference — YYYY-MM-NNNN, monotonically
-    incrementing per workspace+period.  Uses a row-level lock to prevent races.
-    Existing IC-* references in posted journals are never modified.
+    incrementing per workspace+period.
+
+    Uses a per-(workspace, period) threading.Lock to prevent concurrent increments
+    within the same process (required for SQLite; complementary to PostgreSQL's
+    SELECT...FOR UPDATE row-level lock in multi-process deployments).
     """
-    seq = (
-        db.query(IcReferenceSequence)
-        .filter_by(workspace_id=workspace_id, period=period)
-        .with_for_update()
-        .first()
-    )
-    if seq is None:
-        seq = IcReferenceSequence(
-            id=str(uuid.uuid4()),
-            workspace_id=workspace_id,
-            period=period,
-            last_seq=0,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+    with _ic_seq_lock(workspace_id, period):
+        seq = (
+            db.query(IcReferenceSequence)
+            .filter_by(workspace_id=workspace_id, period=period)
+            .with_for_update()
+            .first()
         )
-        db.add(seq)
-    seq.last_seq += 1
-    seq.updated_at = datetime.utcnow()
-    db.flush()
-    return f"IC-{period}-{seq.last_seq:04d}"
+        if seq is None:
+            seq = IcReferenceSequence(
+                id=str(uuid.uuid4()),
+                workspace_id=workspace_id,
+                period=period,
+                last_seq=0,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            db.add(seq)
+        seq.last_seq += 1
+        seq.updated_at = datetime.utcnow()
+        db.flush()
+        return f"IC-{period}-{seq.last_seq:04d}"
 
 
 def backfill_company_id(db: Session, workspace_id: str, company_id: str) -> None:

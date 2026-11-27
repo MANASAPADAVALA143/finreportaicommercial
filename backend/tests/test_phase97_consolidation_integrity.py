@@ -21,15 +21,18 @@ from __future__ import annotations
 
 import math
 import os
+import tempfile
+import threading
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.models.company_setup import (
     AccountingPeriod,
@@ -486,3 +489,57 @@ def test_T14_ic_reference_sequence_no_duplicates(db):
     assert seqs == sorted(seqs), f"IC refs not monotonically increasing: {seqs}"
     # Sequence must be contiguous (no gaps from 1)
     assert seqs[-1] - seqs[0] == 9, f"IC ref gap: {seqs}"
+
+
+# ---------------------------------------------------------------------------
+# T14b — IC reference uniqueness under 20 concurrent threads (SVC-1 race)
+# Uses a file-based SQLite + NullPool so each session gets its own connection,
+# which exercises the INSERT-or-retry path in next_ic_reference().
+# ---------------------------------------------------------------------------
+
+def test_T14b_ic_reference_concurrent_no_duplicates():
+    """20 concurrent threads each calling next_ic_reference in its own session
+    must produce 20 unique, contiguous references with zero errors."""
+    db_path = Path(tempfile.mkdtemp()) / "t14b_concurrent.sqlite"
+    engine14b = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    for model in TABLES:
+        model.__table__.create(engine14b)
+    Sess14b = sessionmaker(bind=engine14b)
+    ws14b = "ws-t14b-" + uuid.uuid4().hex[:8]
+    period14b = "2026-11"
+
+    results: list[str] = []
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    def worker(thread_id: int) -> None:
+        s = Sess14b()
+        try:
+            ref = svc.next_ic_reference(s, ws14b, period14b)
+            s.commit()
+            with lock:
+                results.append(ref)
+        except Exception as exc:
+            with lock:
+                errors.append(f"T{thread_id}: {exc}")
+        finally:
+            s.close()
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Concurrent IC reference errors:\n" + "\n".join(errors)
+    assert len(results) == 20, f"Expected 20 refs, got {len(results)}: {results}"
+    assert len(set(results)) == 20, (
+        f"Duplicate IC refs under concurrency: "
+        f"{[r for r in results if results.count(r) > 1]}"
+    )
+    seqs = sorted(int(r.split("-")[-1]) for r in results)
+    assert seqs == list(range(1, 21)), f"Non-contiguous sequence: {seqs}"
