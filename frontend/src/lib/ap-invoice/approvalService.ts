@@ -6,6 +6,7 @@ import { recalcVendorRiskAsync } from '@/lib/ap-invoice/vendorMasterService';
 import { requireCompanyId } from '@/lib/ap-invoice/companyService';
 import { notifyApproverViaWhatsApp, notifyVendorStatusByInvoiceId } from '@/lib/ap-invoice/whatsappService';
 import type { ApproveAndPostResult } from '@/lib/ap-invoice/glPostService';
+import { getIntegrationStatuses, triggerErpPushForInvoice } from '@/lib/ap-invoice/apIntegrationsService';
 
 export type ChainApprovalStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
 export type ApprovalRowStatus = 'pending' | 'approved' | 'rejected';
@@ -114,6 +115,20 @@ async function finalizeInvoiceApproval(
   }
 
   void notifyVendorStatusByInvoiceId(invoice.id, 'Approved');
+
+  // Auto-push to connected ERPs — fire-and-forget, never blocks approval UX.
+  void (async () => {
+    try {
+      const statuses = await getIntegrationStatuses();
+      const connected = statuses.filter((s) => s.connected).map((s) => s.id);
+      if (connected.length > 0) {
+        await triggerErpPushForInvoice(invoice.id, connected);
+      }
+    } catch (e) {
+      console.warn('[AP] ERP auto-push after approval failed:', e instanceof Error ? e.message : e);
+    }
+  })();
+
   return { ok: true, fully_approved: true, gl_post };
 }
 

@@ -485,6 +485,152 @@ def _build_ap_je_lines(
     return lines
 
 
+def _push_to_erp_if_configured(invoice_id: str, invoice_number: str, vendor_name: str) -> None:
+    """Fire-and-forget ERP push for a just-approved invoice.
+
+    Checks whether Zoho and/or QuickBooks are connected by reading the stored
+    refresh tokens.  Calls the same push_bill handlers used by the manual push
+    endpoint.  Any failure is logged but never propagated — the approval has
+    already succeeded at this point.
+    """
+    from app.services.ap_settings_service import get_app_setting
+
+    zoho_connected = bool(
+        get_app_setting("zoho_refresh_token") and get_app_setting("zoho_organization_id")
+    )
+    qb_connected = bool(
+        get_app_setting("qb_refresh_token") and get_app_setting("qb_realm_id")
+    )
+
+    if not zoho_connected and not qb_connected:
+        return
+
+    import asyncio
+
+    async def _push() -> None:
+        import httpx
+        from app.api.routes.ap_integrations import (
+            _zoho_token,
+            _qbo_token,
+            _qbo_ensure_bill,
+            _mark_erp_bill,
+            _record_sync,
+            _INVOICE_FIELDS,
+            QBOConflictError,
+            QBOUncertainStateError,
+        )
+        from app.core.supabase import get_supabase
+
+        rows = (
+            get_supabase()
+            .table("invoices")
+            .select(_INVOICE_FIELDS)
+            .eq("id", invoice_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            logger.warning("ERP auto-push: invoice %s not found in Supabase", invoice_id)
+            return
+        inv = rows[0]
+
+        # Skip if already synced by a concurrent bulk sync or prior auto-push
+        if inv.get("erp_qbo_bill_id") and inv["erp_qbo_bill_id"] != "PENDING":
+            qb_connected_now = False
+        else:
+            qb_connected_now = qb_connected
+
+        def _n(v: object) -> float:
+            try:
+                return float(v or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        total = _n(inv.get("total_amount"))
+        tax = _n(inv.get("tax_amount"))
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if zoho_connected:
+                try:
+                    org_id = get_app_setting("zoho_organization_id") or ""
+                    access, api_domain = await _zoho_token(client)
+                    payload = {
+                        "vendor_name": inv.get("vendor_name"),
+                        "bill_number": inv.get("invoice_number"),
+                        "date": inv.get("invoice_date"),
+                        "due_date": inv.get("due_date"),
+                        "currency_code": inv.get("currency") or "AED",
+                        "line_items": [{
+                            "description": f"Invoice {inv.get('invoice_number')} — {inv.get('vendor_name')}",
+                            "rate": total - tax,
+                            "quantity": 1,
+                            "tax_percentage": inv.get("tax_rate") or 0,
+                        }],
+                        "notes": f"Auto-imported from InvoiceFlow on approval. GL: {inv.get('gl_code') or ''}".strip(),
+                    }
+                    res = await client.post(
+                        f"{api_domain}/books/v3/bills",
+                        params={"organization_id": org_id},
+                        headers={"Authorization": f"Zoho-oauthtoken {access}"},
+                        json={"JSONString": __import__("json").dumps(payload)},
+                    )
+                    data = res.json()
+                    if data.get("code") == 0:
+                        bill = data.get("bill") or {}
+                        bill_ref = str(bill.get("bill_id") or bill.get("bill_number") or "pushed")
+                        _mark_erp_bill(invoice_id, "erp_zoho_bill_id", bill_ref)
+                        logger.info(
+                            "ERP auto-push Zoho: invoice=%s bill_id=%s bill_number=%s",
+                            invoice_number,
+                            bill.get("bill_id"),
+                            bill.get("bill_number"),
+                        )
+                        _record_sync("zoho", True, f"Auto-pushed bill for {invoice_number}", 1)
+                    else:
+                        logger.warning(
+                            "ERP auto-push Zoho: invoice=%s Zoho error code=%s msg=%s",
+                            invoice_number,
+                            data.get("code"),
+                            data.get("message"),
+                        )
+                        _record_sync("zoho", False, str(data.get("message") or "push error"))
+                except Exception:
+                    logger.exception("ERP auto-push to Zoho failed for invoice %s", invoice_number)
+                    _record_sync("zoho", False, f"auto-push error for {invoice_number}")
+
+            if qb_connected_now:
+                try:
+                    access, base_url, realm_id = await _qbo_token(client)
+                    bill_id = await _qbo_ensure_bill(client, inv, access, base_url, realm_id)
+                    logger.info("ERP auto-push QBO: invoice=%s bill_id=%s", invoice_number, bill_id)
+                    _record_sync("quickbooks", True, f"Auto-pushed bill for {invoice_number}", 1)
+                except QBOConflictError as exc:
+                    logger.error(
+                        "ERP auto-push QBO conflict for invoice %s: %s — needs manual resolution",
+                        invoice_number, exc,
+                    )
+                    _record_sync("quickbooks", False, f"conflict for {invoice_number}: {exc}")
+                except QBOUncertainStateError as exc:
+                    logger.error(
+                        "ERP auto-push QBO uncertain state for invoice %s: %s — manual verification required",
+                        invoice_number, exc,
+                    )
+                    _record_sync("quickbooks", False, f"uncertain state for {invoice_number}")
+                except Exception:
+                    logger.exception("ERP auto-push to QuickBooks failed for invoice %s", invoice_number)
+                    _record_sync("quickbooks", False, f"auto-push error for {invoice_number}")
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_push())
+        else:
+            loop.run_until_complete(_push())
+    except Exception:
+        logger.exception("ERP auto-push task scheduling failed for invoice %s", invoice_number)
+
+
 def post_invoice_to_gl_and_tax(
     body: ApInvoicePostRequest,
     *,
@@ -810,6 +956,10 @@ def post_invoice_to_gl_and_tax(
                 )
             except Exception:
                 pass
+
+    # Auto-push to ERP (Zoho / QuickBooks) if connected — non-blocking, never raises.
+    if body.invoice_id and je_posted:
+        _push_to_erp_if_configured(body.invoice_id, body.invoice_number, body.vendor_name)
 
     logger.info(
         "AP post_invoice_to_gl_and_tax: invoice=%s vendor=%s JE=%s workspace=%s je_posted=%s err=%s",

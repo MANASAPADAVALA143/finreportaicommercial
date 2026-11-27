@@ -2,19 +2,24 @@
  * APIntegrations.tsx — Zoho Books + QuickBooks integration hub
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Zap, Settings, ArrowRight, Database } from 'lucide-react';
+import { Link2, CheckCircle, AlertCircle, RefreshCw, ExternalLink, Zap, Settings, ArrowRight, Database, Upload, Users } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import {
+  bulkSyncApprovedInvoices,
   disconnectIntegration,
   getIntegrationStatuses,
   getQuickBooksOAuthUrl,
   getZohoOAuthUrl,
+  pullVendorsFromErp,
   triggerIntegrationSync,
+  type BulkSyncResult,
   type IntegrationId,
   type IntegrationStatus,
+  type VendorPullResult,
 } from '../../lib/ap-invoice/apIntegrationsService';
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
+type BulkStatus = 'idle' | 'running' | 'done' | 'error';
 
 const CORE_INTEGRATIONS: Array<{
   id: IntegrationId;
@@ -67,6 +72,10 @@ export default function APIntegrations() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<IntegrationId | null>(null);
+  const [bulkStatus, setBulkStatus] = useState<Record<string, BulkStatus>>({});
+  const [bulkResults, setBulkResults] = useState<Record<string, BulkSyncResult>>({});
+  const [vendorPullStatus, setVendorPullStatus] = useState<Record<string, BulkStatus>>({});
+  const [vendorPullResults, setVendorPullResults] = useState<Record<string, VendorPullResult>>({});
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -162,6 +171,65 @@ export default function APIntegrations() {
       }, ...p]);
     }
     setTimeout(() => setSyncStatus((p) => ({ ...p, [id]: 'idle' })), 3000);
+  };
+
+  const handleVendorPull = async (id: IntegrationId) => {
+    const st = statusFor(id);
+    if (!st?.connected) return;
+    setVendorPullStatus((p) => ({ ...p, [id]: 'running' }));
+    try {
+      const result = await pullVendorsFromErp(id);
+      setVendorPullResults((p) => ({ ...p, [id]: result }));
+      setVendorPullStatus((p) => ({ ...p, [id]: result.ok ? 'done' : 'error' }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: result.message,
+        count: result.created + result.updated,
+        status: result.ok ? 'success' : 'error',
+      }, ...p.slice(0, 19)]);
+    } catch (e) {
+      setVendorPullStatus((p) => ({ ...p, [id]: 'error' }));
+      setVendorPullResults((p) => ({
+        ...p,
+        [id]: { ok: false, message: e instanceof Error ? e.message : 'Vendor pull failed', created: 0, updated: 0, skipped: 0, errors: [] },
+      }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: e instanceof Error ? e.message : 'Vendor pull failed',
+        count: 0,
+        status: 'error',
+      }, ...p]);
+    }
+  };
+
+  const handleBulkSync = async (id: IntegrationId) => {
+    const st = statusFor(id);
+    if (!st?.connected) return;
+    setBulkStatus((p) => ({ ...p, [id]: 'running' }));
+    try {
+      const result = await bulkSyncApprovedInvoices(id);
+      setBulkResults((p) => ({ ...p, [id]: result }));
+      setBulkStatus((p) => ({ ...p, [id]: result.ok ? 'done' : 'error' }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: result.message,
+        count: result.pushed,
+        status: result.ok ? 'success' : 'error',
+      }, ...p.slice(0, 19)]);
+      await refresh();
+    } catch (e) {
+      setBulkStatus((p) => ({ ...p, [id]: 'error' }));
+      setBulkResults((p) => ({
+        ...p,
+        [id]: { ok: false, message: e instanceof Error ? e.message : 'Bulk sync failed', pushed: 0, skipped: 0, failed: 0, errors: [] },
+      }));
+      setSyncLogs((p) => [{
+        time: new Date().toLocaleTimeString(),
+        action: e instanceof Error ? e.message : 'Bulk sync failed',
+        count: 0,
+        status: 'error',
+      }, ...p]);
+    }
   };
 
   const connectedCount = statuses.filter((s) => s.connected).length;
@@ -266,6 +334,26 @@ export default function APIntegrations() {
                       </button>
                       <button
                         type="button"
+                        onClick={() => void handleBulkSync(intg.id)}
+                        disabled={bulkStatus[intg.id] === 'running'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium"
+                        title="Push all approved invoices that have not yet been sent to this ERP"
+                      >
+                        <Upload className={`w-3.5 h-3.5 ${bulkStatus[intg.id] === 'running' ? 'animate-pulse' : ''}`} />
+                        {bulkStatus[intg.id] === 'running' ? 'Syncing…' : 'Bulk Sync'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleVendorPull(intg.id)}
+                        disabled={vendorPullStatus[intg.id] === 'running'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white text-xs font-medium"
+                        title="Import all vendors from this ERP into AP vendor master"
+                      >
+                        <Users className={`w-3.5 h-3.5 ${vendorPullStatus[intg.id] === 'running' ? 'animate-pulse' : ''}`} />
+                        {vendorPullStatus[intg.id] === 'running' ? 'Importing…' : 'Pull Vendors'}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => void handleDisconnect(intg.id)}
                         className="px-3 py-1.5 rounded-lg bg-black/30 hover:bg-red-900/50 text-slate-300 hover:text-red-300 text-xs"
                       >
@@ -306,6 +394,50 @@ export default function APIntegrations() {
                     <p>Configured: {st?.configured ? 'Yes (Settings)' : 'No'}</p>
                     <p>ERP connection ID: {st?.connectionId ?? '—'}</p>
                     <p>Status: {st?.lastSyncStatus ?? 'never'}</p>
+                    {bulkResults[intg.id] && (
+                      <div className="mt-3 pt-3 border-t border-white/10">
+                        <p className="font-semibold uppercase tracking-wide mb-1.5">Last bulk sync</p>
+                        {(() => {
+                          const r = bulkResults[intg.id]!;
+                          return (
+                            <>
+                              <div className="flex gap-4">
+                                <span className="text-green-400 font-bold">{r.pushed} pushed</span>
+                                <span className="text-slate-400">{r.skipped} skipped</span>
+                                {r.failed > 0 && <span className="text-red-400 font-bold">{r.failed} failed</span>}
+                              </div>
+                              {r.errors.length > 0 && (
+                                <ul className="mt-1.5 space-y-0.5 text-red-300 max-h-24 overflow-y-auto">
+                                  {r.errors.map((e, i) => <li key={i}>• {e}</li>)}
+                                </ul>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
+                    {vendorPullResults[intg.id] && (
+                      <div className="mt-3 pt-3 border-t border-white/10">
+                        <p className="font-semibold uppercase tracking-wide mb-1.5">Last vendor pull</p>
+                        {(() => {
+                          const r = vendorPullResults[intg.id]!;
+                          return (
+                            <>
+                              <div className="flex gap-4">
+                                <span className="text-teal-400 font-bold">{r.created} created</span>
+                                <span className="text-blue-400">{r.updated} updated</span>
+                                <span className="text-slate-400">{r.skipped} skipped</span>
+                              </div>
+                              {r.errors.length > 0 && (
+                                <ul className="mt-1.5 space-y-0.5 text-red-300 max-h-24 overflow-y-auto">
+                                  {r.errors.map((e, i) => <li key={i}>• {e}</li>)}
+                                </ul>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

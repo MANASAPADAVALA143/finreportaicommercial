@@ -192,6 +192,117 @@ export async function triggerIntegrationSync(id: IntegrationId, connectionId?: s
   return { ok, message, count };
 }
 
+export interface VendorPullResult {
+  ok: boolean;
+  message: string;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+/**
+ * Pull all vendors from the given ERP and upsert them into the vendors table.
+ * Calls GET /api/ap/integrations/{id}/pull-vendors.
+ */
+export async function pullVendorsFromErp(
+  id: IntegrationId,
+  companyId?: string,
+): Promise<VendorPullResult> {
+  const path =
+    id === 'zoho'
+      ? '/api/ap/integrations/zoho/pull-vendors'
+      : '/api/ap/integrations/quickbooks/pull-vendors';
+  const url = new URL(joinApiUrl(path));
+  if (companyId) url.searchParams.set('company_id', companyId);
+  const res = await fetch(url.toString(), {
+    headers: workspaceHeaders(getStoredAccessToken()),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((j as { detail?: string }).detail ?? `Vendor pull failed (HTTP ${res.status})`);
+  }
+  return j as VendorPullResult;
+}
+
+export interface BulkSyncResult {
+  ok: boolean;
+  message: string;
+  pushed: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
+/**
+ * Bulk-push all Approved invoices that have not yet been synced to the given ERP.
+ * Calls POST /api/ap/integrations/{id}/sync-approved.
+ */
+export async function bulkSyncApprovedInvoices(
+  id: IntegrationId,
+  companyId?: string,
+): Promise<BulkSyncResult> {
+  const path =
+    id === 'zoho'
+      ? '/api/ap/integrations/zoho/sync-approved'
+      : '/api/ap/integrations/quickbooks/sync-approved';
+  const url = new URL(joinApiUrl(path));
+  if (companyId) url.searchParams.set('company_id', companyId);
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+    headers: workspaceHeaders(getStoredAccessToken()),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((j as { detail?: string }).detail ?? `Bulk sync failed (HTTP ${res.status})`);
+  }
+  return j as BulkSyncResult;
+}
+
+/**
+ * Push a single approved invoice to every connected ERP in the given list.
+ * Called automatically after approval — errors are logged but never thrown.
+ */
+export async function triggerErpPushForInvoice(
+  invoiceId: string,
+  connectedIds: IntegrationId[],
+): Promise<void> {
+  const results: Array<{ id: IntegrationId; ok: boolean; message: string }> = [];
+
+  for (const id of connectedIds) {
+    const path =
+      id === 'zoho'
+        ? '/api/ap/integrations/zoho/push-bill'
+        : '/api/ap/integrations/quickbooks/push-bill';
+    try {
+      const res = await fetch(joinApiUrl(path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...workspaceHeaders(getStoredAccessToken()) },
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      });
+      const j = await res.json().catch(() => ({}));
+      const ok = res.ok && (j as { success?: boolean }).success !== false;
+      const message = (j as { message?: string; detail?: string }).message
+        ?? (j as { detail?: string }).detail
+        ?? (ok ? 'pushed' : 'failed');
+      results.push({ id, ok, message });
+      logAction('integration.auto_push', id, invoiceId, getInvoiceflowWorkEmail(), { ok, message });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      results.push({ id, ok: false, message });
+      logAction('integration.auto_push', id, invoiceId, getInvoiceflowWorkEmail(), { ok: false, message });
+    }
+  }
+
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length > 0) {
+    console.warn(
+      '[AP] ERP auto-push partial failure:',
+      failed.map((r) => `${r.id}: ${r.message}`).join(', '),
+    );
+  }
+}
+
 export async function disconnectIntegration(id: IntegrationId, connectionId: string | null): Promise<void> {
   if (connectionId) {
     await fetch(joinApiUrl(`/api/connections/${connectionId}`), {
