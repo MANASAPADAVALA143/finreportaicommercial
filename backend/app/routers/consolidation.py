@@ -23,7 +23,10 @@ router = APIRouter(prefix="/api/consolidation", tags=["Consolidation"])
 class EliminationBody(BaseModel):
     period_id: str
     account_category: str
-    amount: float = 0
+    # UI-1: amount is required and must be positive; zero default removed.
+    amount: float
+    # ADJ-1: 'pl' | 'bs' | 'both' — inferred from account_category when omitted.
+    elimination_type: str | None = None
     company_from_id: str | None = None
     company_to_id: str | None = None
     note: str | None = None
@@ -101,15 +104,32 @@ def save_elimination(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    return svc.upsert_elimination_amount(
-        db,
-        ctx.workspace_id,
-        body.period_id,
-        body.account_category,
-        body.amount,
-        body.note,
-        user.id,
-    )
+    # UI-1: validation errors from the service layer surface as HTTP 400.
+    try:
+        return svc.upsert_elimination_amount(
+            db,
+            ctx.workspace_id,
+            body.period_id,
+            body.account_category,
+            body.amount,
+            body.note,
+            user.id,
+            body.elimination_type,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/ic-reference")
+def next_ic_reference(
+    period: str,
+    ctx: WorkspaceContext = Depends(validate_workspace),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """SVC-1: allocate the next collision-resistant IC reference for a period."""
+    ref = svc.next_ic_reference(db, ctx.workspace_id, period)
+    db.commit()
+    return {"ic_reference": ref}
 
 
 @router.post("/export")

@@ -44,19 +44,46 @@ export const getSummary = (t: string | null, periodId: string) =>
   api<{ cards: SummaryCard[] }>(`/api/consolidation/summary?period_id=${periodId}`, t);
 
 export const getPL = (t: string | null, periodId: string) =>
-  api<{ period_name: string; companies: { id: string; company_name: string }[]; rows: ConsolidationRow[] }>(
-    `/api/consolidation/pl?period_id=${periodId}`, t);
+  api<{
+    period_name: string;
+    companies: { id: string; company_name: string }[];
+    rows: ConsolidationRow[];
+    /** ENG-1: count of posted journal lines with no company attribution. */
+    unassigned_lines: number;
+    has_unassigned_lines: boolean;
+  }>(`/api/consolidation/pl?period_id=${periodId}`, t);
 
 export const getBS = (t: string | null, periodId: string) =>
-  api<{ period_name: string; companies: { id: string; company_name: string }[]; rows: ConsolidationRow[];
-    total_assets: number; total_liabilities_equity: number; is_balanced: boolean }>(
-    `/api/consolidation/bs?period_id=${periodId}`, t);
+  api<{
+    period_name: string;
+    companies: { id: string; company_name: string }[];
+    rows: ConsolidationRow[];
+    total_assets: number;
+    total_liabilities_equity: number;
+    is_balanced: boolean;
+    /** ENG-1: count of posted journal lines with no company attribution. */
+    unassigned_lines: number;
+    has_unassigned_lines: boolean;
+  }>(`/api/consolidation/bs?period_id=${periodId}`, t);
 
 export const getComparison = (t: string | null, periodId: string) =>
   api<{ companies: CompanyComparison[] }>(`/api/consolidation/comparison?period_id=${periodId}`, t);
 
-export const saveElimination = (t: string | null, body: { period_id: string; account_category: string; amount: number }) =>
-  api('/api/consolidation/eliminations', t, { method: 'POST', body: JSON.stringify(body) });
+export const saveElimination = (
+  t: string | null,
+  body: {
+    period_id: string;
+    account_category: string;
+    /** UI-1: must be positive and finite; validated before calling this. */
+    amount: number;
+    /** ADJ-1: 'pl' | 'bs' | 'both'. Omit to let the backend infer from account_category. */
+    elimination_type?: string;
+  },
+) => api('/api/consolidation/eliminations', t, { method: 'POST', body: JSON.stringify(body) });
+
+/** SVC-1: allocate the next collision-resistant IC reference for a period (YYYY-MM). */
+export const nextIcReference = (t: string | null, period: string) =>
+  api<{ ic_reference: string }>(`/api/consolidation/ic-reference?period=${encodeURIComponent(period)}`, t);
 
 export async function exportConsolidationPdf(t: string | null, periodId: string): Promise<Blob> {
   const res = await fetch(`${backendOrigin()}/api/consolidation/export?period_id=${periodId}`, {

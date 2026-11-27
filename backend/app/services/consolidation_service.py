@@ -1,7 +1,17 @@
-"""Group consolidation — aggregate P&L and Balance Sheet across UAE companies."""
+"""Group consolidation — aggregate P&L and Balance Sheet across UAE companies.
+
+Phase 9.7 accounting integrity:
+  ADJ-1: eliminations are routed by elimination_type ('pl' | 'bs' | 'both').
+         BS-only eliminations never alter revenue, expenses or net income.
+         P&L eliminations never alter asset/liability balances.
+  ENG-1: journal lines with no company_id are excluded from every company's
+         figures AND reported as unassigned_lines so they surface in reporting.
+"""
 
 from __future__ import annotations
 
+import math
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -10,9 +20,26 @@ from sqlalchemy.orm import Session
 from app.models.company_setup import (
     AccountingPeriod,
     ConsolidationElimination,
+    IcReferenceSequence,
     UaeCompanyProfile,
 )
 from app.models.uae_accounting_full import UAEAccount, UAEJournalEntry, UAEJournalLine
+
+# Valid elimination_type values (ADJ-1)
+ELIM_TYPE_PL = "pl"
+ELIM_TYPE_BS = "bs"
+ELIM_TYPE_BOTH = "both"
+VALID_ELIM_TYPES = {ELIM_TYPE_PL, ELIM_TYPE_BS, ELIM_TYPE_BOTH}
+
+# CoA keys that belong to the P&L statement
+PL_KEYS = {"revenue", "cost_of_sales", "gross_profit", "operating_expenses",
+           "ebitda", "depreciation", "ebit", "finance_costs", "pbt", "tax", "net_profit"}
+
+# CoA keys that belong to the Balance Sheet
+BS_KEYS = {"fixed_assets_net", "inventory", "trade_receivables", "cash_bank",
+           "other_current_assets", "total_assets", "long_term_borrowings",
+           "trade_payables", "other_current_liabilities", "share_capital",
+           "retained_earnings", "total_liabilities_equity"}
 
 PL_ROWS = [
     {"key": "revenue", "label": "Revenue", "calculated": False},
@@ -244,21 +271,27 @@ def _calc_bs_row(key: str, company_totals: dict[str, dict[str, float]]) -> dict[
     return merged
 
 
-def _elimination_map(db: Session, workspace_id: str, period_id: str) -> dict[str, float]:
-    rows = db.query(ConsolidationElimination).filter_by(workspace_id=workspace_id, period_id=period_id).all()
-    out: dict[str, float] = {}
-    for r in rows:
-        out[r.account_category] = out.get(r.account_category, 0.0) + float(r.amount or 0)
-    return out
+def _elimination_maps(
+    db: Session, workspace_id: str, period_id: str, statement: str
+) -> tuple[dict[str, float], dict[str, str]]:
+    """ADJ-1: return elimination amount+notes filtered to the requested statement.
 
-
-def _elimination_notes_map(db: Session, workspace_id: str, period_id: str) -> dict[str, str]:
+    statement must be 'pl' or 'bs'.  Rows with elimination_type='both' (legacy
+    rows written before 9.7) apply to both statements.  Rows typed 'pl' apply
+    only to the P&L; rows typed 'bs' apply only to the Balance Sheet.
+    """
     rows = db.query(ConsolidationElimination).filter_by(workspace_id=workspace_id, period_id=period_id).all()
-    out: dict[str, str] = {}
+    amounts: dict[str, float] = {}
+    notes: dict[str, str] = {}
     for r in rows:
+        etype = (r.elimination_type or ELIM_TYPE_BOTH).lower()
+        if etype != statement and etype != ELIM_TYPE_BOTH:
+            continue
+        cat = r.account_category
+        amounts[cat] = amounts.get(cat, 0.0) + float(r.amount or 0)
         if r.note:
-            out[r.account_category] = r.note
-    return out
+            notes[cat] = r.note
+    return amounts, notes
 
 
 def get_consolidation_pl(db: Session, workspace_id: str, period_id: str) -> dict[str, Any]:
@@ -270,8 +303,8 @@ def get_consolidation_pl(db: Session, workspace_id: str, period_id: str) -> dict
         cid: _aggregate_categories(db, workspace_id, cid, period_str, _pl_category)
         for cid in company_ids
     }
-    elim = _elimination_map(db, workspace_id, period_id)
-    elim_notes = _elimination_notes_map(db, workspace_id, period_id)
+    # ADJ-1: only P&L-typed eliminations affect the income statement.
+    elim, elim_notes = _elimination_maps(db, workspace_id, period_id, ELIM_TYPE_PL)
 
     rows_out = []
     for row in PL_ROWS:
@@ -290,13 +323,16 @@ def get_consolidation_pl(db: Session, workspace_id: str, period_id: str) -> dict
             "group_total": group_total,
         })
 
+    unassigned = unassigned_journal_lines(db, workspace_id, period_str)
     return {
         "period_id": period_id,
         "period_name": period_obj.period_name,
         "period": period_str,
         "companies": companies,
         "rows": rows_out,
-        "unassigned_lines": unassigned_journal_lines(db, workspace_id, period_str),
+        "unassigned_lines": unassigned,
+        # ENG-1: surface unattributed lines so the UI can warn the user.
+        "has_unassigned_lines": unassigned > 0,
     }
 
 
@@ -309,8 +345,8 @@ def get_consolidation_bs(db: Session, workspace_id: str, period_id: str) -> dict
         cid: _aggregate_categories(db, workspace_id, cid, period_str, _bs_category)
         for cid in company_ids
     }
-    elim = _elimination_map(db, workspace_id, period_id)
-    elim_notes = _elimination_notes_map(db, workspace_id, period_id)
+    # ADJ-1: only BS-typed eliminations affect the balance sheet.
+    elim, elim_notes = _elimination_maps(db, workspace_id, period_id, ELIM_TYPE_BS)
 
     rows_out = []
     for row in BS_ROWS:
@@ -332,6 +368,7 @@ def get_consolidation_bs(db: Session, workspace_id: str, period_id: str) -> dict
     total_assets = next((r["group_total"] for r in rows_out if r["key"] == "total_assets"), 0)
     total_le = next((r["group_total"] for r in rows_out if r["key"] == "total_liabilities_equity"), 0)
     balanced = abs(total_assets - total_le) < 1.0
+    unassigned = unassigned_journal_lines(db, workspace_id, period_str)
 
     return {
         "period_id": period_id,
@@ -342,7 +379,8 @@ def get_consolidation_bs(db: Session, workspace_id: str, period_id: str) -> dict
         "total_assets": total_assets,
         "total_liabilities_equity": total_le,
         "is_balanced": balanced,
-        "unassigned_lines": unassigned_journal_lines(db, workspace_id, period_str),
+        "unassigned_lines": unassigned,
+        "has_unassigned_lines": unassigned > 0,
     }
 
 
@@ -396,14 +434,47 @@ def get_company_comparison(db: Session, workspace_id: str, period_id: str) -> li
     return out
 
 
+def _validate_elimination_amount(amount: Any) -> float:
+    """UI-1 / SVC-1: reject zero, negative, NaN, Infinity and non-numeric values."""
+    try:
+        v = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError("Elimination amount must be a valid number.")
+    if math.isnan(v):
+        raise ValueError("Elimination amount must not be NaN.")
+    if math.isinf(v):
+        raise ValueError("Elimination amount must not be Infinity.")
+    if v <= 0:
+        raise ValueError("Elimination amount must be positive and non-zero.")
+    return v
+
+
+def _infer_elimination_type(account_category: str) -> str:
+    """ADJ-1: infer default elimination_type from the account category key."""
+    if account_category in PL_KEYS:
+        return ELIM_TYPE_PL
+    if account_category in BS_KEYS:
+        return ELIM_TYPE_BS
+    return ELIM_TYPE_BOTH
+
+
 def save_elimination(db: Session, workspace_id: str, data: dict[str, Any], user_id: str | None) -> dict[str, Any]:
+    # UI-1: validate amount — never silently accept zero, negative, NaN or Infinity.
+    amount = _validate_elimination_amount(data.get("amount"))
+
+    # ADJ-1: determine elimination_type from caller or infer from account category.
+    raw_type = (data.get("elimination_type") or _infer_elimination_type(data["account_category"])).lower()
+    if raw_type not in VALID_ELIM_TYPES:
+        raise ValueError(f"elimination_type must be one of {sorted(VALID_ELIM_TYPES)}; got {raw_type!r}.")
+
     rec = ConsolidationElimination(
         workspace_id=workspace_id,
         period_id=data["period_id"],
         account_category=data["account_category"],
+        elimination_type=raw_type,
         company_from_id=data.get("company_from_id"),
         company_to_id=data.get("company_to_id"),
-        amount=data.get("amount", 0),
+        amount=amount,
         note=data.get("note"),
         created_by=user_id,
     )
@@ -431,15 +502,25 @@ def upsert_elimination_amount(
     amount: float,
     note: str | None,
     user_id: str | None,
+    elimination_type: str | None = None,
 ) -> dict[str, Any]:
+    # UI-1: validate before touching the database.
+    validated = _validate_elimination_amount(amount)
+
+    # ADJ-1: resolve type.
+    raw_type = (elimination_type or _infer_elimination_type(account_category)).lower()
+    if raw_type not in VALID_ELIM_TYPES:
+        raise ValueError(f"elimination_type must be one of {sorted(VALID_ELIM_TYPES)}; got {raw_type!r}.")
+
     existing = (
         db.query(ConsolidationElimination)
         .filter_by(workspace_id=workspace_id, period_id=period_id, account_category=account_category)
         .first()
     )
     if existing:
-        existing.amount = amount
+        existing.amount = validated
         existing.note = note
+        existing.elimination_type = raw_type
         db.add(existing)
         db.commit()
         db.refresh(existing)
@@ -447,7 +528,13 @@ def upsert_elimination_amount(
     return save_elimination(
         db,
         workspace_id,
-        {"period_id": period_id, "account_category": account_category, "amount": amount, "note": note},
+        {
+            "period_id": period_id,
+            "account_category": account_category,
+            "elimination_type": raw_type,
+            "amount": validated,
+            "note": note,
+        },
         user_id,
     )
 
@@ -458,12 +545,40 @@ def _elim_dict(r: ConsolidationElimination) -> dict[str, Any]:
         "workspace_id": r.workspace_id,
         "period_id": r.period_id,
         "account_category": r.account_category,
+        "elimination_type": r.elimination_type or ELIM_TYPE_BOTH,
         "company_from_id": r.company_from_id,
         "company_to_id": r.company_to_id,
         "amount": float(r.amount or 0),
         "note": r.note,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
+
+
+def next_ic_reference(db: Session, workspace_id: str, period: str) -> str:
+    """SVC-1: collision-resistant IC reference — YYYY-MM-NNNN, monotonically
+    incrementing per workspace+period.  Uses a row-level lock to prevent races.
+    Existing IC-* references in posted journals are never modified.
+    """
+    seq = (
+        db.query(IcReferenceSequence)
+        .filter_by(workspace_id=workspace_id, period=period)
+        .with_for_update()
+        .first()
+    )
+    if seq is None:
+        seq = IcReferenceSequence(
+            id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
+            period=period,
+            last_seq=0,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(seq)
+    seq.last_seq += 1
+    seq.updated_at = datetime.utcnow()
+    db.flush()
+    return f"IC-{period}-{seq.last_seq:04d}"
 
 
 def backfill_company_id(db: Session, workspace_id: str, company_id: str) -> None:

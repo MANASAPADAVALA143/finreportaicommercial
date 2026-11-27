@@ -51,6 +51,15 @@ function BreakdownBar({ card }: { card: SummaryCard }) {
   );
 }
 
+/** UI-1: reject zero, negative, NaN and non-finite values before calling the API. */
+function validateEliminationAmount(raw: string): { value: number; error: string | null } {
+  const v = parseFloat(raw);
+  if (raw.trim() === '' || isNaN(v)) return { value: 0, error: 'Amount must be a valid number.' };
+  if (!isFinite(v)) return { value: 0, error: 'Amount must not be Infinity.' };
+  if (v <= 0) return { value: 0, error: 'Amount must be positive and non-zero.' };
+  return { value: v, error: null };
+}
+
 function Table({ rows, companies, onSave, showNotes = false }: {
   rows: ConsolidationRow[];
   companies: { id: string; company_name: string }[];
@@ -59,6 +68,16 @@ function Table({ rows, companies, onSave, showNotes = false }: {
 }) {
   const [edit, setEdit] = useState<string | null>(null);
   const [val, setVal] = useState('');
+  const [inputError, setInputError] = useState<string | null>(null);
+
+  function commitEdit(key: string) {
+    const { value, error } = validateEliminationAmount(val);
+    if (error) { setInputError(error); return; }
+    setInputError(null);
+    setEdit(null);
+    onSave(key, value);
+  }
+
   return (
     <div className="overflow-x-auto border border-gray-700 rounded-xl">
       <table className="w-full text-xs min-w-[640px]">
@@ -78,23 +97,36 @@ function Table({ rows, companies, onSave, showNotes = false }: {
                 </td>
               ))}
               <td className="px-3 py-2 text-right">
-                <span className="inline-flex items-center justify-end gap-1">
-                  {edit === r.key ? (
-                    <input type="number" className="w-20 bg-gray-900 border border-teal-600 rounded px-1 text-right"
-                      value={val} autoFocus onChange={e => setVal(e.target.value)}
-                      onBlur={() => { onSave(r.key, Number(val) || 0); setEdit(null); }} />
-                  ) : (
-                    <button type="button" className="hover:text-teal-400" onClick={() => { setEdit(r.key); setVal(String(r.eliminations)); }}>
-                      {fmt(r.eliminations)}
-                    </button>
-                  )}
-                  {showNotes && r.elimination_note && (
-                    <span className="relative group cursor-help text-teal-500/80">
-                      <Info className="w-3.5 h-3.5" />
-                      <span className="pointer-events-none absolute bottom-full right-0 mb-1 hidden group-hover:block z-20 w-48 rounded bg-gray-800 border border-gray-600 px-2 py-1 text-[10px] text-gray-200 text-left shadow-lg">
-                        {r.elimination_note}
+                <span className="inline-flex flex-col items-end gap-0.5">
+                  <span className="inline-flex items-center justify-end gap-1">
+                    {edit === r.key ? (
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        className={`w-24 bg-gray-900 border rounded px-1 text-right ${inputError ? 'border-red-500' : 'border-teal-600'}`}
+                        value={val}
+                        autoFocus
+                        onChange={e => { setVal(e.target.value); setInputError(null); }}
+                        onBlur={() => commitEdit(r.key)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitEdit(r.key); if (e.key === 'Escape') { setEdit(null); setInputError(null); } }}
+                      />
+                    ) : (
+                      <button type="button" className="hover:text-teal-400" onClick={() => { setEdit(r.key); setVal(r.eliminations > 0 ? String(r.eliminations) : ''); setInputError(null); }}>
+                        {fmt(r.eliminations)}
+                      </button>
+                    )}
+                    {showNotes && r.elimination_note && (
+                      <span className="relative group cursor-help text-teal-500/80">
+                        <Info className="w-3.5 h-3.5" />
+                        <span className="pointer-events-none absolute bottom-full right-0 mb-1 hidden group-hover:block z-20 w-48 rounded bg-gray-800 border border-gray-600 px-2 py-1 text-[10px] text-gray-200 text-left shadow-lg">
+                          {r.elimination_note}
+                        </span>
                       </span>
-                    </span>
+                    )}
+                  </span>
+                  {edit === r.key && inputError && (
+                    <span className="text-red-400 text-[10px]">{inputError}</span>
                   )}
                 </span>
               </td>
@@ -185,6 +217,12 @@ export default function ConsolidationPage() {
                 </div>
               ))}
             </div>
+            {/* ENG-1: warn when journal lines have no company attribution */}
+            {(pl?.has_unassigned_lines || bs?.has_unassigned_lines) && (
+              <div className="bg-amber-900/30 border border-amber-700/50 rounded-lg px-4 py-3 text-sm text-amber-200">
+                ⚠ {(pl?.unassigned_lines ?? bs?.unassigned_lines ?? 0)} posted journal line(s) have no company attribution and are excluded from all entity figures. Assign a company to these journal entries to include them in consolidation.
+              </div>
+            )}
             {pl && <section><h2 className="text-sm font-semibold text-gray-400 mb-2 uppercase">Consolidated P&amp;L</h2>
               <Table rows={pl.rows} companies={pl.companies} showNotes
                 onSave={(k, a) => con.saveElimination(accessToken, { period_id: periodId, account_category: k, amount: a }).then(load)} /></section>}

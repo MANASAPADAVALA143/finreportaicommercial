@@ -87,6 +87,22 @@ class WorkspaceUserRole(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class IcReferenceSequence(Base):
+    """SVC-1: collision-resistant IC reference counter per workspace+period."""
+
+    __tablename__ = "ic_reference_sequences"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "period", name="uq_ic_seq_ws_period"),
+    )
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    workspace_id = Column(String(36), ForeignKey("workspaces.id"), nullable=False, index=True)
+    period = Column(String(7), nullable=False)  # YYYY-MM
+    last_seq = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ConsolidationElimination(Base):
     __tablename__ = "consolidation_eliminations"
 
@@ -94,6 +110,8 @@ class ConsolidationElimination(Base):
     workspace_id = Column(String(36), ForeignKey("workspaces.id"), nullable=False, index=True)
     period_id = Column(String(36), ForeignKey("accounting_periods.id"), nullable=False, index=True)
     account_category = Column(String(64), nullable=False)
+    # ADJ-1: 'pl' = affects P&L only, 'bs' = balance-sheet only, 'both' = legacy/both statements
+    elimination_type = Column(String(4), nullable=False, server_default="both")
     company_from_id = Column(String(36), ForeignKey("uae_company_profiles.id"), nullable=True)
     company_to_id = Column(String(36), ForeignKey("uae_company_profiles.id"), nullable=True)
     amount = Column(Numeric(15, 2), nullable=False, default=0)
