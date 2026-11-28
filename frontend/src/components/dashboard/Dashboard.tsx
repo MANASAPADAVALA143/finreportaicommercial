@@ -14,6 +14,7 @@ import {
   Shield,
   Receipt,
   Settings,
+  Layers,
 } from 'lucide-react';
 import { useAgentActivity } from '../../context/AgentActivityContext';
 import type { AgentId } from '../../context/AgentActivityContext';
@@ -112,6 +113,14 @@ const UAE_PRIMARY_HUB: DashboardModule[] = [
     description: 'Comprehensive planning, budgeting, and forecasting',
     link: '/fpa',
     bgColor: 'bg-green-500/10',
+  },
+  {
+    icon: <Layers className="w-16 h-16 text-sky-400" />,
+    title: 'Group Consolidation',
+    description: 'Multi-entity consolidation, intercompany eliminations, group financial statements',
+    link: '/consolidation',
+    bgColor: 'bg-sky-500/10',
+    badge: 'Group',
   },
 ];
 
