@@ -26,6 +26,7 @@ import {
 import { format } from 'date-fns';
 import {
   COLUMNS_STORAGE_KEY,
+  DEFAULT_COLUMNS,
   DEFAULT_SORT,
   EMPTY_FILTERS,
   invoiceProperty,
@@ -35,9 +36,12 @@ import {
   OPTIONAL_COLUMNS,
   PAGE_SIZE_STORAGE_KEY,
   PAGE_SIZES,
+  SAVED_VIEW_STORAGE_KEY,
+  SAVED_VIEWS,
   sortInvoices,
   type ListFilters,
   type OptionalColumn,
+  type SavedViewId,
   type SortState,
   type StageFilter,
   type ViewMode,
@@ -393,11 +397,21 @@ export function InvoiceList() {
   });
   const [columns, setColumns] = useState<Set<OptionalColumn>>(() => {
     try {
-      const raw = JSON.parse(localStorage.getItem(COLUMNS_STORAGE_KEY) || '[]');
-      const known = new Set(OPTIONAL_COLUMNS.map((c) => c.key));
-      return new Set((Array.isArray(raw) ? raw : []).filter((k): k is OptionalColumn => known.has(k)));
+      const stored = localStorage.getItem(COLUMNS_STORAGE_KEY);
+      const raw = JSON.parse(stored || 'null');
+      if (Array.isArray(raw)) {
+        const known = new Set(OPTIONAL_COLUMNS.map((c) => c.key));
+        return new Set(raw.filter((k): k is OptionalColumn => known.has(k)));
+      }
+    } catch { /* ignore */ }
+    return new Set(DEFAULT_COLUMNS);
+  });
+  const [savedView, setSavedView] = useState<SavedViewId>(() => {
+    try {
+      const stored = localStorage.getItem(SAVED_VIEW_STORAGE_KEY) as SavedViewId | null;
+      return SAVED_VIEWS.some((v) => v.id === stored) ? (stored as SavedViewId) : 'all';
     } catch {
-      return new Set();
+      return 'all';
     }
   });
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -513,6 +527,21 @@ export function InvoiceList() {
     [viewFiltered, stageFilter, sort],
   );
 
+  const kpiCards = useMemo(() => {
+    const total = invoices.length;
+    const pendingApproval = invoices.filter(
+      (inv) => inv.status === 'Processing' && inv.approval_level && inv.approval_level !== 'none',
+    ).length;
+    const exceptions = invoices.filter(
+      (inv) =>
+        inv.match_status === 'mismatch' ||
+        (typeof inv.risk_score === 'number' && inv.risk_score >= 60) ||
+        inv.duplicate_flag === true,
+    ).length;
+    const processed = invoices.filter((inv) => inv.status === 'Approved' || inv.status === 'Paid').length;
+    return { total, pendingApproval, exceptions, processed };
+  }, [invoices]);
+
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
   const page = Math.min(currentPage, totalPages);
   const paginatedInvoices = filteredInvoices.slice((page - 1) * pageSize, page * pageSize);
@@ -530,6 +559,21 @@ export function InvoiceList() {
   useEffect(() => {
     localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify([...columns]));
   }, [columns]);
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_VIEW_STORAGE_KEY, savedView);
+  }, [savedView]);
+
+  function handleSavedViewChange(id: SavedViewId) {
+    const sv = SAVED_VIEWS.find((v) => v.id === id);
+    if (!sv) return;
+    setSavedView(id);
+    setFilters({ ...EMPTY_FILTERS, ...sv.filterPatch });
+    if (sv.viewMode) setViewMode(sv.viewMode);
+    else if (id === 'all') setViewMode('all');
+    setStageFilter(null);
+    if (window.location.search) navigate('/ap-invoices/list', { replace: true });
+  }
 
   const filterOptions = useMemo<FilterOptions>(() => {
     const uniq = (values: (string | null | undefined)[]) =>
@@ -1522,6 +1566,34 @@ export function InvoiceList() {
           </div>
         )}
 
+        {/* KPI cards */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {(
+            [
+              { label: 'Total Invoices', value: kpiCards.total, tone: 'blue' },
+              { label: 'Pending Approval', value: kpiCards.pendingApproval, tone: 'amber' },
+              { label: 'Exceptions', value: kpiCards.exceptions, tone: 'red' },
+              { label: 'Processed', value: kpiCards.processed, tone: 'teal' },
+            ] as { label: string; value: number; tone: 'blue' | 'amber' | 'red' | 'teal' }[]
+          ).map(({ label, value, tone }) => {
+            const colorMap = {
+              blue: { bg: 'bg-[#EEF4FF]', text: 'text-[#1765F5]', label: 'text-[#1D4ED8]' },
+              amber: { bg: 'bg-[#FFFBEB]', text: 'text-[#D97706]', label: 'text-[#92400E]' },
+              red: { bg: 'bg-[#FEF2F2]', text: 'text-[#DC2626]', label: 'text-[#991B1B]' },
+              teal: { bg: 'bg-[#F0FDF4]', text: 'text-[#059669]', label: 'text-[#065F46]' },
+            };
+            const c = colorMap[tone];
+            return (
+              <div key={label} className={`rounded-xl ${c.bg} px-4 py-3`}>
+                <p className={`text-[11px] font-medium uppercase tracking-wide ${c.label}`}>{label}</p>
+                <p className={`mt-1 text-[26px] font-bold tabular-nums leading-none ${c.text}`}>
+                  {value.toLocaleString()}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
         <ListPipeline stages={listStages} selected={stageFilter} onSelect={selectStage} />
 
         <ListToolbar
@@ -1536,6 +1608,8 @@ export function InvoiceList() {
           costCenterLabel={costCenterLabel}
           statusLabel={statusLabel}
           showAdvanceFilter={filters.advanceOnly || invoices.some((inv) => inv.is_advance_payment === true)}
+          savedView={savedView}
+          onSavedViewChange={handleSavedViewChange}
         />
 
         {selectedRows.length > 0 && (

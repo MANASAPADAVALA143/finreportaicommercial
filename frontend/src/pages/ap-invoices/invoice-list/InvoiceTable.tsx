@@ -32,6 +32,7 @@ import {
   invoiceProperty,
   listRisk,
   OPTIONAL_COLUMNS,
+  DEFAULT_COLUMNS,
   PAGE_SIZES,
   paymentLabel,
   type OptionalColumn,
@@ -139,6 +140,12 @@ function SortHeader({
 const OPTIONAL_WIDTH: Record<OptionalColumn, number> = {
   invoice_date: 100,
   due_date: 100,
+  invoice_type: 80,
+  currency: 76,
+  net_amount: 108,
+  tax_amount: 108,
+  approval_status: 120,
+  po_number: 120,
   vat_timing: 120,
   payment: 110,
   confidence: 100,
@@ -146,6 +153,7 @@ const OPTIONAL_WIDTH: Record<OptionalColumn, number> = {
   property: 120,
   department: 120,
   cost_center: 120,
+  duplicate_flag: 110,
   created_at: 100,
   source: 100,
 };
@@ -222,6 +230,42 @@ export function InvoiceTable({
         return inv.due_date ? displayDate(inv.due_date, dateFormat) : '—';
       case 'created_at':
         return inv.created_at ? displayDate(inv.created_at.slice(0, 10), dateFormat) : '—';
+      case 'invoice_type': {
+        const isAR = inv.invoice_type === 'sales';
+        return <Badge tone={isAR ? 'teal' : 'blue'}>{isAR ? 'AR' : 'AP'}</Badge>;
+      }
+      case 'currency':
+        return <span className="font-mono text-[12px] font-semibold text-[#152238]">{currencyOf(inv)}</span>;
+      case 'net_amount': {
+        const p = amountParts(inv.subtotal_amount, currencyOf(inv));
+        return p ? <span className="tabular-nums">{p.value}</span> : <span className="text-[#94A3B8]">—</span>;
+      }
+      case 'tax_amount': {
+        const taxAmt = inv.tax_amount ?? inv.vat_amount ?? inv.gst_amount ?? null;
+        const taxLabel = inv.tax_type && inv.tax_type !== 'None' ? inv.tax_type : 'Tax';
+        const p = amountParts(taxAmt, currencyOf(inv));
+        return p ? (
+          <div>
+            <span className="tabular-nums">{p.value}</span>
+            <p className="text-[10.5px] text-[#64748B]">{taxLabel}</p>
+          </div>
+        ) : <span className="text-[#94A3B8]">—</span>;
+      }
+      case 'approval_status': {
+        const as_ = inv.approval_status;
+        if (!as_ || as_ === 'not_required') return <Badge tone="slate">Not required</Badge>;
+        const toneMap: Record<string, Tone> = { pending: 'amber', approved: 'teal', rejected: 'red' };
+        const labelMap: Record<string, string> = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
+        return <Badge tone={toneMap[as_] ?? 'slate'}>{labelMap[as_] ?? as_}</Badge>;
+      }
+      case 'po_number': {
+        const po = inv.po_number?.trim();
+        return po ? <span className="font-mono text-[12px]" title={po}>{po}</span> : <span className="text-[#94A3B8]">—</span>;
+      }
+      case 'duplicate_flag':
+        return inv.duplicate_flag === true
+          ? <Badge tone="amber">Possible duplicate</Badge>
+          : <span className="text-[#94A3B8]">—</span>;
       case 'payment': {
         const p = paymentLabel(inv, today);
         const tone: Tone = p.state === 'paid' ? 'teal' : p.state === 'overdue' ? 'red' : p.state === 'scheduled' ? 'blue' : 'slate';
@@ -309,8 +353,10 @@ export function InvoiceTable({
               <option value="created_at:asc">Oldest first</option>
               <option value="invoice_date:desc">Invoice date (newest)</option>
               <option value="due_date:asc">Due date (soonest)</option>
-              <option value="amount:desc">Amount (high → low)</option>
-              <option value="amount:asc">Amount (low → high)</option>
+              <option value="amount:desc">Gross amount (high → low)</option>
+              <option value="amount:asc">Gross amount (low → high)</option>
+              <option value="net_amount:desc">Net amount (high → low)</option>
+              <option value="net_amount:asc">Net amount (low → high)</option>
               <option value="risk:desc">Risk score (high → low)</option>
               <option value="vendor:asc">Vendor (A → Z)</option>
               <option value="invoice_number:asc">Invoice # (A → Z)</option>
@@ -321,6 +367,8 @@ export function InvoiceTable({
                 'due_date:asc',
                 'amount:desc',
                 'amount:asc',
+                'net_amount:desc',
+                'net_amount:asc',
                 'risk:desc',
                 'vendor:asc',
                 'invoice_number:asc',
@@ -342,9 +390,9 @@ export function InvoiceTable({
                 )}
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuContent align="end" className="w-60">
               <DropdownMenuLabel className="text-[11px] uppercase tracking-wide text-[#64748B]">
-                Additional columns
+                Optional columns
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               {OPTIONAL_COLUMNS.filter((c) => !c.uaeOnly || isUAE).map((c) => (
@@ -362,6 +410,13 @@ export function InvoiceTable({
                   {c.key === 'cost_center' ? costCenterLabel : c.label}
                 </DropdownMenuCheckboxItem>
               ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => onColumnsChange(new Set(DEFAULT_COLUMNS))}
+                className="text-[12.5px] text-[#1765F5]"
+              >
+                Restore defaults
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

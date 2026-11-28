@@ -271,6 +271,7 @@ export type SortKey =
   | 'invoice_number'
   | 'vendor'
   | 'amount'
+  | 'net_amount'
   | 'status'
   | 'ifrs'
   | 'match'
@@ -294,6 +295,11 @@ function sortValue(inv: Invoice, key: SortKey): string | number | null {
       return (inv.vendor_name || '').toLowerCase() || null;
     case 'amount': {
       const raw = inv.total_amount as unknown;
+      if (raw == null || raw === '') return null;
+      return Number.isFinite(Number(raw)) ? Number(raw) : null;
+    }
+    case 'net_amount': {
+      const raw = inv.subtotal_amount as unknown;
       if (raw == null || raw === '') return null;
       return Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
@@ -345,11 +351,26 @@ export type OptionalColumn =
   | 'department'
   | 'cost_center'
   | 'created_at'
-  | 'source';
+  | 'source'
+  | 'invoice_type'
+  | 'currency'
+  | 'net_amount'
+  | 'tax_amount'
+  | 'approval_status'
+  | 'duplicate_flag'
+  | 'po_number';
 
 export const OPTIONAL_COLUMNS: { key: OptionalColumn; label: string; sort?: SortKey; uaeOnly?: boolean }[] = [
+  // Core columns (default-visible set via DEFAULT_COLUMNS)
   { key: 'invoice_date', label: 'Invoice date', sort: 'invoice_date' },
   { key: 'due_date', label: 'Due date', sort: 'due_date' },
+  { key: 'invoice_type', label: 'Type (AP/AR)' },
+  { key: 'currency', label: 'Currency' },
+  { key: 'net_amount', label: 'Net amount', sort: 'net_amount' },
+  { key: 'tax_amount', label: 'Tax amount' },
+  { key: 'approval_status', label: 'Approval status' },
+  { key: 'po_number', label: 'PO number' },
+  // Optional extras
   { key: 'payment', label: 'Payment status' },
   { key: 'vat_timing', label: 'VAT timing', uaeOnly: true },
   { key: 'confidence', label: 'Extraction confidence', sort: 'confidence' },
@@ -357,10 +378,58 @@ export const OPTIONAL_COLUMNS: { key: OptionalColumn; label: string; sort?: Sort
   { key: 'property', label: 'Property' },
   { key: 'department', label: 'Department' },
   { key: 'cost_center', label: 'Cost center' },
+  { key: 'duplicate_flag', label: 'Duplicate flag' },
   { key: 'created_at', label: 'Created date', sort: 'created_at' },
   { key: 'source', label: 'Source' },
 ];
 
-export const COLUMNS_STORAGE_KEY = 'invoiceflow.list.columns.v1';
+/** Default columns shown when no stored preference exists */
+export const DEFAULT_COLUMNS: OptionalColumn[] = [
+  'invoice_date',
+  'due_date',
+  'invoice_type',
+  'currency',
+  'net_amount',
+  'tax_amount',
+  'approval_status',
+  'po_number',
+];
+
+// ── Saved views ──────────────────────────────────────────────────────────────
+
+export type SavedViewId =
+  | 'all'
+  | 'my_approvals'
+  | 'pending'
+  | 'exceptions'
+  | 'overdue'
+  | 'posted'
+  | 'paid'
+  | 'drafts';
+
+export type SavedView = {
+  id: SavedViewId;
+  label: string;
+  filterPatch: Partial<ListFilters>;
+  viewMode?: ViewMode;
+};
+
+export const SAVED_VIEWS: SavedView[] = [
+  { id: 'all', label: 'All Invoices', filterPatch: {} },
+  { id: 'my_approvals', label: 'My Approvals', filterPatch: {}, viewMode: 'approvals' },
+  { id: 'pending', label: 'Pending', filterPatch: { status: 'Processing' } },
+  {
+    id: 'exceptions',
+    label: 'Exceptions',
+    filterPatch: { match: 'match_issues' },
+  },
+  { id: 'overdue', label: 'Overdue', filterPatch: { payment: 'overdue' } },
+  { id: 'posted', label: 'Posted', filterPatch: { status: 'Approved' } },
+  { id: 'paid', label: 'Paid', filterPatch: { status: 'Paid' } },
+  { id: 'drafts', label: 'Drafts', filterPatch: { status: 'Processing' } },
+];
+
+export const SAVED_VIEW_STORAGE_KEY = 'invoiceflow.list.savedView.v1';
+export const COLUMNS_STORAGE_KEY = 'invoiceflow.list.columns.v2';
 export const PAGE_SIZE_STORAGE_KEY = 'invoiceflow.list.pageSize.v1';
 export const PAGE_SIZES = [10, 20, 50, 100] as const;

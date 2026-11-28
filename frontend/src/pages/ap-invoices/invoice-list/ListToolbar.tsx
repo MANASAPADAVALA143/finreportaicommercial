@@ -10,9 +10,11 @@ import {
   MATCH_FILTER_LABEL,
   PAYMENT_FILTER_LABEL,
   RISK_FILTER_LABEL,
+  SAVED_VIEWS,
   type FilterKey,
   type KindFilter,
   type ListFilters,
+  type SavedViewId,
   type StageFilter,
   type ViewMode,
 } from './listModel';
@@ -83,6 +85,8 @@ export function ListToolbar({
   costCenterLabel,
   statusLabel,
   showAdvanceFilter,
+  savedView,
+  onSavedViewChange,
 }: {
   filters: ListFilters;
   onFiltersChange: (next: ListFilters) => void;
@@ -95,6 +99,8 @@ export function ListToolbar({
   costCenterLabel: string;
   statusLabel: (status: string) => string;
   showAdvanceFilter: boolean;
+  savedView: SavedViewId;
+  onSavedViewChange: (id: SavedViewId) => void;
 }) {
   const set = <K extends keyof ListFilters>(key: K, value: ListFilters[K]) => onFiltersChange({ ...filters, [key]: value });
   const chips = activeFilters(filters, { costCenter: costCenterLabel, status: statusLabel }).filter((c) => c.key !== 'search');
@@ -110,6 +116,27 @@ export function ListToolbar({
 
   return (
     <section className="space-y-2.5 rounded-xl border border-[#E2E8F0] bg-white p-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      {/* Saved views bar */}
+      <div className="-mx-3 -mt-3 flex items-center gap-0 overflow-x-auto border-b border-[#EEF2F7] px-3 pb-0 scrollbar-none">
+        {SAVED_VIEWS.map((sv) => {
+          const active = savedView === sv.id;
+          return (
+            <button
+              key={sv.id}
+              type="button"
+              onClick={() => onSavedViewChange(sv.id)}
+              aria-pressed={active}
+              className={`shrink-0 border-b-2 px-3 py-2.5 text-[12.5px] font-medium whitespace-nowrap transition-colors ${
+                active
+                  ? 'border-[#1765F5] text-[#1765F5]'
+                  : 'border-transparent text-[#64748B] hover:text-[#152238]'
+              }`}
+            >
+              {sv.label}
+            </button>
+          );
+        })}
+      </div>
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#94A3B8]" aria-hidden />
         <input
