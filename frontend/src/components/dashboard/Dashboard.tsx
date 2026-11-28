@@ -291,6 +291,14 @@ export const Dashboard: React.FC = () => {
       badge: 'New'
     },
     {
+      icon: <Layers className="w-16 h-16 text-sky-400" />,
+      title: 'Group Consolidation',
+      description: 'Multi-entity consolidation, intercompany eliminations, group financial statements',
+      link: '/consolidation',
+      bgColor: 'bg-sky-500/10',
+      badge: 'Group',
+    },
+    {
       icon: <Globe className="w-16 h-16 text-blue-400" />,
       title: '🇦🇪 UAE Accounting',
       description: 'Full UAE accounting suite — VAT 5%, CT 9% (MoF Decision 134), IFRS depreciation, bank recon (ENBD/FAB/ADCB), accruals, EOSB, period close, management accounts',
