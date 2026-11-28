@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import io
 import json
@@ -21,8 +23,7 @@ load_dotenv(dotenv_path=_env_file if _env_file.exists() else None, override=True
 from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+# openpyxl loaded lazily inside Excel endpoints to reduce startup memory
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import inspect, text
 from app.core.config import settings
@@ -146,7 +147,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from app.db import init_db
 from app.scheduler import run_daily_watchdog, scheduler, setup_close_scheduler, setup_scheduler, setup_ses_intake_scheduler
-from excel_addin import analyze_service, chat_layer, intent_layer, legacy_shim
+# excel_addin loaded lazily inside Excel add-in endpoints to reduce startup memory
 
 _BOARD_PACK_DIR = Path(__file__).resolve().parent.parent / "board_packs"
 os.makedirs(_BOARD_PACK_DIR, exist_ok=True)
@@ -887,6 +888,7 @@ async def excel_addin_analyze_post(
     Legacy /variance, /budget, /kpi, /forecast, /scenarios, /reports still work
     but return header X-Deprecated-Use-Instead: /api/excel-addin/analyze.
     """
+    from excel_addin import analyze_service
     try:
         out = analyze_service.run(body.model_dump())
     except ValueError as exc:
@@ -920,6 +922,7 @@ def _to_num(v: Any) -> float:
 
 
 def _title(ws, text: str) -> None:
+    from openpyxl.styles import Font, PatternFill
     ws["A1"] = text
     ws["A1"].font = Font(bold=True, size=14, color="FFFFFF")
     ws["A1"].fill = PatternFill("solid", fgColor="0F2D5E")
@@ -929,6 +932,7 @@ def _title(ws, text: str) -> None:
 
 
 def _header_row(ws, row: int, labels: list[str]) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
     for i, label in enumerate(labels, 1):
         c = ws.cell(row=row, column=i, value=label)
         c.font = Font(bold=True, color="FFFFFF")
@@ -937,6 +941,7 @@ def _header_row(ws, row: int, labels: list[str]) -> None:
 
 
 def _status_fill(flag: str) -> PatternFill:
+    from openpyxl.styles import PatternFill
     f = str(flag or "").upper()
     if f in {"FAV", "GREEN", "GOOD"}:
         return PatternFill("solid", fgColor="DCFCE7")
@@ -1131,6 +1136,8 @@ def _with_defaults(data: dict[str, Any], company: str, period: str, currency: st
     summary="Export all 6 Excel add-in analyses into one XLSX workbook",
 )
 async def excel_addin_export(body: ExcelAddinExportBody):
+    from openpyxl import Workbook
+    from excel_addin import analyze_service, legacy_shim
     module_builders: list[tuple[str, dict[str, Any], Any, Any]] = [
         ("variance", body.variance, legacy_shim.to_analyze_variance, legacy_shim.response_variance),
         ("budget", body.budget, legacy_shim.to_analyze_budget, legacy_shim.response_budget),
@@ -1188,6 +1195,7 @@ async def excel_addin_export(body: ExcelAddinExportBody):
 )
 async def excel_addin_variance_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=variance."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1214,6 +1222,7 @@ async def excel_addin_variance_legacy(request: Request):
 )
 async def excel_addin_budget_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=budget."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1240,6 +1249,7 @@ async def excel_addin_budget_legacy(request: Request):
 )
 async def excel_addin_kpi_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=kpi."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1266,6 +1276,7 @@ async def excel_addin_kpi_legacy(request: Request):
 )
 async def excel_addin_forecast_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=forecast."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1292,6 +1303,7 @@ async def excel_addin_forecast_legacy(request: Request):
 )
 async def excel_addin_scenarios_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=scenario."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1318,6 +1330,7 @@ async def excel_addin_scenarios_legacy(request: Request):
 )
 async def excel_addin_reports_legacy(request: Request):
     """Deprecated: use POST /api/excel-addin/analyze with analysis_type=report."""
+    from excel_addin import analyze_service, legacy_shim
     if request.method == "OPTIONS":
         return Response(status_code=204, headers=dict(_EXCEL_ADDIN_CORS))
     try:
@@ -1370,6 +1383,7 @@ async def excel_addin_chat(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    from excel_addin import chat_layer, intent_layer
     hist = [t.model_dump() for t in body.chat_history]
     intent_detected = intent_layer.detect_intent(body.message)
     result = chat_layer.handle_chat(

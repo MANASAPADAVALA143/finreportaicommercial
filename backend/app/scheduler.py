@@ -7,9 +7,6 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import inspect, text
 
-from app.agents.intelligence import generate_board_pack_content, generate_insight
-from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
-from app.board_pack_generator import generate_pdf
 from app.core.config import settings
 from app.core.database import SessionLocal
 
@@ -150,6 +147,8 @@ async def _run_daily_agent(db, agent: str, table: str) -> list[dict[str, Any]]:
     for workspace_id, current_data in _latest_row_per_workspace(db, table).items():
         key = f"{agent}:{workspace_id}"
         try:
+            from app.agents.intelligence import generate_insight
+            from app.agents.memory import read_agent_memory, store_agent_run, update_agent_memory
             history = await read_agent_memory(key, db)
             insight = await generate_insight(agent, current_data, history)
             await update_agent_memory(key, current_data, db)
@@ -267,6 +266,8 @@ async def run_board_pack_agent() -> list[str]:
     stamp = datetime.now().strftime("%Y_%m")
     for workspace_id, all_results in by_workspace.items():
         try:
+            from app.agents.intelligence import generate_board_pack_content
+            from app.board_pack_generator import generate_pdf
             content = await generate_board_pack_content(all_results)
             pdf_path = await generate_pdf(content, f"board_pack_{workspace_id}_{stamp}.pdf")
             generated.append(pdf_path)
