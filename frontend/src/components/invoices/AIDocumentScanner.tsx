@@ -909,7 +909,7 @@ export function AIDocumentScanner({
                           <Input
                             value={item.description}
                             onChange={(e) => onLineItemUpdate(item.id, 'description', e.target.value)}
-                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0"
+                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-gray-900"
                             placeholder="Item description"
                           />
                         </td>
@@ -918,7 +918,7 @@ export function AIDocumentScanner({
                             type="number"
                             value={item.quantity}
                             onChange={(e) => onLineItemUpdate(item.id, 'quantity', parseFloat(e.target.value) || 0)}
-                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right"
+                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right text-gray-900"
                             min="0" step="0.01"
                           />
                         </td>
@@ -927,7 +927,7 @@ export function AIDocumentScanner({
                             type="number"
                             value={item.unit_price}
                             onChange={(e) => onLineItemUpdate(item.id, 'unit_price', parseFloat(e.target.value) || 0)}
-                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right"
+                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right text-gray-900"
                             min="0" step="0.01"
                           />
                         </td>
@@ -936,7 +936,7 @@ export function AIDocumentScanner({
                             type="number"
                             value={item.tax}
                             onChange={(e) => onLineItemUpdate(item.id, 'tax', parseFloat(e.target.value) || 0)}
-                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right"
+                            className="h-6 text-xs border-0 shadow-none p-0 bg-transparent focus-visible:ring-0 text-right text-gray-900"
                             min="0" step="0.01"
                           />
                         </td>
