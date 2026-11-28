@@ -135,6 +135,7 @@ from app.api.routes import (
     ap_payment_run_routes,
     ap_payment_runs_alias,
     industry_config_routes,
+    internal_seed,
 )
 from app.modules.ifrs9.router import router as ifrs9_router
 from app.modules.ifrs15.router import router as ifrs15_router
@@ -660,6 +661,7 @@ app.include_router(industry_config_routes.router)
 app.include_router(ap_companies_rds.router)
 app.include_router(vat_advanced_rds.router)
 app.include_router(system_routes.router)
+app.include_router(internal_seed.router)
 
 # GulfTax AI — embedded (replaces external localhost:8000 service)
 from app.modules.gulftax.router import public_router as gulftax_public_router
