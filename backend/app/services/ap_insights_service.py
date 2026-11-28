@@ -329,8 +329,8 @@ def generate_ap_insights(*, workspace_id: str | None, company_id: str | None) ->
         logger.warning("AP insights — Supabase not configured: %s", exc)
         return _mock_empty_response()
     except Exception as exc:
-        logger.exception("AP insights fetch failed")
-        raise RuntimeError(f"Failed to load AP data: {exc}") from exc
+        logger.warning("AP insights fetch failed: %s", exc)
+        return _mock_empty_response()
 
     if not invoices:
         return _mock_empty_response()
