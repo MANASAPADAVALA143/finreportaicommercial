@@ -2131,10 +2131,10 @@ export function InvoiceUpload() {
 
     setPdfQueue(prev => {
       const updated = [...prev, ...newItems];
-      // Start processing after state update
+      // Pass newItems directly to avoid stale-closure reading old pdfQueue
       setTimeout(() => {
         if (!processingQueue) {
-          void processPdfQueue();
+          void processPdfQueue(newItems);
         }
       }, 100);
       return updated;
@@ -2146,13 +2146,13 @@ export function InvoiceUpload() {
     });
   };
 
-  const processPdfQueue = async () => {
+  const processPdfQueue = async (overrideItems?: QueueItem[]) => {
     if (processingQueue) return;
-    
+
     setProcessingQueue(true);
-    
-    // Get current queue state
-    let currentQueue = [...pdfQueue];
+
+    // overrideItems: passed when called immediately after setPdfQueue (avoids stale closure)
+    let currentQueue = overrideItems ?? [...pdfQueue];
     const pendingItems = currentQueue.filter(item => item.status === 'pending');
     
     if (pendingItems.length === 0) {
@@ -2264,13 +2264,14 @@ export function InvoiceUpload() {
   };
 
   const retryQueueItem = (itemId: string) => {
-    setPdfQueue(prev => prev.map(item => 
-      item.id === itemId ? { ...item, status: 'pending', error: null, extractedData: null } : item
-    ));
-    // Trigger processing after state update
-    setTimeout(() => {
-      void processPdfQueue();
-    }, 100);
+    setPdfQueue(prev => {
+      const updated = prev.map(item =>
+        item.id === itemId ? { ...item, status: 'pending' as QueueItemStatus, error: null, extractedData: null } : item
+      );
+      const retried = updated.filter(i => i.id === itemId);
+      setTimeout(() => { void processPdfQueue(retried); }, 100);
+      return updated;
+    });
   };
 
   const submitAllReadyInvoices = async () => {
