@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import io
 import os
 from datetime import date, timedelta
 from typing import Any
@@ -128,19 +127,26 @@ async def _extract_with_claude(data: bytes, media_type: str, prompt: str) -> dic
 
     b64 = base64.standard_b64encode(data).decode("ascii")
     client = anthropic.Anthropic(api_key=key)
+
+    # PDFs are sent as document blocks; images as image blocks.
+    if media_type == "application/pdf":
+        content_block: dict = {
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+        }
+    else:
+        content_block = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": b64},
+        }
+
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1200,
         messages=[
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": media_type, "data": b64},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
+                "content": [content_block, {"type": "text", "text": prompt}],
             }
         ],
     )
@@ -172,23 +178,8 @@ async def extract_image(
     content_type = file.content_type or ""
 
     if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
-        try:
-            from pdf2image import convert_from_bytes
-
-            images = convert_from_bytes(data, first_page=1, last_page=1, dpi=150)
-            if not images:
-                raise HTTPException(status_code=422, detail="Could not render PDF page")
-            buf = io.BytesIO()
-            images[0].save(buf, format="JPEG")
-            data = buf.getvalue()
-            media_type = "image/jpeg"
-        except ImportError:
-            raise HTTPException(
-                status_code=422,
-                detail="PDF upload requires pdf2image. Upload a JPG/PNG instead.",
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"PDF conversion failed: {exc}") from exc
+        # Pass PDF bytes directly to Claude — no poppler/pdf2image required.
+        media_type = "application/pdf"
     else:
         media_type = _media_type(filename, content_type)
 
