@@ -116,7 +116,7 @@ def _bs_category(code: str, account_type: str | None, sub_type: str | None) -> s
         return "other_current_assets"
     if code.startswith("40") or "non-current liability" in st or "long" in st:
         return "long_term_borrowings"
-    if code.startswith("300") or st == "current liability" and "payable" in st:
+    if code.startswith("300") or code.startswith("31") or (st == "current liability" and "payable" in st):
         return "trade_payables"
     if at == "liability":
         return "other_current_liabilities"
