@@ -40,7 +40,15 @@ import {
   type SortState,
 } from './listModel';
 
-export type DetailTab = 'details' | 'matching' | 'risk' | 'approval' | 'activity';
+export type DetailTab =
+  | 'details'
+  | 'line_items'
+  | 'tax'
+  | 'matching'
+  | 'risk'
+  | 'approval'
+  | 'activity'
+  | 'documents';
 export type GlDisplay = { code: string; name: string; suggested: boolean } | null;
 
 type Tone = 'teal' | 'blue' | 'amber' | 'red' | 'slate' | 'purple' | 'gold';

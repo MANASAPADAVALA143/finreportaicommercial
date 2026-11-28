@@ -207,7 +207,15 @@ interface InvoiceDetailModalProps {
   onToggleExpand?: () => void;
 }
 
-export type DetailTabKey = 'details' | 'matching' | 'risk' | 'approval' | 'activity';
+export type DetailTabKey =
+  | 'details'
+  | 'line_items'
+  | 'tax'
+  | 'matching'
+  | 'risk'
+  | 'approval'
+  | 'activity'
+  | 'documents';
 
 function DetailFrame({
   drawer,
@@ -1840,13 +1848,26 @@ export function InvoiceDetailModal({
             <TabsList
               className={`h-auto w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 ${isDrawer ? 'mt-2' : 'mt-3'}`}
             >
-              <TabsTrigger value="details" className={tabTrigger} title="Details">
+              <TabsTrigger value="details" className={tabTrigger} title="Overview">
                 {!isDrawer && <FileText className="mr-1.5 h-4 w-4" />}
-                Details
+                Overview
               </TabsTrigger>
-              <TabsTrigger value="matching" className={tabTrigger} title="Matching & Accounting">
+              <TabsTrigger value="line_items" className={tabTrigger} title="Line Items">
+                {!isDrawer && <Receipt className="mr-1.5 h-4 w-4" />}
+                {isDrawer ? 'Lines' : 'Line Items'}
+                {lineItems.length > 0 && (
+                  <span className="ml-1.5 rounded-full bg-[#F1F5F9] px-1.5 text-[10px] font-semibold text-[#64748B]">
+                    {lineItems.length}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="tax" className={tabTrigger} title="Tax">
+                {!isDrawer && <Calculator className="mr-1.5 h-4 w-4" />}
+                Tax
+              </TabsTrigger>
+              <TabsTrigger value="matching" className={tabTrigger} title="Matching">
                 {!isDrawer && <ShieldCheck className="mr-1.5 h-4 w-4" />}
-                {isDrawer ? 'Matching' : 'Matching & Accounting'}
+                Matching
               </TabsTrigger>
               <TabsTrigger value="risk" className={tabTrigger} title="Risk & Compliance">
                 {!isDrawer && <AlertCircle className="mr-1.5 h-4 w-4" />}
@@ -1857,13 +1878,17 @@ export function InvoiceDetailModal({
                   </span>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="approval" className={tabTrigger} title="Approval & Payment">
+              <TabsTrigger value="approval" className={tabTrigger} title="Workflow">
                 {!isDrawer && <UserCheck className="mr-1.5 h-4 w-4" />}
-                {isDrawer ? 'Approval' : 'Approval & Payment'}
+                Workflow
               </TabsTrigger>
-              <TabsTrigger value="activity" className={tabTrigger} title="Activity & Audit Trail">
+              <TabsTrigger value="activity" className={tabTrigger} title="Audit Trail">
                 {!isDrawer && <Clock className="mr-1.5 h-4 w-4" />}
-                {isDrawer ? 'Activity' : 'Activity & Audit Trail'}
+                {isDrawer ? 'Audit' : 'Audit Trail'}
+              </TabsTrigger>
+              <TabsTrigger value="documents" className={tabTrigger} title="Documents">
+                {!isDrawer && <Download className="mr-1.5 h-4 w-4" />}
+                Documents
               </TabsTrigger>
             </TabsList>
           </div>
@@ -3738,6 +3763,188 @@ export function InvoiceDetailModal({
                 </div>
               </div>
             </TabsContent>
+
+            {/* ── Line Items tab ─────────────────────────────────────────── */}
+            <TabsContent value="line_items" className="mt-0 focus-visible:ring-0 focus-visible:ring-offset-0">
+              <div className="space-y-4">
+                {lineItems.length === 0 ? (
+                  <div className="rounded-xl border border-[#E3E8EF] bg-[#F8FAFC] py-10 text-center text-[13px] text-[#64748B]">
+                    No line items extracted for this invoice.
+                  </div>
+                ) : (
+                  <Card className="border-[#E3E8EF] shadow-sm">
+                    <CardHeader>
+                      <CardTitle className="text-[15px] font-semibold">
+                        Line Items · {lineItems.length}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="pl-4">#</TableHead>
+                              <TableHead>Description</TableHead>
+                              <TableHead className="text-right">Qty</TableHead>
+                              <TableHead className="text-right">Unit Price</TableHead>
+                              <TableHead className="text-right">Tax</TableHead>
+                              <TableHead className="text-right pr-4">Total</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {lineItems.map((item, idx) => (
+                              <TableRow key={item.id}>
+                                <TableCell className="pl-4 text-[#64748B]">{idx + 1}</TableCell>
+                                <TableCell>{item.description || '—'}</TableCell>
+                                <TableCell className="text-right tabular-nums">{item.quantity ?? '—'}</TableCell>
+                                <TableCell className="text-right tabular-nums">{money(item.unit_price)}</TableCell>
+                                <TableCell className="text-right tabular-nums">{(item as unknown as { tax_amount?: number }).tax_amount != null ? money((item as unknown as { tax_amount?: number }).tax_amount) : '—'}</TableCell>
+                                <TableCell className="text-right tabular-nums pr-4 font-medium">{money(item.total)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="flex justify-end gap-6 border-t border-[#EEF2F7] px-4 py-3 text-[13px]">
+                        <span className="text-[#64748B]">Subtotal</span>
+                        <span className="tabular-nums font-semibold">{money(invoice.subtotal_amount ?? invoice.total_amount)}</span>
+                        <span className="text-[#64748B]">{getTaxLabel(invoice.tax_code)}</span>
+                        <span className="tabular-nums font-semibold">{money(invoice.tax_amount ?? invoice.vat_amount ?? invoice.gst_amount)}</span>
+                        <span className="text-[#64748B]">Gross</span>
+                        <span className="tabular-nums font-bold text-[#152238]">{money(invoice.total_amount)}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* ── Tax tab ───────────────────────────────────────────────── */}
+            <TabsContent value="tax" className="mt-0 focus-visible:ring-0 focus-visible:ring-offset-0">
+              <div className="space-y-4">
+                <Card className="border-[#E3E8EF] shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-[15px] font-semibold">Tax Summary</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[13px]">
+                      <InfoRow label="Tax type" value={invoice.tax_type ?? '—'} />
+                      <InfoRow label="Tax code" value={invoice.tax_code ?? '—'} />
+                      <InfoRow label="Tax rate" value={invoice.tax_rate != null ? `${invoice.tax_rate}%` : '—'} />
+                      <InfoRow label={getTaxLabel(invoice.tax_code)} value={money(invoice.tax_amount ?? invoice.vat_amount ?? invoice.gst_amount)} />
+                      {invoice.vat_treatment && (
+                        <InfoRow label="VAT treatment" value={invoice.vat_treatment} />
+                      )}
+                      {invoice.vendor_trn && (
+                        <InfoRow label="Vendor TRN" value={invoice.vendor_trn} />
+                      )}
+                    </div>
+
+                    {/* GST breakdown */}
+                    {(invoice.cgst != null || invoice.sgst != null || invoice.igst != null) && (
+                      <div className="rounded-lg border border-[#E3E8EF] bg-[#F8FAFC] p-3 space-y-1.5 text-[13px]">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">GST Breakdown</p>
+                        {invoice.cgst != null && <InfoRow label="CGST" value={money(invoice.cgst)} />}
+                        {invoice.sgst != null && <InfoRow label="SGST" value={money(invoice.sgst)} />}
+                        {invoice.igst != null && <InfoRow label="IGST" value={money(invoice.igst)} />}
+                        {invoice.gstin && <InfoRow label="GSTIN (Vendor)" value={invoice.gstin} />}
+                      </div>
+                    )}
+
+                    {/* Tax breakdown lines from extraction */}
+                    {taxBreakdownLines.length > 0 && (
+                      <div className="rounded-lg border border-[#E3E8EF] p-3">
+                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">Tax Lines</p>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Name</TableHead>
+                              <TableHead className="text-right">Rate</TableHead>
+                              <TableHead className="text-right">Amount</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {taxBreakdownLines.map((t: { name?: string; rate?: number; amount?: number }, i: number) => (
+                              <TableRow key={i}>
+                                <TableCell>{t.name ?? '—'}</TableCell>
+                                <TableCell className="text-right tabular-nums">{t.rate != null ? `${t.rate}%` : '—'}</TableCell>
+                                <TableCell className="text-right tabular-nums">{t.amount != null ? money(t.amount) : '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+
+                    {/* TDS */}
+                    {(invoice.tds_section || invoice.tds_amount != null) && (
+                      <div className="rounded-lg border border-[#E3E8EF] bg-[#F8FAFC] p-3 space-y-1.5 text-[13px]">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">TDS</p>
+                        {invoice.tds_section && <InfoRow label="TDS section" value={invoice.tds_section} />}
+                        {invoice.tds_amount != null && <InfoRow label="TDS amount" value={money(invoice.tds_amount)} />}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
+            {/* ── Documents tab ─────────────────────────────────────────── */}
+            <TabsContent value="documents" className="mt-0 focus-visible:ring-0 focus-visible:ring-offset-0">
+              <div className="space-y-4">
+                <Card className="border-[#E3E8EF] shadow-sm overflow-hidden">
+                  <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle className="text-[15px] font-semibold">Invoice Document</CardTitle>
+                    {invoice.file_url && (
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-[12.5px]"
+                          onClick={() => {
+                            const a = document.createElement('a');
+                            a.href = fileUrl ?? invoice.file_url ?? '';
+                            a.download = `${invoice.invoice_number}.${invoice.file_type ?? 'pdf'}`;
+                            a.target = '_blank';
+                            a.click();
+                          }}
+                        >
+                          <Download className="mr-1.5 h-3.5 w-3.5" />
+                          Download
+                        </Button>
+                      </div>
+                    )}
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <DocumentPreview
+                      url={fileUrl}
+                      loading={fileLoading}
+                      fileType={invoice.file_type}
+                      fileRef={invoice.file_url}
+                      zoom={zoomLevel}
+                      onZoom={setZoomLevel}
+                      compact={false}
+                      attaching={attaching}
+                      onAttach={invoice.company_id ? () => attachInputRef.current?.click() : undefined}
+                    />
+                  </CardContent>
+                </Card>
+
+                {/* File metadata */}
+                <Card className="border-[#E3E8EF] shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-[15px] font-semibold">File Details</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-[13px]">
+                    <InfoRow label="File type" value={invoice.file_type ?? '—'} />
+                    <InfoRow label="Source" value={INVOICE_SOURCE_LABEL[invoice.source as string] ?? invoice.source ?? '—'} />
+                    <InfoRow label="Uploaded" value={invoice.created_at ? format(new Date(invoice.created_at), 'dd MMM yyyy, HH:mm') : '—'} />
+                    {invoice.bank_reconciled && <InfoRow label="Bank reconciled" value="Yes" />}
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+
           </div>
         </Tabs>
     </DetailFrame>
